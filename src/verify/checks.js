@@ -5274,11 +5274,29 @@ export async function checkTriggerActions(fetchRaw) {
   check('ACT11/12/13 are three separate single-`C3` no-ops',
     !touched && nop.planeA.every((b, i) => b === snap[i]) && nop.zones[0].kind < 0);
 
-  const ws = makeActionContext({ weaponSlots: [5, 8, 5] });
+  const disarmed = [];
+  const ws = makeActionContext({ weaponSlots: [5, 8, 5],
+                                 clearWeaponSlot: (i) => disarmed.push(i) });
   const w1 = runAction(T({ action: 10, actionArg: 5 }), ws);
   check('ACT10 clears only the FIRST matching weapon slot',
     w1.slot === 0 && ws.weaponSlots[0] === 0xffff && ws.weaponSlots[2] === 5,
     'each arm of CS:0x3e3f ends in its own `ret`');
+
+  /* ⚠️ ctx.weaponSlots is a COPY for any host that keeps its arsenal
+   * elsewhere, so the array write alone disarms nothing. This pins the hook
+   * that actually does — an assertion reading only the copy would pass while
+   * all 7 shipped ACT10 records did nothing. */
+  check('ACT10 disarms the host through clearWeaponSlot, not just the copy',
+    disarmed.length === 1 && disarmed[0] === 0,
+    `hook fired for slot [${disarmed.join(',')}]`);
+
+  /* The mirror case: the inventory IS passed live, so the consume passes must
+   * land on the caller's own array rather than a copy. */
+  const liveInv = [0x13, 0xffff, 0xffff, 0xffff];
+  const ic = makeActionContext({ inventory: liveInv });
+  fireTrigger(T({ action: 2, condKind: [1,0,0], condArg: [0x13,0,0] }), ic);
+  check('the key-consume writes through to the caller\'s inventory array',
+    liveInv[0] === 0xffff && ic.inventory === liveInv);
 
   /* --- ACT0 / ACT1 ------------------------------------------------------ */
   const mkObjs = (n) => Array.from({ length: n }, (_, i) =>

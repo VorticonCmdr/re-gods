@@ -296,7 +296,10 @@ async function main() {
     messages: lvl.map.messages,
     categoryOf: (type) => lvl.cats[type],
     inventory: inv,
+    /* A DETACHED copy — see act10's note. The live arsenal is disarmed
+     * through the hook below, not by writing into this array. */
     weaponSlots: ars.slots.map((sl) => sl.weapon),
+    clearWeaponSlot: (i) => { ars.slots[i].weapon = INVENTORY_EMPTY; },
     /* Same allocator the treasure burst uses — CS:0x38D7 first-fit, with the
      * 200-slot ceiling measured against what is actually live. */
     alloc: () => {
@@ -596,11 +599,24 @@ async function main() {
           (p.duplicate ? ` (again — count ${p.count})` : ` into slot ${'ABC'[p.slot]}`);
       }
       /* plane-B cell -> event record -> selector 2 -> trigger evaluator */
-      const fired = events.step(player.x, player.y, events.makeState({ timer: clock.tick }));
+      const fired = events.step(player.x, player.y,
+        events.makeState({ timer: clock.tick, inventory }));
       if (fired) {
+        /* The verb now RUNS (game/trigger-actions.js); `fired.result` says what
+         * it did. Doors and gates write the live plane arrays, so the change is
+         * on screen next frame. */
+        const r = fired.result;
+        const what = r
+          ? `${ACTION_NAMES[fired.verb] || `verb ${fired.verb}`}` +
+            (r.ok === false ? ` — refused (${r.reason || 'no effect'})` : '') +
+            (r.missed ? ' — MISS (ACT8 dead-guard path)' : '')
+          : `verb ${fired.verb}`;
         $('event').textContent =
-          `trigger ${fired.trigger} verb ${fired.verb}` + (fired.msg ? ` — “${fired.msg}”` : '');
+          `trigger ${fired.trigger}: ${what}` + (fired.msg ? ` — “${fired.msg}”` : '');
       }
+      /* CS:0x4189's dead `js` is reachable in shipped data — 5 of 48 ACT8
+       * records. Report it rather than diverging quietly. */
+      while (diverged.length) console.warn('[trigger]', diverged.shift());
       runSpawns();
       /* THE HUNT. CS:0xf11f/0xf1e5 run the pathfinder only from the two walk
        * modes, only on a tile crossing, and only when standing on ground —

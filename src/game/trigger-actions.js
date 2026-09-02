@@ -425,6 +425,12 @@ function act10(t, ctx) {
   for (let i = 0; i < ctx.weaponSlots.length; i++) {
     if (ctx.weaponSlots[i] === t.actionArg) {
       ctx.weaponSlots[i] = 0xffff;
+      /* ⚠️ ctx.weaponSlots is a plain number array, so for a host whose real
+       * arsenal lives elsewhere this write lands on a DETACHED COPY. The hook
+       * is what actually disarms the hero; without it ACT10 looks like it
+       * works — the result record says ok, and any check that reads the same
+       * copy agrees — while the weapon stays in the slot. */
+      ctx.clearWeaponSlot(i);
       return { verb: 10, ok: true, slot: i };
     }
   }
@@ -526,6 +532,7 @@ export function makeActionContext(over = {}) {
     categoryOf: null,
     sfx: () => {},
     showMessage: () => {},
+    clearWeaponSlot: () => {},
     onDiverge: () => {},
     /* CS:0x38D7. Overridable because the host holds its object array in a
      * different shape than the tests do; the default is the plain allocator. */
