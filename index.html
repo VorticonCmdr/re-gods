@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>GODS — web port</title>
+<style>
+  :root {
+    --bg:#0e0d12; --panel:#17161d; --line:#2a2833;
+    --ink:#e8e6ef; --dim:#9b97ac; --ok:#5ad48c; --bad:#ff6b6b; --accent:#e0a33e;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); display:flex; min-height:100vh; }
+  #stage { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:.75rem; padding:1rem; min-width:0; }
+  canvas { background:#000; image-rendering:pixelated; width:100%; max-width:960px; aspect-ratio:320/200; border:1px solid var(--line); }
+  #hud { display:flex; gap:1rem; flex-wrap:wrap; font-size:12px; color:var(--dim); }
+  #hud b { color:var(--ink); font-weight:600; }
+  aside { width:380px; flex:none; background:var(--panel); border-left:1px solid var(--line); padding:1rem; overflow-y:auto; max-height:100vh; }
+  h1 { font-size:14px; margin:0 0 .25rem; letter-spacing:.08em; text-transform:uppercase; }
+  .sub { font-size:11px; color:var(--dim); margin:0 0 1rem; line-height:1.5; }
+  h2 { font-size:11px; text-transform:uppercase; letter-spacing:.08em; color:var(--accent); margin:1.25rem 0 .5rem; }
+  .chk { display:flex; gap:.5rem; align-items:baseline; font-size:11px; padding:.2rem 0; border-bottom:1px solid #201f28; line-height:1.45; }
+  .chk .m { flex:none; width:1rem; }
+  .chk.ok .m { color:var(--ok); } .chk.bad .m { color:var(--bad); }
+  /* a `note` row reports a measurement, not a passed assertion — it must not
+     render as a green tick beside an open UNKNOWN_ */
+  .chk.note { opacity:.75; } .chk.note .m { color:var(--dim); }
+  .chk .d { color:var(--dim); }
+  .msg { font-size:11px; color:var(--dim); padding:.15rem 0; }
+  select, button { background:#221f2b; color:var(--ink); border:1px solid var(--line); padding:.35rem .5rem; font:inherit; font-size:12px; border-radius:4px; }
+  #summary { font-size:12px; padding:.5rem; border-radius:4px; margin-bottom:.5rem; }
+  #summary.ok { background:#12301f; color:var(--ok); } #summary.bad { background:#3a1618; color:var(--bad); }
+  code { color:var(--accent); }
+</style>
+</head>
+<body>
+  <div id="stage">
+    <canvas id="screen" width="1280" height="800"></canvas>
+    <div id="hud">
+      <span>level <select id="level"></select></span>
+      <span>logic <b id="hz">15.000</b> Hz</span>
+      <span>display <b id="fps">–</b> fps</span>
+      <span>hero <b id="pos">–</b></span>
+      <span>state <b id="pstate">–</b></span>
+      <span>event <b id="event">–</b></span>
+      <span>weapon <select id="weapon"></select></span>
+      <span>shots <b id="shots">0</b></span>
+      <span><label><input type="checkbox" id="showUnk" checked> mark unexplained tiles</label></span>
+      <span class="d">← → move · ↑ jump/climb · ↓ climb down · space fire</span>
+      <span class="d">the hero really starts unarmed (CS:0x914c) — the weapon
+        picker is a dev affordance until pickups are wired; idle+fire is object
+        pickup in the original, so firing needs a direction held</span>
+    </div>
+  </div>
+  <aside>
+    <h1>GODS — evidence-grounded port</h1>
+    <p class="sub">
+      Assets are read from the shipped <code>P*</code> files and
+      PKWARE-DCL-decompressed in the browser, so the checks below re-derive
+      published figures from the original bytes at load time rather than from
+      an offline extraction.
+    </p>
+    <div id="summary">running checks…</div>
+    <h2>Invariants</h2>
+    <div id="checks"></div>
+    <h2>Recovered level text</h2>
+    <div id="messages"></div>
+    <h2>Sprite atlas <span class="d" id="atlasName"></span></h2>
+    <p class="sub" style="margin:.25rem 0 .5rem">
+      Frames cut live from <code>POBJ1.PI1</code> using <code>POBJ1.DAT</code>'s
+      rectangles. The object <em>type → frame</em> mapping is not established,
+      so the game view marks object positions rather than guessing sprites.
+    </p>
+    <canvas id="atlas" width="560" height="561"
+            style="width:100%;image-rendering:pixelated;border:1px solid var(--line)"></canvas>
+    <h2>Clocks</h2>
+    <div class="msg">PIT ch0 <b>60.0011 Hz</b> — <code>1193182 / 19886</code></div>
+    <div class="msg">music <b>50.001 Hz</b> — ISR skips 1 in 6</div>
+    <div class="msg">logic <b>15.000 Hz</b> — export 14 waits for <code>[0x39] &gt; 3</code></div>
+  </aside>
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>

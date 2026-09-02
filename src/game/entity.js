@@ -1,0 +1,327 @@
+/* entity.js — System-B enemy locomotion, ported from the movement-mode table.
+ *
+ * SCOPE
+ *   GODS runs TWO parallel entity systems, discriminated by DS:0x3c2 (0x00 =
+ *   System A, 0xff = System B). This file is System B only: entity stride
+ *   0x18, group descriptors at DS:0xa1ac, movement modes at DS:0xdbe0.
+ *   System A (stride 0x28) has NO located movement table and is not modelled.
+ *
+ *   Here: the spawn state machine, walk, fall, and the mode transitions.
+ *   Placement itself lives in game/spawn.js. What is NOT here, and is not
+ *   faked:
+ *   Hop (modes 4/5) IS ported — see _hop, CS:0xf316/0xf3ee.
+ *   Hunting lives in pathfind.js / pathfind-producers.js and contact damage
+ *   in combat.js; both are wired. What is still NOT here:
+ *     - The DEATH sequence. Contact sets state -1 (see isDying below) and the
+ *       original branches to CS:0xf02a, which is unread.
+ *       UNKNOWN_creature_death_anim — the port stops drawing instead.
+ *     - The group-clear reward drop.
+ *
+ * THE MODE TABLE — DS:0xdbe0, 8 x {u16 handler, u16 anim_base}
+ *   Note the field order is the REVERSE of the player's table at DS:0xd818,
+ *   which is exactly the kind of thing a port mirrors wrongly.
+ *   Both read sites are `mov si,0xdbe0 / mov ax,[di+0xa] / shl ax,1 x2 /
+ *   add si,ax` (CS:0xedc3 and CS:0xf0ae) — the selector is entity +0x0a and
+ *   there is NO bounds check. The immediate E0 DB occurs exactly twice in the
+ *   whole file, which is what pins this table to System B alone.
+ */
+
+import { verdictAction, applyVerdict, VERDICT_NONE } from './pathfind.js';
+
+export const MODE = {
+  WALK_L: 0, WALK_R: 1, FALL_L: 2, FALL_R: 3, HOP_L: 4, HOP_R: 5,
+};
+
+/* handler address is carried for provenance; anim_base is what a port uses. */
+export const MODE_TABLE = [
+  { handler: 0xf11f, animBase:  0, label: 'walk left' },
+  { handler: 0xf1e5, animBase:  9, label: 'walk right' },
+  { handler: 0xf487, animBase:  8, label: 'fall left' },
+  { handler: 0xf4e5, animBase: 17, label: 'fall right' },
+  { handler: 0xf316, animBase:  8, label: 'hop left' },
+  { handler: 0xf3ee, animBase: 17, label: 'hop right' },
+  /* 6 and 7 are the fall-through targets of modes 0/1's alignment gate
+   * (0xf11f does `and ax,0x1c / jz 0xf129`), not separate behaviours. No
+   * store to [di+0x0a] anywhere writes 6 or 7. */
+  { handler: 0xf129, animBase:  8, label: 'unreachable (gate target of 0)' },
+  { handler: 0xf1ef, animBase: 17, label: 'unreachable (gate target of 1)' },
+];
+
+/* Mode bit 0 is facing in every live mode. */
+export const facingOf = (mode) => (mode & 1) ? +1 : -1;
+
+/* DS:0xdcde, and it extends into NEGATIVE indices — the table is centred on
+ * its own base, signed both ways like the hero's jump table:
+ *     idx  -6  -5  -4  -3  -2  -1 |  0  +1  +2  +3  +4  +5 .. +15
+ *     val   8   8   4   2   1   1 |  0  -1  -1  -2  -4  -8 ..  -8
+ * A port that treats 0xdcde as the start of the array and clamps at 0 loses
+ * the whole descent. Indices >= 16 are garbage (-772, -248, 1288, 1280), so
+ * the cursor cap is load-bearing.
+ *
+ * ⚠️ THE SIGN CONVENTION, because an earlier revision of this file had it
+ * backwards. The value is added to Y and screen Y grows DOWNWARD, so:
+ *     index  7..5   4    3    2,1   0    -1,-2  -3   -4   -5,-6
+ *     value  -8    -4   -2    -1    0     +1    +2   +4    +8
+ *     motion LAUNCH  decelerate    APEX      fall        fall fast
+ * The -8 run is the LAUNCH, not a terminal tail. That is exactly why seed 13
+ * is a longer hop than seed 7: it spends nine ticks climbing at 8 px instead
+ * of three. */
+export const HOP_ARC_MIN = -6;
+export const HOP_ARC = [
+  /* -6 */ 8, 8, 4, 2, 1, 1,
+  /*  0 */ 0, -1, -1, -2, -4, -8, -8, -8, -8, -8, -8, -8, -8, -8, -8, -8,
+];
+export const hopDelta = (cursor) => {
+  const i = cursor - HOP_ARC_MIN;
+  return (i >= 0 && i < HOP_ARC.length) ? HOP_ARC[i] : null;   // null = past the table
+};
+
+/* THE CURSOR TRAVERSAL — formerly UNKNOWN_sysB_hop_cursor, now closed. The arc
+ * simulator holds a BYTE offset in BX and word-indexes the table with it:
+ *     f8f3  mov bx,[0x2bc] / f8f7 add bx,bx      ; cursor = seed * 2
+ *     f975  mov si,0xdcde / f978 mov ax,[bx+si]  ; index = bx / 2
+ *     f97a  add [0x2ba],ax                       ; simY += value
+ *     f9c3  sub bx,0x2                           ; INDEX DECREMENTS BY 1
+ *     f9c6  cmp bx,-12 / jl / f9ce mov bx,-10    ; floor
+ * The floor is an OSCILLATION, not a clamp: byte -12 (index -6) decrements to
+ * -14, which is < -12, so it is reset to -10 (index -5). The cursor then
+ * ping-pongs between -6 and -5 forever — both hold 8, giving a terminal fall
+ * at a constant 8 px per tick. */
+export const HOP_CURSOR_FLOOR = -6;
+export const hopCursorNext = (cursor) =>
+  (cursor - 1 < HOP_CURSOR_FLOOR ? HOP_CURSOR_FLOOR + 1 : cursor - 1);
+
+export const WALK_STEP     = 4;    // CS:0xf1de `sub word [di],0x4`
+export const FALL_VMAX     = 16;   // CS:0xf492 `cmp ax,0x10`
+export const WALK_ANIM_MASK = 7;   // CS:0xf1da `and word [di+0x4],0x7`
+export const CULL = { xMin: -63, xMax: 351, yMin: -63, yMax: 223 };
+
+/** The map cursor System B uses — identical index math to the hero's. */
+const cellIndex = (x, y) => ((x & 0xFFE0) >> 5) + ((y & 0xFFF0) >> 4) * 128;
+
+/* CS:0xf4A1 / 0xf198 family: `cmp byte [ds:bp+0x100],0x1`, plus the
+ * `(X & 0x1f) >= 8` straddle against +0x101. +0x100 is two rows down
+ * (stride 128), i.e. the cell under a 32-px-tall entity.
+ * THE TEST IS `== 1` EXACTLY. Plane-B 2 (ladder) and every event cell >= 3
+ * are NOT ground, so a System-B entity falls straight through a ladder
+ * column. Writing this as `>= 1` is the single easiest way to get enemy
+ * movement subtly wrong everywhere. */
+export function groundBelow(planeB, x, y) {
+  return groundUnderCell(planeB, cellIndex(x, y), x);
+}
+
+/* CS:0xf3ae, split out because the hop handler calls it with a cell pointer
+ * computed BEFORE its own horizontal step while passing the POST-step X for
+ * the straddle. On the tick a hop crosses a tile boundary those disagree, and
+ * reproducing that needs the two inputs kept separate. */
+export function groundUnderCell(planeB, di, x) {
+  const si = di + 0x100;
+  if (planeB[si] === 1) return true;                 // f3b0
+  if ((x & 0x1f) >= 8 && planeB[si + 1] === 1) return true;   // f3b8..f3c2
+  return false;
+}
+
+/** CS:0xf3cd — the same shape one row up: the hop's ceiling test. */
+export function ceilingAtCell(planeB, di, x) {
+  if (planeB[di] === 1) return true;                 // f3cf
+  if ((x & 0x1f) >= 8 && planeB[di + 1] === 1) return true;   // f3d6..f3e0
+  return false;
+}
+
+/** CS:0xf586's window. Off-screen entities skip the search entirely. */
+export function onScreen(x, y, camX, camY) {
+  const sx = x - camX, sy = y - camY;
+  return sx > CULL.xMin && sx < CULL.xMax && sy > CULL.yMin && sy < CULL.yMax;
+}
+
+/**
+ * One System-B entity. Field names carry their DS offsets so the mapping back
+ * to the disassembly stays visible.
+ */
+/* Entity states, from DS:0x536 + 0x08 (CS:0xff20).
+ *   -2 waiting for its stagger delay, -3 materialising, >0 alive with HP,
+ *   <0 (other) dying, 0 free. */
+export const EST = { FREE: 0, DYING: -1, WAITING: -2, MATERIALISING: -3 };
+
+/* DYING is written by the contact routine, not by this module: CS:0xac59
+ * stores 0xFFFF into the strength word and CS:0xffb4 writes it straight back
+ * into +0x08. The per-frame driver then branches on it — CS:0xedf7
+ * `cmp word [di+0x8],0 / jns 0xee00` sends a live entity to the draw call and
+ * a negative one to CS:0xf02a instead. That death path has not been read
+ * (UNKNOWN_creature_death_anim), so this port stops drawing a dying creature
+ * rather than rendering it with the frame -1 the kill leaves behind. */
+export const isDying = (e) => e.state === EST.DYING;
+export const MATERIALISE_TICKS = 5;    // CS:0xff7f `mov word [di+0x6],5`
+
+export class EntityB {
+  constructor({ x, y, mode = MODE.WALK_L, speed = 9, hp = 1, cls = 0, delay = 0 }) {
+    this.x = x;             // +0x00
+    this.y = y;             // +0x02
+    this.frame = 0;         // +0x04  animation index, cycles 0..7
+    this.delay = 0;         // +0x06  step delay counter
+    this.mode = mode;       // +0x0a
+    this.vel = 2;           // +0x12  fall velocity / hop cursor (init 2 at spawn)
+    this.speed = speed;     // descriptor +0x0b — HIGHER IS FASTER
+    this.cls = cls;         // descriptor +0x07, the sprite class
+    this.state = EST.WAITING;   // +0x08
+    this.hp = hp;               // descriptor +0x01
+    this.timer = delay;         // +0x06, the per-entity stagger
+  }
+
+  get alive() { return this.state > 0; }
+
+  get animBase() { return MODE_TABLE[this.mode].animBase; }
+
+  /**
+   * One 15 Hz tick.
+   * @param {Uint8Array} planeB
+   * @param {number} verdict  DS:0x2ac, the pathfinder result — see pathfind.js.
+   *   -1 means "no path", which is also what an off-screen entity always gets,
+   *   because CS:0xf586 pre-sets 0xFFFF and its cull returns before searching.
+   *   0..7 is a first move: 0/1 walk left/right, 2..7 hop left/right at one of
+   *   three reaches. UNKNOWN_f586_verdict_semantics is CLOSED — the domain and
+   *   the applier (CS:0xf2ac) are decoded. What is still open is the search
+   *   that PRODUCES it: UNKNOWN_pathfinder_producers. With no producers the
+   *   search reports -1 and the entity patrols, which is the original's own
+   *   no-path behaviour rather than an invention.
+   */
+  tick(planeB, verdict = VERDICT_NONE) {
+    /* CS:0xff20 — the pre-life states run before any locomotion.
+     *   waiting (-2): count the stagger down, then materialise
+     *   materialising (-3): 5 ticks, then become alive with the descriptor HP
+     * The materialise effect itself (CS:0xff59) is not ported. */
+    if (this.state === EST.WAITING) {
+      if (--this.timer <= 0) { this.state = EST.MATERIALISING; this.timer = MATERIALISE_TICKS; }
+      return;
+    }
+    if (this.state === EST.MATERIALISING) {
+      if (--this.timer <= 0) { this.state = this.hp; this.timer = 0; }
+      return;
+    }
+    if (this.state <= 0) return;          // dying or free
+
+    switch (this.mode) {
+      case MODE.WALK_L: case MODE.WALK_R: this._walk(planeB, verdict); break;
+      case MODE.FALL_L: case MODE.FALL_R: this._fall(planeB); break;
+      case MODE.HOP_L:  case MODE.HOP_R:  this._hop(planeB); break;
+      default: break;
+    }
+  }
+
+  /**
+   * CS:0xf316 (hop left) / CS:0xf3ee (hop right) — the LOCOMOTION hop.
+   *
+   * ⚠️ THIS IS NOT THE PATHFINDER'S ARC SIMULATOR. That one (CS:0xf8dc) only
+   * predicts where a hop would land; this one actually moves the entity, and
+   * the two differ in a way that matters: the simulator holds a BYTE cursor
+   * and ping-pongs -6/-5 forever, while this holds a WORD cursor
+   * (`f368 mov ax,[di+0x12] / shl ax,1`) and, once it drops below -5, HANDS
+   * OFF TO THE FALL HANDLER at velocity 8. A hop here always terminates.
+   */
+  _hop(planeB) {
+    if (--this.delay >= 0) return;                   // f316 `dec / jns` — just redraw
+    this.delay = 2 - (this.speed >> 2);              // f31b..f329 — SAR, not divide
+
+    const right = (this.mode & 1) === 1;
+    /* The cell pointer is taken BEFORE the horizontal step (f32c) and the
+     * ground test below still uses it — see groundUnderCell. */
+    const diBefore = cellIndex(this.x, this.y);
+
+    /* Horizontal step, wall-gated only exactly on a tile boundary. */
+    const onBoundary = (this.x & 0x1f) === 0;        // f330
+    const blocked = onBoundary && (right
+      ? (planeB[diBefore + 1] === 1 || planeB[diBefore + 0x81] === 1)    // f40f/f416
+      : (planeB[diBefore - 1] === 1 || planeB[diBefore + 0x7f] === 1));  // f337/f33e
+    if (!blocked) this.x += right ? 4 : -4;          // f41e / f345
+
+    /* Past the apex, a floor under us ends the hop. */
+    if (this.vel <= 0) {                             // f348 / f421 `cmp 0 / jg`
+      if (groundUnderCell(planeB, diBefore, this.x)) {          // f34e / f427
+        this.y &= 0xfff0;                            // f35b / f42f
+        this.mode = right ? MODE.WALK_R : MODE.WALK_L;          // f356 / f433
+        return;
+      }
+    }
+
+    /* The arc step. The cursor indexes the table directly as a WORD. */
+    this.y += hopDelta(this.vel) || 0;               // f365..f373
+
+    const diAfter = cellIndex(this.x, this.y);       // f376 / f44f — RECOMPUTED
+    if (ceilingAtCell(planeB, diAfter, this.x)) {    // f379 / f452
+      this.y = (this.y & 0xfff0) + 0x10;             // f381 / f45a
+      this.mode = right ? MODE.FALL_R : MODE.FALL_L; // f389
+      this.vel = 2;                                  // f38e — a bonk drops at 2
+      return;
+    }
+
+    this.vel--;                                      // f397
+    if (this.vel < -5) {                             // f39a `cmp -5 / jnl`
+      this.mode = right ? MODE.FALL_R : MODE.FALL_L;
+      this.vel = 8;                                  // f3a5 — running out drops at 8
+    }
+  }
+
+  _walk(planeB, verdict) {
+    /* CS:0xf11f: `mov ax,[di] / and ax,0x1c / jz` — the map is probed ONLY on
+     * a tile crossing. X moves in steps of 4, so `& 0x1c` is zero only at
+     * multiples of 32: once per tile. That is observable behaviour, not an
+     * optimisation — it decides when a turn-around can happen at all. */
+    if ((this.x & 0x1c) !== 0) { this._step(); return; }   // f126 jmp 0xf1be
+
+    if (!groundBelow(planeB, this.x, this.y)) {
+      /* Walked off an edge — CS:0xf157 (left) / 0xf21e (right), and note the
+       * transition is NOT inert: it seeds the velocity to 1 and advances Y by
+       * one pixel in the same tick.
+       *     f157  mov ax,0x1
+       *     f15a  mov word [di+0xa],0x2     ; fall left  (0xf21e stores 3)
+       *     f15f  mov [di+0x12],ax          ; velocity := 1, NOT 0
+       *     f162  add [di+0x2],ax           ; y += 1 immediately
+       *     f165  mov word [di+0x4],0
+       * An earlier revision of this port set the velocity to 0 and left Y
+       * alone, which delayed every fall by a tick and started the curve one
+       * step low. Facing is preserved because mode bit 0 is facing. */
+      this.mode = (this.mode & 1) ? MODE.FALL_R : MODE.FALL_L;
+      this.vel = 1;
+      this.y += 1;
+      this.frame = 0;
+      return;
+    }
+
+    /* On a tile boundary, on ground: RUN THE PATHFINDER (CS:0xf141/0xf203) and
+     * branch on its verdict. `verdictAction` carries the asymmetry between the
+     * two walk handlers — each compares against its OWN mode number. */
+    switch (verdictAction(verdict, this.mode)) {
+      case 'apply':                              // CS:0xf150 `call 0xf2ac`
+        applyVerdict(this, verdict);
+        return;
+      case 'keep':                               // CS:0xf14e `jz 0xf1be`
+      case 'patrol':                             // CS:0xf14c `js` -> wall probes
+      default:
+        this._step();
+    }
+  }
+
+  /** CS:0xf1be — the ordinary step, gated on the delay going NEGATIVE. */
+  _step() {
+    if (--this.delay < 0) {
+      this.delay = 10 - this.speed;              // `mov ax,0xa / sub al,[si+0xb]`
+      this.frame = (this.frame + 1) & WALK_ANIM_MASK;
+      this.x += facingOf(this.mode) * WALK_STEP;
+    }
+    this.vel = 0;                                // `mov word [di+0x12],0`
+  }
+
+  _fall(planeB) {
+    this.frame = 0;                              // CS:0xf487 `mov word [di+0x4],0`
+    /* The velocity is applied BEFORE the increment, and clamps at 16. The hero
+     * uses 4 + v capped at 10 — a different curve entirely. */
+    const v = this.vel;
+    if (v !== FALL_VMAX) this.vel = v + 1;
+    this.y += v;
+    if (groundBelow(planeB, this.x, this.y)) {
+      this.y &= 0xfff0;                          // `and word [di+0x2],0xfff0`
+      this.mode = (this.mode & 1) ? MODE.WALK_R : MODE.WALK_L;
+      this.vel = 0;
+    }
+  }
+}

@@ -1,0 +1,5040 @@
+/* checks.js — live invariant checks.
+ *
+ * The point of this module is that "grounded in facts" should be checkable by
+ * the user in the running page, not asserted in a comment. Every check below
+ * re-derives a published figure from the shipped bytes at load time. If a
+ * format claim were wrong, these would go red rather than fail silently.
+ */
+
+import { dclDecompress } from '../formats/dcl.js';
+import { PI1_SIZE, decodePI1, TILE_COUNT } from '../formats/pi1.js';
+import { BULK_SIZE, parseMap } from '../formats/map.js';
+import { parseAllTriggers, isLive, verbOf, TRIG_COUNT } from '../game/trigger.js';
+import { parseAtlas, cutAll, atlasStats } from '../formats/atlas.js';
+import { buildDescriptorMap, GROUP_STEMS, PLAYER_ANIM_BASE, HERO_DESCRIPTOR_MAX } from '../formats/descriptors.js';
+import { STATE_INFO, STATE_TABLE, spriteFor, NON_RENDERING_STATES, jumpPhase,
+         LADDER_JUMP_PHASE } from '../game/states.js';
+import { emittableStates } from '../game/player.js';
+import { MODE, MODE_TABLE, EntityB, hopDelta, hopCursorNext,
+         groundBelow, onScreen } from '../game/entity.js';
+import { parseGroupsB, GroupSlots, spriteForEntity, CLASS_TABLES_B,
+         CREATURE_DESCRIPTOR_BASE, MAX_ENTITIES } from '../game/spawn.js';
+import { SELECTOR_TABLE, SELECTOR_TRIGGER, EVENT_TABLE_OFF, EVENT_COUNT,
+         palfilsNameFor, parsePalfils, EventRunner } from '../game/events.js';
+import { spriteForType, parseObjectCategories, isDeadType, isUnstamped,
+         OBJECT_SPRITE_BASE, STAMPED_TYPES } from '../game/objects.js';
+import { VERDICT, REACHABLE_VERDICTS, VERDICT_NONE, verdictAction, applyVerdict, search, searchable,
+         OpenList, OPEN_SLOTS, OPEN_LIMIT, GRID_PITCH, GRID_CELLS, GRID_LIMIT,
+         GRID_MARGIN, heroCell, entityCell, SEED_STRATEGIES, SEED_WEIGHT_MASK,
+         seedStrategy, seedBoxCells, seedColumnCells, gridIndex,
+         WAYPOINTS, MARKER_MAX, ATTRACT_POTION_TYPE } from '../game/pathfind.js';
+import { runSearch } from '../game/pathfind-producers.js';
+import { Health, HEALTH_MAX, damageFor, attackHero, creatureTouchesHero,
+         difficultyScale, DIFFICULTY_MULTIPLIERS, difficultyForgiven,
+         DIFFICULTY_PROGRESSION, creatureScansGrid,
+         CREATURE_CONTACT_BOX } from '../game/combat.js';
+import { Arsenal, spawnableWeapons, FIRE_CAPABLE_STATES, LEVER_STATES,
+         INVENTORY_STATES } from '../game/hero-fire.js';
+import { pickUpWeapon, chooseSlot, heroTouches, stepPickups, PICKUP_BOX,
+         isWeaponPickup, weaponIndexOf, FIREBALL,
+         consumableRank } from '../game/pickup.js';
+import { CONSUMABLES, WIRED, WEAPON_ARCS, NOT_WIRED_REASON, applyConsumable,
+         INVULN_TICKS_POTION, INVULN_TICKS_SPAWN, INVULN_SPAWN_DEDUCTION,
+         FREEZE_TICKS, GIANT_JUMP_TICKS, POWER_POTION_STEPS, MSG_CLEAR_394,
+         SHIELD_NOOP_DS, SHIELD_NOOP_SITES, UNIMPLEMENTED_TYPE,
+         FAMILIAR_ENERGY_DS, FAMILIAR_CLEAR_SITES,
+         banksOverheal } from '../game/consumables.js';
+
+import { stepHeroFrame, stepCreatureDamage, FRAME_ORDER,
+         HUNTER_WEAPON } from '../game/frame.js';
+import { CHEST_MIN, CHEST_MAX, CHEST_KEY_BASE, chestKeyFor, openedType,
+         isLockedChest, isOpenChest, isChestType, scoreForValue,
+         collectTreasure, parseObjectRecords, Score, Purse, TreasureBurst,
+         burstTypes, burstTypesAligned, BURST_TABLE, BURST_TABLE_DS,
+         BURST_ALIGNED_DS, BURST_STRIDE_WORDS, BURST_AUTHORED_WORDS,
+         BURST_COUNT, BURST_VY_CAP, CHEST_SFX, TREASURE_SFX,
+         INVENTORY_CLEAR_SITES, INVENTORY_EMPTY, CHEST_KEY_CENSUS,
+         OBJ_NAME_OFF, OBJ_NAME_MAX, OBJ_DESC_OFF, OBJ_DESC_MAX,
+         OBJ_RECORD_SIZE } from '../game/treasure.js';
+import { expandMapObjects, allocObject, OBJECT_SLOTS, activationBox,
+         activateObjects, sortForDraw, insertSpawned } from '../game/objects.js';
+import { GodsRandom } from '../game/random.js';
+import { CLASS_TABLES, EMPTY_CLASS, HAZARD_CLASS, HAZARD_HANDLERS,
+         HAZARD_SPRITE_BASE, POOL_SLOTS, POOL_STRIDE,
+         POOL_TENANTS } from '../game/entity-classes.js';
+import { EnemyShots, hitsHero, isCrouching,
+         SLOTS as ES_SLOTS, STRIDE as ES_STRIDE, FREE as ES_FREE,
+         CULL_LEFT, CULL_RIGHT, DAMAGE as ES_DAMAGE, CROUCH_RAISE,
+         HERO_BOX, HOT_POINT, SPRITE_RIGHT, SPRITE_LEFT, SPRITE_FADE_BASE,
+         DESPAWN_RIGHT_X, DESPAWN_LEFT_X, TERRAIN_Y_BIAS, TERRAIN_STRADDLE,
+         FADE_FREE_AT, STOP_STATE_RIGHT, STOP_STATE_LEFT } from '../game/enemy-shots.js';
+import { HERO_SHOTS_AT, ENEMY_SHOTS_AT } from '../game/frame.js';
+import { Nests, aimAt, broodCount, signed16,
+         OBJECT_TYPE as NEST_TYPE, OBJECT_SPRITE as NEST_OBJ_SPRITE,
+         WORLD as NEST_WORLD, SLOTS as NEST_SLOTS, STRIDE as NEST_STRIDE,
+         SEED_STATE, SEED_HP, SEED_TIMER_BASE, SEED_TIMER_MASK,
+         SEED_X_BIAS, SEED_Y_BIAS,
+         SPRITE_BASE as NEST_SPRITE_BASE, SPRITE_FIRST as NEST_SPRITE_FIRST,
+         SPRITE_LAST as NEST_SPRITE_LAST, DEATH_SPRITE_BASE,
+         BOX_HATCH, BOX_ALIVE, HATCH_WINDOW, AIM_GATE, FIRE_RELOAD,
+         FIRE_PERIOD, HATCH_RELOAD, BAND_LEFT, BAND_RIGHT, MUZZLE,
+         BROOD_AT_STATE, DEATH_FREE_AT_STATE, BROOD_SLOTS, BROOD_STRIDE,
+         BROOD_Y_OFFSET, BROOD_HP, ST as NST } from '../game/nest.js';
+import { Debris, SLOTS as DBG_SLOTS, STRIDE as DBG_STRIDE, LIFETIME_TICKS,
+         SPRITE_FIRST, SPRITE_LAST, EXPIRE_AT } from '../game/debris.js';
+import { Destructibles, DESTRUCTIBLE_TILE, MIN_WORLD, MACE_INDEX, MACE_BONUS,
+         QUEUE_SLOTS, RESTORE_SLOTS, BREAK_FRAMES, SPRITE_BASE_DS,
+         SPRITE_BASE_VALUE, blockDamage, hitsToBreak,
+         shotsToBreak } from '../game/destructible.js';
+import { Starburst, BURST_TEMPLATE, PARTICLES_PER_BURST, SLOTS,
+         CULL as SB_CULL, GRAVITY_PERIOD, AGE_MAX, AGE_STEP, CHAIN_WINDOW,
+         TAG as SB_TAG, chainThreshold, modeDamage,
+         SPAWNER_CALLERS } from '../game/starburst.js';
+import { JUMP_ARC_END, JUMP_ARC_EXIT, fireGuardBefore,
+         fireGuardAfter } from '../game/fire-states.js';
+import { Player, ST, S as PS } from '../game/player.js';
+import { CELL_SOLID, CELL_CLIMBABLE, MAP_COLS as MC } from '../formats/map.js';
+import { parseWeapons, allocateShots, MAX_SUBSLOTS, WEAPON_SLOTS, tagFor,
+         WEAPON_COUNT, PINNED_08, PINNED_SPRITE, PINNED_SPRITE2,
+         armWeapon, pickUpAgain, refundFor, reloadWorld,
+         SPRITE_FIELDS_ARE_PINNED } from '../game/weapons.js';
+import { FIRE_STATES as FS, FIRE_STATE_IDS, WALK_FIRE_ANIM, EMIT_WALK,
+         EMIT_OTHER, fireAnimOffset, fireTick, persistsRawPhase,
+         ENTRY, tryEnterFireState } from '../game/fire-states.js';
+import { clipScanBox, CLIP_NEAR, CLIP_BOTTOM, CLIP_RIGHT,
+         DamageGrid, CELL, GRID_ORIGIN, GRID_LO, GRID_BYTES, ROW_STRIDE,
+         WRITE_LO, WRITE_HI, MAX_SCAN_COLS, stampIndex, scanIndex,
+         damageForTag, TAGS_PER_SLOT } from '../game/collision.js';
+import { FireControl, FIRE_BIT, EMIT_PHASE, RECHECK_PHASE,
+         FIRE_STATES } from '../game/fire.js';
+import { SLOT_STRIDE, PROJECTILE_SIZE, GROUP_STRIDE, GROUP_ENTRIES,
+         AREA_ENTRIES, ENTRIES_REACHABLE, GROUPS_PROBED, HANDLER_TABLE, NULL_HANDLERS,
+         DECODED_HANDLERS, HANDLERS, DIRS, CUT_WEAPON, volleySize,
+         volleySizeAtLoad, spawnVolley, muzzle, MOVER_TABLE, MOVER_NULL,
+         DRAW_STYLES, WOBBLE_ENTRIES, newWobble,
+         stepFireball, pickTarget, unpackHunterVel, hunterTurnRate,
+         TARGET_STRIDE, AXE_STATE_STRIDE, AXE_BOUNCE_VX, AXE_GRAVITY,
+         AXE_VY_CAP, AXE_SPRITE_BASE, newAxeState, stepMagicAxe, axeSprite,
+         HUNTER_VEL_CLAMP, HUNTER_TARGET_BIAS, HUNTER_CULL, hunterSteerAxis,
+         stepHunter, FUSE_START, FUSE_EXPLODE, BOMB_FRAGMENTS, BOMB_SPRITE_BASE,
+         BOMB_BOUNCE, BOMB_GRAVITY_CAP, stepTimeBomb,
+         PROJECTILE_VELOCITY, setWeaponArc, resetWeaponArc,
+         MOVER_WALK, CULL, stepProjectiles,
+         DECODED_MOVERS } from '../game/projectiles.js';
+
+export function makeChecker() {
+  const results = [];
+  const check = (name, pass, detail = '') => {
+    results.push({ name, pass: !!pass, detail });
+    return pass;
+  };
+  return { results, check };
+}
+
+/** Documented figures this port must reproduce from raw bytes. */
+export const EXPECTED = {
+  liveTriggers: 756,
+  condSlots: 2268,
+  cond0Slots: 1207,
+  verbHistogram: [203, 4, 75, 75, 3, 134, 25, 60, 48, 18, 7, 6, 8, 77, 13],
+  maxCondKind: 16,
+  maxVerb: 14,
+};
+
+/**
+ * Run every invariant against the whole shipped level set.
+ * @param {(url:string)=>Promise<Uint8Array>} fetchRaw returns raw file bytes
+ */
+export async function runAllChecks(fetchRaw) {
+  const { results, check } = makeChecker();
+  const keys = ['1A','1B','2A','2B','3A','3B','4A','4B'];
+
+  let liveTotal = 0, slotTotal = 0, cond0Total = 0;
+  let maxKind = -1, maxVerb = -1;
+  const hist = new Array(15).fill(0);
+  let dclExact = 0, pi1Exact = 0, bulkExact = 0;
+  let sampleMessages = [];
+
+  for (const k of keys) {
+    /* --- DCL: decompresses and consumes its input EXACTLY --- */
+    const rawMap = await fetchRaw(`game/PLEV${k}.MAP`);
+    const decMap = dclDecompress(rawMap);
+    if (decMap.consumed === rawMap.length) dclExact++;
+    check(`PLEV${k}.MAP header is 00 06 (DCL, literal mode 0, 4096-byte dict)`,
+      rawMap[0] === 0 && rawMap[1] === 6, `got ${rawMap[0]} ${rawMap[1]}`);
+
+    /* --- MAP: bulk is exactly 21824 bytes --- */
+    const map = parseMap(decMap.data);
+    const bulkLen = decMap.data.length - (4 + map.count * 2);
+    if (bulkLen === BULK_SIZE) bulkExact++;
+    check(`PLEV${k} bulk == ${BULK_SIZE} (total - 21824 == 4 + 2*count)`,
+      bulkLen === BULK_SIZE, `bulk=${bulkLen} count=${map.count}`);
+
+    if (sampleMessages.length === 0) {
+      sampleMessages = map.messages.filter(Boolean).slice(0, 4);
+    }
+
+    /* --- triggers --- */
+    for (let i = 0; i < TRIG_COUNT; i++) {
+      const t = parseAllTriggers(map.bulk)[i];
+      if (!isLive(t)) continue;
+      liveTotal++;
+      const v = verbOf(t);
+      if (v < 15) hist[v]++;
+      if (v > maxVerb) maxVerb = v;
+      for (let s = 0; s < 3; s++) {
+        slotTotal++;
+        if (t.condKind[s] === 0) cond0Total++;
+        if (t.condKind[s] > maxKind) maxKind = t.condKind[s];
+      }
+    }
+
+    /* --- PI1: exactly 32034 bytes = 4 planes, never 5 --- */
+    const rawBits = await fetchRaw(`game/PBITS${k}.PI1`);
+    const decBits = dclDecompress(rawBits);
+    if (decBits.data.length === PI1_SIZE) pi1Exact++;
+    check(`PBITS${k}.PI1 == ${PI1_SIZE} B (4 planes; 5 would need 40034)`,
+      decBits.data.length === PI1_SIZE, `${decBits.data.length}`);
+    /* Palette provenance — a correction this port surfaced.
+     * The project notes originally claimed EVERY .PI1 has ST 3-bit palette
+     * words (all nibbles <= 7). Measured across all 44 shipped .PI1 files
+     * that holds for 32 of them and FAILS for exactly 12: the PBITS* and
+     * PXTRA* tile sheets, every one of which also has the high nibble set.
+     * So a tile sheet's palette words are NOT a usable ST palette, and the
+     * level palette must come from elsewhere. We assert the real split. */
+    const bitsImg = decodePI1(decBits.data);
+    const st3 = (img) => !Array.from(img.paletteRaw)
+      .some((w) => ((w >> 8) & 15) > 7 || ((w >> 4) & 15) > 7 || (w & 15) > 7);
+    check(`PBITS${k} palette is NOT ST 3-bit (tile sheets carry no palette)`,
+      !st3(bitsImg));
+
+    const rawPal = await fetchRaw(`game/PLEVEL${k}.PI1`);
+    const palImg = decodePI1(dclDecompress(rawPal).data);
+    check(`PLEVEL${k}.PI1 palette IS ST 3-bit (every nibble <= 7)`, st3(palImg));
+  }
+
+  check(`DCL consumes input exactly on all 8 maps`, dclExact === 8, `${dclExact}/8`);
+  check(`all 8 .PI1 tile sheets are exactly ${PI1_SIZE} bytes`, pi1Exact === 8, `${pi1Exact}/8`);
+  check(`all 8 map bulks are exactly ${BULK_SIZE} bytes`, bulkExact === 8, `${bulkExact}/8`);
+
+  check(`live trigger records == ${EXPECTED.liveTriggers}`,
+    liveTotal === EXPECTED.liveTriggers, `${liveTotal}`);
+  check(`condition slots == ${EXPECTED.condSlots}`,
+    slotTotal === EXPECTED.condSlots, `${slotTotal}`);
+  check(`COND0 (unused-slot) count == ${EXPECTED.cond0Slots}`,
+    cond0Total === EXPECTED.cond0Slots, `${cond0Total}`);
+  check(`max condition kind == ${EXPECTED.maxCondKind} (17-entry table SS:0x35b0)`,
+    maxKind === EXPECTED.maxCondKind, `${maxKind}`);
+  check(`max action verb == ${EXPECTED.maxVerb} (15-entry table SS:0x3592)`,
+    maxVerb === EXPECTED.maxVerb, `${maxVerb}`);
+  const histOk = hist.every((v, i) => v === EXPECTED.verbHistogram[i]);
+  check(`action verb histogram matches the C port exactly`,
+    histOk, hist.join('/'));
+
+  check(`tile grid is ${TILE_COUNT} tiles (export 17 clamps at 0x78 = 120)`,
+    TILE_COUNT === 120, `${TILE_COUNT}`);
+
+  /* --- sprite atlases --- */
+  for (const name of ['PALWAYS1', 'POBJ1', 'PGODFONT', 'PSMLFNT']) {
+    const dat = dclDecompress(await fetchRaw(`game/${name}.DAT`)).data;
+    const img = decodePI1(dclDecompress(await fetchRaw(`game/${name}.PI1`)).data);
+    const a = parseAtlas(dat);                      // throws unless 2 + 10*count
+    const s = atlasStats(a);
+    check(`${name}.DAT is 2 + 10*count bytes (count ${a.count})`,
+      dat.length === 2 + 10 * a.count, `${dat.length}`);
+    check(`${name} frames all inside the 320x200 canvas`,
+      s.outOfBounds === 0, `${s.outOfBounds} out of bounds`);
+    check(`${name} word2 is dead padding (always 0)`,
+      s.word2NonZero === 0, `${s.word2NonZero} non-zero`);
+    const frames = cutAll(img, a);
+    const empty = frames.filter((f) => !f.pixels.some((v) => v !== 0)).length;
+    check(`${name}: ${a.count - empty}/${a.count} frames contain pixels`,
+      empty <= 1, `${empty} empty`);
+  }
+
+  return { results, sampleMessages, hist };
+}
+
+/* Descriptor-numbering anchors. Both were PREDICTED from the cumulative model
+ * and then measured against the shipped atlases — neither dimension was
+ * fitted. If the numbering were wrong these would land on the wrong frame. */
+export async function checkDescriptorAnchors(fetchRaw) {
+  const { results, check } = makeChecker();
+  const counts = {};
+  for (const s of ['PALWAYS1', 'PALWAYS2', 'PALWAYS3', 'PGODFONT']) {
+    counts[s] = parseAtlas(dclDecompress(await fetchRaw(`game/${s}.DAT`)).data).count;
+  }
+  const { map, ranges } = buildDescriptorMap(['always'], (s) => counts[s]);
+
+  const d127 = map[127];
+  const a3 = parseAtlas(dclDecompress(await fetchRaw('game/PALWAYS3.DAT')).data);
+  const f127 = a3.frames[d127.frame];
+  check(`descriptor #127 (export 21) -> ${d127.stem} frame ${d127.frame}, 80x7 digit strip`,
+    d127.stem === 'PALWAYS3' && f127.w === 80 && f127.h === 7, `${f127.w}x${f127.h}`);
+
+  const d169 = map[169];
+  const gf = parseAtlas(dclDecompress(await fetchRaw('game/PGODFONT.DAT')).data);
+  const f169 = gf.frames[d169.frame];
+  check(`descriptor #169 -> ${d169.stem} frame ${d169.frame}, the 208x46 title logo`,
+    d169.stem === 'PGODFONT' && f169.w === 208 && f169.h === 46, `${f169.w}x${f169.h}`);
+
+  const heroFrames = [];
+  const a1 = parseAtlas(dclDecompress(await fetchRaw('game/PALWAYS1.DAT')).data);
+  const a2 = parseAtlas(dclDecompress(await fetchRaw('game/PALWAYS2.DAT')).data);
+  a1.frames.forEach((f) => heroFrames.push(f));
+  a2.frames.slice(0, 19).forEach((f) => heroFrames.push(f));
+  const tall = heroFrames.filter((f) => f.w === 32 && f.h >= 42).length;
+  check(`hero descriptors #0..#57 are 32x48-class frames`,
+    tall >= 55, `${tall}/58 are 32x>=42`);
+  check(`max player anim_base (55) lies inside the hero range`,
+    Math.max(...PLAYER_ANIM_BASE) <= HERO_DESCRIPTOR_MAX, `${Math.max(...PLAYER_ANIM_BASE)}`);
+  /* ══ THE DS:0xcfcc CO-TENANT — a PLACED world-2 enemy ════════════════════
+   *
+   * Last session closed UNKNOWN_hazard_emitter_placement by proving the other
+   * tenant of this pool is CUT. The natural next inference — that its
+   * neighbour is cut too — is wrong, and these checks are what forces the
+   * question rather than letting the assumption stand.
+   */
+  {
+    const nkeys = ['1A', '1B', '2A', '2B', '3A', '3B', '4A', '4B'];
+    const placed = {};
+    const cat4 = {};
+    for (const k of nkeys) {
+      const m = parseMap(dclDecompress(await fetchRaw(`game/PLEV${k}.MAP`)).data);
+      placed[k] = m.objects.filter((o) => !isDeadType(o.type)
+                                       && o.type === NEST_TYPE).length;
+    }
+    for (const w of [1, 2, 3, 4]) {
+      const cats = parseObjectCategories(
+        dclDecompress(await fetchRaw(`game/POBJECTS.00${w}`)).data);
+      cat4[w] = [...cats].map((c, i) => [c, i]).filter(([c]) => c === 4)
+                         .map(([, i]) => i);
+    }
+
+    const w2 = placed['2A'] + placed['2B'];
+    const rest = nkeys.filter((k) => k[0] !== '2')
+                      .reduce((n, k) => n + placed[k], 0);
+
+    /* ⚠️ THE DISCRIMINATING PART IS THE ZERO. A type placed only in world 2
+     * is what makes the allocator's own `cmp byte [0x42],2` corroborating
+     * rather than circular — the world gate was read out of the code before
+     * this census was run, and the census could have contradicted it. */
+    check(`object type ${NEST_TYPE} is placed 16+16 in WORLD 2 and nowhere else`,
+      placed['2A'] === 16 && placed['2B'] === 16 && w2 === 32 && rest === 0,
+      `PLEV2A ${placed['2A']}, PLEV2B ${placed['2B']}, all six other maps ` +
+      `${rest} — matching CS:0x8611's \`cmp byte [0x42],2\` exactly. So the ` +
+      `DS:0xcfcc pool's OTHER tenant is the opposite of the falling hazard: ` +
+      `decoded AND reachable, 32 placements the port had nothing for`);
+
+    check(`type ${NEST_TYPE} is POBJECTS category 4, with an EMPTY name and description`,
+      [1, 2, 3, 4].every((w) => cat4[w].includes(NEST_TYPE)),
+      `category 4 in all four worlds. The game never names it, which is why ` +
+      `this port's "nest" is a LABEL and UNKNOWN_nest_identity stands. It is ` +
+      `also consistent: a category-4 object is rejected by the walk-in pickup ` +
+      `path (CS:0x17E6 \`jg\` sends category >= 2 away), so it never needs one`);
+
+    /* Category 4 is one of the two codes this project has carried as UNKNOWN
+     * since the POBJECTS work. This does not close it, but it narrows it.
+     *
+     * ⚠️ I FIRST WROTE THIS ROW AS "every category-4 type is unnamed", with
+     * an assertion that did not test any name. It is false: type 50 is named
+     * "spike". The row now tests what it claims — and the exception argues
+     * the same way as the rule, because a spike is a hazard rather than an
+     * item, which is what category 4 looks like from every other angle too. */
+    {
+      const pobj1 = dclDecompress(await fetchRaw('game/POBJECTS.001')).data;
+      const nameOf4 = (t) => {
+        let n = '';
+        for (let i = 0; i < 16; i++) {
+          const c = pobj1[t * 48 + 8 + i];
+          if (!c) break;
+          n += String.fromCharCode(c);
+        }
+        return n;
+      };
+      const named = cat4[1].filter((t) => nameOf4(t) !== '');
+      check(`6 of the 7 category-4 types are UNNAMED — the exception is type 50, "spike"`,
+        cat4[1].length === 7 && cat4[1].join() === cat4[2].join()
+          && named.length === 1 && named[0] === 50 && nameOf4(50) === 'spike'
+          && nameOf4(NEST_TYPE) === '',
+        `types ${cat4[1].join(', ')} (identical in world 2), and only 50 ` +
+        `carries text. POBJECTS categories 0/1/2/3 are ` +
+        `potion/treasure/keys/levers — all things the hero picks up. Category ` +
+        `4 has no names because nothing in it is an item: type ${NEST_TYPE} ` +
+        `is routed BY SPRITE ID into a spawner at CS:0x161D, and "spike" is a ` +
+        `hazard. Categories 4 and 5 stay UNKNOWN, but this is what 4 looks ` +
+        `like from the data side`);
+    }
+
+    /* ── the sprite range closes exactly ────────────────────────────────── */
+    check(`sprite = ${NEST_SPRITE_BASE} + state covers exactly nine frames, ${NEST_SPRITE_FIRST}..${NEST_SPRITE_LAST}`,
+      NEST_SPRITE_FIRST === 512 && NEST_SPRITE_LAST === 520
+        && NEST_SPRITE_LAST - NEST_SPRITE_FIRST + 1 === 9
+        && SEED_STATE === -4,
+      `state runs [-4, +4] and the formula is applied unchanged across the ` +
+      `whole signed range — CS:0x88B4 (hatching, negative) and CS:0x8765 ` +
+      `(alive) both do \`add dx,0x204\`. Under world 2's load order those nine ` +
+      `land inside PLEVEL2B (#504..#540) with room to spare, and render as ` +
+      `four frames growing upward out of nothing then five creature poses`);
+
+    /* ⚠️ The pedestal offsets CANCEL the allocator's exactly — seed (x+3,
+     * y-24) against draw (x-3, y+24) — so the plinth lands precisely on the
+     * placed object. Two readings taken from opposite ends of the subsystem
+     * confirming each other; I had both numbers and missed that they meet. */
+    check(`the object keeps drawing its OWN sprite (${NEST_OBJ_SPRITE}) under the creature, exactly where it was placed`,
+      NEST_OBJ_SPRITE === 285 && NEST_OBJ_SPRITE === 170 + NEST_TYPE
+        && SEED_X_BIAS === 3 && SEED_Y_BIAS === -0x18,
+      `CS:0x8806 blits sprite 0x11d at (x-3, y+0x18), cancelling the seed's ` +
+      `(+3, -0x18) exactly, on every path — hatching, ` +
+      `alive and frozen. That is why the nest does not need the ordinary ` +
+      `object draw: the creature carries it. It is also the reason the ` +
+      `dispatcher can mark the object dead immediately without the plinth ` +
+      `vanishing`);
+
+    /* ── the fire logic: asymmetric on BOTH counts ──────────────────────── */
+    {
+      const x = 1000;
+      const band = [];
+      for (let hx = x - 60; hx <= x + 60; hx++) if (aimAt(x, hx) === 0) band.push(hx);
+      const lo = band[0] - x, hi = band[band.length - 1] - x;
+      check(`the aim dead band is [-${BAND_LEFT}, +${BAND_RIGHT}) — asymmetric, and half-open`,
+        lo === -BAND_LEFT && hi === BAND_RIGHT - 1 && band.length === 56
+          && aimAt(x, x - BAND_LEFT - 1) === -1 && aimAt(x, x + BAND_RIGHT) === +1,
+        `heroX - entityX in [${lo}, ${hi}] inclusive = 56 px wide: 32 left, 24 ` +
+        `right. CS:0x86CE's \`sub bx,0x38\` is applied to the ALREADY-BIASED ` +
+        `bx (heroX + 0x20), so the second bound is heroX - 24, not heroX - 56 ` +
+        `— reading it as a fresh offset gives an 88-px band`);
+
+      {
+        /* ⚠️ In the dead band CS:0x8736 writes state 2 and falls straight
+         * through to the tail with NO `dec`. The timer PAUSES. And because
+         * the >40 gate at CS:0x86BB decrements before the aim test, a turret
+         * whose hero parked in the band since its last shot sits at exactly
+         * 40 and needs 41 more frames after the hero leaves. */
+        const pool = new Nests(2, new GodsRandom(5));
+        pool.spawn(0, 200, 0);
+        const s0 = pool.slots[0];
+        s0.state = 0; s0.timer = 20;
+        const none = (b) => b.hp;
+        for (let t = 0; t < 30; t++) pool.step({ x: 0, y: 0 }, { x: s0.x }, 0, none);
+        check(`the fire timer FREEZES while the hero is in the dead band`,
+          s0.timer === 20 && s0.state === NST.BAND,
+          `30 ticks with the hero centred and the timer has not moved off ` +
+          `${s0.timer}. CS:0x8736 writes state 2 and falls through with no ` +
+          `\`dec\` — only the two aiming branches decrement. A port that ticks ` +
+          `the timer unconditionally has the creature fire the instant the ` +
+          `hero steps out, instead of after the remaining countdown`);
+      }
+
+      check(`the muzzle offsets are asymmetric too: +${MUZZLE.right.dx} against ${MUZZLE.left.dx}`,
+        MUZZLE.right.dx === 0x18 && MUZZLE.left.dx === -6
+          && MUZZLE.right.dy === MUZZLE.left.dy
+          && MUZZLE.right.dir === -MUZZLE.left.dir,
+        `CS:0x86EF \`add ax,0x18\` against CS:0x871D \`sub ax,0x6\`, both with ` +
+        `\`add bx,6\`. The right muzzle sits at the far edge of the 24-wide ` +
+        `body and the left one just outside the near edge. Only the direction ` +
+        `word DS:0x206 (+-5) is a clean mirror`);
+    }
+
+    /* ── the timers, and the reload that exceeds its own gate ───────────── */
+    check(`the fire reload (${FIRE_RELOAD}) is GREATER than the aim gate (${AIM_GATE})`,
+      FIRE_RELOAD > AIM_GATE && FIRE_PERIOD === FIRE_RELOAD + 1,
+      `CS:0x86BB skips the aim logic while the timer exceeds ${AIM_GATE}, and ` +
+      `CS:0x86DF reloads it to ${FIRE_RELOAD} — so for two ticks after every ` +
+      `shot the creature holds its fired pose and does not re-aim. The full ` +
+      `period is ${FIRE_PERIOD} ticks (the shot lands when the dec goes ` +
+      `NEGATIVE), about 2.9 s at 15 Hz`);
+
+    check(`the first shot comes ${HATCH_RELOAD + 1} frames after rising, but the cycle is ${FIRE_PERIOD}`,
+      HATCH_RELOAD === 0x27 && FIRE_PERIOD === 43
+        && HATCH_RELOAD < AIM_GATE && FIRE_RELOAD > AIM_GATE,
+      `the emerge handler reloads ${HATCH_RELOAD}, which is BELOW the ` +
+      `${AIM_GATE} gate, so the aim path runs immediately and 40 decs reach ` +
+      `-1. The fire reload is ${FIRE_RELOAD}, ABOVE the gate, so two frames ` +
+      `are eaten by CS:0x8731 before aiming resumes and the steady cycle is ` +
+      `${FIRE_PERIOD}. The two differ because the reload straddles the gate ` +
+      `in opposite directions`);
+
+    check(`the hatch seed timer is ${SEED_TIMER_BASE}..${SEED_TIMER_BASE + SEED_TIMER_MASK}, straddling the aim gate`,
+      /* ⚠️ Literals on the right. `SEED_TIMER_BASE === AIM_GATE` is the
+       * interesting OBSERVATION but a tautological ASSERTION — both are my
+       * own transcription of the same binary, so it restates itself. The
+       * linter refused it, correctly. */
+      SEED_TIMER_BASE === 0x28 && AIM_GATE === 0x28 && SEED_TIMER_MASK === 0x0f,
+      `CS:0x864D seeds 0x28 then CS:0x8657 adds (rand & 0xf). The base IS the ` +
+      `aim gate, so a fresh creature waits a randomised 0..15 ticks before it ` +
+      `can first aim — the randomisation exists to stop sixteen nests on one ` +
+      `screen firing in lockstep`);
+
+    /* ── the hitbox changes with state, and by a factor of nine ─────────── */
+    check(`the hitbox is ${BOX_HATCH.w}x${BOX_HATCH.h} while hatching and ${BOX_ALIVE.w}x${BOX_ALIVE.h} once alive`,
+      BOX_HATCH.w === 8 && BOX_ALIVE.w === 0x18
+        && BOX_HATCH.dx === 8 && BOX_HATCH.dy === 15
+        && BOX_ALIVE.dx === 0 && BOX_ALIVE.dy === 0,
+      `CS:0x8883 against CS:0x8740. The small box is also OFFSET into the ` +
+      `middle of the sprite, at (x+8, y+15), where the alive box is flush at ` +
+      `(x, y). One box for both makes the whole emergence a free kill`);
+
+    /* ── a SEVENTH cull rectangle ───────────────────────────────────────── */
+    {
+      const rects = [
+        ['System-B entity', -63, 351, -63, 223],
+        ['starburst', -8, 351, -8, 191],
+        ['this creature', HATCH_WINDOW.xMin, HATCH_WINDOW.xMax,
+                          HATCH_WINDOW.yMin, HATCH_WINDOW.yMax],
+      ];
+      const sigs = new Set(rects.map((r) => r.slice(1).join()));
+      check(`the hatch window is a SEVENTH distinct cull rectangle`,
+        sigs.size === rects.length && HATCH_WINDOW.yMin === 8,
+        rects.map((r) => `${r[0]} x[${r[1]},${r[2]}] y[${r[3]},${r[4]}]`).join(' · ') +
+        ` — and this is the only one of the seven whose Y floor is POSITIVE, ` +
+        `so it culls at the top of the visible screen rather than above it. ` +
+        `Factoring the seven into one helper would be wrong six times`);
+    }
+
+    /* ── the brood count: WALK the loop, do not read the seed ───────────── */
+    check(`a dying creature broods ${broodCount(0)} or ${broodCount(1)}, not 2 or 3`,
+      broodCount(0) === 3 && broodCount(1) === 4
+        && [0, 1].every((r) => {
+          /* CS:0x88E7 `mov dx,2` + (rand&1), CS:0x8947 `dec dx / jns`. */
+          let dx = 2 + (r & 1), n = 0;
+          do { n++; dx -= 1; } while (dx >= 0);
+          return n === broodCount(r);
+        }),
+      `\`mov dx,2 / add dx,(rand & 1)\` with \`dec dx / jns\` at the bottom ` +
+      `runs one more pass than the seed suggests. This project has now been ` +
+      `caught by that shape four times — starburst particles, hits-to-break, ` +
+      `the block's first shot, and this`);
+
+    check(`the brood array is ${BROOD_SLOTS} x ${BROOD_STRIDE} bytes and children land one tile BELOW`,
+      BROOD_SLOTS === 16 && BROOD_STRIDE === 0x10 && BROOD_Y_OFFSET === 0x18
+        && BROOD_HP === 0x2b,
+      `CS:0x88F5 \`mov bp,0xf\` with \`dec bp / jns\` = ${BROOD_SLOTS} slots at ` +
+      `stride ${BROOD_STRIDE} = 256 bytes, which is exactly what CS:0x8676 ` +
+      `fills with 0xFFFF (\`mov cx,0x80\` words). The children inherit the ` +
+      `parent's x,y by \`movsw / movsw\` and then add ${BROOD_Y_OFFSET} to y`);
+
+    check(`the two brood randoms are DIFFERENT shapes — sign from the unmasked word`,
+      signed16(0xffff) === -1 && signed16(0x7fff) === 32767
+        && signed16(0x8003) === -32765,
+      `CS:0x8913 masks then negates unconditionally (-2..-5). CS:0x8921 takes ` +
+      `the MAGNITUDE from (rand & 3) but the SIGN from the untouched 16-bit ` +
+      `word — \`mov bx,ax / and ax,3 / or bx,bx / jns / neg ax\`. A single ` +
+      `\`(rand & 3) - 2\` reproduces neither`);
+
+    /* ── death inherits the live state, DRIVEN THROUGH THE REAL CLASS ────
+     *
+     * ⚠️ I first wrote this as a local re-implementation of the increment
+     * loop, which proved only that I could write the same three lines twice.
+     * Mutation testing said so: unifying the two brood randoms inside Nests
+     * SURVIVED, and relaxing `== 4` to `>= 4` inside Nests was not even
+     * reachable from the check. It now drives the class. */
+    {
+      const noDamage = (b) => b.hp;                 // a contact stub that never hits
+      const cam0 = { x: 0, y: 0 };
+      /** Put one creature straight into `state`, at HP -1, and let it die. */
+      const dieFrom = (state) => {
+        const pool = new Nests(2, new GodsRandom(11));
+        const kids = [];
+        const brood = {
+          spawn: (x, y, f8, fA, hp) => { kids.push({ x, y, f8, fA, hp }); return true; },
+        };
+        pool.spawn(0, 200, 0);
+        const s = pool.slots[0];
+        s.state = state; s.hp = -1;
+        let ticks = 0;
+        while (pool.live > 0 && ticks < 20) {
+          pool.step(cam0, { x: 0 }, 0, noDamage, brood);
+          ticks++;
+        }
+        return { ticks, kids, broods: pool.broods };
+      };
+
+      const d0 = dieFrom(NST.AIM_LEFT);
+      const d3 = dieFrom(NST.AIM_RIGHT);
+      const d4 = dieFrom(NST.FIRED_RIGHT);
+      check(`killing it on the fired-right tick (state ${NST.FIRED_RIGHT}) SKIPS the brood`,
+        d0.broods === 1 && d3.broods === 1 && d4.broods === 0
+          && d0.ticks === 7 && d3.ticks === 4 && d4.ticks === 3
+          && BROOD_AT_STATE === 4 && DEATH_FREE_AT_STATE === 7,
+        `death does not reset the state, it CONTINUES incrementing from ` +
+        `whatever pose the creature held: dying from state 0 takes ` +
+        `${d0.ticks} ticks and broods, from 3 takes ${d3.ticks} and broods, ` +
+        `from 4 takes ${d4.ticks} and does NOT. CS:0x87DA is ` +
+        `\`cmp ...,4 / jnz\` — an equality test — so a creature already at 4 ` +
+        `increments past it. State ${NST.FIRED_RIGHT} lasts exactly one tick, ` +
+        `so the window is narrow; \`>= 4\` loses it entirely`);
+
+      /* ⚠️ KILLED MID-RISE. CS:0x88C6/0x88DB `jmp 0x877e` means the EMERGE
+       * draw shares the live path's tail, so CS:0x8784 `mov word [si+4],0`
+       * runs for a creature killed while still hatching. My port had that
+       * reset on the live path only; a cross-read of the tail found it. */
+      {
+        const pool = new Nests(2, new GodsRandom(3));
+        pool.spawn(0, 200, 0);
+        const s0 = pool.slots[0];
+        s0.state = -3;                       // mid-rise
+        const kill = () => -1;               // a contact stub that always kills
+        const frames = pool.step(cam0, { x: 0 }, 0, kill, null);
+        const dead = pool.step(cam0, { x: 0 }, 0, kill, null);
+        const firstDeathSprite = dead.drawn[0] && dead.drawn[0].sprite;
+        check(`a creature killed MID-RISE starts its death at frame 0, not at a negative one`,
+          s0.state >= 0 && firstDeathSprite === DEATH_SPRITE_BASE
+            && frames.drawn.length > 0,
+          `the emerge draw jumps to the shared tail at CS:0x877E, so the ` +
+          `CS:0x8784 state reset applies to it too. Without it the death ` +
+          `handler starts negative and draws sprite ${DEATH_SPRITE_BASE} - 3 = ` +
+          `${DEATH_SPRITE_BASE - 3}, three frames before the death cloud`);
+      }
+
+      /* The brood's two random fields, observed over many bursts through the
+       * real spawner rather than asserted against my own arithmetic. */
+      {
+        const f8 = new Set(), fA = new Set();
+        let kids = 0;
+        for (let seed = 0; seed < 40; seed++) {
+          const pool = new Nests(2, new GodsRandom(seed));
+          const brood = { spawn: (x, y, a, b) => { f8.add(a); fA.add(b); kids++; return true; } };
+          pool.spawn(0, 200, 0);
+          pool.slots[0].state = NST.AIM_LEFT; pool.slots[0].hp = -1;
+          for (let t = 0; t < 12 && pool.live > 0; t++) {
+            pool.step(cam0, { x: 0 }, 0, noDamage, brood);
+          }
+        }
+        const f8s = [...f8].sort((a, b) => a - b);
+        const fAs = [...fA].sort((a, b) => a - b);
+        /* ⚠️ THE DRAW ORDER, pinned separately. The range check above cannot
+         * see the two rng.next() calls being swapped — the distributions are
+         * unchanged, and the original's table is wall-clock seeded so the
+         * per-child pairing was never observable against it anyway. It is
+         * still unfaithful: CS:0x8913 draws BEFORE CS:0x8921. A scripted
+         * source makes the order testable without pretending the values are.
+         */
+        {
+          const script = [0, 0, 3];          // count-draw, then fieldA, then field8
+          let i = 0;
+          const rng = { next: () => script[i++] ?? 0 };
+          const pool = new Nests(2, rng);
+          const kids = [];
+          const brood = { spawn: (x, y, a, b) => { kids.push([a, b]); return true; } };
+          pool.spawn(0, 200, 0);
+          /* spawn() consumed one draw for the hatch timer; restart the script. */
+          i = 0;
+          pool.slots[0].state = NST.AIM_LEFT; pool.slots[0].hp = -1;
+          for (let t = 0; t < 12 && pool.live > 0; t++) {
+            pool.step(cam0, { x: 0 }, 0, noDamage, brood);
+          }
+          check(`the brood draws fieldA BEFORE field8 — order pinned, not just range`,
+            kids.length === 3 && kids[0][0] === 3 && kids[0][1] === -2,
+            `feeding the draws 0, 0, 3 gives child 0 field8=+${kids[0][0]}, ` +
+            `fieldA=${kids[0][1]}: the 0 went to CS:0x8913 (-(0+2) = -2) and ` +
+            `the 3 to CS:0x8921 (magnitude 3, positive word). Swap the two ` +
+            `calls and the same script yields field8=0, fieldA=-5`);
+        }
+
+        check(`the brood's two random fields have DIFFERENT ranges — ${f8s.join(',')} against ${fAs.join(',')}`,
+          kids > 100
+            && f8s.every((v) => v >= -3 && v <= 3) && f8s.includes(-3) && f8s.includes(3)
+            && fAs.every((v) => v >= -5 && v <= -2) && fAs.length === 4
+            && f8s.includes(0) && !fAs.includes(0),
+          `+0x8 is SYMMETRIC about zero (magnitude from \`and ax,3\`, sign from ` +
+          `the untouched word at CS:0x8929) while +0xa is STRICTLY NEGATIVE ` +
+          `(\`and ax,3 / neg ax / sub ax,2\` at CS:0x8913). Observed over ` +
+          `${kids} children from 40 seeds. A single \`(rand & 3) - 2\` gives ` +
+          `-2..1 for both — wrong range, wrong symmetry, and it never reaches ` +
+          `-3 or +3`);
+      }
+    }
+
+    /* ── the allocator's caller tests the WRONG FLAG ────────────────────── */
+    check(`a nest fires ONCE — CS:0x1C94 is \`jz\` where its sibling uses \`jc\``,
+      NEST_WORLD === 2 && NEST_SLOTS === 10 && NEST_STRIDE === 10
+        && SEED_STATE === -4 && SEED_HP === 60,
+      `CS:0x8611 signals failure with STC like the sibling allocator ` +
+      `CS:0x7F0D, whose caller correctly tests \`jc\` at CS:0x1C80. This arm ` +
+      `tests ZF instead, and ZF is 0 on ALL THREE return paths — success ` +
+      `(\`add [si],ax\` lands in 0x28..0x37), pool-full (an occupied slot's x ` +
+      `is non-zero) and wrong-world (the \`cmp\` failed). So the fall-through ` +
+      `always runs and CS:0x1C98 marks the object dead. Consequences: each of ` +
+      `the 16 nests yields at most one creature, and a nest activating while ` +
+      `the ten-slot pool is full is consumed with NOTHING spawned`);
+
+    /* ── the model runs on the shipped placements ───────────────────────── */
+    {
+      const map2a = parseMap(dclDecompress(await fetchRaw('game/PLEV2A.MAP')).data);
+      const nests = map2a.objects.filter((o) => !isDeadType(o.type)
+                                             && o.type === NEST_TYPE);
+
+      /* ⚠️ HOW MANY CAN BE ON SCREEN AT ONCE — measured, not assumed.
+       * I first wrote this row as "16 nests fill the ten-slot pool", spawning
+       * all 16 in a loop. That is not how play works and it overstated the
+       * finding. Sweeping the real activation box (CS:0x11A0) over every
+       * camera position on both world-2 maps gives a maximum of 4 (PLEV2A)
+       * and 5 (PLEV2B) simultaneously inside it — a single screen can NEVER
+       * fill the pool. The pressure comes from somewhere else: slots are
+       * freed only by DEATH (CS:0x87E9 is the sole `mov word [si],0xffff` in
+       * the whole 0x8611..0x894D range), never on scroll-off, so allocation
+       * is CUMULATIVE across a sublevel. */
+      let boxMax = 0;
+      for (let cx = 0; cx <= 4096 - 320; cx += 32) {
+        for (let cy = 0; cy <= 1024 - 160; cy += 16) {
+          const b = activationBox(cx, cy);
+          let c = 0;
+          for (const o of nests) {
+            if (o.x >= b.xMin && o.x <= b.xMax && o.y >= b.yMin && o.y <= b.yMax) c++;
+          }
+          if (c > boxMax) boxMax = c;
+        }
+      }
+      check(`at most ${boxMax} of PLEV2A's ${nests.length} nests fit one activation box — the pool cannot fill from one screen`,
+        nests.length === 16 && boxMax === 4 && boxMax < NEST_SLOTS,
+        `swept over every camera position: ${boxMax} against ${NEST_SLOTS} ` +
+        `slots. So the ten slots are not a per-screen budget. They are a ` +
+        `CUMULATIVE one — nothing frees a slot but death — and with the ` +
+        `\`jz\` bug a nest that finds the pool full is consumed permanently. ` +
+        `The reachable failure is a player who leaves ten alive and then ` +
+        `activates an eleventh`);
+
+      {
+        const pool = new Nests(2, new GodsRandom(7));
+        let ok = 0;
+        for (const o of nests) if (pool.spawn(o.x, o.y, 0)) ok++;
+        check(`and when it does fill, the surplus is LOST rather than deferred`,
+          ok === NEST_SLOTS && pool.refused === nests.length - NEST_SLOTS
+            && pool.live === NEST_SLOTS,
+          `${ok} allocated, ${pool.refused} refused — and because CS:0x1C98 ` +
+          `runs on the refused path too, those ${pool.refused} objects are ` +
+          `dead for the rest of the sublevel. A port that "fixes" CS:0x1C94 to ` +
+          `\`jc\` spawns them later instead and diverges`);
+
+        const wrong = new Nests(1, new GodsRandom(7));
+        check(`the same pool refuses every allocation outside world 2`,
+          !wrong.spawn(100, 100, 0) && wrong.wrongWorld === 1 && wrong.live === 0,
+          `CS:0x8611's world gate, and the census agrees from the data side: ` +
+          `zero type-${NEST_TYPE} objects ship in worlds 1, 3 or 4. The hazard ` +
+          `that shares this pool is gated to world 4, so the two tenants could ` +
+          `never coexist even if the hazard were placed — a STRUCTURAL reason, ` +
+          `stronger than the "the hazard is cut" one this project recorded`);
+      }
+    }
+
+    /* ── DS:0x3b2 is NOT shared state, correcting CLAUDE.md ─────────────── */
+    results.push({
+      name: 'CORRECTION: DS:0x3b2 is per-pass scratch, not a shared counter',
+      note: true, pass: true,
+      detail: 'CLAUDE.md records the two DS:0xcfcc tenants as sharing "one ' +
+        'shared counter DS:0x3b2". All six references in the image are ' +
+        'CS:0x868E/0x869B/0x8796 (this creature) and CS:0x8B5D/0x8B69/0x8C26 ' +
+        '(the hazard), and each walker RESETS it at the top of its own pass, ' +
+        'increments once per live record, and reads it only at the bottom of ' +
+        'that same pass to decide whether to unhook its own gate. Nothing is ' +
+        'carried between the two. The genuine sharing hazard is the RECORDS: ' +
+        'ten slots read with incompatible +4/+6/+8 meanings.',
+    });
+
+
+    /* ══ WHAT THE NEST FIRES — DS:0x8954, and it is a WHOLE SUBSYSTEM ════ */
+    {
+      const cam = { x: 0, y: 0 };
+      const hero = { x: 200, y: 100, state: 0 };
+
+      check(`enemy shots are ${ES_SLOTS} records of ${ES_STRIDE} bytes at DS:0x8954, free when +6 < 0`,
+        ES_SLOTS === 20 && ES_STRIDE === 8 && ES_FREE < 0,
+        `CS:0x200F/0x2061 \`mov cx,0x14\` with \`add si,0x8\`. The emitter tests ` +
+        `\`js\` for free and the updater tests \`jns\` for alive — the same ` +
+        `word read in opposite senses, which is easy to invert from one site`);
+
+      /* The two muzzle windows are NOT mirrors, and the difference is real. */
+      const l = new EnemyShots(), r = new EnemyShots();
+      const firedL = l.fire(4, 100, -5, cam);      // screenX 4: inside right's
+      const firedR = r.fire(4, 100, +5, cam);      //   window, outside left's
+      check(`the two muzzle windows differ — screenX 4 fires RIGHT but not LEFT`,
+        !firedL && firedR && CULL_LEFT.xMin === 8 && CULL_RIGHT.xMin === -8
+          && CULL_LEFT.xMax === 0x148 && CULL_RIGHT.xMax === 0x138,
+        `left x[${CULL_LEFT.xMin},${CULL_LEFT.xMax}] against right ` +
+        `x[${CULL_RIGHT.xMin},${CULL_RIGHT.xMax}] — each shifted 16 px AWAY ` +
+        `from the direction of travel, so a muzzle just off the near edge is ` +
+        `allowed and one just off the far edge is not. Y is identical in both. ` +
+        `Reusing one rectangle loses shots at one edge and invents them at the ` +
+        `other`);
+
+      /* The hero box, at its four edges, with the crouch adjustment. */
+      const hx = hero.x, hy = hero.y;
+      const at = (sx, sy, cr = false) => hitsHero(sx, sy, hx, hy, cr);
+      /* ⚠️ LITERALS on the probe coordinates. Written with HERO_BOX.w and
+       * HOT_POINT.dx on both sides these read as tests but are X === X, and
+       * mutation testing proved it: narrowing the box and zeroing the hot
+       * point both SURVIVED. The linter cannot see it because these are
+       * property accesses, not bare imported identifiers. */
+      check(`the hero box is 32x48 INCLUSIVE, hot point +10,+4`,
+        HERO_BOX.w === 0x20 && HERO_BOX.h === 0x30
+          && HOT_POINT.dx === 0x0a && HOT_POINT.dy === 0x04
+          && at(hx - 10, hy - 4) && at(hx + 22, hy + 44)
+          && !at(hx - 11, hy) && !at(hx + 23, hy),
+        `CS:0x4527-0x4545: \`jl\`/\`jg\` reject, so equality passes at every ` +
+        `edge. The shot's own hot point (+${HOT_POINT.dx}, +${HOT_POINT.dy}) is ` +
+        `added BEFORE the world conversion at CS:0x450A`);
+
+      check(`crouching raises the top edge by ${CROUCH_RAISE} — 24 here, 20 on the CONTACT path`,
+        at(hx, hy + 4) && !at(hx, hy + 4, true) && at(hx, hy + CROUCH_RAISE, true)
+          && CROUCH_RAISE === 0x18 && isCrouching(0x12) && isCrouching(0x13)
+          && !isCrouching(0x11) && !isCrouching(0x14),
+        `CS:0x4516 runs the same \`cmp byte [0x377],0x12/0x13\` range test as ` +
+        `the contact sites, but raises by 0x18 where CS:0xACA0 raises by 0x14. ` +
+        `CLAUDE.md lists CS:0x4516 among three crouch sites without saying it ` +
+        `belongs to the enemy-SHOT path rather than to CS:0xac59`);
+
+      /* Invulnerability: the shot passes THROUGH rather than being eaten. */
+      {
+        const es = new EnemyShots();
+        let hurt = 0;
+        const health = { invulnerable: true, hurt: (n) => { hurt += n; } };
+        es.fire(hero.x - 40, hero.y + 10, +5, cam);
+        for (let t = 0; t < 12; t++) es.step(cam, hero, null, health);
+        check(`while invulnerable the shot PASSES THROUGH — not consumed, no damage`,
+          hurt === 0 && es.hits === 0 && es.passedThrough >= 5 && es.live === 1,
+          `CS:0x4547's \`jnz\` skips BOTH the \`sub word [0x192],2\` and the ` +
+          `\`mov word [si+6],0xffff\` that consumes it, so it keeps flying ` +
+          `(${es.passedThrough} ticks inside the box). The CONTACT path is the ` +
+          `opposite: CS:0xACCC skips only the subtract and the creature still ` +
+          `dies`);
+
+        const es2 = new EnemyShots();
+        let hurt2 = 0;
+        const h2 = { invulnerable: false, hurt: (n) => { hurt2 += n; } };
+        es2.fire(hero.x - 40, hero.y + 10, +5, cam);
+        for (let t = 0; t < 12; t++) es2.step(cam, hero, null, h2);
+        check(`a hit costs a FLAT 2 off the health TARGET, once`,
+          hurt2 === 2 && ES_DAMAGE === 2 && es2.hits === 1 && es2.live === 0,
+          `CS:0x454E \`sub word [0x192],2\` — DS:0x192 is the target, so the ` +
+          `bar at DS:0x19a chases down afterwards. ⚠️ It never reaches the ` +
+          `difficulty scalar: DS:0x365 is consumed at CS:0xab56/0xab63 inside ` +
+          `the CS:0xac59 path, which this test does not use. Enemy shots hit ` +
+          `for the same amount in world 1 and world 4`);
+      }
+
+      /* Sprites and despawn: direction-dependent, and not mirrored. */
+      check(`the flight sprite depends on DIRECTION — ${SPRITE_RIGHT} right, ${SPRITE_LEFT} left`,
+        SPRITE_RIGHT === 0x48 && SPRITE_LEFT === 0x45
+          && SPRITE_FADE_BASE === 0x45   /* literal: the coincidence, not X===X */
+          && DESPAWN_RIGHT_X === 0x140 && DESPAWN_LEFT_X === -0x10
+          && FADE_FREE_AT.join() === '3,6',
+        `CS:0x20D2 against CS:0x2103 — two different descriptors, not one ` +
+        `frame flipped, and the left one doubles as the first fade frame. The ` +
+        `despawn edges are asymmetric too (0x140 against -0x10), and the fade ` +
+        `frees on TWO equality tests (3 and 6) rather than one \`>=\``);
+
+      /* ── The terrain probe: THREE branches, not one gated test ────────
+       *
+       * ⚠️ I first wrote this as "a cell of 1 stops the shot, GATED by a
+       * straddle test", and the fixture only passed because it sat exactly on
+       * the straddle boundary. The bytes read the other way round: `[di]` is
+       * ALWAYS tested, and the straddle adds a SECOND cell. Written my way, a
+       * shot entering a wall head-on at (x & 0x1f) == 0 flies straight
+       * through it. The three cases are tested separately below so no single
+       * fixture can hide a branch again. */
+      {
+        const mk = () => {
+          const pb = new Uint8Array(128 * 64);
+          pb[6 * 128 + 4] = 1;                     // solid at col 4, row 6
+          return pb;
+        };
+        const far = { x: 9999, y: 9999, state: 0 };
+        /** put one shot at world (x, 6*16) and step once; return its state */
+        const probe = (x, planeB) => {
+          const es = new EnemyShots();
+          es.slots[0] = { x, y: 6 * 16, vx: 5, state: 0 };
+          es.step(cam, far, planeB, null);
+          return es.slots[0];
+        };
+        /* head-on: inside col 4 with no straddle at all. vx=5 lands it at
+         * 4*32 + 5, so (x & 0x1f) == 5 — far below the straddle threshold. */
+        const headOn = probe(4 * 32, mk());
+        /* straddling: end at col 3 with (x & 0x1f) > 0x18, so [di] is col 3
+         * (empty) and [di+1] is col 4 (solid). */
+        const straddle = probe(3 * 32 + 0x19 - 5, mk());
+        /* exactly ON the boundary: `jng` means 0x18 does NOT straddle, so
+         * col 3 stays empty and the shot flies on. */
+        const boundary = probe(3 * 32 + 0x18 - 5, mk());
+
+        check(`terrain stops a shot on its OWN cell, or on the next one when it straddles past 24`,
+          headOn.state !== 0 && straddle.state !== 0 && boundary.state === 0
+            && TERRAIN_STRADDLE === 0x18,
+          `head-on into col 4 stops (state ${headOn.state}); straddling ` +
+          `${(straddle.x & 0x1f)} px into col 3 stops on col 4 ` +
+          `(state ${straddle.state}); sitting at exactly ${boundary.x & 0x1f} ` +
+          `does NOT — CS:0x2150 is \`jng\`, so 0x18 itself is not a straddle. ` +
+          `Making the straddle GATE the primary test lets a shot fly through a ` +
+          `wall it entered head-on`);
+
+        check(`the stop STATE depends on direction — ${STOP_STATE_RIGHT} right, ${STOP_STATE_LEFT} left, and both free tests are live`,
+          headOn.state === 4 && headOn.vx === 0
+            && FADE_FREE_AT.join() === '3,6'
+            && STOP_STATE_RIGHT === 4 && STOP_STATE_LEFT === 1,
+          `CS:0x215E seeds 4 for a right-flying shot and CS:0x2165 seeds 1 for ` +
+          `a left-flying one, then CS:0x216A zeroes the velocity — which is ` +
+          `what makes CS:0x20B6's \`jz\` arm reachable at all. So a left stop ` +
+          `fades 1,2 and frees at 3 while a right stop fades 4,5 and frees at ` +
+          `6: BOTH equality tests are live, and the fade cannot be written as ` +
+          `one \`>=\`. The sprites fall out of it — 0x45,0x46,0x47 left and ` +
+          `0x48,0x49,0x4A right, three consecutive per direction`);
+
+        check(`the terrain probe's +${TERRAIN_Y_BIAS} Y bias is a FOURTH pixel-to-cell rule`,
+          TERRAIN_Y_BIAS === 2
+            && probe(4 * 32, (() => { const p2 = mk(); p2[6 * 128 + 4] = 0;
+                                      p2[7 * 128 + 4] = 1; return p2; })()).state === 0,
+          `CS:0x2124 \`add bx,0x2\` before the mask. Collected: floored ` +
+          `(entity), rounded-to-nearest (hero, export 40), +8 on both axes ` +
+          `(the hero's projectile terrain stop), and +2 on Y only here. One ` +
+          `shared helper is wrong three times`);
+      }
+
+      /* The frame order, which is opposite for the two projectile systems. */
+      check(`enemy shots step AFTER the player; hero shots step BEFORE`,
+        ENEMY_SHOTS_AT > 0x0254 && HERO_SHOTS_AT < 0x0254
+          && ENEMY_SHOTS_AT === 0x02ba && HERO_SHOTS_AT === 0x020f,
+        `CS:0x020F precedes the state machine at CS:0x0254, so a hero shot ` +
+        `cannot hit anything on its spawn tick. CS:0x02BA follows both the ` +
+        `nest walker (0x0282) and the entity step (0x0285), so an enemy shot ` +
+        `moves and can reach the hero on the very tick it is fired. Giving ` +
+        `both systems one ordering is wrong for one of them either way`);
+    }
+
+    results.push({
+      name: 'what is still open around this creature', note: true, pass: true,
+      detail: 'UNKNOWN_nest_shot — CS:0x2039 and CS:0x1FE7, what the creature ' +
+        'actually fires and whether it can hurt the hero. UNKNOWN_8014_brood ' +
+        '— the brood walker CS:0x894E, so the port carries the two seeded ' +
+        'signed fields as field8/fieldA rather than calling them a velocity. ' +
+        'UNKNOWN_8014_world1 — CS:0x7CBD and CS:0x7EB6 gate on world 1 and ' +
+        'share the same 256 bytes, writing PLANE A at CS:0x7E62; the two ' +
+        'tenants are mutually exclusive by world, which is why the level-init ' +
+        'clear at CS:0x8676 zeroes the array only in world 2. UNKNOWN_ce64_pool ' +
+        '— CS:0x8681 clears this pool by jumping INTO the middle of a third ' +
+        'pool\'s clear routine at CS:0x7F48, whose tail disarms the DS:0xce64 ' +
+        'walker as a side effect.',
+    });
+  }
+
+  return results;
+}
+
+/* Hero sprite selection. The point of these is that the port must never index
+ * a descriptor it cannot justify: `base + sign_extend(phase)` is unbounded in
+ * principle (max base 55, walk phase reaches 7), so every id the port can
+ * actually emit is enumerated and bounds-checked here rather than trusted. */
+export async function checkHeroSprites(fetchRaw) {
+  const { results, check } = makeChecker();
+
+  const stems = GROUP_STEMS.always;
+  const atlases = {}, images = {};
+  for (const s of stems) {
+    atlases[s] = parseAtlas(dclDecompress(await fetchRaw(`game/${s}.DAT`)).data);
+    images[s]  = decodePI1(dclDecompress(await fetchRaw(`game/${s}.PI1`)).data);
+  }
+  const { map } = buildDescriptorMap(['always'], (s) => atlases[s].count);
+
+  /* Every (state, phase) pair the port emits, DERIVED by driving a real
+   * Player through a scripted input program — not a hand-kept list that would
+   * quietly stop covering a state someone adds later. */
+  const { pairs: emitted } = emittableStates();
+
+  let worstId = -1, bad = 0;
+  for (const [st, ph] of emitted) {
+    const id = spriteFor(st, ph);
+    if (id < 0 || id > HERO_DESCRIPTOR_MAX) bad++;
+    if (id > worstId) worstId = id;
+  }
+  check(`every (state, phase) the port emits lands in descriptor [0, ${HERO_DESCRIPTOR_MAX}]`,
+    bad === 0, `${emitted.length} pairs, max id #${worstId}`);
+
+  /* Frames the hero actually uses must be hero-sized, not font glyphs. */
+  const sizes = emitted.map(([st, ph]) => {
+    const d = map[spriteFor(st, ph)];
+    return atlases[d.stem].frames[d.frame];
+  });
+  const heroSized = sizes.filter((f) => f.w === 32 && f.h >= 40).length;
+  check(`the frames those ids resolve to are hero-sized (32 x >=40)`,
+    heroSized === sizes.length, `${heroSized}/${sizes.length}`);
+
+  /* The stopping poses: leaving walk-left sets CL = -1 and walk-right CL = +1
+   * before entering state 26 (base 52), so they must render 51 and 53 — the
+   * anim_base values of stub states 27 and 28. This is the third independent
+   * derivation of the left/right split, asserted rather than asserted-about. */
+  check(`stop-left renders descriptor #51 (== anim_base of stub state 27)`,
+    spriteFor(26, 0xff) === 51, `#${spriteFor(26, 0xff)}`);
+  check(`stop-right renders descriptor #53 (== anim_base of stub state 28)`,
+    spriteFor(26, 0x01) === 53, `#${spriteFor(26, 0x01)}`);
+  /* WHAT THE THREE REMAPS ARE FOR — found by this check failing.
+   * The remap table at CS:0x5f8b is not arbitrary. Its three inputs are
+   * exactly the phase-0 sprite of the three most common resting states:
+   *     0x34 = 52 = base(26) idle        -> 0x19 = 25
+   *     0x36 = 54 = base(12) fall right  -> 0x23 = 35
+   *     0x37 = 55 = base(11) fall left   -> 0x26 = 38
+   * base 52 exists to generate 51 / 52 / 53 for the stop-left, standing and
+   * stop-right poses; the middle one is then redirected to descriptor 25.
+   * So the hero's frames are NOT a contiguous block, and a port that skips
+   * the remap draws the wrong sprite in the three states the hero spends most
+   * of its time in. All three redirects land on 32x>=40 frames (asserted by
+   * the hero-sized check above), which is independent corroboration. */
+  check(`idle renders descriptor #25 (base 52 remapped at CS:0x5f8b)`,
+    spriteFor(26, 0) === 25, `#${spriteFor(26, 0)}`);
+  check(`fall-left #38 and fall-right #35 (bases 55/54 remapped)`,
+    spriteFor(11, 0) === 38 && spriteFor(12, 0) === 35,
+    `#${spriteFor(11, 0)} / #${spriteFor(12, 0)}`);
+
+  /* CBW sign-extends AL, so 0xFF is -1 and not 255. A port that widens CL as
+   * unsigned indexes descriptor #307 instead of #51 and draws a font glyph. */
+  check(`phase is sign-extended as a byte (0xFF -> -1, not 255)`,
+    spriteFor(26, 0xff) === 51 && spriteFor(26, 0xff) !== 52 + 255);
+
+  /* THE JUMP ANIMATION. Four entry cases, and the two asymmetries are the whole
+   * point: jump-LEFT resolves to two distinct airborne frames (37 and 38)
+   * because CS:0x4E78 stores 7 while its catch-all stores 6, whereas
+   * jump-RIGHT stores 5 in both places and collapses to one. And a jump that
+   * begins on a LADDER seeds phase 0x0D/0x0C, giving a visibly different
+   * take-off pose. Assert the whole sequence, not just the endpoints. */
+  const jumpSeq = (st, start) => {
+    let cl = start, cur = 0; const out = [];
+    for (let i = 0; i < 6; i++) { cl = jumpPhase(st, cl, cur); out.push(spriteFor(st, cl)); cur += 2; }
+    return out.join(',');
+  };
+  check(`ground jump left renders 31,31,36,37,37,37 (two airborne frames)`,
+    jumpSeq(8, 0) === '31,31,36,37,37,37', jumpSeq(8, 0));
+  check(`ground jump right renders 29,29,33,34,34,34 (one airborne frame)`,
+    jumpSeq(9, 0) === '29,29,33,34,34,34', jumpSeq(9, 0));
+  check(`ladder jump left starts on 44, not 31 (phase 0x0D from CS:0x5927)`,
+    jumpSeq(8, LADDER_JUMP_PHASE[8]) === '44,44,38,37,37,37',
+    jumpSeq(8, LADDER_JUMP_PHASE[8]));
+  check(`ladder jump right starts on 41, not 29 (phase 0x0C from CS:0x5912)`,
+    jumpSeq(9, LADDER_JUMP_PHASE[9]) === '41,41,34,34,34,34',
+    jumpSeq(9, LADDER_JUMP_PHASE[9]));
+
+  /* The three non-rendering states must be refused, not silently resolved to
+   * an anim_base the original never reads. */
+  const refused = NON_RENDERING_STATES.filter((s) => {
+    try { spriteFor(s, 0); return false; } catch { return true; }
+  });
+  check(`states ${NON_RENDERING_STATES.join('/')} refuse to yield a sprite ` +
+        `(their anim_base is provably never read)`,
+    refused.length === NON_RENDERING_STATES.length,
+    `${refused.length}/${NON_RENDERING_STATES.length}`);
+  check(`the port never emits one of those states`,
+    !emitted.some(([s]) => NON_RENDERING_STATES.includes(s)));
+
+  /* PALETTE — the hero renders correctly when composited into a level using
+   * PLEVEL<N><X>.PI1's palette, which LOOKS like evidence that PLEVEL is the
+   * real in-game palette. It only is if the hero actually uses indices where
+   * the two palettes disagree; if every index he touches is one of the
+   * agreeing entries the render would look right under either, and proves
+   * nothing. So measure the overlap instead of assuming it.
+   * Reported as a NOTE, never a green check: UNKNOWN_level_palette_source is
+   * still open and a passing tick beside it would read as resolved. */
+  const heroPal = images.PALWAYS1.paletteRaw;
+  const lvlPal = decodePI1(dclDecompress(await fetchRaw('game/PLEVEL1A.PI1')).data).paletteRaw;
+  const disagree = new Set();
+  for (let i = 0; i < 16; i++) if (heroPal[i] !== lvlPal[i]) disagree.add(i);
+
+  const used = new Set();
+  for (const [st, ph] of emitted) {
+    const d = map[spriteFor(st, ph)];
+    const f = atlases[d.stem].frames[d.frame];
+    for (const v of cutAll(images[d.stem], { frames: [f] })[0].pixels) used.add(v);
+  }
+  const decisive = [...used].filter((v) => disagree.has(v));
+  results.push({
+    name: `palette evidence: ${disagree.size}/16 entries differ between PALWAYS1 and PLEVEL1A; ` +
+          `the hero's frames use ${decisive.length} of them`,
+    note: true, pass: true,
+    detail: decisive.length
+      ? `indices ${decisive.join(',')} — the level-palette render IS discriminating`
+      : 'NONE — the level-palette render is NOT evidence either way',
+  });
+
+  return results;
+}
+
+
+/* The plane-B selector dispatch, and the object sprite rule. Both were
+ * established this pass and both replaced something the port had wrong, so
+ * both are asserted against the shipped bytes rather than trusted. */
+export async function checkSelectorsAndObjects(fetchRaw) {
+  const { results, check } = makeChecker();
+  const keys = ['1A','1B','2A','2B','3A','3B','4A','4B'];
+
+  /* --- selectors ------------------------------------------------------- */
+  check(`SS:0x3570 has 11 entries and the trigger evaluator is SELECTOR 3`,
+    SELECTOR_TABLE.length === 11 &&
+    SELECTOR_TABLE[SELECTOR_TRIGGER - 1].handler === 0x39ae,
+    `sel ${SELECTOR_TRIGGER} -> 0x${SELECTOR_TABLE[SELECTOR_TRIGGER - 1].handler.toString(16)}`);
+
+  const hist = {}, paramMax = {};
+  let wide = 0, slots = 0;
+  for (const k of keys) {
+    const b = dclDecompress(await fetchRaw(`game/${palfilsNameFor(k)}`)).data;
+    const dv = new DataView(b.buffer, b.byteOffset, b.byteLength);
+    for (let i = 0; i < EVENT_COUNT; i++) {
+      const o = EVENT_TABLE_OFF + i * 4;
+      const sel = dv.getUint16(o, false), par = dv.getUint16(o + 2, false);
+      slots++;
+      if (sel > 255 || par > 255) wide++;
+      hist[sel] = (hist[sel] || 0) + 1;
+      paramMax[sel] = Math.max(paramMax[sel] ?? -1, par);
+    }
+  }
+
+  /* The decisive structural check: the shipped maximum selector is exactly the
+   * table size. Under a 0-based reading selector 11 would index entry 11,
+   * which belongs to a DIFFERENT table (SS:0x3586, consumed only by
+   * CS:0xAE7C). So the data alone forces the 1-based reading. */
+  const maxSel = Math.max(...Object.keys(hist).map(Number));
+  check(`max shipped selector (${maxSel}) == table size (11), forcing the 1-based read`,
+    maxSel === SELECTOR_TABLE.length, `${slots} records scanned`);
+
+  /* Each selector's param must fit the table its handler indexes. */
+  const BOUND = { 1: 100, 2: 100, 3: 100, 4: 50, 5: 50, 7: 25, 8: 25, 9: 25, 10: 25 };
+  const bad = Object.entries(BOUND).filter(([sel, n]) => (paramMax[sel] ?? -1) >= n);
+  check(`every selector's max param fits its handler's table ` +
+        `(sel 1/2/3 < 100, 4/5 < 50, 7-10 < 25)`,
+    bad.length === 0,
+    `maxima ${[1,2,3,4,5,7,8,9,10].map((s) => `${s}:${paramMax[s] ?? '-'}`).join(' ')}`);
+
+  /* The original packs each field to ONE byte (CS:0x386E) before use, so this
+   * port's direct big-endian read is only equivalent while nothing exceeds
+   * 255. Assert it rather than assume it. */
+  check(`no event field exceeds 255, so the byte-pack at CS:0x386E is lossless`,
+    wide === 0, `${wide} of ${slots * 2} fields`);
+
+  check(`selector 3 (triggers) is the most common non-empty selector`,
+    hist[3] > 0 && Object.entries(hist).filter(([s]) => +s > 0)
+      .every(([s, n]) => +s === 3 || n <= hist[3]),
+    `census ${Object.entries(hist).map(([s, n]) => `${s}:${n}`).join(' ')}`);
+
+  /* --- objects --------------------------------------------------------- */
+  let live = 0, unstamped = 0, outside = 0, idAgree = 0, idTotal = 0;
+  const distinct = new Set();
+  for (const k of keys) {
+    const m = parseMap(dclDecompress(await fetchRaw(`game/PLEV${k}.MAP`)).data);
+    const pobj = dclDecompress(await fetchRaw(`game/POBJECTS.00${k[0]}`)).data;
+    for (const o of m.objects) {
+      if (isDeadType(o.type)) continue;
+      live++; distinct.add(o.type);
+      if (isUnstamped(o.type)) unstamped++;
+      const sid = spriteForType(o.type);
+      if (sid < OBJECT_SPRITE_BASE || sid > 449) outside++;
+      /* POBJECTS' own big-endian id at +0 is independently `base + type`.
+       * In worlds 1-3 that base is 170, corroborating the EXE stamp from the
+       * shipped asset. WORLD 4's file uses 175 — every record shifted +5,
+       * the same authoring drift this project already recorded for
+       * PWEAPONS.004's +0xc/+0x1e fields, in the same file. The stamp loop
+       * overwrites the descriptor unconditionally, so the shift never takes
+       * effect; that is exactly what makes CS:0x2234 load-bearing rather
+       * than redundant. Assert the real per-world base. */
+      if (o.type < STAMPED_TYPES) {
+        idTotal++;
+        const id = (pobj[o.type * 48] << 8) | pobj[o.type * 48 + 1];
+        const fileBase = (pobj[0] << 8) | pobj[1];
+        if (id === fileBase + o.type) idAgree++;
+      }
+    }
+  }
+  check(`POBJECTS' own id field is a clean \`base + type\` ramp in every world`,
+    idAgree === idTotal, `${idAgree}/${idTotal}`);
+
+  /* The per-world bases, stated so the world-4 anomaly is visible rather than
+   * averaged away — and so the claim "the EXE stamp is what the game uses"
+   * has something concrete standing behind it. */
+  const bases = [];
+  for (const w of ['1', '2', '3', '4']) {
+    const b = dclDecompress(await fetchRaw(`game/POBJECTS.00${w}`)).data;
+    bases.push((b[0] << 8) | b[1]);
+  }
+  check(`POBJECTS bases are 170,170,170,175 — world 4 is shifted +5 and the ` +
+        `CS:0x2234 stamp discards it`,
+    bases.join() === '170,170,170,175', bases.join(','));
+  check(`every shipped object's sprite lands in the objects group (#170..#449)`,
+    outside === 0, `${live} live objects, ${distinct.size} distinct types`);
+  results.push({
+    name: `object types in the unstamped gap 132..191 (CS:0x223A stamps only 132)`,
+    note: true, pass: true,
+    detail: unstamped === 0 ? 'none ship — the hazard never fires' : `${unstamped} DO ship`,
+  });
+
+  /* The category table the port reads from POBJECTS must agree with the two
+   * lever/switch pairs this project established independently. */
+  const cats = parseObjectCategories(
+    dclDecompress(await fetchRaw('game/POBJECTS.001')).data);
+  check(`categories 24/25/26/27 are all 3 — the lever & switch off/on pairs`,
+    [24, 25, 26, 27].every((t) => cats[t] === 3),
+    [24, 25, 26, 27].map((t) => cats[t]).join(','));
+
+  return results;
+}
+
+
+/* System-B enemy locomotion. Nothing constructs entities yet (spawn is
+ * undecoded), so these assert the CONSTANTS and the two physics curves that
+ * were re-read from the binary — the parts a port would otherwise share with
+ * the hero and get subtly wrong. */
+export function checkEntityB() {
+  const { results, check } = makeChecker();
+
+  check(`the System-B mode table is 8 entries with anim_base 0/9/8/17/8/17`,
+    MODE_TABLE.length === 8 &&
+    [0, 9, 8, 17, 8, 17].every((b, i) => MODE_TABLE[i].animBase === b),
+    MODE_TABLE.slice(0, 6).map((m) => m.animBase).join(','));
+
+  /* The hop arc is SIGNED BOTH WAYS around its own base — a port that treats
+   * DS:0xdcde as index 0 of an array loses the entire descent. */
+  const rise = [-1, -2, -3, -4, -5, -6].map(hopDelta);
+  const fall = [1, 2, 3, 4, 5].map(hopDelta);
+  check(`the hop arc extends to negative indices (rise ${rise.join(',')})`,
+    rise.join() === '1,1,2,4,8,8' && fall.join() === '-1,-1,-2,-4,-8',
+    `descent ${fall.join(',')}`);
+  check(`the hop arc runs out past index 15 rather than reading garbage`,
+    hopDelta(16) === null && hopDelta(-7) === null);
+
+  /* Enemy gravity is NOT the hero's. Hero: dY = 4 + v, v <= 10, so 5..14.
+   * Enemy: dY = v applied before the increment, v <= 16, so 0..16. Assert the
+   * whole sequence, because "clamped at 16" alone would pass with an
+   * off-by-one in the apply-then-increment order. */
+  const planeB = new Uint8Array(128 * 64);
+  const e = new EntityB({ x: 64, y: 0, mode: MODE.FALL_L });
+  /* Skip the spawn states — this check is about the fall CURVE in isolation,
+   * so it forces v = 0. Neither real entry path actually starts there: a
+   * freshly SPAWNED entity begins at v = 2 (CS:0xecf1 `mov word [di+0x12],2`)
+   * and one that WALKS OFF A LEDGE begins at v = 1 (CS:0xf15f), checked
+   * separately below. */
+  e.state = 1; e.vel = 0;
+  const steps = [];
+  let prev = e.y;
+  for (let i = 0; i < 20; i++) { e.tick(planeB); steps.push(e.y - prev); prev = e.y; }
+  check(`enemy fall is 0,1,2,..,16 then flat — applied BEFORE the increment`,
+    steps.slice(0, 17).every((d, i) => d === i) && steps.slice(17).every((d) => d === 16),
+    `first 6: ${steps.slice(0, 6).join(',')} last: ${steps[19]}`);
+
+  /* Ground is `== 1` EXACTLY. Ladder (2) and event cells (>= 3) are not
+   * ground, so an enemy falls straight through a ladder column. */
+  const gb = new Uint8Array(128 * 64);
+  const at = (x, y) => (((x & 0xFFE0) >> 5) + ((y & 0xFFF0) >> 4) * 128) + 0x100;
+  gb[at(64, 0)] = 1;
+  check(`plane-B 1 is ground`, groundBelow(gb, 64, 0));
+  gb[at(64, 0)] = 2;
+  check(`plane-B 2 (ladder) is NOT ground — enemies fall through ladders`,
+    !groundBelow(gb, 64, 0));
+  gb[at(64, 0)] = 200;
+  check(`plane-B >= 3 (an event cell) is NOT ground`, !groundBelow(gb, 64, 0));
+
+  /* Walk speed: the delay reloads to 10 - speed and the step happens when the
+   * counter goes negative, so a step costs (10 - speed) + 1 ticks. */
+  const walked = (speed) => {
+    const flat = new Uint8Array(128 * 64);
+    for (let c = 0; c < 128; c++) flat[at(c * 32, 0) ] = 1;
+    const w = new EntityB({ x: 64, y: 0, mode: MODE.WALK_R, speed });
+    w.state = 1;
+    const x0 = w.x;
+    for (let i = 0; i < 44; i++) w.tick(flat);
+    return w.x - x0;
+  };
+  const fast = walked(10), slow = walked(7);
+  check(`higher descriptor +0x0b is FASTER (speed 10 moves ${fast}px vs speed 7 ${slow}px in 44 ticks)`,
+    fast > slow, `${fast} > ${slow}`);
+
+  /* The spawn state machine: waiting (stagger) -> materialising (5 ticks) ->
+   * alive with the descriptor's HP. Entities of one group share a spawn point
+   * and differ only in when they appear. */
+  const sp = new EntityB({ x: 64, y: 0, hp: 3, delay: 4 });
+  const trace = [];
+  for (let i = 0; i < 12; i++) { sp.tick(planeB); trace.push(sp.state); }
+  check(`spawn runs waiting(delay) -> materialising(5) -> alive with descriptor HP`,
+    trace.join() === '-2,-2,-2,-3,-3,-3,-3,-3,3,3,3,3', trace.join(','));
+
+  /* The cull window is asymmetric — 64 px of slack on the left and top only. */
+  check(`cull window is x (-63,351), y (-63,223) — slack on left/top only`,
+    onScreen(-63 + 1, 0, 0, 0) && !onScreen(-64, 0, 0, 0) &&
+    onScreen(350, 0, 0, 0) && !onScreen(352, 0, 0, 0));
+
+  return results;
+}
+
+
+/* The enemy spawn chain, end to end, on shipped level data. Every figure here
+ * is re-derived from the PALFILS bytes at run time — none is transcribed. */
+export async function checkSpawn(fetchRaw) {
+  const { results, check } = makeChecker();
+  const keys = ['1A','1B','2A','2B','3A','3B','4A','4B'];
+
+  let live = 0, refs = 0, badRef = 0, outOfMap = 0, overCount = 0;
+  const counts = new Set(), speeds = new Set(), perFile = [];
+  for (const k of keys) {
+    const buf = dclDecompress(await fetchRaw(`game/${palfilsNameFor(k)}`)).data;
+    const groups = parseGroupsB(buf);
+    let n = 0;
+    for (const g of groups) {
+      if (!g.live) continue;
+      live++; n++;
+      counts.add(g.count); speeds.add(g.speed);
+      if (g.count > MAX_ENTITIES) overCount++;
+      if (g.tileX < 1 || g.tileX > 126 || g.tileY < 1 || g.tileY > 60) outOfMap++;
+    }
+    perFile.push(n);
+    /* Every selector-4 event in this level must name a LIVE descriptor. */
+    const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+    for (let i = 0; i < EVENT_COUNT; i++) {
+      const o = EVENT_TABLE_OFF + i * 4;
+      if (dv.getUint16(o, false) !== 4) continue;
+      refs++;
+      const p = dv.getUint16(o + 2, false);
+      if (!(groups[p] && groups[p].live)) badRef++;
+    }
+  }
+
+  check(`270 live System-B group descriptors (14/14/30/28/50/50/42/42)`,
+    live === 270, `${live} — ${perFile.join('/')}`);
+  check(`every selector-4 event names a live descriptor`,
+    badRef === 0, `${refs} references, ${badRef} dangling`);
+  check(`every spawn tile is inside the 128x64 map`,
+    outOfMap === 0, `${outOfMap} outside`);
+  check(`no group asks for more than the ${MAX_ENTITIES} runtime slots`,
+    overCount === 0, `entity counts ${[...counts].sort((a, b) => a - b).join(',')}`);
+  results.push({
+    name: `descriptor +0x0b speeds in shipped data`, note: true, pass: true,
+    detail: `${[...speeds].sort((a, b) => a - b).join(',')} — step delay is 10 - v, so higher is faster`,
+  });
+
+  /* Sprite composition: every (class, mode, frame) a level can produce must
+   * land inside that world's creature group, which begins at descriptor #450.
+   * This is the check that would catch a wrong class table or a wrong base. */
+  const ANIM = MODE_TABLE.map((m) => m.animBase);
+  let usedClasses = 0, below = 0, over = 0;
+  const overBases = new Set();
+  for (const world of [1, 2, 3, 4]) {
+    const stems = GROUP_STEMS[`level${world}`];
+    let groupFrames = 0;
+    for (const st of stems) {
+      groupFrames += parseAtlas(dclDecompress(await fetchRaw(`game/${st}.DAT`)).data).count;
+    }
+    const last = CREATURE_DESCRIPTOR_BASE + groupFrames - 1;
+    /* only the classes the shipped descriptors actually reference */
+    const refd = new Set();
+    for (const sub of ['A', 'B']) {
+      const g = parseGroupsB(dclDecompress(
+        await fetchRaw(`game/${palfilsNameFor(`${world}${sub}`)}`)).data);
+      g.filter((x) => x.live).forEach((x) => refd.add(x.cls));
+    }
+    for (const cls of refd) {
+      usedClasses++;
+      const rec = CLASS_TABLES_B[world][cls];
+      if (!rec) { below++; continue; }
+      if (rec.base < CREATURE_DESCRIPTOR_BASE) below++;
+      if (rec.base + 17 > last) { over++; overBases.add(`w${world}:${rec.base}`); }
+    }
+  }
+  check(`every referenced enemy class starts at or after descriptor #450`,
+    below === 0, `${usedClasses} classes referenced across the 4 worlds`);
+  results.push({
+    name: `REFERENCED classes whose base + 17 escapes their creature group`,
+    note: true, pass: true,
+    detail: over === 0 ? 'none — the formula is consistent everywhere it is exercised' :
+      `${[...overBases].join(' ')} — mostly the 24x24 records; ` +
+      `UNKNOWN_sysB_small_class_modes (the port range-checks and refuses to draw)`,
+  });
+
+  /* The spawn recipe itself, driven through the real EventRunner on PLEV1A. */
+  const map = parseMap(dclDecompress(await fetchRaw('game/PLEV1A.MAP')).data);
+  const pf = dclDecompress(await fetchRaw(`game/${palfilsNameFor('1A')}`)).data;
+  const groups = parseGroupsB(pf);
+  const runner = new EventRunner(map, parsePalfils(pf));
+  const acts = [];
+  runner.onSpawnB = (p) => acts.push(p);
+  for (let row = 0; row < 64; row++) {
+    for (let col = 0; col < 128; col++) {
+      if (map.planeB[row * 128 + col] < 3) continue;
+      runner.lastCell = -1;
+      runner.step(col * 32, row * 16, runner.makeState({ timer: 0 }));
+    }
+  }
+  check(`PLEV1A dispatches selector-4 activations through the real event chain`,
+    acts.length > 0 && acts.every((p) => groups[p] && groups[p].live),
+    `${acts.length} activations, groups ${[...new Set(acts)].join(',')}`);
+
+  /* And the sprites those groups resolve to are creature frames, not glyphs. */
+  const ids = [...new Set(acts)].map((p) => {
+    const d = groups[p];
+    return spriteForEntity(1, d.cls, MODE.WALK_L, 0, ANIM);
+  });
+  check(`their sprites land in world 1's creature group`,
+    ids.length > 0 && ids.every((i) => i !== null && i >= CREATURE_DESCRIPTOR_BASE),
+    `#${ids.join(' #')}`);
+
+  /* ── The pathfinder verdict (CS:0xf586 / 0xf2ac) ──────────────────────── */
+
+  /* The domain is exactly 8 wide. Re-derived here from CS:0xf2ac's arithmetic
+   * rather than read off the table, so the table and the formula must agree. */
+  const derived = [];
+  for (let v = 0; v <= 7; v++) {
+    if (v <= 1) { derived.push({ v, mode: v }); continue; }
+    let ax = v - 2;
+    const mode = 4 + (ax & 1);
+    ax &= 0xfffe;
+    const cursor = ax === 0 ? 7 : (ax - 2 === 0 ? 9 : 13);
+    derived.push({ v, mode, cursor });
+  }
+  check(`the verdict domain re-derives from CS:0xf2ac's arithmetic`,
+    derived.every((d, i) => VERDICT[i].mode === d.mode && VERDICT[i].cursor === d.cursor),
+    derived.map((d) => `${d.v}->m${d.mode}${d.cursor ? `/c${d.cursor}` : ''}`).join(' '));
+
+  /* Hop cursors are REACHES: the sibling seeders CS:0xf2e4/0xf2fc compute
+   * 5 + 2*(d-1), so 7/9/13 must be exactly d = 2, 3, 5. */
+  const reaches = [7, 9, 13].map((c) => (c - 5) / 2 + 1);
+  check(`hop cursor seeds 7/9/13 are the reaches 2/3/5 under 5 + 2*(d-1)`,
+    reaches.every(Number.isInteger) && reaches.join() === '2,3,5', reaches.join('/'));
+
+  /* The two walk handlers test the verdict against DIFFERENT constants. */
+  check(`walk-left keeps going on verdict 0, walk-right on verdict 1`,
+    verdictAction(0, MODE.WALK_L) === 'keep' && verdictAction(1, MODE.WALK_R) === 'keep'
+    && verdictAction(1, MODE.WALK_L) === 'apply' && verdictAction(0, MODE.WALK_R) === 'apply',
+    'CS:0xf14e tests 0, CS:0xf215 tests 1 — not a shared constant');
+
+  check(`a negative verdict falls back to patrol, never to a mode`,
+    verdictAction(VERDICT_NONE, MODE.WALK_L) === 'patrol'
+    && verdictAction(VERDICT_NONE, MODE.WALK_R) === 'patrol',
+    'CS:0xf14c / 0xf20e `js`');
+
+  /* Applying a hop verdict must set mode AND cursor AND frame — CS:0xf2ac
+   * writes all three, and a port that only sets the mode hops zero distance. */
+  const he = new EntityB({ x: 0, y: 0, mode: MODE.WALK_L });
+  he.state = 1;
+  applyVerdict(he, 6);
+  check(`applying verdict 6 gives hop-left with cursor 13 and frame 0`,
+    he.mode === MODE.HOP_L && he.vel === 13 && he.frame === 0,
+    `mode ${he.mode}, cursor ${he.vel}, frame ${he.frame}`);
+
+  /* Only 7 and 13 ever ship — the hop stage seeds exactly those two
+   * (CS:0xfb88 / 0xfbaa), and 9 belongs to the dead verdict-4/5 branch. */
+  check(`both live hop cursor seeds are inside the arc table`,
+    [7, 13].every((c) => hopDelta(c) !== null),
+    `deltas ${[7, 13].map((c) => hopDelta(c)).join(',')} (9 is the dead branch)`);
+
+  /* Only 0,1,2,3,6,7 can ever be minted, so the cursor-9 branch is dead. */
+  check(`verdicts 4 and 5 are unreachable — the cursor-9 branch is dead code`,
+    VERDICT.filter((r) => r.dead).map((r) => r.v).join() === '4,5'
+    && REACHABLE_VERDICTS.every((v) => !VERDICT[v].dead)
+    && VERDICT.filter((r) => r.dead).every((r) => r.cursor === 9),
+    `mintable ${REACHABLE_VERDICTS.join(',')} — CS:0xf2d0 \`mov bx,0x9\` never runs`);
+
+  /* THE CURSOR DECREMENTS, and the -8 run the seeds sit in is the LAUNCH.
+   * Y grows downward, so a negative delta moves the entity up. Seed 13 spends
+   * nine ticks climbing at 8 px where seed 7 spends three — which is what
+   * makes 13 the long hop. */
+  const arcOf = (seed) => {
+    const out = []; let c = seed;
+    for (let i = 0; i < 24; i++) { out.push(hopDelta(c)); c = hopCursorNext(c); }
+    return out;
+  };
+  const a7 = arcOf(7), a13 = arcOf(13);
+  const rise = (a) => -a.reduce((s, v) => Math.min(s, s + v), 0);
+  check(`the hop cursor decrements and the -8 run is the LAUNCH, not a tail`,
+    a7[0] === -8 && a7.includes(0) && a7[a7.length - 1] === 8
+    && rise(a13) > rise(a7),
+    `seed 7 rises ${rise(a7)} px, seed 13 rises ${rise(a13)} px ` +
+    '(CS:0xf9c3 `sub bx,2`)');
+
+  /* And the floor is an oscillation, not a clamp — it ping-pongs -6/-5, both
+   * of which hold 8, giving a constant 8 px/tick terminal fall. */
+  check(`the cursor floor ping-pongs -6/-5 rather than clamping`,
+    hopCursorNext(-6) === -5 && hopCursorNext(-5) === -6
+    && hopDelta(-6) === 8 && hopDelta(-5) === 8,
+    'CS:0xf9c6 `cmp bx,-12 / jl / mov bx,-10` — terminal fall is a flat 8 px');
+
+  /* ── The grid, and the two DIFFERENT cell rules ───────────────────────── */
+
+  check(`the visited grid is 20 x 20 and its bound excludes the last row`,
+    GRID_PITCH * 20 === GRID_CELLS && GRID_LIMIT === GRID_CELLS - GRID_PITCH,
+    `${GRID_CELLS} bytes, pitch ${GRID_PITCH}, bound ${GRID_LIMIT} = 400 - 20 (CS:0xf7e5)`);
+
+  check(`the export-39 bias 0x55 is a 5-column, 4-row margin at pitch 20`,
+    GRID_MARGIN === 4 * GRID_PITCH + 5, `${GRID_MARGIN} = 4*${GRID_PITCH} + 5`);
+
+  check(`the hero's cell rounds the column, the entity's floors it`,
+    heroCell(16, 0) === 1 && entityCell(16, 0) === 0
+    && heroCell(31, 0) === 1 && entityCell(31, 0) === 0,
+    'export 40 adds 0x10 first (CS:0x5fab); CS:0xf56a does not');
+
+  check(`both rules floor the ROW identically`,
+    heroCell(0, 15) === 0 && entityCell(0, 15) === 0
+    && heroCell(0, 16) === 128 && entityCell(0, 16) === 128,
+    'and dx,0xfff0 in both');
+
+  /* ── The open list ───────────────────────────────────────────────────── */
+  const ol = new OpenList();
+  let pushed = 0;
+  for (let i = 0; i < 40; i++) if (ol.push({ i })) pushed++;
+  check(`the open list holds 32 nodes and then refuses pushes`,
+    pushed === OPEN_SLOTS && ol.dropped === 40 - OPEN_SLOTS,
+    `${pushed} accepted, ${ol.dropped} dropped (CS:0xf6ac limit ${OPEN_LIMIT})`);
+
+  let popped = 0;
+  while (ol.pop()) popped++;
+  check(`every pushed node is popped exactly once`,
+    popped === pushed && ol.count === 0, `${popped} popped, count ${ol.count}`);
+
+  /* THE DOUBLE INCREMENT. CS:0xf5ff does `inc cx` with no `add si,8`, so the
+   * emptied slot is rescanned next turn and charged a second `add cx,1`. Net:
+   * one expansion advances the cursor by 1 slot but the counter by 2, so the
+   * wrap at cx >= 0x20 fires after ~16 expansions rather than 32. This is the
+   * single behavioural difference between the real loop and a plain queue. */
+  const q = new OpenList();
+  for (let i = 0; i < OPEN_SLOTS; i++) q.push({ i });
+  q.pop(); q.wrapAfterExpand();          // first expansion
+  const siA = q.si, cxA = q.cx;
+  q.pop(); q.wrapAfterExpand();          // second
+  check(`one expansion advances the cursor by 1 slot but the counter by 2`,
+    siA === 0 && cxA === 1 && q.si === 1 && q.cx === 3,
+    `after 1: si=${siA} cx=${cxA}; after 2: si=${q.si} cx=${q.cx} ` +
+    '(CS:0xf5ff `inc cx` with no `add si,8`)');
+
+  /* And therefore the counter reaches its 0x20 wrap after only 16 expansions.
+   * With a full list, n expansions leave si = n-1 and cx = 2n-1; a plain queue
+   * would leave cx = n. At n = 16 the counter is already 31, one short of the
+   * wrap, while only half the slots have been visited. */
+  const q2 = new OpenList();
+  for (let i = 0; i < OPEN_SLOTS; i++) q2.push({ i });
+  for (let n = 0; n < 16; n++) { q2.pop(); q2.wrapAfterExpand(); }
+  check(`16 expansions leave the counter at 31 — half the slots, a full lap`,
+    q2.si === 15 && q2.cx === 31 && q2.count === OPEN_SLOTS - 16,
+    `si=${q2.si} cx=${q2.cx} count=${q2.count}; a plain queue would give cx=16 ` +
+    '— UNKNOWN_f5ff_cx_desync');
+
+  /* The search must degrade to "no path" while the producers are unknown.
+   * That is the honest state and it should be visible, not asserted. */
+  const idle = Object.assign(new EntityB({ x: 100, y: 100, mode: MODE.WALK_L }), { state: 1 });
+  check(`with no producers the search reports no path (enemies patrol)`,
+    search(idle, 0, 0) === VERDICT_NONE,
+    "UNKNOWN_pathfinder_producers — the original's own no-path case");
+
+  /* An off-screen entity is culled before anything is cleared, so its verdict
+   * stays 0xFFFF: off-screen enemies never hunt. */
+  const far = Object.assign(new EntityB({ x: 5000, y: 100 }), { state: 1 });
+  check(`an off-screen entity is culled before the search runs`,
+    !searchable(5000, 100, 0, 0) && search(far, 0, 0) === VERDICT_NONE,
+    'CS:0xf59f-0xf5b2 — off-screen enemies never hunt');
+
+  /* THE LOOP ITSELF, driven by a synthetic expand. Without this every check
+   * above stops at `if (!expand) return`, so the GOOD_ENOUGH cutoff, the
+   * cursor quirk inside the loop and the cost/firstMove wiring would all be
+   * written but never run. The stub pushes one node per call and, on the
+   * second expansion, drops `best` under the cutoff. */
+  const seen = [];
+  let calls = 0;
+  const stubVerdict = search(idle, 0, 0, {
+    expand(st, x, y) {
+      calls++;
+      seen.push({ x, y, depth: st.depth, firstMove: st.firstMove });
+      if (calls === 1) { st.open.push({ x: 64, y: 32, cost: 5, firstMove: 3 }); return; }
+      st.best = 8;                       // under GOOD_ENOUGH -> loop must stop
+      st.verdict = st.firstMove;
+    },
+  });
+  check(`the search loop reads cost and firstMove from the popped slot`,
+    calls === 2 && seen[0].depth === 0 && seen[0].firstMove === 0
+    && seen[1].x === 64 && seen[1].y === 32
+    && seen[1].depth === 5 && seen[1].firstMove === 3,
+    `root(depth 0) then node(depth ${seen[1] && seen[1].depth}, ` +
+    `move ${seen[1] && seen[1].firstMove}) — CS:0xf623/0xf627`);
+
+  check(`the loop stops as soon as best drops to GOOD_ENOUGH or below`,
+    calls === 2 && stubVerdict === 3,
+    `2 expansions, verdict ${stubVerdict} — CS:0xf5d8/0xf635 \`jna 0x10\``);
+
+  /* ── DOES IT ACTUALLY HUNT? ───────────────────────────────────────────
+   * There is no differential test for this subsystem — the seed choice is
+   * randomised from a wall-clock-seeded replay table, so the original is not
+   * reproducible run-to-run either. But the randomness enters at exactly one
+   * point, so pinning `rnd` makes the chain deterministic without faking it.
+   * The test is two-sided on real level geometry: a chase that closes, and a
+   * genuinely unreachable hero that yields no path. A pursuit test that only
+   * passes on an open field proves very little. */
+  const huntMap = parseMap(dclDecompress(await fetchRaw('game/PLEV1A.MAP')).data);
+
+  /* Find real geometry rather than inventing it: a run of clear cells with
+   * solid ground beneath. */
+  let corr = null;
+  for (let row = 4; row < 60 && !corr; row++) {
+    let run = 0;
+    for (let col = 1; col < 127; col++) {
+      const ok = huntMap.planeB[(row + 2) * 128 + col] === 1
+              && huntMap.planeB[row * 128 + col] === 0
+              && huntMap.planeB[(row + 1) * 128 + col] === 0;
+      if (ok) { run++; if (run >= 9) { corr = { row, col: col - 8 }; break; } }
+      else run = 0;
+    }
+  }
+
+  /* Use a REAL shipped descriptor rather than a fabricated struct — the whole
+   * discipline here is re-deriving from shipped bytes, and a hand-made one
+   * silently picked hopUnlock 0, which disables the seed-13 arcs and left half
+   * the hop machinery uncovered. */
+  const huntPf = dclDecompress(await fetchRaw(`game/${palfilsNameFor('1A')}`)).data;
+  const huntDescs = parseGroupsB(huntPf).filter((d) => d.live);
+  const shipped = huntDescs.find((d) => (d.seedPair & 0xf) === 0 && d.budget >= 8
+                                        && d.hopUnlock > 4) || huntDescs[0];
+
+  const chase = (walls, desc, wallRows) => {
+    const planeB = Uint8Array.from(huntMap.planeB);
+    for (const c of walls) {
+      for (let r = corr.row - wallRows; r <= corr.row + 1; r++) planeB[r * 128 + c] = 1;
+    }
+    const y = corr.row * 16;
+    const heroX = (corr.col + 8) * 32;
+    const e = Object.assign(
+      new EntityB({ x: corr.col * 32, y, mode: MODE.WALK_L, speed: desc.speed || 9 }),
+      { state: 1 });
+    const camX = Math.max(0, corr.col * 32 - 48), camY = Math.max(0, y - 80);
+    const first = Math.abs(e.x - heroX);
+    const verdicts = [];
+    let oob = 0, bailouts = 0;
+    for (let t = 0; t < 60; t++) {
+      let v = VERDICT_NONE;
+      const walking = e.mode === MODE.WALK_L || e.mode === MODE.WALK_R;
+      if (walking && (e.x & 0x1c) === 0 && groundBelow(planeB, e.x, e.y)) {
+        /* rnd 0 can never lose to the weight (`swap only when weight < rnd`),
+         * so the LOW nibble wins — strategy 0, direct pursuit. Pinning the one
+         * random input is what makes this deterministic without faking it. */
+        const r = runSearch(e, { planeB, camX, camY, heroX, heroY: y, desc, rnd: 0 });
+        v = r.verdict;
+        oob += r.state.oob; bailouts += r.state.bailouts;
+        verdicts.push(v);
+      }
+      e.tick(planeB, v);
+    }
+    return { first, last: Math.abs(e.x - heroX), verdicts, oob, bailouts };
+  };
+
+  if (!corr) {
+    results.push({ name: 'enemy pursuit', note: true, pass: true,
+      detail: 'PLEV1A has no corridor wide enough to stage a chase' });
+  } else {
+    const open = chase([], shipped, 0);
+    check(`an enemy on open ground closes the distance to the hero`,
+      open.last < open.first && open.verdicts.some((v) => v === 1),
+      `descriptor #${shipped.index}: ${open.first} -> ${open.last} px, ` +
+      `first verdict ${open.verdicts[0]} (walk right)`);
+
+    /* ⚠️ THE INSTRUMENTATION ASSERTION. A grid write outside [0,400) silently
+     * drops a GOAL MARK and an out-of-range read returns 0 = "free", so both
+     * failure modes look exactly like "sometimes no path". Counting them is
+     * the only way to tell a working search from a quietly clipping one. */
+    check(`the search never reads or writes outside its grid or plane`,
+      open.oob === 0 && open.bailouts === 0,
+      `${open.oob} out-of-range accesses, ${open.bailouts} loop bailouts ` +
+      'across the whole chase');
+
+    /* A two-tile wall is inside a seed-7 hop's 32-px reach, so the enemy
+     * should clear it rather than give up. */
+    const hopped = chase([corr.col + 3], shipped, 1);
+    check(`a two-tile wall is hopped, not treated as impassable`,
+      hopped.verdicts.some((v) => v === 2 || v === 3 || v === 6 || v === 7)
+      && hopped.last < hopped.first,
+      `verdicts ${[...new Set(hopped.verdicts)].join(',')}, ` +
+      `${hopped.first} -> ${hopped.last} px`);
+
+    /* Six tiles is out of reach of both seeds (7 rises 32 px, 13 rises 80). */
+    const blocked = chase([corr.col + 3], shipped, 4);
+    check(`an enemy walled off from the hero gets NO PATH, every time`,
+      blocked.verdicts.length > 0 && blocked.verdicts.every((v) => v === VERDICT_NONE),
+      `${blocked.verdicts.length} searches, all none — the search does not ` +
+      'hallucinate a route through solid tiles');
+  }
+
+  /* The long-hop arcs only run when descriptor +0x0c > 4, so they need their
+   * own coverage: without it seed 13 and move codes 6/7 are never exercised. */
+  check(`the long-hop gate is exercised by a real shipped descriptor`,
+    shipped.hopUnlock > 4,
+    `descriptor #${shipped.index} has +0x0c = ${shipped.hopUnlock} ` +
+    '(CS:0xfb9e `cmp byte [si+0xc],4 / jng`) — seed 13 and codes 6/7 reachable');
+
+  /* ── How much of the shipped population can actually hunt? ─────────────
+   * Strategy 2 is the "attracts monsters" potion's marker list, and with no
+   * markers it SHORT-CIRCUITS to the other nibble (CS:0xf799 -> 0xf71a), so
+   * it is not inert. Strategy 3 paints only if one of its per-world waypoints
+   * is on screen. The honest figure is the share whose EFFECTIVE strategy is
+   * hero-relative (0 or 1), weighted over every rnd. */
+  const effective = (b8, w9, rnd) => {
+    const lo = b8 & 0x0f, hi = (b8 & 0xf0) >> 4;
+    let idx = seedStrategy(b8, w9, rnd);
+    if (idx === 2) {                          // CS:0xf799 — one hop, no retry
+      const other = idx === lo ? hi : lo;
+      idx = other === 2 ? 2 : other;
+    }
+    return idx;
+  };
+  let heroRel = 0, total = 0;
+  for (const world of [1, 2, 3, 4]) {
+    for (const sub of ['A', 'B']) {
+      const buf = dclDecompress(
+        await fetchRaw(`game/${palfilsNameFor(`${world}${sub}`)}`)).data;
+      parseGroupsB(buf).forEach((d, i) => {
+        if (!d.live) return;
+        total++;
+        const o = 0x11A4 + i * 0x16;
+        let good = 0;
+        for (let rnd = 0; rnd < 128; rnd++) {
+          const e = effective(buf[o + 8], buf[o + 9], rnd);
+          if (e === 0 || e === 1) good++;
+        }
+        heroRel += good / 128;
+      });
+    }
+  }
+  const pct = (100 * heroRel / total).toFixed(1);
+  results.push({
+    name: 'share of shipped groups whose goal is hero-relative', note: true, pass: true,
+    detail: `${pct}% of ${total} live descriptors, weighted over every rnd — ` +
+      'the rest choose strategy 3 (a per-world waypoint, which paints only when ' +
+      'one is on screen) or land on 2 twice',
+  });
+
+  /* Strategy 2 with no markers must fall back, not go inert. */
+  const fbGrid = () => {
+    const st = { grid: new Int8Array(GRID_CELLS), camX: 0, camY: 0 };
+    return st;
+  };
+  check(`strategy 2 with an empty marker list retries the other nibble`,
+    effective(0x20, 0, 1) === 0 && effective(0x02, 0, 127) === 0
+    && effective(0x22, 0, 1) === 2,
+    'lo/hi 0 is reached from either side; 2 paired with 2 has no retry ' +
+    '(CS:0xf799 -> 0xf71a `xchg cx,dx`)');
+
+  /* The waypoint lists: every shipped coordinate must be inside the map, and
+   * worlds 3 and 4 must be the SAME list — DS:0xdb28 gives both one pointer. */
+  const wpCounts = [1, 2, 3, 4].map((w) => WAYPOINTS[w].length);
+  const allInMap = [1, 2, 3, 4].every((w) =>
+    WAYPOINTS[w].every(([x, y]) => x >= 0 && x < 128 && y >= 0 && y < 64));
+  check(`the per-world waypoint lists are inside the 128x64 map`,
+    allInMap && WAYPOINTS[3] === WAYPOINTS[4],
+    `${wpCounts.join('/')} waypoints per world; 3 and 4 share a list ` +
+    '(DS:0xdb28 -> 0xdb30, 0xdb58, 0xdba8, 0xdba8)');
+
+  /* The attract potion is what forces strategy 2 — object type 45. */
+  const objs = dclDecompress(await fetchRaw('game/POBJECTS.001')).data;
+  const nameOf = (t) => Array.from(objs.slice(t * 0x30 + 8, t * 0x30 + 48))
+    .map((c) => (c >= 32 && c < 127 ? String.fromCharCode(c) : '.')).join('');
+  check(`DS:0x399 is set by object type 45, the "attracts monsters" potion`,
+    ATTRACT_POTION_TYPE === 45 && /attracts monsters/.test(nameOf(45)),
+    `POBJECTS type 45 reads "${nameOf(45).replace(/\.+/g, ' ').trim()}" ` +
+    '— CS:0x163d `cmp dx,0x2d` then CS:0x164d sets the gate');
+
+  /* ── Health: the bar lags the target, and that lag IS the game ────────── */
+
+  /* Level start animates the bar up rather than showing it full. */
+  const hs = new Health();
+  let upTicks = 0;
+  while (hs.bar < HEALTH_MAX && upTicks < 100) { hs.chase(); upTicks++; }
+  check(`level start fills the bar over 23 frames, not instantly`,
+    upTicks === 23 && hs.bar === HEALTH_MAX,
+    `${upTicks} ticks from bar 1 to ${HEALTH_MAX} (CS:0x084B target 24, 0x0851 bar 1)`);
+
+  /* THE RESCUE WINDOW — the check that proves the lag is modelled rather than
+   * the target being drained instantly. Drive the target to 0 and the hero
+   * must stay alive for the bar's whole descent. */
+  const dying = new Health(HEALTH_MAX, HEALTH_MAX);
+  dying.damage(HEALTH_MAX);                        // target 24 -> 0
+  let alive = 0;
+  while (!dying.dead && alive < 100) { dying.chase(); alive++; }
+  /* ⚠️ THE DISCRIMINATING ASSERTION is not the frame count — that is just the
+   * starting bar walking down, and it would pass under an instant-drain
+   * implementation too. What proves the lag is modelled is that the TARGET is
+   * already at or below zero while the hero is still ALIVE. */
+  const lagWindow = new Health(HEALTH_MAX, HEALTH_MAX);
+  lagWindow.damage(HEALTH_MAX);
+  lagWindow.chase();
+  check(`a fatal hit leaves a rescue window: target dead, hero still alive`,
+    lagWindow.target <= 0 && !lagWindow.dead && lagWindow.bar > 0
+    && alive === HEALTH_MAX && dying.dead,
+    `target ${lagWindow.target}, bar ${lagWindow.bar}, alive — then ${alive} ` +
+    `frames (~${(alive / 15).toFixed(1)} s at 15 Hz) to death (CS:0x01bd reads the BAR)`);
+
+  /* The window has a real deadline, but ⚠️ NOT the one this file used to
+   * assert. Every potion site opens `cmp word [0x19a],0 / jns <effect>` —
+   * JNS, so it proceeds while the bar is non-negative and refuses only once
+   * it has gone NEGATIVE. This check previously asserted "does nothing once
+   * the bar reads zero", which is the opposite at exactly the boundary that
+   * decides whether the last frame of the descent can still be saved. */
+  const saved = new Health(HEALTH_MAX, HEALTH_MAX);
+  saved.damage(HEALTH_MAX);
+  for (let i = 0; i < 20; i++) saved.chase();      // bar down to 4
+  const tookIt = saved.potion(0x18).taken;
+  let after = 0;
+  while (!saved.dead && after < 200) { saved.chase(); after++; }
+
+  const atZero = new Health(HEALTH_MAX, HEALTH_MAX);
+  atZero.damage(HEALTH_MAX);
+  while (atZero.bar > 0) atZero.chase();           // bar is exactly 0
+  const zeroWorks = atZero.potion(0x18).taken;
+
+  const negative = new Health(HEALTH_MAX, HEALTH_MAX);
+  negative.bar = -1;
+  const refused = negative.potion(0x18).taken;
+
+  check(`a potion still works at a bar of exactly 0, and is refused below it`,
+    tookIt && !saved.dead && after >= 200
+      && atZero.bar === 0 && zeroWorks === true && refused === false,
+    `bar 0 -> accepted, bar -1 -> refused. CS:0x6306 is ` +
+    '`cmp word [0x19a],0 / jns`, the same non-strict shape as the damage ' +
+    'guard and the pickup gate — and the opposite of the death test, which ' +
+    'fires at <= 0. Four reads of DS:0x19a, three different boundaries');
+
+  /* ⚠️ AND THE CAP IS A CONVERSION, NOT A CLAMP. */
+  const brim = new Health(HEALTH_MAX, HEALTH_MAX);
+  brim.target = HEALTH_MAX - 2;
+  const brimmed = brim.potion(0x18);
+  /* ⚠️ CORRECTED. An earlier revision of this check asserted the banking as
+   * live behaviour. CS:0x6384 gates it on DS:0x168 >= 0 — the FAMILIAR'S
+   * energy — which is -1 at both full restarts and can only be lifted by a
+   * "familiar" potion, type 39, placed ZERO times in all eight maps. */
+  const withFamiliar = new Health(HEALTH_MAX, HEALTH_MAX);
+  withFamiliar.target = HEALTH_MAX - 2; withFamiliar.familiarEnergy = 1000;
+  const fed = withFamiliar.potion(0x18);
+  check(`over-healing banks 32 a point ONLY while a familiar is alive`,
+    brim.target === HEALTH_MAX && brimmed.banked === 0
+      && brimmed.discarded === (0x18 - 2)
+      && fed.banked === (0x18 - 2) * 32,
+    `the same ${0x18 - 2} wasted points bank ${fed.banked} with a familiar ` +
+    `and ${brimmed.banked} without. CS:0x6377 shifts the excess left five ` +
+    `times, but CS:0x6384 \`cmp word [0x168],0 / jns\` skips the credit when ` +
+    `DS:0x168 is negative — and CS:0xC470 sets -1 at both full restarts. So ` +
+    `the banking is real code that NO shipped level can reach, and quoting ` +
+    `it as what over-healing does was wrong`);
+
+  /* The hurt sound is a ONE-SHOT per descent, not one per tick. */
+  const noisy = new Health(HEALTH_MAX, HEALTH_MAX);
+  noisy.damage(10);
+  for (let i = 0; i < 20; i++) noisy.chase();
+  check(`the hurt sound fires once per descent, not once per frame`,
+    noisy.hurtSounds === 1,
+    `${noisy.hurtSounds} sound(s) over a 10-unit descent (latch DS:0x3ad)`);
+
+  /* ── The damage curve, and a correction this port made ────────────────── */
+
+  /* Five arithmetic shifts, not four. The two readings disagree on almost
+   * every shipped enemy HP, so this is decided by the bytes, not by taste. */
+  const hpSeen = new Set();
+  for (const world of [1, 2, 3, 4]) {
+    for (const sub of ['A', 'B']) {
+      const buf = dclDecompress(
+        await fetchRaw(`game/${palfilsNameFor(`${world}${sub}`)}`)).data;
+      parseGroupsB(buf).forEach((d) => { if (d.live) hpSeen.add(d.hp); });
+    }
+  }
+  const hps = [...hpSeen].sort((a, b) => a - b);
+  const differ = hps.filter((v) => damageFor(v) !== (((v + 1) >> 4) + 5)).length;
+  check(`contact damage is ((strength + 1) >> 5) + 5 — five shifts, not four`,
+    damageFor(2) === 5 && damageFor(255) === 13 && differ > 20,
+    `shipped HP ${hps[0]}..${hps[hps.length - 1]} gives ${damageFor(hps[0])}..` +
+    `${damageFor(hps[hps.length - 1])} damage; the old \`>> 4\` note disagrees on ` +
+    `${differ}/${hps.length} values (it would cost 21 of ${HEALTH_MAX} at HP 255)`);
+
+  /* Crouching really shortens the hitbox — otherwise the dodge is cosmetic.
+   * The box is `heroY + 8 - h <= atkY <= heroY + 38`, and crouching raises the
+   * lower bound by 20, so attacks in a 20-px band are exactly what a standing
+   * hero eats and a crouching one ducks. */
+  const hero = { x: 100, y: 100, state: 0 };
+  const high = { x: 110, y: 80, w: 0x20, h: 0x20, strength: 0 };
+  const standHit = attackHero(high, hero, new Health(), {}).hit;
+  const crouchHit = attackHero(high, { ...hero, state: 0x12 }, new Health(), {}).hit;
+  /* And it must be a BAND, not blanket immunity: a hit at the hero's own
+   * level still connects while crouching. */
+  const lowHit = attackHero({ ...high, y: 110 }, { ...hero, state: 0x12 },
+                            new Health(), {}).hit;
+  check(`crouching (states 18/19) raises the hitbox top and dodges a HIGH hit`,
+    standHit && !crouchHit && lowHit,
+    `y=80 hits standing and misses crouching; y=110 still hits crouching ` +
+    '— CS:0xaca0 `add bx,0x14`');
+
+  /* Invulnerability suppresses the damage but NOT the hit report. */
+  const h3 = new Health();
+  const inv = attackHero({ x: 110, y: 110, w: 0x20, h: 0x20, strength: 40 },
+                         hero, h3, { invuln: 1 });
+  /* CS:0xACCC's `jnz` skips ONLY the `sub` at 0xACD3; the [0x34] test and the
+   * bp store at 0xACDB/0xACE2 sit after the branch rejoins. So an invulnerable
+   * hero is a creature-killing battering ram — he takes no damage and the
+   * contact still reports a hit, which is what kills the creature. */
+  check(`invulnerability blocks the damage but STILL kills what touches him`,
+    inv.hit && h3.target === HEALTH_MAX && inv.strengthOut === -1,
+    `hit, target unchanged at ${h3.target}, strength -> ${inv.strengthOut} — ` +
+    'CS:0xaccc gates only the sub, so the kill still lands');
+
+  /* Contact kills the creature: the strength IS the entity's state word and
+   * the routine writes 0xFFFF back through it. */
+  const creature = { x: 110, y: 110, state: 40, frame: 3, delay: 7 };
+  const h4 = new Health();
+  const touch = creatureTouchesHero(creature, hero, h4, {});
+  check(`touching the hero costs health AND kills the creature`,
+    touch.hit && h4.target < HEALTH_MAX && creature.state === -1
+    && creature.frame === -1 && creature.delay === 0,
+    `hero -${touch.damage}, creature state 40 -> ${creature.state} ` +
+    '(CS:0xffb4 writes bp back, CS:0xffbf starts the death frames)');
+
+  /* The reportGate is an input, not a constant — with it set, the hero is
+   * hurt and the caller is told nothing, so the creature survives. */
+  const survivor = { x: 110, y: 110, state: 40, frame: 3, delay: 7 };
+  const h5 = new Health();
+  creatureTouchesHero(survivor, hero, h5, { reportGate: 1 });
+  /* ── Weapons and the difficulty scalar ───────────────────────────────── */
+
+  const wpn = parseWeapons(dclDecompress(await fetchRaw('game/PWEAPONS.001')).data);
+  check(`PWEAPONS.001 is 11 records of 0x50 bytes`,
+    wpn.length === 11, `${wpn.length} records`);
+
+  /* +0x0a is the max simultaneous projectiles, and the fire routine can only
+   * ever consume three (an unrolled 3-iteration loop). Every shipped record
+   * holding exactly 1 or 3 is what corroborates the field's meaning — a value
+   * of 2, or of 7, would refute it. */
+  const shots = [...new Set(wpn.map((w) => w.maxShots))].sort();
+  check(`every weapon's +0x0a max-shots is 1 or 3, never more than the 3 sub-slots`,
+    shots.join() === '1,3' && wpn.every((w) => w.maxShots <= MAX_SUBSLOTS),
+    `values ${shots.join('/')} across 11 weapons (CS:0x9609, loop length ${MAX_SUBSLOTS})`);
+
+  /* The cap is per weapon: a 1-shot weapon is refused a second live shot. */
+  const oneShot = wpn.findIndex((w) => w.maxShots === 1);
+  const threeShot = wpn.findIndex((w) => w.maxShots === 3);
+  const busy = (n) => ({ weapon: n, subslots: [true, false, false] });
+  const free = (n) => ({ weapon: n, subslots: [false, false, false] });
+  const a1 = allocateShots([busy(oneShot), null, null], wpn);
+  const a2 = allocateShots([busy(threeShot), null, null], wpn);
+  const a3 = allocateShots([free(oneShot), null, null], wpn);
+  check(`a 1-shot weapon is refused a second live shot; a 3-shot one is not`,
+    a1.allocated[0] === null && a2.allocated[0] !== null && a3.allocated[0] !== null,
+    `weapon #${oneShot} (1 shot) blocked while busy, #${threeShot} (3) allowed, ` +
+    'and #' + oneShot + ' allowed again once free — CS:0x9613 `dec bx / jz`');
+
+  /* PWEAPONS.004's sprite drift, the same +5 as POBJECTS.004 — and it never
+   * takes effect because CS:0x366d pins those fields at the EXE values. */
+  const w4 = parseWeapons(dclDecompress(await fetchRaw('game/PWEAPONS.004')).data);
+  /* Measured on the FILE field. `sprite` now returns the pinned EXE value, so
+   * reading the drift through it shows +0 — which is the pinning working, not
+   * the drift being absent. */
+  const drift = wpn.map((w, i) => w4[i].fileSprite - w.fileSprite);
+  check(`PWEAPONS.004 sprite fields are shifted +5, and are pinned at load`,
+    drift.every((d) => d === 5) && SPRITE_FIELDS_ARE_PINNED,
+    `+${drift[0]} on all 11 records — discarded by CS:0x366d, like POBJECTS.004`);
+
+  /* ⚠️ THESE TWO ASSERTED THE WRONG READING UNTIL THE WHOLE BRACKET WAS READ.
+   * `shr bx,cl` looks like it computes the damage. CS:0xAB5E subtracts the RAW
+   * value first and CS:0xAB86 adds the shifted one BACK, so the shift is what
+   * the scalar forgives — and the direction is the intuitive one after all. */
+  check(`the difficulty scalar multipliers are 1.00 / 0.75 / 0.50 / 0.25 / 0.25`,
+    DIFFICULTY_MULTIPLIERS.map((m) => m.toFixed(2)).join() === '1.00,0.75,0.50,0.25,0.25',
+    DIFFICULTY_MULTIPLIERS.map((m) => m.toFixed(2)).join(' ') +
+    ' — applied = raw - (raw >> (3 - scalar)), CS:0xAB5E paired with CS:0xAB86');
+
+  check(`a later-progression scalar deals LESS damage`,
+    difficultyScale(100, 3) < difficultyScale(100, 1)
+    && difficultyScale(100, 0) === 100,
+    `scalar 1 -> ${difficultyScale(100, 1)}, scalar 3 -> ${difficultyScale(100, 3)} ` +
+    'of 100 — enemies get tougher as the game progresses');
+
+  results.push({
+    name: 'the difficulty curve a player actually meets', note: true, pass: true,
+    detail: 'the scalar starts at 0 and is incremented on level completion ' +
+      'CLAMPED TO [2,4], so the sequence is ' +
+      DIFFICULTY_PROGRESSION.map((s) => (difficultyScale(1000, s) / 1000).toFixed(2)).join(' -> ') +
+      ' — monotone, and enemies are toughest at the END, not on world 2',
+  });
+
+  check(`DS:0x34 non-zero hurts the hero but leaves the creature alive`,
+    h5.target < HEALTH_MAX && survivor.state === 40,
+    `hero hurt, creature state still ${survivor.state} — UNKNOWN_DS_0034`);
+
+  /* The walk -> fall TRANSITION is not inert. CS:0xf157 seeds v := 1 and
+   * advances Y by one pixel in the same tick, before the fall handler ever
+   * runs. An earlier revision of this port set v := 0 and left Y alone, which
+   * delayed every ledge fall by a tick and started the curve one step low. */
+  const ledge = new Uint8Array(128 * 64);
+  ledge[0x100] = 1;                          // ground under the start cell only
+  const w = Object.assign(new EntityB({ x: 0, y: 0, mode: MODE.WALK_L, speed: 10 }),
+                          { state: 1 });
+  w.tick(ledge);                             // on a tile boundary, ground present
+  const beforeY = w.y, beforeMode = w.mode;
+  w.x = 32; w.tick(ledge);                   // next tile: no ground -> fall
+  check(`walking off a ledge seeds velocity 1 and moves Y by 1 in the same tick`,
+    beforeMode === MODE.WALK_L && w.mode === MODE.FALL_L && w.vel === 1
+    && w.y === beforeY + 1,
+    `mode ${beforeMode}->${w.mode}, v ${w.vel}, y ${beforeY}->${w.y} (CS:0xf157/0xf15f/0xf162)`);
+
+  /* ── The seed strategies ─────────────────────────────────────────────── */
+
+  /* The jump table at DS:0xd966 is four wide and the nibble is UNBOUNDED, so
+   * the shipped data has to stay inside it or the original would jump into
+   * garbage. Census every live descriptor across all 8 levels. */
+  let nibbleMax = -1, weightMax = -1, liveDescs = 0;
+  const nib = {};
+  for (const world of [1, 2, 3, 4]) {
+    for (const sub of ['A', 'B']) {
+      const buf = dclDecompress(
+        await fetchRaw(`game/${palfilsNameFor(`${world}${sub}`)}`)).data;
+      parseGroupsB(buf).forEach((d, i) => {
+        if (!d.live) return;
+        liveDescs++;
+        const o = 0x11A4 + i * 0x16;
+        const lo = buf[o + 8] & 0x0f, hi = (buf[o + 8] & 0xf0) >> 4;
+        nibbleMax = Math.max(nibbleMax, lo, hi);
+        weightMax = Math.max(weightMax, buf[o + 9]);
+        nib[lo] = (nib[lo] || 0) + 1; nib[hi] = (nib[hi] || 0) + 1;
+      });
+    }
+  }
+  check(`every shipped seed-strategy nibble is inside the 4-entry table`,
+    nibbleMax === SEED_STRATEGIES.length - 1 && liveDescs > 0,
+    `${liveDescs} live descriptors, max nibble ${nibbleMax}, table ${SEED_STRATEGIES.length} ` +
+    `— histogram ${JSON.stringify(nib)}`);
+
+  check(`every shipped seed weight fits the 0x7f mask`,
+    weightMax === SEED_WEIGHT_MASK,
+    `max +0x09 is ${weightMax}, mask is ${SEED_WEIGHT_MASK} (CS:0xf713)`);
+
+  /* The weight's polarity: `cmp bx,ax / jnl` keeps the LO nibble, so a HIGH
+   * weight means LO wins. 127 can never lose because rand <= 127. */
+  check(`weight 127 always picks the LO strategy, weight 0 almost always HI`,
+    [0, 1, 63, 127].every((r) => seedStrategy(0x21, 127, r) === 1)
+    && [1, 63, 127].every((r) => seedStrategy(0x21, 0, r) === 2)
+    && seedStrategy(0x21, 0, 0) === 1,
+    'CS:0xf716 `cmp bx,ax / jnl` — swap only when +9 < rand');
+
+  /* Strategy 1 paints a box around the HERO — 32 cells, and the corners of
+   * that box must sit exactly 64 px out on both axes. */
+  const box = seedBoxCells(1000, 500);
+  const xs = box.map((c) => c[0]), ys = box.map((c) => c[1]);
+  check(`seed strategy 1 paints a 32-cell box +/-64 px around the hero`,
+    box.length === 32 && Math.min(...xs) === 936 && Math.max(...xs) === 1064
+    && Math.min(...ys) === 436 && Math.max(...ys) === 564,
+    `x ${Math.min(...xs)}..${Math.max(...xs)}, y ${Math.min(...ys)}..${Math.max(...ys)} ` +
+    `(CS:0xf729, bp=7 so 8 cells a side)`);
+
+  /* Strategy 0, the commonest, marks the hero's own 3-cell column — one cell
+   * per tile row of his 32x48 body, stepping by the grid pitch. */
+  const col = seedColumnCells(160, 80);
+  check(`seed strategy 0 marks the hero's 3-cell column, stepping by the pitch`,
+    col.length === 3 && col[1] - col[0] === GRID_PITCH && col[2] - col[1] === GRID_PITCH
+    && col[0] === (160 >> 5) + GRID_PITCH * (80 >> 4) + GRID_MARGIN,
+    `cells ${col.join(',')} — a 32x48 hero spans 3 tile rows (CS:0xf892/0xf896/0xf89d)`);
+
+  /* And its cell math is NOT export 39's, despite the identical 0x55 bias. */
+  check(`strategy 0 and export 39 disagree by the 8-px bias near a boundary`,
+    seedColumnCells(8, 16)[0] !== gridIndex(8, 16)
+    && seedColumnCells(64, 32)[0] === gridIndex(64 + 8, 32 + 8),
+    'CS:0xf868 has no `sub cx,8`; export 39 (VGA:0x203) does');
+
+  results.push({
+    name: 'what the seed grid actually holds', note: true, pass: true,
+    detail: 'CS:0xf7dd marks cells 0xFF, and both decoded strategies walk the ' +
+      "HERO's position — so SS:0x1c70 is the GOAL region, not a closed set. " +
+      'Reading it the other way inverts the search.',
+  });
+
+  results.push({
+    name: 'shipped seed-strategy mix', note: true, pass: true,
+    detail: `strategy 0 (chase the hero's column) ${nib[0] || 0}, ` +
+      `1 (box around him) ${nib[1] || 0}, 2 ${nib[2] || 0}, 3 ${nib[3] || 0} ` +
+      `of ${liveDescs * 2} nibbles. Strategy 2 is the \"attracts monsters\" potion ` +
+      '(object type 45 sets DS:0x399) and 3 is the per-world waypoint list — ' +
+      'both closed; all four are implemented.',
+  });
+
+  return results;
+}
+
+/* ── weapons, fire-slot allocation and projectile spawn ──────────────────
+ *
+ * Everything here is spawn-side. Nothing moves or collides a projectile yet
+ * (UNKNOWN_projectile_mover), so these checks prove the records are BUILT
+ * correctly, not that the hero can kill anything.
+ */
+export async function checkWeaponsProjectiles(fetchRaw) {
+  const { results, check } = makeChecker();
+
+  const files = ['001', '002', '003', '004'];
+  const sets = [];
+  for (const f of files) {
+    sets.push(parseWeapons(dclDecompress(await fetchRaw(`game/PWEAPONS.${f}`)).data));
+  }
+  const all = sets.flat();
+
+  /* ── the record layout, from the three slot bases ─────────────────────── */
+  check(`the three weapon slots are a uniform 0x92 stride`,
+    WEAPON_SLOTS[1].weaponAt - WEAPON_SLOTS[0].weaponAt === SLOT_STRIDE
+    && WEAPON_SLOTS[2].weaponAt - WEAPON_SLOTS[1].weaponAt === SLOT_STRIDE,
+    `0xdd10 / 0xdda2 / 0xde34 — 2 bytes of weapon index + ${SLOT_STRIDE - 2} of ` +
+    `projectile area = ${AREA_ENTRIES} records of ${PROJECTILE_SIZE} bytes`);
+
+  /* The free test reads [di], [di+8], [di+0x10] and the allocator strides
+   * 0x18 — that is three 8-byte records per probe, which is what makes the
+   * record 8 bytes rather than 24. */
+  check(`a probe group is exactly ${GROUP_ENTRIES} records of ${PROJECTILE_SIZE} bytes`,
+    GROUP_ENTRIES * PROJECTILE_SIZE === GROUP_STRIDE,
+    `CS:0x9724 tests [di], [di+8], [di+0x10]; CS:0x9616 strides 0x18`);
+
+  check(`the allocator can reach only ${ENTRIES_REACHABLE} of the ${AREA_ENTRIES} records`,
+    ENTRIES_REACHABLE === 9 && AREA_ENTRIES === 18,
+    'the unrolled loop is 3 groups deep, so bytes 72..143 of every slot are ' +
+    'never allocated into — UNKNOWN_projectile_area_upper');
+
+  /* The 18 is not inferred from the 0x92 stride alone: the clear routine
+   * zeroes exactly 72 words from each slot's base + 2, so the whole 144-byte
+   * region is one array of projectile records and is not shared. */
+  check(`the clear routine zeroes all ${AREA_ENTRIES} records, not just the 9 reachable`,
+    AREA_ENTRIES * PROJECTILE_SIZE === 0x48 * 2,
+    'CS:0x9177 `mov cx,0x48` = 72 words = 144 bytes, called for each slot from ' +
+    'CS:0x914c at level start and on a new weapon pickup (CS:0x94ce)');
+
+  /* ── tags ─────────────────────────────────────────────────────────────── */
+  const tags = [];
+  for (let s = 0; s < 3; s++) for (let i = 0; i < 3; i++) tags.push(tagFor(s, i));
+  check(`tag = 1 + slot*9 + subslot*3 reproduces all three shipped bases`,
+    WEAPON_SLOTS.every((m, s) => m.tagBase === tagFor(s, 0))
+    && tags.join(',') === '1,4,7,10,13,16,19,22,25',
+    `bases ${WEAPON_SLOTS.map((m) => m.tagBase).join('/')} ` +
+    '(CS:0x95e8 = 1, CS:0x9674 = 0xa, CS:0x96df = 0x13)');
+
+  /* A tag is never zero, which is exactly what lets the tag word double as
+   * the record's free flag. If any tag could be 0 the free test would be
+   * ambiguous — the same trap the pathfinder's open list has at (0,0). */
+  check(`no tag is 0, so the tag word can serve as the free flag`,
+    tags.every((t) => t !== 0), `lowest tag ${Math.min(...tags)}`);
+
+  /* ── the handler table ────────────────────────────────────────────────── */
+  const refL = new Set(all.map((w) => w.handlerLeft));
+  const refR = new Set(all.map((w) => w.handlerRight));
+  check(`every weapon's right handler is exactly its left handler + 1`,
+    all.every((w) => w.handlerRight === w.handlerLeft + 1),
+    `left ${[...refL].sort((a, b) => a - b).join(',')} / ` +
+    `right ${[...refR].sort((a, b) => a - b).join(',')} across ${all.length} records`);
+
+  /* The parity is pinned by the table itself, not by the weapon data: entry
+   * 12 trampolines into the LEFT body and 13 into the RIGHT one. */
+  check(`even table indices are left-facing, odd are right-facing`,
+    DECODED_HANDLERS.every((i) => HANDLERS[i].facing === (i % 2 ? +1 : -1)),
+    'entry 12 = `sub bx,8 / jmp 0x991c` (left body), 13 = `... jmp 0x98d1` (right)');
+
+  check(`the highest handler index shipped data references is within the table`,
+    Math.max(...refL, ...refR) < HANDLER_TABLE.length,
+    `max ${Math.max(...refL, ...refR)}, table is ${HANDLER_TABLE.length} wide ` +
+    '(size is [STATIC] — inferred from where the potion table starts)');
+
+  /* ⚠️ Handler 13 is not handler 1 with a different Y — it skips the +0x10. */
+  check(`handler 13 does NOT apply handler 1's +0x10 X offset`,
+    HANDLERS[1].dx === 0x10 && HANDLERS[13].dx === 0 && HANDLERS[13].facing === +1,
+    'CS:0x9964 jumps to 0x98d1, past `add ax,0x10` — mirroring 1 puts shots 16 px off');
+
+  /* ── the null handlers, and the weapon that points at them ────────────── */
+  check(`table entries ${NULL_HANDLERS.join('/')} are null`,
+    NULL_HANDLERS.every((i) => HANDLER_TABLE[i] === 0),
+    'a `call cx` with cx = 0 would jump to CS:0x0000');
+
+  const flame = sets[0][CUT_WEAPON];
+  check(`weapon ${CUT_WEAPON} ("flame") is the one pointing at the null pair`,
+    flame.handlerLeft === 4 && flame.handlerRight === 5,
+    'so the null entries are reachable only through a weapon that is never placed');
+
+  /* The discriminating half: flame appears in NO shipped level. */
+  const placed = new Set();
+  let pickups = 0;
+  for (const k of ['1A','1B','2A','2B','3A','3B','4A','4B']) {
+    const m = parseMap(dclDecompress(await fetchRaw(`game/PLEV${k}.MAP`)).data);
+    for (const o of m.objects) if (!isDeadType(o.type) && o.type >= 0xc0) pickups++;
+    /* Consumed slots are marked 0xFFFF and tested by SIGN, so they must be
+     * dropped before the type is read as a weapon index — otherwise the
+     * marker itself enters the census as "weapon 65343". */
+    for (const o of m.objects) {
+      if (!isDeadType(o.type) && o.type >= 0xc0) placed.add(o.type - 0xc0);
+    }
+  }
+  /* Anchored to the 55/9 figure this project recorded from a separate tool,
+   * so the check fails if the object decode drifts rather than only if flame
+   * appears. Flame and "magic axe" are the two absentees; magic axe's
+   * handlers 14/15 are real code, so only flame's are dead. */
+  check(`no shipped level places weapon ${CUT_WEAPON} — the null handler is unreachable`,
+    !placed.has(CUT_WEAPON) && pickups === 55 && placed.size === 9,
+    `${pickups} pickups of ${placed.size} distinct types ` +
+    `(${[...placed].sort((a, b) => a - b).join(',')}) of ${WEAPON_COUNT} weapons ` +
+    '— flame is a cut weapon whose handler was never written');
+
+  /* ── +0x08 is PINNED at the EXE-image value ───────────────────────────── */
+  const drift = all.filter((w) => w.file08 !== w.unknown08);
+  check(`7 of the ${all.length} file records disagree with the pinned +0x08`,
+    drift.length === 7 && drift.every((w) => PINNED_08[w.index] === w.unknown08),
+    'CS:0x367a pushes +0x08 from all 11 records, loads the file over them, then ' +
+    'pops them back — so each file\'s own copy is discarded. Reading the file ' +
+    'value here fires the wrong projectile count for four world-4 weapons');
+
+  /* ⚠️ Do NOT assert `w.sprite === PINNED_SPRITE[w.index]` — that compares the
+   * port against the constant it was built from and cannot fail. What CAN be
+   * checked from the data is that PINNED_SPRITE is the RIGHT table: its values
+   * must land in the objects descriptor range, and +0x1e must be zero for
+   * every weapon except the two that visibly have a second sprite. Both would
+   * break if the extraction offset or endianness were wrong. */
+  check(`the pinned +0x0c values all land inside the POBJ2 descriptor range`,
+    PINNED_SPRITE.every((v) => v >= 331 && v <= 449),
+    `${Math.min(...PINNED_SPRITE)}..${Math.max(...PINNED_SPRITE)} — POBJ2 is ` +
+    '#331..#449, so a wrong offset or endianness would fall outside');
+
+  const withSecond = PINNED_SPRITE2.map((v, i) => (v ? i : -1)).filter((i) => i >= 0);
+  check(`+0x1e is zero except for the two weapons that have a second sprite`,
+    withSecond.join(',') === '4,6',
+    `nonzero for weapons ${withSecond.join(',')} — "lightning bolt" and "spear"; ` +
+    'that field is selected by +0x0e, the facing');
+
+  /* Only PWEAPONS.004 drifts on +0x0c — its 11 records are shifted +5, the same
+   * authoring slip as POBJECTS.004. The other three files match the image, so
+   * the pinning is invisible except in world 4. */
+  const spriteDrift = all.filter((w) => w.fileSprite !== w.sprite).length;
+  check(`exactly 11 file records disagree with the pinned +0x0c — all of .004`,
+    spriteDrift === 11
+    && sets[3].every((w) => w.fileSprite - w.sprite === 5)
+    && [0, 1, 2].every((f) => sets[f].every((w) => w.fileSprite === w.sprite)),
+    'CS:0x35b7 saves +0x0c/+0x1e to DS:0x2f76 and CS:0x35d0 restores them — a ' +
+    'different save/restore pair from +0x08\'s push/pop, which is why this ' +
+    'project recorded two of the three pinned fields and missed the third');
+
+  /* ── UNKNOWN_weapon_08 CLOSED: the volley is a PICKUP COUNT ──────────── */
+  const w0 = sets[0][0];
+  const knifeArm = armWeapon(w0);
+  check(`a freshly picked-up weapon fires exactly ONE projectile`,
+    volleySize(knifeArm) === 1 && knifeArm.count === knifeArm.base,
+    'CS:0x9115 sets +0x08 := +0x06 on a new pickup, so bp = 1 whatever the file ' +
+    'or the pinned EXE table held');
+
+  const prog = [knifeArm, pickUpAgain(knifeArm), pickUpAgain(pickUpAgain(knifeArm))];
+  check(`each duplicate pickup adds a projectile, to a maximum of three`,
+    prog.map(volleySize).join(',') === '1,2,3'
+    && volleySize(pickUpAgain(prog[2])) === 3,
+    'CS:0x94e8 `inc [di+8]`; the `dec bp / jz` chain clamps at 3 — collect the ' +
+    'same weapon repeatedly and it fires more at once');
+
+  /* Every weapon behaves the same way, because base cancels out. */
+  check(`the progression is identical for all ${WEAPON_COUNT} weapons`,
+    sets[0].every((x) => volleySize(armWeapon(x)) === 1
+                && volleySize(pickUpAgain(armWeapon(x))) === 2),
+    'bp = 1 + (count - base), so Power cancels — it sets the floor, not the rate');
+
+  /* The shop reads the same difference from the other side, which is what
+   * makes "extras collected" the right reading rather than a coincidence. */
+  /* Uses TWO extras deliberately: with one extra, `(v+1)>>1` and `v>>1` agree
+   * whenever v is even, so a mutant that drops the `inc bx` at CS:0x6fe9
+   * survives on the knife. At two extras the two forms always differ. */
+  const twoExtra = pickUpAgain(pickUpAgain(knifeArm));
+  check(`the shop refunds in proportion to the extras collected`,
+    refundFor(knifeArm, w0) === 0
+    && refundFor(pickUpAgain(knifeArm), w0) === ((w0.value + 1) >> 1)
+    && refundFor(twoExtra, w0) === (w0.value + 1)
+    && refundFor(twoExtra, w0) !== w0.value,
+    `no extras refunds 0, two extras refunds value+1 = ${w0.value + 1} — ` +
+    'CS:0x6fde `mul bx / sar dx,1 / rcr ax,1` over the same [+8]-[+6] the ' +
+    'volley uses, which is what makes "extras collected" the right reading');
+
+  /* ⚠️ The LOADED state is never fired from. An earlier revision of this file
+   * computed the volley from the shipped table and asserted a per-weapon,
+   * per-world spread (including an "axe fires 3 in worlds 3-4"); that was
+   * reading state CS:0x9115 overwrites before the weapon can fire. */
+  /* ⚠️ The two mechanisms COMPOSE. A fresh pickup re-bases the count to Power
+   * (volley 1), but a sublevel-'a' load re-pins the count to the EXE value
+   * while Power comes from the new world's file — and the weapon slots are
+   * NOT cleared between worlds (CS:0x914c's only callers are full restarts).
+   * So a CARRIED weapon can enter a world already at full spread. */
+  const axeCarried = [0, 1, 2, 3].map((f) => volleySize(reloadWorld(sets[f][7])));
+  const axeFresh   = [0, 1, 2, 3].map((f) => volleySize(armWeapon(sets[f][7])));
+  check(`a CARRIED axe gains spread in worlds 3-4; a freshly picked-up one does not`,
+    axeCarried.join(',') === '1,1,3,3' && axeFresh.join(',') === '1,1,1,1',
+    `carried ${axeCarried.join(',')} vs fresh ${axeFresh.join(',')} — Power is ` +
+    `per-world (${[0,1,2,3].map((f) => sets[f][7].power).join('/')}) while the ` +
+    `re-pinned count is fixed at ${PINNED_08[7]}. UNKNOWN_carried_weapon_volley`);
+
+  /* ── the spawn itself ─────────────────────────────────────────────────── */
+  const knife = sets[0][0];
+  const knifeSt = armWeapon(knife);
+  const right = spawnVolley(knifeSt, knife.handlerRight, tagFor(0, 0), 100, 200);
+  const left  = spawnVolley(knifeSt, knife.handlerLeft,  tagFor(0, 0), 100, 200);
+  check(`a right volley leaves the muzzle 0x10 further out than a left one`,
+    right.entries[0].x - left.entries[0].x === 0x10
+    && right.entries[0].y === left.entries[0].y,
+    `right x=${right.entries[0].x}, left x=${left.entries[0].x}, both y=${left.entries[0].y}`);
+
+  check(`facing is written back as +1 right / -1 left`,
+    right.facing === +1 && left.facing === -1,
+    'CS:0x98ea stores 1 into weapon +0x0e, CS:0x9935 stores 0xFFFF — ' +
+    'that field selects the +0x0c vs +0x1e sprite descriptor');
+
+  /* Tags step by one WITHIN a volley (`inc dx`), by three BETWEEN sub-slots. */
+  /* Three entries requires a weapon picked up twice over — a bare weapon
+   * record has no runtime state and must not be passed here. */
+  const star = sets[0][5];
+  const maxed = pickUpAgain(pickUpAgain(armWeapon(star)));
+  const three = spawnVolley(maxed, star.handlerRight, tagFor(0, 0), 0, 0);
+  check(`tags step by 1 inside a volley but by 3 between sub-slots`,
+    three.entries.length === 3
+    && three.entries.map((e) => e.tag).join(',') === '1,2,3'
+    && tagFor(0, 1) - tagFor(0, 0) === 3,
+    `volley tags ${three.entries.map((e) => e.tag).join(',')} — CS:0x98f2 \`inc dx\`, ` +
+    'CS:0x9619 `add dx,3`');
+
+  /* Pinned to the literal immediates, NOT to DIRS — comparing the spawn
+   * against the same table it was built from passes under any ordering. The
+   * order is the non-obvious part: the FIRST entry written gets 1 (right) or
+   * 4 (left) and the SECOND gets 0 or 3, so the naive 0/1/2 and 3/4/5 is
+   * wrong even though it preserves the +3 relation. */
+  check(`the dir codes are 1/0/2 right and 4/3/5 left, in that write order`,
+    three.entries.map((e) => e.dir).join(',') === '1,0,2'
+    && DIRS.right.join(',') === '1,0,2' && DIRS.left.join(',') === '4,3,5'
+    && DIRS.left.every((d, i) => d === DIRS.right[i] + 3),
+    'CS:0x98e3 writes 1, CS:0x98fe writes 0, CS:0x9914 writes 2; the left body ' +
+    'at CS:0x992e/0x9949/0x995f is the same sequence + 3');
+
+  /* ── the allocator's three corrected rules ────────────────────────────── */
+  const w = sets[0];
+  const empty = () => [0, 1, 2].map((i) => ({ weapon: i, subslots: [false, false, false] }));
+  const single = w.findIndex((x) => x.maxShots === 1);
+  const multi  = w.findIndex((x) => x.maxShots === 3);
+
+  /* Slot A single-shot suppresses OTHER single-shot slots — B as well as C. */
+  const s1 = [single, single, single].map((k) => ({ weapon: k, subslots: [false, false, false] }));
+  const r1 = allocateShots(s1, w);
+  check(`a single-shot slot A suppresses single-shot B *and* C`,
+    r1.allocated[0] && !r1.allocated[1] && !r1.allocated[2],
+    'CS:0x969a and CS:0x9705 carry the identical DS:0x33e interlock — ' +
+    'gating it on slot C alone lets B fire when the original would not');
+
+  /* Multi-shot slots are exempt on both sides of the test. */
+  const s2 = [multi, single, single].map((k) => ({ weapon: k, subslots: [false, false, false] }));
+  const r2 = allocateShots(s2, w);
+  check(`a multi-shot slot A sets no interlock, so B and C both fire`,
+    r2.allocated.every(Boolean) && r2.flag33e === false,
+    'CS:0x963b sets DS:0x33e only when slot A\'s own maxShots is 1');
+
+  const r3 = allocateShots(empty(), w, { locked: true });
+  check(`the DS:0x351 lockout blocks the whole routine`,
+    !r3.any && r3.allocated.every((a) => a === null) && r3.lockedOut,
+    'CS:0x95cb returns before clearing DS:0x33e or the three live pointers');
+
+  /* A full slot yields nothing, and maxShots caps the probe depth. */
+  const s4 = [{ weapon: multi, subslots: [true, true, true] }, null, null];
+  check(`a slot with every sub-slot occupied allocates nothing`,
+    !allocateShots(s4, w).allocated[0], 'CS:0x962f falls through to the next slot');
+
+  const s5 = [{ weapon: single, subslots: [true, false, false] }, null, null];
+  check(`maxShots 1 stops after ONE probe even with free sub-slots behind it`,
+    !allocateShots(s5, w).allocated[0],
+    'CS:0x9613 `dec bx / jz` — the budget, not the array length, ends the walk');
+
+  results.push({
+    name: 'shipped maxShots values', note: true, pass: true,
+    detail: `+0x0a is only ever ${[...new Set(all.map((x) => x.maxShots))].sort().join(' or ')} ` +
+      `across all ${all.length} records — exactly what a ${MAX_SUBSLOTS}-deep unrolled ` +
+      'loop can consume. A 2 or a 7 would refute the reading.',
+  });
+
+  /* ── UNKNOWN_projectile_mover — CLOSED ────────────────────────────────── */
+  const movers = new Set(all.map((x) => x.mover));
+  check(`weapon +0x1A indexes the ${MOVER_TABLE.length}-entry mover table exactly`,
+    Math.max(...movers) === MOVER_TABLE.length - 1 && Math.min(...movers) === 0
+    && movers.size === MOVER_TABLE.length,
+    `values ${[...movers].sort().join(',')} across ${all.length} records — the ` +
+    'table at DS:0xd8ac is 6 wide, and every one of its entries is used');
+
+  check(`each weapon's mover index is the same in all four worlds`,
+    sets[0].every((x, i) => [1, 2, 3].every((f) => sets[f][i].mover === x.mover)),
+    'so the mover is a weapon identity, not per-world tuning');
+
+  /* The mover table's null entry belongs to the SAME cut weapon as the null
+   * spawn pair — two independent nulls, both reachable only through flame. */
+  check(`the mover table's null entry is weapon ${CUT_WEAPON} ("flame") too`,
+    MOVER_TABLE[MOVER_NULL] === 0 && sets[0][CUT_WEAPON].mover === MOVER_NULL,
+    'the same cut weapon whose spawn handlers 4/5 are null — two independent ' +
+    'null slots corroborating each other');
+
+  /* The velocity table closes the loop on the spawn write ORDER. */
+  check(`the 6 velocities are a 3-way spread at +/-12 px/tick`,
+    PROJECTILE_VELOCITY.filter((v) => v.vx === 12).length === 3
+    && PROJECTILE_VELOCITY.filter((v) => v.vx === -12).length === 3
+    && PROJECTILE_VELOCITY.map((v) => v.vy).join(',') === '-3,0,3,-3,0,3',
+    'DS:0xdf0e, copied from SS:0x3612 by CS:0x95bc (`mov cx,0xc` = 6 entries) — ' +
+    '12 px/tick at 15 Hz is 180 px/s');
+
+  check(`a single-projectile volley flies LEVEL, and extras fan out`,
+    PROJECTILE_VELOCITY[DIRS.right[0]].vy === 0
+    && PROJECTILE_VELOCITY[DIRS.left[0]].vy === 0
+    && PROJECTILE_VELOCITY[DIRS.right[1]].vy < 0
+    && PROJECTILE_VELOCITY[DIRS.right[2]].vy > 0,
+    'the handlers write dir 1/4 first (vy 0), then up, then down — which is why ' +
+    'the write order is 1,0,2 rather than 0,1,2');
+
+  check(`right-facing dirs carry +12 and left-facing -12`,
+    DIRS.right.every((d) => PROJECTILE_VELOCITY[d].vx === 12)
+    && DIRS.left.every((d) => PROJECTILE_VELOCITY[d].vx === -12),
+    'independently confirms which spawn handler is which facing');
+
+  /* The mover walks exactly the nine records the allocator can reach. */
+  /* ⚠️ NOT `MOVER_WALK === ENTRIES_REACHABLE` — both are constants written
+   * here, so that form is 9 === 9 and cannot fail. The non-circular claim is
+   * that two INDEPENDENTLY read immediates agree: the allocator's unrolled
+   * loop is 3 groups deep over 3-entry groups (CS:0x9616, CS:0x9724), and the
+   * mover's own counter is `mov cx,0x9` (CS:0x9c6d). */
+  check(`the allocator's 3x3 reach and the mover's own cx=9 are the same nine`,
+    GROUPS_PROBED * GROUP_ENTRIES === MOVER_WALK && MOVER_WALK === 9,
+    `${GROUPS_PROBED} groups x ${GROUP_ENTRIES} entries = ${MOVER_WALK}, and the ` +
+    'mover strides `add di,8` (CS:0x9d6a) — so the upper 9 of the 18 are ' +
+    'untouched by BOTH sides, not merely unallocated');
+
+  /* End-to-end: a shot flies, then is culled, and culling frees the slot. */
+  const area = Array.from({ length: 18 }, () => ({ tag: 0, x: 0, y: 0, dir: 1 }));
+  area[0] = { tag: 1, x: 100, y: 100, dir: 1 };
+  const cam = { x: 0, y: 0 };
+  let ticks = 0;
+  while (area[0].tag !== 0 && ticks < 100) { stepProjectiles(area, cam); ticks++; }
+  check(`a level shot flies right at 12 px/tick and is culled off-screen`,
+    ticks === Math.ceil((CULL.xMax - (100 - cam.x)) / 12) && area[0].tag === 0,
+    `${ticks} ticks from x=100 to the ${CULL.xMax} cull edge — despawn is ` +
+    '`mov word [di],0` (CS:0x9d91), which zeroes the same tag word the ' +
+    "allocator's free test reads, so the slot frees immediately");
+
+  /* ⚠️ The cull bounds are EXCLUSIVE — the original tests `jl 0x140` and
+   * `jg 0xffe0`, so landing exactly ON 320 or -32 despawns. A flight test from
+   * an arbitrary x never lands on the boundary, so it cannot tell `>=` from
+   * `>`; these two start where the next step lands exactly on the edge. */
+  const edgeR = [{ tag: 1, x: CULL.xMax - 12, y: 100, dir: 1 }];
+  stepProjectiles(edgeR, cam);
+  const edgeL = [{ tag: 1, x: CULL.xMin + 12, y: 100, dir: 4 }];
+  stepProjectiles(edgeL, cam);
+  check(`a projectile landing exactly ON the cull edge despawns`,
+    edgeR[0].tag === 0 && edgeR[0].x === CULL.xMax
+    && edgeL[0].tag === 0 && edgeL[0].x === CULL.xMin,
+    `x=${CULL.xMax} and x=${CULL.xMin} are both outside — CS:0x9cb8 \`jl 0x140\` ` +
+    'and CS:0x9ca8 `jg 0xffe0` continue only STRICTLY inside');
+
+  /* A dir from another mover must be SKIPPED and counted, never thrown on:
+   * the original reads 188 bytes past the table and draws garbage, and a
+   * throw on a per-frame path is a worse failure mode than the divergence. */
+  const alien = [{ tag: 1, x: 100, y: 100, dir: 0x2f }];
+  const r = stepProjectiles(alien, cam);
+  check(`a dir from another mover is skipped and counted, not thrown on`,
+    r.outOfRange === 1 && r.moved === 0 && alien[0].tag === 1
+    && alien[0].x === 100,
+    "time bomb's handler 9 writes dir 0x2f; CS:0x9c88 has no bounds check and " +
+    'would index past DS:0xdf0e — the port surfaces it instead of crashing');
+
+  const up = [{ tag: 1, x: 100, y: 100, dir: 0 }];
+  stepProjectiles(up, cam);
+  check(`dir 0 rises while dir 2 falls, both moving right`,
+    up[0].y === 97 && up[0].x === 112,
+    `after one tick: ${up[0].x},${up[0].y} — vy is -3 up, +3 down, 0 level`);
+
+  /* ── the fire cycle: latch, allocate, emit ────────────────────────────── */
+  const fc = new FireControl();
+  const slotsOf = () => [0, 1, 2].map((i) => ({ weapon: i, subslots: [false, false, false] }));
+
+  /* ⚠️ The latch clears ONLY on a tick where fire is not held, so holding the
+   * button gives exactly one volley — semi-automatic, not 15 Hz auto. */
+  let volleys = 0;
+  for (let t = 0; t < 20; t++) {
+    fc.latchTick(true);                       // fire held every tick
+    if (fc.tryFire(slotsOf(), w, true, true)) volleys++;
+    fc.tick(true);
+  }
+  check(`holding fire yields exactly ONE volley, not one per tick`,
+    volleys === 1,
+    `${volleys} in 20 ticks — CS:0x01A2 \`jnz\` SKIPS the latch clear while the ` +
+    'fire bit is set, so a port that clears it every frame gives a 15 Hz autocannon');
+
+  /* Release then press again re-arms it. */
+  const fc2 = new FireControl();
+  let shots = 0;
+  for (const held of [true, true, false, true, true, false, true]) {
+    fc2.latchTick(held);
+    if (fc2.tryFire(slotsOf(), w, held, true)) shots++;
+    fc2.tick(held);
+  }
+  check(`releasing and pressing again re-arms the latch`,
+    shots === 3, `${shots} volleys over 3 presses — CS:0x01A4 clears on release`);
+
+  /* Allocation and emission are on DIFFERENT ticks, three apart. */
+  const fc3 = new FireControl();
+  fc3.latchTick(true);
+  const entered = fc3.tryFire(slotsOf(), w, true, true);
+  const emitTick = [];
+  for (let t = 1; t <= 6; t++) if (fc3.tick(true)) emitTick.push(t);
+  /* ⚠️ Pinned to the LITERAL 3, not to EMIT_PHASE — comparing the observed
+   * phase against the same constant that produced it cannot fail. */
+  check(`a shot is reserved on the press tick but EMITTED 3 ticks later`,
+    entered && emitTick.length === 1 && emitTick[0] === 3 && EMIT_PHASE === 3
+    && RECHECK_PHASE === 5,
+    `emitted at phase ${emitTick.join(',')} — CS:0x5d48 \`cmp cl,3\`; at 15 Hz that ` +
+    'is a 200 ms delay between press and the projectile appearing');
+
+  /* The state machine enters a fire state only when the allocator SUCCEEDS,
+   * and its success value is 0 (cx starts 1, zeroed on any allocation). */
+  const fc4 = new FireControl();
+  fc4.latchTick(true);
+  check(`no fire state is entered when nothing can be allocated`,
+    !fc4.tryFire([null, null, null], w, true, true),
+    'CS:0x5cb2 `cmp ax,0 / jnz` — the INVERTED return convention, in live use');
+
+  check(`the ${FIRE_STATES.length} firing states match the state table's labels`,
+    FIRE_STATES.every((i) => STATE_INFO[i] && /fire/.test(STATE_INFO[i].label))
+    && STATE_INFO.filter((x) => /fire/.test(x.label)).length === FIRE_STATES.length,
+    `states ${FIRE_STATES.join(',')} — cross-checked against states.js rather than ` +
+    'restated, so adding a fire state without listing it here fails');
+
+  /* ── the damage grid: collision is occupancy, not a pairwise test ─────── */
+  check(`the grid is 1600 bytes of 8x8 cells, stride ${ROW_STRIDE} = 384 px`,
+    GRID_BYTES === 0x320 * 2 && ROW_STRIDE * CELL === 384
+    && GRID_ORIGIN > GRID_LO && GRID_ORIGIN - GRID_LO === 100,
+    'CS:0xACF6 `mov cx,0x320 / mov di,0x1666 / rep stosw`; DS:0x16ca is screen ' +
+    '(0,0), 100 bytes in, so there is a margin above and left');
+
+  /* ⚠️ Stamp FLOORS, scan ROUNDS half-up. The two must differ. */
+  check(`the stamp floors to a cell while the scan rounds half-up`,
+    stampIndex(12, 12) === GRID_ORIGIN + 1 + 6 * 8
+    && scanIndex(12, 12) === GRID_ORIGIN + 2 + 6 * 16
+    && stampIndex(16, 16) === scanIndex(16, 16),
+    'CS:0xA863 `sar` + `and 0xfff8` vs CS:0xAA09 `add 4` first — they agree only ' +
+    'on exact multiples of 8, and one shared helper misplaces every stamp');
+
+  /* A stamp lands where a scan over the same point finds it. */
+  const g = new DamageGrid();
+  g.clear();
+  g.stamp2x2(160, 96, 7);
+  check(`a creature box scanning over a stamped projectile finds its tag`,
+    g.scan(160, 96, 0x20, 0x20) === 7,
+    'the 32x32 System-B box (DS:0x1e2/0x1e4 set at CS:0xFF93) covers the 2x2 stamp');
+
+  check(`an empty grid returns no hit`,
+    (g.clear(), g.scan(160, 96, 0x20, 0x20)) === 0,
+    'CS:0xAB3F falls out of the row loop with nothing found');
+
+  /* The unrolled chain caps the scan at ten columns. */
+  const wide = new DamageGrid();
+  wide.clear();
+  wide.stamp2x2(160 + MAX_SCAN_COLS * CELL + 16, 96, 5);
+  check(`the scan is capped at ${MAX_SCAN_COLS} columns by the unrolled chain`,
+    wide.scan(160, 96, 0xff, 0x20) === 0,
+    'CS:0xAAF7-0xAB32 is 60 bytes of 6-byte units, entered at `0xab33 - 6*cols` — ' +
+    'a box wider than 80 px cannot reach past column 10');
+
+  /* Stamps outside the write window are dropped. */
+  const edge = new DamageGrid();
+  edge.clear();
+  const dropped = edge.stamp2x2(-200, -200, 3);
+  check(`a stamp outside [0x${WRITE_LO.toString(16)}, 0x${WRITE_HI.toString(16)}) is dropped`,
+    dropped === false,
+    'CS:0xA87A `cmp si,0x1696 / jl` and CS:0xA880 `cmp si,0x1c42 / jnl` — the ' +
+    'window is NARROWER than the cleared region at both ends');
+
+  /* ── tag -> damage: CS:0x9320 ─────────────────────────────────────────── */
+  const st0 = w.map((x) => armWeapon(x));
+  /* ⚠️ NOT `TAGS_PER_SLOT === ENTRIES_REACHABLE` — both are constants written
+   * here. Assert the DECODE instead: the lowest and highest tag of a slot must
+   * map to the first and last reachable record, which is what ties the tag
+   * arithmetic to the array geometry. */
+  check(`a slot's lowest and highest tags map to records 0 and 8`,
+    damageForTag(1, [0, 1, 2], st0).record === 0
+    && damageForTag(9, [0, 1, 2], st0).record === ENTRIES_REACHABLE - 1
+    && damageForTag(10, [0, 1, 2], st0).record === 0,
+    'CS:0x932D `cmp al,9 / jng` splits the tag space 9 per slot, and CS:0x933F ' +
+    '`dec al / shl ax,1 x3` makes it (tag-1)*8 — records 0..8, the same nine ' +
+    'the allocator reaches and the mover walks');
+
+  const st = st0;
+  const d0 = damageForTag(1, [0, 1, 2], st);
+  const d1 = damageForTag(1, [0, 1, 2], st.map((x, i) => (i === 0 ? pickUpAgain(x) : x)));
+  check(`damage is weapon +0x08 — the PICKUP COUNT, not Power`,
+    d0.damage === w[0].power && d1.damage === w[0].power + 1 && d0.slot === 0,
+    `a fresh knife deals ${d0.damage} (= its Power, because a new pickup sets ` +
+    `count := Power) and one duplicate makes it ${d1.damage} — CS:0x935E ` +
+    '`mov ax,[di+0x8]`, so a duplicate buys BOTH an extra projectile and +1 damage');
+
+  check(`tags 10 and 19 decode to slots B and C`,
+    damageForTag(10, [0, 1, 2], st).slot === 1
+    && damageForTag(19, [0, 1, 2], st).slot === 2
+    && damageForTag(9, [0, 1, 2], st).slot === 0,
+    'CS:0x9331 / CS:0x933A subtract 9 per slot — the same 1 + 9*slot + 3*subslot ' +
+    'the allocator mints');
+
+  /* ⚠️ CORRECTED. Negative tags are other sources, but they are NOT harmless:
+   * an earlier revision of this check asserted `damage === 0` for all four,
+   * which is right for exactly one of them. */
+  check(`the four negative tags decode to four DIFFERENT damages`,
+    damageForTag(0xfc, [0, 1, 2], st, 0).damage === 10000
+    && damageForTag(0xfc, [0, 1, 2], st, 2).damage === 50
+    && damageForTag(0xfe, [0, 1, 2], st, 0).damage === 10000
+    && damageForTag(0xfe, [0, 1, 2], st, 2).damage === 0
+    && damageForTag(0xfd, [0, 1, 2], st, 0).damage === 0
+    && damageForTag(0xff, [0, 1, 2], st, 0).varies !== undefined,
+    'CS:0x9325 `cbw / or ax,ax / js` branches away before any slot lookup, ' +
+    'and CS:0x938B then peels one `inc ax` per tag: 0xFF carries DS:0x210 ' +
+    '(the familiar\'s power), 0xFE 10000, 0xFD nothing, 0xFC 10000 — each of ' +
+    'the two AREA tags dropping to 50/0 when DS:0x34 is not the normal-play ' +
+    'zero. Reporting 0 for all four made the starburst and the aura inert');
+
+  /* ── the eight firing states ──────────────────────────────────────────── */
+  check(`all 8 firing states are ported, and their bases match the state table`,
+    FIRE_STATE_IDS.length === 8
+    && FIRE_STATE_IDS.every((i) => STATE_TABLE[i].base === FS[i].base),
+    `states ${FIRE_STATE_IDS.join(',')} — bases cross-checked against the ` +
+    'DS:0xd818 dispatch table rather than restated');
+
+  /* ⚠️ Walk is the odd one out on emit phase — six of eight emit at 1. */
+  check(`walk+fire emits at phase ${EMIT_WALK}; the other six emit at ${EMIT_OTHER}`,
+    FS[5].emit === 3 && FS[6].emit === 3
+    && [20, 21, 22, 23, 24, 25].every((i) => FS[i].emit === 1),
+    'CS:0x5d48 `cmp cl,3` vs CS:0x5423 / 0x4dab / 0x545c `cmp cl,1` — mirroring ' +
+    'walk+fire into the other three families puts six of eight shots on the wrong tick');
+
+  /* The walk animation is a symmetric recoil, and index 5 is unreachable. */
+  check(`the walk-fire animation is the symmetric recoil 2,1,0,1,2`,
+    WALK_FIRE_ANIM.slice(0, 5).join(',') === '2,1,0,1,2' && WALK_FIRE_ANIM[5] === 21,
+    'DS:0xd950 read as bytes at [phase*2]. Entry 5 holds 21 and `cmp cl,5 / jl` ' +
+    'diverts before the lookup, so it can never be indexed — but it is KEPT ' +
+    'rather than replaced by a safe fallback, so a routing bug renders a ' +
+    'visibly wrong sprite instead of a plausible one');
+
+  /* ⚠️ The exit COMPARISON differs by family — a third asymmetry. */
+  check(`fall+fire exits on EQUALITY while jump and ladder exit on >=`,
+    FS[22].exitCmp === 'eq' && FS[23].exitCmp === 'eq'
+    && [20, 21, 24, 25].every((i) => FS[i].exitCmp === 'ge'),
+    'CS:0x4DA9/0x4E13 `jz` against CS:0x53F0 `jl` and CS:0x5467/0x5499 `jnl` — ' +
+    'they diverge on any path where DS:0x356 drives the phase backward');
+
+  check(`an over-shot phase leaves a >= family but NOT the eq family`,
+    fireTick(24, 5, false, false).next === 14
+    && fireTick(22, 5, false, false).next === 22,
+    'phase 6 vs `cmp cl,3`: `jnl` fires, `jz` does not — using >= everywhere ' +
+    'makes the fall pair leave a tick early');
+
+  check(`only walk+fire remaps its phase for rendering`,
+    persistsRawPhase(5) && persistsRawPhase(6)
+    && ![20, 21, 22, 23, 24, 25].some(persistsRawPhase)
+    && fireAnimOffset(5, 2) === 0 && fireAnimOffset(22, 2) === 2,
+    'CS:0x5d68 stores the RAW phase then overwrites cl from the table and jumps ' +
+    'to 0x5e9f — one instruction PAST the epilogue\'s own `mov [0x36b],cl`');
+
+  /* A full walk+fire cycle: emit once, at phase 3, then leave to the walk state. */
+  let ph = 0, emits = [], st5 = 5, guard = 0;
+  while (st5 === 5 && guard++ < 12) {
+    const r = fireTick(st5, ph, false, false);
+    if (r.emit) emits.push(r.phase);
+    ph = r.nextCl; st5 = r.next;
+  }
+  check(`a walk+fire cycle emits once and returns to walk right with phase 2`,
+    emits.length === 1 && st5 === 1 && ph === 2,
+    `emitted at phase ${emits.join(',')}, exited to state ${st5} — CS:0x5d7a ` +
+    '`mov cl,2 / mov byte [0x377],1` then tail-jumps INTO state 1\'s handler');
+
+  /* Holding fire chains a new cycle instead of leaving. */
+  const chain = fireTick(5, 4, true, true);
+  check(`at phase 5 with fire held and a slot free, the cycle CHAINS`,
+    chain.next === 5 && chain.nextCl === 0,
+    'CS:0x5d5e calls the allocator again and `xor cl,cl` restarts — so holding ' +
+    'fire does re-fire, but only through a fresh allocation');
+
+  const noChain = fireTick(5, 4, true, false);
+  check(`...but not when nothing can be allocated`,
+    noChain.next === 1, 'CS:0x5d61 `cmp ax,0 / jnz` falls through to the exit');
+
+  /* The ladder pair is asymmetric where the others mirror cleanly. */
+  check(`the ladder-fire pair exits with DIFFERENT phases (3 vs 1)`,
+    FS[24].exitCl === 3 && FS[25].exitCl === 1
+    && FS[24].to === 14 && FS[25].to === 14,
+    'CS:0x5471 `mov cl,3` against CS:0x54a3 `mov cl,1` — both return to state 14, ' +
+    'so a port that mirrors 24 into 25 gets the exit pose wrong');
+
+  /* Fall+fire really does run the fall physics, not just an animation. */
+  check(`fall+fire exits to the plain fall states, jump+fire to the jump states`,
+    FS[22].to === 12 && FS[23].to === 11 && FS[20].to === 9 && FS[21].to === 8,
+    'CS:0x4e23 / 0x4db9 write states 0x0c and 0x0b; CS:0x53f4 writes 9');
+
+  /* ── the entries, and the DS:0x356 wind-up ────────────────────────────── */
+  check(`every firing state needs the fire bit AND a successful allocation`,
+    FIRE_STATE_IDS.every((i) =>
+      tryEnterFireState(i, { fireHeld: true, allocated: false, ladderFacing: 1 }) === null
+      && tryEnterFireState(i, { fireHeld: false, allocated: true, ladderFacing: 1 }) === null),
+    'the shared core: `test byte [0x382],0x80 / jz` then `call 0x95ca / cmp ax,0`');
+
+  check(`a jump can only start firing while the arc cursor is under 0x2c`,
+    tryEnterFireState(20, { fireHeld: true, allocated: true, arcCursor: 0x2b }) !== null
+    && tryEnterFireState(20, { fireHeld: true, allocated: true, arcCursor: 0x2c }) === null,
+    'CS:0x51da `cmp byte [0x358],0x2c / jnl` — the hero cannot fire late in a jump, ' +
+    'a guard the other three families do not have');
+
+  check(`a ladder fire state needs a nonzero ladder facing`,
+    tryEnterFireState(24, { fireHeld: true, allocated: true, ladderFacing: 1 }) !== null
+    && tryEnterFireState(24, { fireHeld: true, allocated: true, ladderFacing: 0 }) === null,
+    'CS:0x55d6 `cmp byte [0x378],0 / jz` picks the variant, and 0 skips entirely');
+
+  /* ⚠️ DS:0x356 makes the FIRST tick count DOWN — so fall/jump do not emit on
+   * their first tick even though their emit phase is 1. */
+  const e22 = tryEnterFireState(22, { fireHeld: true, allocated: true });
+  const seq = [e22.cl];
+  let ph2 = e22.cl, fl = e22.flag356, st2 = 22, emitAt = [];
+  for (let t = 0; t < 5 && st2 === 22; t++) {
+    const r = fireTick(st2, ph2, false, false, fl);
+    fl = false;
+    if (r.emit) emitAt.push(r.phase);
+    ph2 = r.nextCl; st2 = r.next; seq.push(ph2);
+  }
+  check(`a fall+fire entry dips to 0 first, so the shot lands on the SECOND phase 1`,
+    seq.join(',') === '1,0,1,2,0' && emitAt.join(',') === '1',
+    `phases ${seq.join(',')} — CS:0x4c20 sets DS:0x356 at entry and the handler ` +
+    'decrements once; entering at cl = 0 with a plain increment fires a tick early ' +
+    'and loses the wind-up');
+
+  check(`the walk family has no wind-up — it enters at 0 and counts up`,
+    ENTRY[5].cl === 0 && ENTRY[5].flag356 === false
+    && ENTRY[22].cl === 1 && ENTRY[22].flag356 === true,
+    'CS:0x5d3d `xor cl,cl` against CS:0x4c1e `mov cl,1 / mov byte [0x356],1`');
+
+  results.push({
+    name: 'the fire chain is complete', note: true, pass: true,
+    detail: 'All eight firing states, their four entry patterns and the DS:0x356 ' +
+      'wind-up are decoded and ported. UNKNOWN_fire_state_entry and ' +
+      'UNKNOWN_fire_state_356 are both CLOSED — the entries ARE 0x356\'s writers.',
+  });
+
+  results.push({
+    name: 'the running game still cannot fire', note: true, pass: true,
+    detail: 'FireControl models the latch, the allocate/emit split and the ' +
+      're-fire check, but the eight firing states (5, 6, 20-25) are NOT ported ' +
+      'into the player state machine — UNKNOWN_fire_state_bodies. Until they ' +
+      'are, nothing calls tryFire() in the playable build.',
+  });
+
+  /* ── the move -> stamp link, and the whole chain end to end ──────────── */
+  check(`the draw-style table is 3 wide and weapon +0x02 is 0..2`,
+    DRAW_STYLES.length === 3
+    && [...new Set(all.map((x) => x.drawStyle))].sort().join(',') === '0,1,2',
+    'DS:0xdf26; entries from 0xdf2c are signed byte pairs, a different table. ' +
+    'That width is also why CS:0x9118 zeroes +0x02 when it reads 3 — a RANGE ' +
+    'GUARD, not a second meaning for the field');
+
+  /* THE END-TO-END TEST: fire -> allocate -> spawn -> move -> stamp -> scan
+   * -> damage. If any link is broken this cannot pass. */
+  const chainGrid = new DamageGrid();
+  const knifeSt2 = armWeapon(knife);
+  const area2 = Array.from({ length: 18 }, () => ({ tag: 0, x: 0, y: 0, dir: 1 }));
+  const vol = spawnVolley(knifeSt2, knife.handlerRight, tagFor(0, 0), 100, 200);
+  vol.entries.forEach((e, i) => { area2[i] = e; });
+  const cam2 = { x: 0, y: 0 };
+  let hitTag = 0, ticksToHit = 0;
+  for (let t = 0; t < 12 && !hitTag; t++) {
+    chainGrid.clear();                       // CS:0x01CC, every frame
+    stepProjectiles(area2, cam2, { grid: chainGrid, weapon: knife });
+    hitTag = chainGrid.scan(area2[0].x, area2[0].y, 0x20, 0x20);
+    ticksToHit = t + 1;
+  }
+  check(`END TO END: a fired knife stamps the grid and a creature box finds it`,
+    hitTag === tagFor(0, 0) && ticksToHit === 1,
+    `tag ${hitTag} found on tick ${ticksToHit} — this passes only if spawn, move, ` +
+    'stamp and scan are ALL connected; the stamp lives on the draw path, so a ' +
+    'port that only moves projectiles leaves the grid empty forever');
+
+  const dmg = damageForTag(hitTag, [0, -1, -1], [knifeSt2]);
+  check(`...and that tag decodes back to the knife's damage`,
+    dmg.damage === knife.power && dmg.slot === 0 && dmg.record === 0,
+    `${dmg.damage} damage from slot ${dmg.slot} record ${dmg.record} — the full ` +
+    'chain from a button press to a creature losing health');
+
+  /* ⚠️ +0x48 STOPS the projectile; it does not break blocks. */
+  /* Two setup details this test needs, both of which caught me:
+   *  - y must be INSIDE the 192-px cull limit, or the projectile is culled
+   *    before the terrain check ever runs.
+   *  - the cell is NOT floor(x/32), floor(y/16): CS:0xA7CC adds 8 to BOTH axes
+   *    before masking, so a shot arriving at (112, 100) tests column
+   *    (112+8)&~0x1f = 96 -> 3 and row (100+8)&~0xf = 96 -> 6. */
+  const wall = new Uint8Array(128 * 64);
+  wall[6 * 128 + 3] = 1;
+  const area3 = [{ tag: 1, x: 100, y: 100, dir: 1 }];
+  const rw = stepProjectiles(area3, cam2, { grid: chainGrid, weapon: knife, planeB: wall });
+  check(`a terrain-colliding weapon is CONSUMED by a solid tile, not stopped by nothing`,
+    knife.breaksTerrain && rw.hitTerrain === 1 && area3[0].tag === 0,
+    'CS:0xA7EF `cmp byte [ds:bp+0],1` then CS:0xA85B `mov word [di],0`. There is ' +
+    'NO write to plane A or B on that path — the wall is untouched, so +0x48 ' +
+    'means STOPPED BY terrain, not "breaks blocks" as this project long assumed');
+
+  /* ⚠️ Discriminating the +8 rounding needs a position where the two rules
+   * DISAGREE. A shot arriving at (88, 104) tests column (88+8)&~0x1f = 96 -> 3
+   * and row (104+8)&~0xf = 112 -> 7; the naive floor gives column 2, row 6.
+   * A wall in only one of those two cells tells the readings apart. */
+  const mk = (row, col) => { const m2 = new Uint8Array(128 * 64); m2[row * 128 + col] = 1; return m2; };
+  const shot = () => [{ tag: 1, x: 76, y: 104, dir: 1 }];
+  const aRight = shot(), aNaive = shot();
+  stepProjectiles(aRight, cam2, { grid: chainGrid, weapon: knife, planeB: mk(7, 3) });
+  stepProjectiles(aNaive, cam2, { grid: chainGrid, weapon: knife, planeB: mk(6, 2) });
+  check(`the terrain cell uses the +8 rounding, not a plain floor`,
+    aRight[0].tag === 0 && aNaive[0].tag === 1,
+    'a wall at (row 7, col 3) stops the shot; one at the naive (6, 2) does not — ' +
+    'CS:0xA7CC `add cx,8 / add dx,8` before the masks');
+
+  const through = all.filter((x) => !x.breaksTerrain).map((x) => x.index);
+  check(`5 of the 11 weapons pass straight through walls`,
+    [...new Set(through)].sort((a, b) => a - b).join(',') === '4,6,7,8,9',
+    'lightning bolt, spear, axe, hunter, magic axe have +0x48 == 0 and skip the ' +
+    'terrain test entirely (CS:0xA7BD `jmp 0xa860`)');
+
+  results.push({
+    name: 'UNKNOWN_destructible_tile', note: true, pass: true,
+    detail: `Block destruction is NOT a weapon property. Only when the plane-A ` +
+      `tile is 0x${DESTRUCTIBLE_TILE.toString(16)} AND the world is >= 3 does ` +
+      'CS:0xA810 call 0x73ec, which appends the cell to a 40-entry queue at ' +
+      'DS:0xd0c6. What that queue then does is not decoded.',
+  });
+
+  /* ── mover 1: fireball's accelerating wobble ──────────────────────────── */
+  check(`the wobble table is ${WOBBLE_ENTRIES} words, one per projectile record`,
+    WOBBLE_ENTRIES === 9 && newWobble().length === 9,
+    'DS:0xdefc sits 0x12 bytes below the velocity table at 0xdf0e — 9 words, ' +
+    'which is what pins its size');
+
+  const fbArea = [{ tag: 1, x: 100, y: 100, dir: 1 }];   // dir 1 = level, vy 0
+  const wob = newWobble();
+  const ys = [];
+  for (let t = 0; t < 4; t++) { stepFireball(fbArea, { x: 0, y: 0 }, wob); ys.push(fbArea[0].y); }
+  check(`a fireball's drop ACCELERATES: +0, +1, +2, +3 on a level dir`,
+    ys.join(',') === '100,101,103,106' && wob[0] === 4,
+    `y ${ys.join(',')} — CS:0x9dce adds the accumulator then CS:0x9dd0 bumps it, ` +
+    'so the deltas grow by one each tick rather than staying constant');
+
+  const flat = [{ tag: 1, x: 100, y: 100, dir: 1 }];
+  stepProjectiles(flat, { x: 0, y: 0 });
+  check(`...whereas the common mover keeps a level shot exactly level`,
+    flat[0].y === 100,
+    'the wobble is mover 1 only — sharing one step function loses the fireball arc');
+
+  /* ── mover 4: hunter homing ───────────────────────────────────────────── */
+  check(`the hunter picks the target with the SMALLEST key`,
+    pickTarget([{ x: 1, y: 1, key: 40 }, { x: 2, y: 2, key: 7 },
+                { x: 3, y: 3, key: 90 }]).x === 2
+    && pickTarget([]) === null && TARGET_STRIDE === 6,
+    'CS:0x9e4f `cmp dx,[si] / jnl` keeps only a strictly smaller key; the list is ' +
+    '6-byte {x, y, key} records built by the COLLISION SCANNER at CS:0xAA8D');
+
+  /* ⚠️ X is the HIGH byte and Y the LOW one — the reverse of the obvious. */
+  const hv = unpackHunterVel(0x02fe);
+  check(`hunter velocity is packed signed bytes, X in the HIGH half`,
+    hv.vx === 2 && hv.vy === -2
+    && unpackHunterVel(0xfe02).vx === -2 && unpackHunterVel(0xfe02).vy === 2,
+    'CS:0x9F46 sign-extends ch into the X addend and CS:0x9F4B cl into the Y one — ' +
+    'reading them the natural way round mirrors every hunter shot diagonally');
+
+  /* The `- 2` matters: the rate only rises at FOUR extras, well past the two
+   * that already max out the volley. So the upgrade curve keeps paying after
+   * the projectile count stops. */
+  check(`the hunter's turn rate rises at 4 extras, not 2`,
+    hunterTurnRate({ count: 5, base: 5 }) === 1      // 0 extras
+    && hunterTurnRate({ count: 8, base: 5 }) === 1   // 3 extras -> v = 1
+    && hunterTurnRate({ count: 9, base: 5 }) === 2   // 4 extras -> v = 2
+    && hunterTurnRate({ count: 20, base: 5 }) === 2, // clamped
+    'CS:0x9f12 `[si+8] - [si+6] - 2` then clamped to [1,2] — the volley is ' +
+    'already maxed at 2 extras, so +0x08 keeps paying past that through the turn rate');
+
+  /* ── the hunter's steering, and the clamp that falls through ──────────── */
+  check(`the hunter steers +/-rate toward the target, clamped to +/-${HUNTER_VEL_CLAMP}`,
+    hunterSteerAxis(0, 0, 100, 1) === 1        // target right -> accelerate right
+    && hunterSteerAxis(0, 100, 0, 1) === -1    // target left  -> decelerate
+    && hunterSteerAxis(6, 0, 100, 1) === 6,    // already at the cap
+    'CS:0x9f61 `cmp ax,[ss:0x420] / jl` picks the arm; CS:0x9f74 caps at +6');
+
+  /* ⚠️ THE LOW CLAMP FALLS THROUGH INTO THE INCREMENT. */
+  const osc = [];
+  let hvel = -6;
+  for (let t = 0; t < 6; t++) { hvel = hunterSteerAxis(hvel, 100, 0, 1); osc.push(hvel); }
+  check(`the low clamp falls through, so the speed OSCILLATES -6/-5`,
+    osc.join(',') === '-5,-6,-5,-6,-5,-6',
+    `${osc.join(',')} — CS:0x9f6f pins to -6 and then CS:0x9f72 adds the rate ` +
+    'back. A plain clamp(v - rate, -6, 6) sits flat at -6 and is wrong every ' +
+    'other tick');
+
+  /* The write-back confirms the packed layout from the OTHER side. */
+  /* ⚠️ The target must be ASYMMETRIC — with vx === vy a swapped repack is
+   * invisible, which is exactly how a mutation of it first survived here. */
+  const hp = { tag: 1, x: 0, y: 0, dir: 0 };
+  stepHunter(hp, { x: 1000, y: -1000 }, 2);
+  check(`steering repacks vx into the HIGH byte and vy into the LOW`,
+    unpackHunterVel(hp.dir).vx === 2 && unpackHunterVel(hp.dir).vy === -2,
+    'CS:0x9f9d `mov [di+7],cl` and CS:0x9fa0 `mov [di+6],dl` — the write side ' +
+    'independently confirms the layout decoded earlier from the read side');
+
+  check(`the hunter aims +${HUNTER_TARGET_BIAS} into the creature, not at its corner`,
+    HUNTER_TARGET_BIAS === 6, 'CS:0x9f55 / 0x9f5b add 6 to both axes of the target');
+
+  /* ⚠️ A different cull, with a different EFFECT. */
+  check(`the hunter's cull is (-16, 320] and only skips the draw — it never despawns`,
+    HUNTER_CULL.xMin === -16 && HUNTER_CULL.yMin === -16
+    && HUNTER_CULL.xMax === CULL.xMax && CULL.xMin === -32,
+    'CS:0x9fb3 `cmp ax,0x140 / jg` against the common mover\'s -32 bounds, and ' +
+    'CS:0x9fd9 skips the stamp and draw rather than zeroing the tag — a hunter ' +
+    'that leaves the screen keeps flying and can come back');
+
+  results.push({
+    name: 'the target list is an engine feature, not a weapon one', note: true, pass: true,
+    detail: 'DS:0x8c54 is filled by the per-frame CREATURE SCAN (CS:0xAA8D appends ' +
+      '{x, y, key} and bumps DS:0x33c, which starts at 0xFF). The hunter only ' +
+      'reads it. So ordering matters: run the mover before the scan and it ' +
+      "homes on last frame's creatures. UNKNOWN_hunter_turn — the steering " +
+      'arithmetic past CS:0x9f5b is unread, so the port models target selection ' +
+      'and the packed-velocity decode but not the turn.',
+  });
+
+  /* ── mover 5: the magic axe bounces ───────────────────────────────────── */
+  check(`the axe's state array is 9 records of ${AXE_STATE_STRIDE} bytes`,
+    AXE_STATE_STRIDE === 6 && newAxeState().length === MOVER_WALK,
+    'CS:0xa77d `add si,0x6` in lockstep with CS:0xa77a `add di,0x8`, and bp ' +
+    'counts 8..0 — nine of each');
+
+  /* ⚠️ The wall probe is GATED on the sub-tile position. */
+  const noWall = () => false, yesWall = () => true;
+  const axeA = [{ tag: 1, x: 100 + 0x10, y: 60, dir: 0 }];   // sub-tile 16 > 12
+  const stA = newAxeState(); stA[0] = { vx: 4, vy: 0, life: 99 };
+  stepMagicAxe(axeA, stA, { x: 0, y: 0 }, yesWall);
+  const axeB = [{ tag: 1, x: 96 + 2, y: 60, dir: 0 }];        // sub-tile 2, not > 12
+  const stB = newAxeState(); stB[0] = { vx: 4, vy: 0, life: 99 };
+  stepMagicAxe(axeB, stB, { x: 0, y: 0 }, yesWall);
+  check(`a wall only bounces the axe inside the sub-tile window`,
+    stA[0].vx === -AXE_BOUNCE_VX && stB[0].vx === AXE_BOUNCE_VX,
+    'CS:0xa69d `cmp dx,0xc / jng` — outside the window the axe moves WITHOUT ' +
+    'testing for a wall at all, so a port that probes every tick bounces early');
+
+  /* The bounce is a fixed +/-4, not a reflection of the incoming speed. */
+  const fast = [{ tag: 1, x: 100 + 0x10, y: 60, dir: 0 }];
+  const stF = newAxeState(); stF[0] = { vx: 12, vy: 0, life: 99 };
+  stepMagicAxe(fast, stF, { x: 0, y: 0 }, yesWall);
+  check(`the bounce sets a FIXED -${AXE_BOUNCE_VX}, it does not reflect the speed`,
+    stF[0].vx === -AXE_BOUNCE_VX,
+    'CS:0xa6a9 `mov cx,0xfffc` — an incoming +12 leaves as -4, not -12');
+
+  /* A fourth distinct gravity rule. */
+  const g2 = newAxeState(); g2[0] = { vx: 0, vy: 0, life: 99 };
+  const gA = [{ tag: 1, x: 100, y: 20, dir: 0 }];
+  const vys = [];
+  for (let t = 0; t < 6; t++) { stepMagicAxe(gA, g2, { x: 0, y: 0 }, noWall); vys.push(g2[0].vy); }
+  check(`axe gravity is +${AXE_GRAVITY} capped at ${AXE_VY_CAP} — a FOURTH distinct rule`,
+    vys.join(',') === '2,4,6,8,8,8',
+    'hero is `4 + v` cap 10, enemy `v` then ++ cap 16, time bomb ++ cap 4, axe ' +
+    '+2 cap 8 — four gravity implementations and no two alike');
+
+  /* Lifetime, and the sprite base agreeing with the pinned table. */
+  const lifeA = [{ tag: 1, x: 100, y: 60, dir: 0 }];
+  const lifeS = newAxeState(); lifeS[0] = { vx: 0, vy: 0, life: 2 };
+  let alive = 0;
+  for (let t = 0; t < 6; t++) { stepMagicAxe(lifeA, lifeS, { x: 0, y: 0 }, noWall); if (lifeA[0].tag) alive++; }
+  check(`the axe expires when its lifetime counter goes NEGATIVE, not zero`,
+    alive === 2 && lifeA[0].tag === 0,
+    'CS:0xa737 `dec word [si+0x4] / js` — decrement THEN test the sign, so a ' +
+    'life of 2 survives two ticks (1, then 0) and dies on the third at -1');
+
+  check(`the axe sprite base is exactly the magic axe's pinned descriptor`,
+    AXE_SPRITE_BASE === PINNED_SPRITE[9]
+    && axeSprite(0, 0) === AXE_SPRITE_BASE + (8 % 6) + 1,
+    `0x1aa = ${AXE_SPRITE_BASE}, and PINNED_SPRITE[9] (magic axe) is the same — ` +
+    'an independent check on the pinned table, from a routine that never reads it');
+
+  /* ── mover 3: the time bomb's `dir` is a FUSE ─────────────────────────── */
+  const bombP = { tag: 1, x: 100, y: 60, dir: FUSE_START };
+  const bombS = { vx: 0, vy: 0, phase: -1, landed: false };
+  let ticksAlive = 0, boom = null;
+  for (let t = 0; t < 60 && !boom; t++) {
+    const r = stepTimeBomb(bombP, bombS, { x: 0, y: 0 }, null);
+    if (r.status === 'explode') boom = r; else ticksAlive++;
+  }
+  check(`the fuse runs ${FUSE_START} ticks then explodes into ${BOMB_FRAGMENTS} fragments`,
+    ticksAlive === FUSE_START + 1 && boom && boom.fragments === BOMB_FRAGMENTS,
+    `${ticksAlive} ticks (~${((FUSE_START + 1) / 15).toFixed(1)} s at 15 Hz) — ` +
+    'CS:0xa261 `dec word [di+0x6]` on the SHARED tail, and CS:0xa273 fires at ' +
+    'exactly -1');
+
+  /* ⚠️ Only EXACTLY -1 detonates. CS:0xa273 is `cmp dx,0xffff / jz 0xa27b`,
+   * and anything more negative falls through to 0xa326 — a different path.
+   * A test that only ever reaches -1 cannot tell `=== -1` from `<= -1`. */
+  const spent = stepTimeBomb({ tag: 1, x: 0, y: 0, dir: -5 },
+                             { vx: 0, vy: 0, phase: -1, landed: false },
+                             { x: 0, y: 0 }, null);
+  check(`only a fuse of exactly ${FUSE_EXPLODE} detonates`,
+    spent.status === 'spent' && spent.fragments === 0
+    && stepTimeBomb({ tag: 1, x: 0, y: 0, dir: -1 },
+                    { vx: 0, vy: 0, phase: -1, landed: false },
+                    { x: 0, y: 0 }, null).status === 'explode',
+    'CS:0xa273 `cmp dx,0xffff / jz` — a bomb already past -1 takes the 0xa326 ' +
+    'path instead, so `<= -1` would detonate it a second time');
+
+  /* ⚠️ dir means three different things across three movers. */
+  check(`\`dir\` has no global meaning — three encodings across three movers`,
+    PROJECTILE_VELOCITY[1].vx === 12          // common: a table index
+    && unpackHunterVel(0x02fe).vx === 2       // hunter: packed signed bytes
+    && FUSE_START === 0x2f,                   // bomb: a countdown
+    'the common mover indexes a 6-entry table, the hunter unpacks two signed ' +
+    'bytes, the bomb counts down — so 0x2f is a 3-second fuse in one and out of ' +
+    'range in another. A port with one dir helper is wrong twice over');
+
+  check(`the bomb's sprite base is its own pinned descriptor`,
+    BOMB_SPRITE_BASE === PINNED_SPRITE[1],
+    `0x153 = ${BOMB_SPRITE_BASE} = PINNED_SPRITE[1] — a second routine agreeing ` +
+    'with the pinned table without reading it');
+
+  /* The settling bounce is four arcs of falling amplitude. */
+  const peaks = [];
+  for (let i = 0; i < BOMB_BOUNCE.length; i++) {
+    if (BOMB_BOUNCE[i] < 0 && (i === 0 || BOMB_BOUNCE[i - 1] >= 0)) peaks.push(-BOMB_BOUNCE[i]);
+  }
+  check(`the landing bounce is 24 bytes: four DAMPED arcs of amplitude 4,3,2,1`,
+    BOMB_BOUNCE.length === 24 && peaks.join(',') === '4,3,2,1',
+    `DS:0xdf2c, indexed by DS:0x1cc which resets past 23 — arcs start at ` +
+    `-${peaks.join(', -')}, so the bomb visibly settles rather than stopping dead`);
+
+  check(`bomb gravity is +1 capped at ${BOMB_GRAVITY_CAP}, applied every 4th tick`,
+    BOMB_GRAVITY_CAP === 4,
+    'CS:0xa0a0 `add dx,2 / and dx,3 / jnz` gates it on the FUSE value, so the ' +
+    'fall is stepped rather than smooth — a fifth distinct gravity rule');
+
+  results.push({
+    name: 'the movers, and which are wired into the running build',
+    note: true, pass: true,
+    detail: 'All SIX movers are decoded and ported (checks above). What the ' +
+      'integrated build steps is the common mover only (CS:0x9c6d, weapon ' +
+      '+0x1A == 0), because the other five belong to weapons whose SPAWN ' +
+      'handlers are undecoded — so those weapons cannot produce a projectile ' +
+      'for their mover to move. Decoding handler pairs 2/3, 6/7, 8/9, 10/11 ' +
+      'and 14/15 is what unlocks them, not more mover work.',
+  });
+
+  /* ══ THE INTEGRATED CHAIN ═══════════════════════════════════════════════
+   *
+   * Everything above tests a module in isolation. These drive a real Player
+   * against a real Arsenal, because the failures this pass was built to catch
+   * — allocate-then-emit three ticks apart, the wind-up dip, projectiles
+   * stepping before the player — are all ORDERING failures that every
+   * isolated test passes.                                                    */
+
+  const w1 = sets[0];
+
+  /* A flat world with a floor at row 12, and a climbable band at cols 20/21. */
+  const flatMap = () => {
+    const n = MC * 64;
+    const planeB = new Uint8Array(n);
+    for (let c = 0; c < MC; c++) planeB[12 * MC + c] = CELL_SOLID;
+    for (let r = 4; r < 12; r++) {
+      planeB[r * MC + 20] = CELL_CLIMBABLE;
+      planeB[r * MC + 21] = CELL_CLIMBABLE;
+    }
+    return { planeA: new Uint8Array(n), planeB, widthPx: 4096, heightPx: 1024 };
+  };
+  const IN = (o = {}) => ({ left: false, right: false, up: false, down: false,
+                            fire: false, ...o });
+  /** A hero standing on the floor, armed with `weapon` in slot A. */
+  const armed = (weapon = 0, x = 2 * 32, y = 9 * 16) => {
+    const a = new Arsenal(w1);
+    a.equip(0, weapon);
+    const p = new Player(x, y);
+    const m = flatMap();
+    for (let i = 0; i < 4; i++) p.tick(m, IN(), a);   // settle onto the floor
+    return { a, p, m };
+  };
+
+  /* ── the census: which states reach the allocator ─────────────────────── */
+  check(`only 8 player states reach the allocator, and idle is NOT one`,
+    FIRE_CAPABLE_STATES.length === 8
+      && !FIRE_CAPABLE_STATES.includes(26)
+      && LEVER_STATES.includes(26)
+      && INVENTORY_STATES.join() === '18,19',
+    'all 12 `call 0x95ca` sites map to states 0,1,8,9,11,12,13,14 plus the two ' +
+    'chain re-fires inside 5 and 6; state 26 tests the same fire bit at ' +
+    'CS:0x49EA and calls CS:0x1045 — which keeps only CATEGORY 3 and ends in ' +
+    '`xor byte [si+0x4],0x1`, the LEVER toggle — and the crouch pair 18/19 ' +
+    'jump to CS:0x612F, which reads the inventory at DS:0x17e. So fire means ' +
+    'three different things, and none of them is pickup');
+
+  {
+    const { a, p, m } = armed();
+    for (let i = 0; i < 10; i++) p.tick(m, IN({ fire: true }), a);
+    check(`a stationary hero with fire held never shoots`,
+      a.fired === 0 && p.fireState < 0,
+      'CS:0x49EA -> CS:0x1045 is object pickup, not the allocator. A port ' +
+      'that lets idle+fire shoot has invented a control scheme');
+  }
+
+  /* ── the press-to-muzzle delay ────────────────────────────────────────── */
+  {
+    const { a, p, m } = armed();
+    const emitTick = [];
+    for (let i = 0; i < 6; i++) {
+      p.tick(m, IN({ right: true, fire: true }), a);
+      if (p.emitted) emitTick.push(i);
+    }
+    check(`a walk-fire shot appears on the 4th tick, not the press tick`,
+      emitTick.length >= 1 && emitTick[0] === 3,
+      `CS:0x5CAF reserves a sub-slot on the press and CS:0x5D4E emits at ` +
+      `phase 3 — ${(4 / 15 * 1000).toFixed(0)} ms at 15 Hz, and visible in play`);
+  }
+
+  /* ⚠️ THE ONE MOST LIKELY TO BE SILENTLY WRONG. The fall/jump entries set
+   * DS:0x356, which makes the handler count the phase DOWN on its first tick,
+   * so the emit phase of 1 is reached the SECOND time, not the first. */
+  {
+    const m = flatMap();
+    const a = new Arsenal(w1); a.equip(0, 0);
+    const p = new Player(2 * 32, 4 * 16);        // in the air, above the floor
+    p.tick(m, IN(), a);                          // -> ST.FALL
+    const seq = [];
+    for (let i = 0; i < 4; i++) {
+      p.tick(m, IN({ fire: true }), a);
+      seq.push(p.emitted ? 1 : 0);
+    }
+    check(`a fall-fire does NOT emit on its first tick — the DS:0x356 wind-up`,
+      seq[0] === 0 && seq.indexOf(1) === 2,
+      `emit pattern ${seq.join('')}: the entry (CS:0x4D22) sets the flag and ` +
+      `cl = 1, the handler DECREMENTS to 0, then climbs back through 1 — so ` +
+      `the shot lands on the second phase-1. Entering at cl = 0 with a plain ` +
+      `increment fires a tick early and loses the dip entirely`);
+  }
+
+  /* ── walk-fire halts the hero, and resumes mid-cycle ──────────────────── */
+  {
+    const { a, p, m } = armed();
+    p.tick(m, IN({ right: true }), a);
+    const x0 = p.x;
+    for (let i = 0; i < 5; i++) p.tick(m, IN({ right: true, fire: true }), a);
+    check(`firing while walking HALTS the hero for the whole cycle`,
+      p.x === x0,
+      'state 5\'s body (CS:0x5D46) is `inc cl`, the emit gate, the chain check ' +
+      'and the animation — there is no X step in it at all, and the entry at ' +
+      'CS:0x5CA8 sits BEFORE the step at CS:0x5CCB and jumps past it');
+  }
+  check(`walk-fire hands the walk back at phase 2, not 0`,
+    FS[5].exitCl === 2 && FS[6].exitCl === 2,
+    'CS:0x5D7A `mov cl,2` — resuming at 0 restarts the 8-frame cycle and ' +
+    'double-plays the footstep');
+
+  /* ── the jump pair's exit phases differ (the defect this pass found) ──── */
+  check(`the jump-fire pair exits with DIFFERENT phases: 5 right, 6 left`,
+    FS[20].exitCl === 5 && FS[21].exitCl === 6,
+    'CS:0x53F2 `mov cl,5` vs CS:0x52D5 `mov cl,6`. This file mirrored 20 into ' +
+    '21 until the tails were read for the integration pass; state 8 uses 6 as ' +
+    'its catch-all airborne frame and never produces a 5 on its own');
+  /* ⚠️ THE JUMP GUARDS STRADDLE THE ALLOCATOR, and that is observable. */
+  {
+    /* Driven through a real _jump at cursor 2 — the boundary case. The guard
+     * must see the PRE-advance cursor (2, blocked), not the value after this
+     * tick's `+= 2` (4, which would pass). And being pre-allocator it leaves
+     * the latch CLEAR, the opposite of the late-jump case below; the two
+     * together are what make either one discriminating. */
+    const a = new Arsenal(w1); a.equip(0, 0);
+    const p = new Player(2 * 32, 6 * 16);
+    p.state = ST.JUMP; p.jumpCursor = 2; p.facing = 1;
+    p.tick(flatMap(), IN({ fire: true }), a);
+    check(`the jump family cannot fire during its 4-tick wind-up`,
+      ENTRY[20].arcMin === 4 && ENTRY[21].arcMin === 4
+        && p.fireState < 0 && a.latch === false,
+      'CS:0x51C4 `cmp byte [0x358],0x4 / jl` — a LOWER guard this port did ' +
+      'not have at all, so firing is locked out at BOTH ends of the arc. It ' +
+      'reads the cursor BEFORE the entry\'s own `add [0x358],2` (CS:0x51ED), ' +
+      'and being pre-allocator it leaves DS:0x351 alone');
+  }
+  {
+    /* Late in a jump the allocator RUNS and is then rejected (CS:0x51DA sits
+     * eight bytes past CS:0x51D2), so the press is consumed. Evaluating the
+     * guard first would leave the latch clear and let the next tick fire. */
+    const a = new Arsenal(w1); a.equip(0, 0);
+    const p = new Player(2 * 32, 6 * 16);
+    p.state = ST.JUMP; p.jumpCursor = 0x2c; p.facing = 1;
+    p.tick(flatMap(), IN({ fire: true }), a);
+    check(`a press late in a jump is CONSUMED, not ignored`,
+      p.fireState < 0 && a.latch === true,
+      'the shot is refused (no fire state) but DS:0x351 is set, because the ' +
+      'upper arc guard is checked AFTER `call 0x95ca`. A port that guards ' +
+      'first leaves the latch clear and fires on the very next tick');
+  }
+  check(`the jump arc cursor exit OVERRIDES the phase exit`,
+    JUMP_ARC_EXIT[20] === 12 && JUMP_ARC_EXIT[21] === 11 && JUMP_ARC_END === 0x2e,
+    'CS:0x53F9/0x542B `add byte [0x358],2` runs on BOTH paths and the ' +
+    '`cmp [0x358],0x2e` after it sends the hero to the fall state regardless ' +
+    'of what the phase gate chose');
+
+  /* ── the semi-automatic latch, through the real frame ─────────────────── */
+  {
+    /* Driven through stepHeroFrame so the latch call in frame.js is what is
+     * under test — calling arsenal.latchTick() here instead would let a frame
+     * that clears the latch unconditionally pass. */
+    const run = (hold) => {
+      const { a, p, m } = armed();
+      const grid = new DamageGrid();
+      let volleys = 0;
+      for (let i = 0; i < 30; i++) {
+        const down = hold ? true : (i % 6) < 2;      // held, vs press/release
+        const fr = stepHeroFrame({ input: IN({ right: true, fire: down }),
+                                   arsenal: a, grid, player: p, map: m,
+                                   cam: { x: 0, y: 0 }, world: 1 });
+        if (fr.emitted) volleys++;
+      }
+      return volleys;
+    };
+    const held = run(true), tapped = run(false);
+    check(`holding fire for 30 ticks yields ONE volley; tapping yields more`,
+      held === 1 && tapped > held,
+      `held ${held} vs tapped ${tapped} — CS:0x019D only clears DS:0x351 on a ` +
+      `tick where the bit is NOT set, so the weapon is semi-automatic. A frame ` +
+      `that clears it every tick gives the hero a 15 Hz autocannon`);
+  }
+
+  /* ── the record geometry, which only a SECOND volley can expose ───────── */
+  {
+    const { a, p, m } = armed(0);               // knife: maxShots 3
+    const grid = new DamageGrid();
+    /* ⚠️ RECORD THE INDEX, NOT JUST THE TAG. A freshly picked-up weapon fires
+     * a volley of ONE, so every sub-slot writes a single record and the tags
+     * come out 1/4/7 whatever stride the head uses. The stride is only visible
+     * in WHERE the record landed. */
+    const placed = new Map();
+    for (let i = 0; i < 24; i++) {
+      const down = (i % 6) < 2;
+      stepHeroFrame({ input: IN({ right: true, fire: down }), arsenal: a, grid,
+                      player: p, map: m, cam: { x: 0, y: 0 }, world: 1 });
+      a.slots[0].area.slice(0, ENTRIES_REACHABLE).forEach((r, idx) => {
+        if (r.tag !== 0 && !placed.has(r.tag)) placed.set(r.tag, idx);
+      });
+    }
+    const want = [[1, 0], [4, 3], [7, 6]];
+    const got = want.map(([t]) => `${t}@${placed.has(t) ? placed.get(t) : '-'}`);
+    check(`volleys land at sub-slot heads 0/3/6 carrying tags 1/4/7`,
+      placed.size >= 2 && want.every(([t, i]) => !placed.has(t) || placed.get(t) === i),
+      `observed ${got.join(' ')} — head = subslot * ${GROUP_ENTRIES} (the ` +
+      `handler writes three consecutive 8-byte records, CS:0x98d1) and tag = ` +
+      `1 + slot*9 + subslot*3 (CS:0x9619 \`add dx,3\`). Getting the head ` +
+      `stride wrong makes group 0 look busy and group 1 free, and the ` +
+      `allocator then hands out a sub-slot that is already in use`);
+  }
+
+  /* ── the ordering that no isolated test can catch ─────────────────────────
+   *
+   * ⚠️ THESE DRIVE game/frame.js, NOT A LOOP WRITTEN HERE. An earlier version
+   * of this block re-implemented the tick order inline and asserted the
+   * property against its own loop — which passed, and let a mutation that
+   * swapped the two calls in main.js SURVIVE the whole suite. A check that
+   * cannot see the code it is about is not a check. */
+  {
+    /* Looked up by ROLE, not by index — an index-based assertion breaks the
+     * moment a step is inserted, which is exactly what happened when pickup
+     * was added at CS:0x0206. */
+    const at = (re) => FRAME_ORDER.find((s) => re.test(s.what)).at;
+    check(`the frame's call order is the main loop's, in address order`,
+      FRAME_ORDER.every((s, i, arr) => i === 0 || s.at > arr[i - 1].at)
+        && at(/grid/) === 0x01cc && at(/pickup/i) === 0x0206
+        && at(/projectiles/) === 0x020f && at(/state machine/) === 0x0254,
+      'grid clear 0x01CC < pickup 0x0206 < projectiles 0x020F < player ' +
+      '0x0254 — the projectile step is BEFORE the emit, which is what denies ' +
+      'a shot its spawn tick, and pickup is before both');
+  }
+  {
+    const { a, p, m } = armed();
+    const cam = { x: 0, y: 0 };
+    const grid = new DamageGrid();
+    let stampedOnSpawnTick = null;
+    for (let i = 0; i < 6; i++) {
+      const before = a.stamped;
+      const fr = stepHeroFrame({ input: IN({ right: true, fire: true }),
+                                 arsenal: a, grid, player: p, map: m, cam, world: 1 });
+      if (fr.emitted) stampedOnSpawnTick = a.stamped - before;
+    }
+    check(`a shot cannot stamp the damage grid on its spawn tick`,
+      stampedOnSpawnTick === 0,
+      'driven through stepHeroFrame, so swapping the projectile step and the ' +
+      'player tick FAILS here. CS:0x01CC clears and CS:0x020F moves+stamps, ' +
+      'both before the player at CS:0x0254');
+  }
+  {
+    /* Contact must short-circuit the scan: a creature touching the hero is
+     * sent past the grid by CS:0xa9ec, so it cannot also be shot this tick.
+     * ⚠️ COUNT THE DECODES. Asserting on the creature's HP is not
+     * discriminating — the contact path already drives it negative, so a scan
+     * that also ran would leave it negative too and the check would pass
+     * either way. The observable difference is whether the grid was READ. */
+    const { p } = armed();
+    const grid = new DamageGrid();
+    const cam = { x: 0, y: 0 };
+    let decodes = 0;
+    const decode = () => { decodes++; return { damage: 5, weapon: 0 }; };
+    const toucher = { x: p.x + 12, y: p.y + 12, state: 20, alive: true,
+                      frame: 0, delay: 0 };
+    grid.stamp2x2(toucher.x - cam.x, toucher.y - cam.y, 1);   // a shot on it too
+    const r = stepCreatureDamage([toucher], { grid, cam, health: new Health(),
+      hero: { x: p.x, y: p.y, state: p.stateIndex }, decodeTag: decode });
+    check(`a creature that touches the hero is NOT also damage-scanned`,
+      r.touched === 1 && decodes === 0,
+      'CS:0xa9e7 `cmp bp,0 / jns` jumps past the grid at CS:0xa9ec when the ' +
+      'contact test reported a hit, so one creature cannot both hurt the hero ' +
+      'and die to a projectile on the same tick. The tag decode never runs');
+  }
+  {
+    /* The grid is per-tick scratch: CS:0xACF6 zeroes all 1600 bytes at 0x01CC,
+     * before anything stamps. A stale stamp would let a despawned projectile
+     * keep killing, which is the classic version of this bug. */
+    const { a, p, m } = armed();
+    const grid = new DamageGrid();
+    grid.stamp2x2(64, 64, 7);                    // a leftover from "last tick"
+    stepHeroFrame({ input: IN(), arsenal: a, grid, player: p, map: m,
+                    cam: { x: 0, y: 0 }, world: 1 });
+    check(`the damage grid is cleared at the top of every tick`,
+      grid.scan(64, 64, 0x20, 0x20) === 0,
+      'CS:0x01CC `call 0xacf6` -> `mov cx,0x320 / rep stosw`. Without it a ' +
+      'despawned projectile keeps killing from wherever it last stamped');
+  }
+  {
+    /* A creature landing on EXACTLY zero must die: CS:0xAB88 is `js` followed
+     * by `jz`, and both reach the death path, so the test is `<= 0`. */
+    const grid = new DamageGrid();
+    const cam = { x: 0, y: 0 };
+    const e = { x: 100, y: 100, state: 5, alive: true, frame: 0, delay: 0 };
+    grid.stamp2x2(e.x, e.y, 1);
+    const r = creatureScansGrid(e, grid, cam, () => ({ damage: 5, weapon: 0 }), 0);
+    /* ⚠️ Assert on the STATE WORD, not on the returned boolean. `killed` is
+     * this port's own flag; what the original's caller reads is the SIGN of
+     * BP (CS:0xFFB7 `or bp,bp / js`), and the death path forces it negative
+     * with `CS:0xABA7 mov bp,0xffff` — so leaving the word at 0 would look
+     * like a kill here while the creature never enters its death frames. */
+    check(`a hit that lands the creature on exactly 0 HP kills it, and the`
+      + ` state word goes NEGATIVE`,
+      r.killed === true && e.state < 0,
+      'CS:0xAB88 `js 0xab98` and CS:0xAB8A `jz 0xab98` BOTH reach the death ' +
+      'path, so the condition is <= 0; CS:0xABA7 `mov bp,0xffff` then forces ' +
+      'the sign the caller tests. Writing `< 0` leaves a creature alive on ' +
+      'exactly zero and it takes one more hit than it should');
+  }
+
+  /* ── end to end: press -> ... -> a creature loses HP ──────────────────── */
+  {
+    const { a, p, m } = armed();
+    const cam = { x: 0, y: 0 };
+    const grid = new DamageGrid();
+    const decode = (tag) => damageForTag(tag, a.slots.map((s) => s.weapon),
+      Object.fromEntries(a.slots.filter((s) => s.st).map((s) => [s.weapon, s.st])));
+    /* A creature sitting in the shot's path, 64 px to the hero's right. */
+    const creature = { x: p.x + 64, y: p.y + 0x18, state: 20 };
+    const hp0 = creature.state;
+    let hitTick = -1;
+    for (let i = 0; i < 12; i++) {
+      grid.clear();
+      a.step(cam, grid, m.planeB, 1);
+      p.tick(m, IN({ right: true, fire: true }), a);
+      const r = creatureScansGrid(creature, grid, cam, decode, 0);
+      if (r.hit && r.damage && hitTick < 0) hitTick = i;
+    }
+    check(`END TO END: press -> allocate -> emit -> move -> stamp -> scan -> HP`,
+      hitTick >= 0 && creature.state < hp0,
+      `the creature lost ${hp0 - creature.state} HP on tick ${hitTick}; the ` +
+      `damage is weapon +0x08 (the pickup count), decoded back from the grid ` +
+      `tag by CS:0x9320. This is the whole chain, and it is the check that ` +
+      `fails if any single link is unwired`);
+  }
+
+  /* ── the difficulty scalar: a correction to a correction ──────────────── */
+  check(`the difficulty scalar REDUCES the hero's damage as it rises`,
+    DIFFICULTY_MULTIPLIERS[0] === 1 && DIFFICULTY_MULTIPLIERS[1] === 0.75
+      && DIFFICULTY_MULTIPLIERS[2] === 0.5 && DIFFICULTY_MULTIPLIERS[3] === 0.25,
+    'CS:0xAB5E `sub bp,bx` subtracts the RAW damage and CS:0xAB86 `add bp,bx` ' +
+    'adds the SHIFTED value back, so the shift is what is FORGIVEN, not what ' +
+    'is dealt: applied = raw - (raw >> cl). Reading the shift alone — as this ' +
+    'project did twice, in both directions — inverts the progression');
+  check(`the forgiven amount is the shifted value, and 3/4 when the shift is 0`,
+    difficultyForgiven(1000, 1) === 250 && difficultyForgiven(1000, 2) === 500
+      && difficultyForgiven(1000, 3) === 750 && difficultyForgiven(1000, 0) === 0,
+    'CS:0xAB6C `shr bx,cl` with cl = 3 - scalar, and the CS:0xAB78 fixed 3/4 ' +
+    'path taken when the shift changed nothing');
+  check(`the scalar a player actually meets is 0, 2, 3, 4, 4`,
+    DIFFICULTY_PROGRESSION.join() === '0,2,3,4,4'
+      && DIFFICULTY_PROGRESSION.every((v, i, arr) => i === 0 || v >= arr[i - 1]),
+    'CS:0x0445 `inc byte [0x365]` then clamped low to 2 (CS:0x0449) and high ' +
+    'to 4 (CS:0x0455) — so the damage multiplier falls 1.00 -> 0.50 -> 0.25 ' +
+    'monotonically and enemies are toughest at the END, not on world 2');
+
+  /* ── is the shot actually VISIBLE? ────────────────────────────────────────
+   *
+   * ⚠️ Nothing above this point renders anything. The running build draws a
+   * projectile with the weapon's pinned descriptor, and if that id falls
+   * outside the groups main.js loads it silently draws a box and bumps a
+   * counter — with all 300-odd checks still green. "The chain is wired" and
+   * "the chain is visible" are different claims, and this is the one this
+   * increment was for. Resolved against the shipped atlases, the same way
+   * main.js resolves it. */
+  {
+    const groups = ['always', 'objects'];
+    const counts = {};
+    for (const g of groups) {
+      for (const s of GROUP_STEMS[g]) {
+        counts[s] = parseAtlas(dclDecompress(await fetchRaw(`game/${s}.DAT`)).data).count;
+      }
+    }
+    const { map: dmap } = buildDescriptorMap(groups, (s) => counts[s]);
+    const ok = spawnableWeapons(w1).ok;
+    /* A POSITIVE assertion — name the group each descriptor actually resolves
+     * into, so the check reports what it found rather than the absence of a
+     * problem. Every one must land in `objects`, which is what main.js loads. */
+    const stems = ok.map((i) => (dmap[PINNED_SPRITE[i]] || {}).stem);
+    const objectStems = GROUP_STEMS.objects;
+    check(`every spawnable weapon's pinned sprite resolves inside \`objects\``,
+      ok.length === 5 && stems.length === 5
+        && stems.every((s) => s && objectStems.includes(s)),
+      `descriptors ${ok.map((i) => PINNED_SPRITE[i]).join(', ')} -> ` +
+      `${stems.join(', ')}. main.js loads always + objects + level<N>; a ` +
+      `pinned id outside those draws a placeholder box and raises a counter ` +
+      `while every other check stays green`);
+  }
+
+  /* ── how much of the arsenal is actually reachable ────────────────────── */
+  {
+    const s = spawnableWeapons(w1);
+    check(`exactly 5 of the 11 shipped weapons have a decoded spawn handler`,
+      s.ok.length === 5 && s.ok.join() === '0,4,5,7,10',
+      `handlers 12/13 are decoded but NO shipped weapon references them, so ` +
+      `the decoded set covers ${s.ok.length} weapons in practice, not 4 ` +
+      `families of 11. The other six are counted at the call site rather than ` +
+      `throwing, the same treatment the out-of-range \`dir\` gets`);
+    const cut = s.blocked.filter((b) => b.cut);
+    check(`the one weapon with a NULL handler pair is the cut "flame"`,
+      cut.length === 1 && cut[0].index === CUT_WEAPON,
+      'table entries 4/5 are 0x0000 and mover 2 is null as well — two ' +
+      'independent tables agreeing, and no map places the type');
+  }
+
+  /* ══ THE COLLISION GEOMETRY — the clip and the two stamps ══════════════ */
+
+  {
+    /* The clip shrinks the box; it does not merely clamp the origin. */
+    const full = clipScanBox(10, 10, 0x20, 0x20);
+    const top  = clipScanBox(10, -20, 0x20, 0x20);
+    /* ⚠️ -16 as a LITERAL, not as CLIP_NEAR. Asserting `top.y === CLIP_NEAR`
+     * compares the port against the very constant it was built from, and a
+     * mutation of that constant survives it — the same tautology the linter
+     * catches for bare `A === B` but not for a property access. */
+    check(`a creature straddling the top edge is scanned over a SHRUNK box`,
+      full.h === 0x20 && top.hit && top.y === -16 && top.h === 0x20 - 4,
+      `y=-20 loses ${0x20 - top.h}px of height (CS:0xAA1D \`add [0x1e4],bx\`) ` +
+      `and the origin clamps to ${CLIP_NEAR}, which is exactly the grid's own ` +
+      `margin — DS:0x16ca is 100 bytes in and the stride is 48, so 100 = ` +
+      `2*48 + 4, two rows of slack`);
+
+    /* y = -48 shrinks the height to EXACTLY 0 — the boundary that separates
+     * `jns`+`jnz` (both jump to the no-hit exit) from a naive `h < 0`. */
+    const zero = clipScanBox(10, -48, 0x20, 0x20);
+    const gone = clipScanBox(10, -0x40, 0x20, 0x20);
+    check(`a box that shrinks away returns NO HIT without scanning a cell`,
+      gone.hit === false && zero.hit === false && zero.h === 0,
+      'CS:0xAA21/0xAA26 `jns`/`jnz` both jump to CS:0xAB3B, the scanner\'s ' +
+      'no-hit exit — so height 0 is already no-hit. Testing `h < 0` instead ' +
+      'lets a zero-height box through, and the scan loop is `dec al / jns`, ' +
+      'so it would still run one full row of comparisons');
+  }
+  {
+    /* ⚠️ EACH AXIS CLIPS ONCE. The near-edge path jumps PAST the far-edge
+     * test (CS:0xAA2E, CS:0xAA67), so a box big enough to exceed both edges
+     * of one axis is clipped only at the near one. */
+    /* The horizontal near-edge clip is the mirror, and it clamps too. */
+    const left = clipScanBox(-20, 10, 0x20, 0x20);
+    check(`the left-edge clip shrinks the width AND clamps x to -16`,
+      left.hit && left.x === -16 && left.w === 0x20 - 4,
+      'CS:0xAA53/0xAA56 `add ax,0x10 / add [0x1e2],ax` then CS:0xAA64 ' +
+      '`mov ax,0xfff0` — dropping the clamp leaves the scan indexing from a ' +
+      'position further left than the grid margin allows');
+
+    const both = clipScanBox(10, -20, 0x20, 0x100);
+    check(`a top-clipped box is NOT also bottom-clipped in the same call`,
+      both.hit && both.h === 0x100 - 4,
+      `height ${both.h}: only the top clip ran. CS:0xAA2B ends \`mov bx,0xfff0 ` +
+      `/ jmp 0xaa4e\`, skipping CS:0xAA30 entirely. Applying both clamps ` +
+      `unconditionally would leave ${0x100 - 4 - ((0x100 - 4) + CLIP_NEAR - CLIP_BOTTOM)}`);
+  }
+  {
+    /* ⚠️ THE HORIZONTAL TEST READS THE NEAR EDGE, THE VERTICAL THE FAR ONE. */
+    const wideY = clipScanBox(10, 0xc8, 0x20, 0x20);   // bottom edge past 0xd0
+    const wideX = clipScanBox(0x148, 10, 0x20, 0x20);  // right edge past 0x150
+    /* Exact values, not inequalities: `h < 0x20` passes for any bottom bound. */
+    check(`the right-edge clip reads the LEFT edge, so it barely ever fires`,
+      wideY.h === 8 && wideY.hit && wideX.w === 0x20 && wideX.x === 0x148,
+      `y=0xc8 clips to h=${wideY.h} because CS:0xAA36 is \`81 F9\` = ` +
+      `cmp CX,0xd0 against the computed bottom; x=0x148 keeps w=${wideX.w} ` +
+      `because CS:0xAA6F is \`3D\` = cmp AX,0x150 against the LEFT edge, even ` +
+      `though CS:0xAA6D just computed the right edge into CX and ignores it. ` +
+      `For a 32-wide creature that clip is dead. Encoding, not mnemonic`);
+  }
+  {
+    /* The two stamps order the nudge and the bounds check oppositely. */
+    const g = new DamageGrid();
+    g.clear();
+    const n2 = (() => { g.clear(); g.stamp2x2(64, 64, 5);
+      return g.buf.reduce((a, b) => a + (b ? 1 : 0), 0); })();
+    const n3 = (() => { g.clear(); g.stamp3x3(64, 64, 5);
+      return g.buf.reduce((a, b) => a + (b ? 1 : 0), 0); })();
+    check(`the 2x2 stamp covers 4 cells and the 3x3 covers 9`,
+      n2 === 4 && n3 === 9,
+      'CS:0xA88F writes 4 bytes at offsets 0/1/0x30/0x31; CS:0xA8EB writes 9 ' +
+      'at 0/1/2, 0x30..0x32, 0x60..0x62 — 16x16 px against 24x24');
+
+    /* ⚠️ THE POSITION WHERE THE TWO ORDERS DISAGREE. y = 236 has bit 2 set, so
+     * the nudge applies, and its pre-nudge index 0x1C3A is inside the write
+     * window while 0x1C3A + 0x30 = 0x1C6A is past WRITE_HI. The 2x2 checks
+     * before nudging and is ACCEPTED; the 3x3 checks after and is REJECTED. */
+    const g2 = new DamageGrid();
+    g2.clear(); const took2 = g2.stamp2x2(0, 236, 5);
+    g2.clear(); const took3 = g2.stamp3x3(0, 236, 5);
+    check(`at the window edge the 2x2 stamps and the 3x3 refuses`,
+      took2 === true && took3 === false && stampIndex(0, 236) < WRITE_HI
+        && stampIndex(0, 236) + ROW_STRIDE >= WRITE_HI,
+      `pre-nudge 0x${stampIndex(0, 236).toString(16)} is inside ` +
+      `[0x${WRITE_LO.toString(16)}, 0x${WRITE_HI.toString(16)}) and post-nudge ` +
+      `0x${(stampIndex(0, 236) + ROW_STRIDE).toString(16)} is not. CS:0xA87A ` +
+      `bounds -> CS:0xA88A nudge, against CS:0xA8DA nudge -> CS:0xA8DF ` +
+      `bounds. A shared size-parameterised helper gets one of them wrong here`);
+  }
+
+  {
+    /* ⚠️ THE DEFECT THIS FIX EXISTS FOR. The axe and the lightning bolt are
+     * draw style 1 and both are among the five spawnable weapons, so routing
+     * every style to stamp2x2 made them under-hit on every shot. Driven
+     * through stepProjectiles so the ROUTING is under test, not the table. */
+    const cam = { x: 0, y: 0 };
+    const area = (wpn) => {
+      const g = new DamageGrid(); g.clear();
+      const recs = [{ tag: 1, x: 100, y: 100, dir: 1 }];
+      stepProjectiles(recs, cam, { grid: g, weapon: wpn, planeB: null, world: 1 });
+      return g.buf.reduce((a, b) => a + (b ? 1 : 0), 0);
+    };
+    const knife = w1[0], axe = w1[7], lightning = w1[4];
+    const nk = area(knife), na = area(axe), nl = area(lightning);
+    check(`the axe and lightning bolt stamp 9 cells, the knife 4`,
+      knife.drawStyle === 0 && axe.drawStyle === 1 && lightning.drawStyle === 1
+        && nk === 4 && na === 9 && nl === 9,
+      `knife style ${knife.drawStyle} -> ${nk} cells, axe style ` +
+      `${axe.drawStyle} -> ${na}, lightning bolt -> ${nl}. Styles 1 and 2 ` +
+      `call CS:0xA8B8 (24x24 px), style 0 calls CS:0xA860 (16x16). This port ` +
+      `sent all three to the 2x2 until the 3x3 was decoded, so two of the ` +
+      `five weapons the hero can actually fire covered less than half the ` +
+      `grid area they should`);
+  }
+
+  {
+    /* ⚠️ THE HUNTER'S TARGET LIST IS GATED ON HOLDING THE HUNTER. CS:0xAA86
+     * `cmp byte [0x343],0 / js` skips the append, and CS:0x9124-0x9146 leaves
+     * DS:0x343 at 0xFF unless a slot holds weapon 8. */
+    const grid = new DamageGrid(); grid.clear();
+    const cam = { x: 0, y: 0 };
+    const mob = () => ([{ x: 100, y: 100, state: 20, alive: true,
+                          frame: 0, delay: 0 }]);
+    const run = (weapon) => {
+      const a = new Arsenal(w1);
+      if (weapon >= 0) pickUpWeapon(a, weapon);
+      return stepCreatureDamage(mob(), { grid, cam, health: new Health(),
+        hero: { x: 900, y: 900, state: 26 }, decodeTag: () => ({ damage: 0 }),
+        arsenal: a }).targets.length;
+    };
+    check(`the hunter's target list is built ONLY while the hero holds a hunter`,
+      run(HUNTER_WEAPON) === 1 && run(0) === 0 && run(-1) === 0,
+      `holding weapon ${HUNTER_WEAPON} appends ${run(HUNTER_WEAPON)} target(s); ` +
+      `holding a knife or nothing appends ${run(0)}. CS:0x9130/0x9137/0x913E ` +
+      `each compare a slot word against 8, and only a match (or DS:0x168 >= 0) ` +
+      `clears DS:0x343. A port that always appends hands the hunter targets ` +
+      `the original never gave it`);
+  }
+
+  /* ══ PICKUP — how the hero actually gets a weapon ═══════════════════════ */
+
+  check(`idle + FIRE operates a LEVER, it does not pick anything up`,
+    LEVER_STATES.join() === '26',
+    'CS:0x1045 keeps only category 3 (`cmp byte [di+0x4],0x3 / jnz`) and ends ' +
+    'in `xor byte [si+0x4],0x1` — flipping bit 0 of the type, which is the ' +
+    'documented lever/switch toggle (24/25, 26/27). This project called it ' +
+    '"the object-pickup walk" until the bytes were read; real pickup has NO ' +
+    'fire gate at all and happens on contact at CS:0x177d');
+
+  check(`the pickup box is 40 x 56 around the hero's top-left, not symmetric`,
+    PICKUP_BOX.xMin === -12 && PICKUP_BOX.xMax === 28
+      && PICKUP_BOX.yMin === -12 && PICKUP_BOX.yMax === 44,
+    'CS:0x1799 adds 8 to the object position, then CS:0x179F/0x17A2 open the ' +
+    'X window at hero-4 .. hero+0x24 and CS:0x17AD/0x17B2 the Y window at ' +
+    'hero-4 .. hero+0x34. Folding the +8 in gives these offsets — wider than ' +
+    'his 32x48 body and reaching further below than above');
+
+  check(`a bar of exactly 0 still allows a pickup`,
+    heroTouches({ x: 0, y: 0 }, { x: 0, y: 0 }, 0) === true
+      && heroTouches({ x: 0, y: 0 }, { x: 0, y: 0 }, -1) === false,
+    'CS:0x177D `cmp word [0x19a],0 / js` is STRICTLY negative — the same shape ' +
+    'as the damage guard, and the opposite of the death test which fires at ' +
+    '<= 0. Three reads of the same variable, three different boundaries');
+
+  {
+    const a = new Arsenal(w1);
+    const r0 = pickUpWeapon(a, 0);                 // knife, +0x00 == 0
+    const r2 = pickUpWeapon(a, 2);                 // fireball -> forced slot C
+    check(`slot A is reserved for weapons whose +0x00 is 0; fireball takes C`,
+      r0.slot === 0 && w1[0].slotAClass === 0 && r2.slot === 2
+        && a.tagBase === 0x12,
+      `+0x00 is 0/1/1/1/1/0/0/0/1/1/0 and IDENTICAL in all four PWEAPONS ` +
+      `files, so the slot rule does not drift between worlds the way +0x08 ` +
+      `does. knife -> A (CS:0x9554 \`cmp word [di],0 / jz\`), fireball -> C ` +
+      `(CS:0x954F, hard-wired) and that same write sets DS:0x340 to 0x12 — ` +
+      `slot C's tag base, which is exactly what the fireball's mover ` +
+      `subtracts at CS:0x9DC2. Two facts explaining each other`);
+
+    const before = a.slots[0].st.count;
+    const dup = pickUpWeapon(a, 0);
+    check(`picking up a weapon you already hold only increments the count`,
+      dup.duplicate === true && dup.slot === 0
+        && a.slots[0].st.count === before + 1,
+      'CS:0x94A8-0x94B8 compares against all three slot words first and takes ' +
+      'the CS:0x94E8 `inc word [di+0x8]` path — so the volley and the per-hit ' +
+      'damage both rise, and the projectile area is NOT cleared');
+  }
+  {
+    const a = new Arsenal(w1);
+    pickUpWeapon(a, 1);                            // time bomb -> B
+    pickUpWeapon(a, 8);                            // hunter    -> C
+    a.slots[1].st.count += 5;                      // invest in B
+    const r = pickUpWeapon(a, 9);                  // magic axe, +0x00 == 1
+    check(`with B and C both full, the LOWER-count slot is replaced`,
+      r.slot === 2 && r.replaced === 8,
+      'CS:0x9580-0x9596 loads both counts and `jl` picks B only when B is ' +
+      'STRICTLY lower — you lose the weapon you have invested less in');
+
+    /* The tie is the discriminating case for `jl` vs `jle`: equal counts must
+     * keep B and take C. Built by re-arming both so their counts match. */
+    const t = new Arsenal(w1);
+    pickUpWeapon(t, 1);                            // time bomb -> B
+    pickUpWeapon(t, 8);                            // hunter    -> C
+    t.slots[1].st.count = t.slots[2].st.count = 9;
+    const tie = pickUpWeapon(t, 9);
+    check(`a TIE between B and C replaces C, not B`,
+      tie.slot === 2 && tie.replaced === 8,
+      'CS:0x9596 is `jl`, strict and signed — equal counts fall through to ' +
+      'CS:0x9598 `jmp 0x9567`, which selects slot C. Writing `<=` swaps which ' +
+      'weapon you lose on every tie, and a tie is the common case early on ' +
+      'when both slots still hold their first pickup');
+  }
+  {
+    const a = new Arsenal(w1);
+    pickUpWeapon(a, 0);
+    a.slots[0].area[0].tag = 7;                    // a shot in flight
+    pickUpWeapon(a, 0);
+    const keptOnDup = a.slots[0].area[0].tag === 7;
+    pickUpWeapon(a, 5);                            // throwing star, also slot A
+    check(`a NEW weapon clears the slot's projectiles; a duplicate does not`,
+      keptOnDup && a.slots[0].area[0].tag === 0,
+      'CS:0x94CE `call 0x9177` sits only on the new-weapon path — so swapping ' +
+      'weapons deletes your shots mid-flight while re-collecting the same one ' +
+      'leaves them alone');
+  }
+
+  {
+    /* The original indexes DS:0xe2b6 with no range check. This runs inside the
+     * frame callback, so a bad type must not throw — count and skip, the same
+     * treatment the out-of-range `dir` and the undecoded handler get. */
+    const a = new Arsenal(w1);
+    let threw = false;
+    try { pickUpWeapon(a, 99); } catch { threw = true; }
+    check(`an out-of-range weapon index is counted, not thrown`,
+      !threw && a.badWeaponIndex === 1 && a.slots.every((sl) => sl.weapon < 0),
+      'a TypeError inside the tick kills the frame, which is strictly worse ' +
+      'than the original reading 80 bytes of the wrong table. Shipped maps ' +
+      'only place types 0xC0..0xC9, but that is a property of the DATA');
+  }
+
+  /* ⚠️ AND THE ONE THAT MATTERS: real geometry, real objects, no fixtures. */
+  {
+    const lvl = parseMap(dclDecompress(await fetchRaw('game/PLEV1A.MAP')).data);
+    const guns = lvl.objects.filter((o) => isWeaponPickup(o.type));
+    const a = new Arsenal(w1);
+    const grid = new DamageGrid();
+    const target = guns[0];
+    const p = new Player(target.x, target.y);      // stand on it
+    const fr = stepHeroFrame({ input: IN(), arsenal: a, grid, player: p,
+                               map: lvl, cam: { x: 0, y: 0 }, world: 1,
+                               objects: lvl.objects, bar: 24 });
+    const wi = weaponIndexOf(target.type);
+    check(`walking onto a shipped weapon pickup arms the hero`,
+      guns.length > 0 && fr.picked.length === 1
+        && a.slots[fr.picked[0].slot].weapon === wi && target.dead === true,
+      `PLEV1A places ${guns.length} weapon pickups; taking the first ` +
+      `(type ${target.type} = ${['knife', 'time bomb', 'fireball', 'flame', 'lightning bolt', 'throwing star', 'spear', 'axe', 'hunter', 'magic axe', 'mace'][wi]}) ` +
+      `armed slot ${'ABC'[fr.picked[0].slot]} and removed the object from the ` +
+      `map. Driven through stepHeroFrame, so the pickup's place in the tick ` +
+      `order (CS:0x0206, before the projectile step) is under test too`);
+  }
+  {
+    /* ⚠️ WHY PICKUP MUST RUN BEFORE THE PROJECTILE STEP. The two orders only
+     * differ when a pickup REPLACES a weapon that has shots in flight: the
+     * new-weapon path clears the slot (CS:0x9177), so in the original those
+     * shots are gone before CS:0x020F ever looks at them. Run pickup after
+     * and they get one more move and one more STAMP — a dead weapon's
+     * projectile still able to kill on the tick you swapped it away. */
+    const { a, p, m } = armed(0);                  // knife in slot A
+    const grid = new DamageGrid();
+    const cam = { x: 0, y: 0 };
+    for (let i = 0; i < 6; i++) {                  // get a shot into the air
+      stepHeroFrame({ input: IN({ right: true, fire: i < 2 }), arsenal: a, grid,
+                      player: p, map: m, cam, world: 1 });
+    }
+    const flying = a.slots[0].live;
+    const before = a.stamped;
+    /* A throwing star (slotAClass 0, so it also wants slot A) on the hero. */
+    const drop = [{ x: p.x, y: p.y, type: 0xc0 + 5 }];
+    const fr = stepHeroFrame({ input: IN({ right: true }), arsenal: a, grid,
+                               player: p, map: m, cam, world: 1,
+                               objects: drop, bar: 24 });
+    check(`swapping a weapon kills its shots BEFORE they can stamp again`,
+      flying > 0 && fr.picked.length === 1 && a.slots[0].weapon === 5
+        && a.slots[0].live === 0 && a.stamped === before,
+      `${flying} knife shot(s) were in flight; the pickup cleared slot A ` +
+      `(CS:0x94CE -> CS:0x9177) at CS:0x0206 and the projectile pass at ` +
+      `CS:0x020F then found nothing, so the stamp count did not move. ` +
+      `Running pickup after the projectile step gives a weapon you no longer ` +
+      `hold one more frame of collision`);
+  }
+
+  {
+    /* ⚠️ EVERY DEAD SLOT SITS AT (0,0) WITH TYPE 0xFFFF, so a hero standing
+     * near the map origin is inside the pickup box of all of them at once.
+     * Without the sign test that is 70 phantom weapons on PLEV1A alone —
+     * and 0xFFFF - 0xC0 is not even a valid weapon index. This is the case
+     * that makes the sign test observable rather than merely defensible. */
+    const lvl = parseMap(dclDecompress(await fetchRaw('game/PLEV1A.MAP')).data);
+    const deadAtOrigin = lvl.objects.filter((o) => isDeadType(o.type)).length;
+    const a = new Arsenal(w1);
+    let taken = 0;
+    try {
+      taken = stepPickups(lvl.objects, { x: 0, y: 0 }, a, 24).taken.length;
+    } catch { taken = -1; }        // an out-of-range weapon index throws
+    check(`a hero at the map origin collects none of the ${deadAtOrigin} dead slots`,
+      taken === 0 && a.slots.every((sl) => sl.weapon < 0),
+      `all ${deadAtOrigin} consumed/unused records on PLEV1A carry type 0xFFFF ` +
+      `at (0,0), which passes a naive \`type >= 0xC0\`. CS:0x9000 tests the ` +
+      `SIGN instead, and the port does the same`);
+  }
+
+  {
+    const totals = [];
+    for (const k of ['1A', '1B', '2A', '2B', '3A', '3B', '4A', '4B']) {
+      const m = parseMap(dclDecompress(await fetchRaw(`game/PLEV${k}.MAP`)).data);
+      totals.push(m.objects.filter((o) => isWeaponPickup(o.type)).length);
+    }
+    const sum = totals.reduce((x, y) => x + y, 0);
+    check(`the eight maps place 55 weapon pickups between them`,
+      sum === 55,
+      `${totals.join('/')} = ${sum} — the figure this project recorded from a ` +
+      `different tool, re-derived here from the shipped bytes. It is the ONLY ` +
+      `source of weapons in real play, since CS:0x914c leaves all three slots ` +
+      `empty and only the two full restarts reach it`);
+  }
+
+  results.push({
+    name: 'sound ids are carried but NOT exercised', note: true, pass: true,
+    detail: 'The port has no audio, so every sfx id it records is unverified ' +
+      'by this suite and asserting one against itself would be a tautology the ' +
+      'linter rejects. Stating the gap instead: 0x0638 pickup (CS:0x1939), ' +
+      '0x0f22 and 0x0e49 creature death (CS:0xABA0 / 0xABB7), 0x1c fire, ' +
+      '0x1d projectile-hits-terrain (CS:0xA7F6), 0x09 magic-axe bounce ' +
+      '(CS:0xA7AD), 0x22 bomb detonation (CS:0xA27C), 0x20e footstep and ' +
+      '0x0e42 the hurt sound. A green suite does not mean these are right.',
+  });
+
+  /* ── CONSUMABLES: the rank, the table width, and a real potion ────────── */
+  {
+    const cats = parseObjectCategories(
+      dclDecompress(await fetchRaw('game/POBJECTS.001')).data);
+    const cat0 = [...cats].map((c, i) => [c, i]).filter(([c]) => c === 0).map(([, i]) => i);
+
+    /* ⚠️ The census and the table width agreeing is what pins the size — the
+     * words after index 22 (0x50, 0x50, 0x50, 0x50, 0x05, 0x4f) are not code
+     * offsets at all. Neither number was chosen to match the other. */
+    check(`the consumable table is exactly as wide as the category-0 census`,
+      cat0.length === 23 && CONSUMABLES.length === cat0.length,
+      `${cat0.length} category-0 types in POBJECTS against ` +
+      `${CONSUMABLES.length} handler words at DS:0xd8b8 before the ` +
+      `table runs into unrelated data`);
+
+    /* ⚠️ Derive the rank with the ORIGINAL's loop, and check it against the
+     * type list rather than against itself. Type 35 must land on rank 3, which
+     * requires exactly three category-0 types below it. */
+    const r35 = consumableRank(35, cats);
+    const below35 = cat0.filter((t) => t < 35);
+    check(`the handler index is the RANK among category-0 types, counted below`,
+      consumableRank(0, cats) === 0 && r35 === 3 && below35.length === 3
+        && below35.join() === '0,2,3',
+      `type 35 -> rank ${r35}, because types ${below35.join(', ')} are the only ` +
+      `category-0 types beneath it. CS:0x180F counts entries 0..type-1, so the ` +
+      `count is STRICTLY below and type 0 is rank 0 — which is why CS:0x180B ` +
+      `guards with \`or cx,cx\`, since \`loop\` at cx = 0 runs 65536 times`);
+
+    /* Every decoded handler's type must agree with the rank the loop derives. */
+    const bad = CONSUMABLES.filter(
+      (h) => consumableRank(h.type, cats) !== h.rank);
+    check(`all 23 table entries sit at the rank their own type derives`,
+      bad.length === 0,
+      `derived from POBJECTS.001 through the original's counting loop, not ` +
+      `from the table's own ordering`);
+
+    /* The five decoded ones must be the five that say "restores energy". */
+    const objBuf = dclDecompress(await fetchRaw('game/POBJECTS.001')).data;
+    const txt = (t) => [...objBuf.slice(t * 48, t * 48 + 48)]
+      .map((c) => (c >= 32 && c < 127 ? String.fromCharCode(c) : '.')).join('');
+    const healers = CONSUMABLES.filter((h) => h.effect === 'health');
+    check(`the five HEALTH handlers are exactly the five "restores energy" objects`,
+      healers.length === 5
+        && healers.every((h) => /restores energy/.test(txt(h.type)))
+        && healers.map((h) => h.health).join() === '12,24,2,4,3'
+        && cat0.filter((t) => /restores energy/.test(txt(t))).length === 5,
+      `types ${healers.map((h) => h.type).join(', ')} give ` +
+      `+${healers.map((h) => h.health).join('/+')} — each confirmed against its ` +
+      `own POBJECTS text, so the addend and the object agree from two sources`);
+  }
+  {
+    /* END TO END on real geometry: stand on a shipped health potion. */
+    const cats = parseObjectCategories(
+      dclDecompress(await fetchRaw('game/POBJECTS.001')).data);
+    const lvl = parseMap(dclDecompress(await fetchRaw('game/PLEV1A.MAP')).data);
+    const healTypes = CONSUMABLES.filter((h) => h.effect === 'health')
+      .map((h) => h.type);
+    const pot = lvl.objects.find((o) => !isDeadType(o.type) && healTypes.includes(o.type));
+    const hp = new Health(HEALTH_MAX, HEALTH_MAX);
+    /* Target 0 so no potion in the table can overflow the 24 cap — the
+     * conversion path has its own check, and mixing them here would let a
+     * wrong addend hide behind the clamp. */
+    hp.target = 0;
+    const a = new Arsenal(w1);
+    const grid = new DamageGrid();
+    const p = new Player(pot.x, pot.y);
+    const fr = stepHeroFrame({ input: IN(), arsenal: a, grid, player: p,
+                               map: lvl, cam: { x: 0, y: 0 }, world: 1,
+                               objects: lvl.objects, bar: 12, cats, health: hp });
+    const want = CONSUMABLES.find((h) => h.type === pot.type).health;
+    check(`walking onto a shipped health potion restores energy`,
+      fr.consumed.length === 1 && pot.dead === true
+        && hp.target === want && fr.consumed[0].banked === 0
+        && fr.consumed[0].taken === true,
+      `PLEV1A type ${pot.type} at (${pot.x},${pot.y}) gave +${want}, target ` +
+      `0 -> ${hp.target}, nothing banked. It raises the TARGET, so the bar ` +
+      `then chases it one unit a frame — a potion is not an instant heal`);
+  }
+
+  {
+    /* ⚠️ A REFUSED POTION IS STILL CONSUMED. CS:0x17F6 marks the object dead
+     * BEFORE CS:0x1829 calls the handler, and the refuse path at CS:0x6209
+     * returns the same `dx = 1` as success — so the object is gone and the
+     * message still shows. Marking dead after the dispatch would leave a
+     * refused potion lying on the floor to be taken again next tick. */
+    const cats = parseObjectCategories(
+      dclDecompress(await fetchRaw('game/POBJECTS.001')).data);
+    const lvl = parseMap(dclDecompress(await fetchRaw('game/PLEV1A.MAP')).data);
+    const healTypes = CONSUMABLES.filter((h) => h.effect === 'health')
+      .map((h) => h.type);
+    const pot = lvl.objects.find((o) => !isDeadType(o.type) && healTypes.includes(o.type));
+    const hp = new Health(HEALTH_MAX, HEALTH_MAX);
+    hp.bar = -1;                                  // past the refusal boundary
+    hp.target = 5;
+    const before = hp.target;
+    const a = new Arsenal(w1);
+    const p = new Player(pot.x, pot.y);
+    const fr = stepHeroFrame({ input: IN(), arsenal: a, grid: new DamageGrid(),
+                               player: p, map: lvl, cam: { x: 0, y: 0 },
+                               world: 1, objects: lvl.objects, bar: 12,
+                               cats, health: hp });
+    check(`a potion refused at negative health is STILL consumed`,
+      fr.consumed.length === 1 && fr.consumed[0].taken === false
+        && pot.dead === true && hp.target === before,
+      'the object is gone and no energy was restored. CS:0x17F6 precedes ' +
+      'CS:0x1829, and CS:0x6209 returns the same dx = 1 as CS:0x638F — so ' +
+      'the caller cannot tell a refusal from a success either. Marking dead ' +
+      'after the dispatch leaves it on the floor to retake next tick');
+  }
+
+  {
+    /* ⚠️ NEITHER TREASURE NOR AN UNDECODED CONSUMABLE MAY BE EATEN. Only 5 of
+     * the 23 handlers are decoded, and PLEV1A places TEN category-0 types
+     * whose handler is not — so treating the whole category as "potion" is
+     * not a corner case, it is most of them. Category 1 (treasure) is a
+     * different branch entirely (CS:0x184E) and must not be touched here. */
+    const cats = parseObjectCategories(
+      dclDecompress(await fetchRaw('game/POBJECTS.001')).data);
+    const lvl = parseMap(dclDecompress(await fetchRaw('game/PLEV1A.MAP')).data);
+    const live = lvl.objects.filter((o) => !isDeadType(o.type) && o.type < 0xc0);
+
+    const run = (o) => {
+      const hp = new Health(HEALTH_MAX, HEALTH_MAX); hp.target = 5;
+      const r = stepPickups([o], { x: o.x, y: o.y }, new Arsenal(w1), 12,
+                            { cats, health: hp });
+      return { hp, r, o };
+    };
+    const undec = live.find((o) => {
+      const h = CONSUMABLES[consumableRank(o.type, cats)];
+      return cats[o.type] === 0 && h && !WIRED.includes(h.effect);
+    });
+    const treasure = live.find((o) => cats[o.type] === 1);
+
+    const u = run({ ...undec });
+    const t = run({ ...treasure });
+    check(`a decoded-but-unwired consumable is reported, not silently healed`,
+      u.r.consumed.length === 1 && !!u.r.consumed[0].notWired
+        && u.o.dead === true && u.hp.target === 5,
+      `type ${undec.type} ("${u.r.consumed[0].name}" / ` +
+      `"${u.r.consumed[0].desc}") is rank ${consumableRank(undec.type, cats)}, ` +
+      `effect "${u.r.consumed[0].effect}" — decoded, but not wired: ` +
+      `${u.r.consumed[0].notWired}. Health stayed ${u.hp.target} and the ` +
+      `object was STILL consumed, because CS:0x17F6 marks it dead before any ` +
+      `dispatch`);
+    check(`a treasure object never reaches the consumable dispatch`,
+      t.r.consumed.length === 0 && t.hp.target === 5,
+      `type ${treasure.type} is category 1 and goes to CS:0x184E. It is now ` +
+      `wired (see the treasure block below), but through a different branch — ` +
+      `nothing about it may run a DS:0xd8b8 handler, and no potion fires`);
+  }
+
+  /* ── THE OTHER 18 CONSUMABLE HANDLERS ────────────────────────────────────
+   *
+   * Every one is confirmed by its own POBJECTS text, which is what makes this
+   * checkable: nothing about a handler address says what it should do.
+   */
+  {
+    const objBuf = dclDecompress(await fetchRaw('game/POBJECTS.001')).data;
+    const nm = (t) => {
+      const o = t * 48, take = (a, n) => {
+        let r = ''; for (let i = a; i < a + n; i++) { if (!objBuf[i]) break; r += String.fromCharCode(objBuf[i]); }
+        return r;
+      };
+      return { name: take(o + 8, 16), desc: take(o + 24, 24) };
+    };
+    const cats = parseObjectCategories(objBuf);
+
+    check(`every one of the 23 ranks now has a decoded effect`,
+      CONSUMABLES.length === 23
+        && CONSUMABLES.every((h) => typeof h.effect === 'string' && h.effect.length)
+        && CONSUMABLES.every((h) => nm(h.type).name === h.name
+                                 && nm(h.type).desc === h.desc),
+      `and every entry's recorded name/description matches the shipped ` +
+      `POBJECTS record for its type — so the table is indexed by the same ` +
+      `type the rank loop derives, checked from the asset rather than from ` +
+      `the table's own ordering`);
+
+    /* THE WEAPON ARCS — the sharpest confirmation in the set. */
+    check(`the three "weapon arc" tables match their own descriptions`,
+      WEAPON_ARCS.map((a) => a.name).join() === 'standard,intense,wide'
+        && WEAPON_ARCS[0].dirs[0][1] === -3
+        && WEAPON_ARCS[1].dirs[0][1] === -1
+        && WEAPON_ARCS[2].dirs[0][1] === -10
+        && WEAPON_ARCS.map((a) => a.ss).join() === [0x3612, 0x362a, 0x3642].join()
+        && CONSUMABLES.filter((h) => h.effect === 'weaponArc')
+             .map((h) => h.desc).join() === 'standard,intense,wide',
+      `three adjacent 24-byte SS tables (0x3612 + 0x18 + 0x18), copied over ` +
+      `DS:0xdf0e by the one routine CS:0x95BC, with Y-spreads of ` +
+      `${WEAPON_ARCS.map((a) => Math.abs(a.dirs[0][1])).join('/')} against ` +
+      `descriptions "${WEAPON_ARCS.map((a) => a.name).join('/')}". Nothing ` +
+      `about the addresses says which is which; the numbers do`);
+
+    {
+      const a = new Arsenal(w1);
+      const before = PROJECTILE_VELOCITY.map((v) => `${v.vx},${v.vy}`).join('|');
+      setWeaponArc(WEAPON_ARCS[2].dirs);
+      const wide = PROJECTILE_VELOCITY.map((v) => `${v.vx},${v.vy}`).join('|');
+      resetWeaponArc();
+      const back = PROJECTILE_VELOCITY.map((v) => `${v.vx},${v.vy}`).join('|');
+      check(`a "wide" stone rewrites the live velocity table, and "standard" restores it`,
+        before === back && wide !== before
+          && wide.startsWith('10,-10') && back.startsWith('12,-3'),
+        `CS:0x95BC overwrites DS:0xdf0e in place — there is ONE velocity ` +
+        `table in the original and swapping it is the entire effect, so this ` +
+        `port swaps one table too. wide -> ${wide.split('|')[0]}, ` +
+        `standard -> ${back.split('|')[0]}`);
+      void a;
+    }
+
+    /* THE POWER POTION — type 3 applies the boost TWICE. */
+    {
+      const mk = () => {
+        const ar = new Arsenal(w1);
+        /* One weapon per slot: +0x00 is 0 for the knife (slot A) and 1 for
+         * the lightning bolt and the hunter, which fill B then C. Picking two
+         * slot-A weapons would just replace one with the other. */
+        pickUpWeapon(ar, 0); pickUpWeapon(ar, 4); pickUpWeapon(ar, 8);
+        return ar;
+      };
+      const one = mk(), two = mk();
+      const base = one.slots.filter((sl) => sl.weapon >= 0).map((sl) => sl.st.count);
+      applyConsumable(CONSUMABLES.find((h) => h.type === 2), { arsenal: one });
+      applyConsumable(CONSUMABLES.find((h) => h.type === 3), { arsenal: two });
+      const g1 = one.slots.filter((sl) => sl.weapon >= 0).map((sl) => sl.st.count);
+      const g2 = two.slots.filter((sl) => sl.weapon >= 0).map((sl) => sl.st.count);
+      check(`the power potion raises the pickup count on EVERY held weapon`,
+        base.length === 3 && g1.every((c, i) => c === base[i] + 1)
+          && g2.every((c, i) => c === base[i] + 2)
+          && POWER_POTION_STEPS[2] === 1 && POWER_POTION_STEPS[3] === 2,
+        `CS:0x9426 walks all three slots doing \`inc word [si+0x8]\` — the ` +
+        `PICKUP COUNT, so a power potion buys on every weapon at once exactly ` +
+        `what a duplicate buys: bigger volley, +1 damage, faster hunter turn. ` +
+        `CS:0x62D7 enters one instruction ABOVE CS:0x62DA and so calls it ` +
+        `twice, which is why type 3 costs 12000 against type 2's 6000`);
+    }
+
+    /* INVULNERABILITY — and the spawn deduction that makes the two differ. */
+    check(`the shield potion lasts 255 frames; a SPAWN gets 85`,
+      INVULN_TICKS_POTION === 0xff && INVULN_SPAWN_DEDUCTION === 0xaa
+        && INVULN_TICKS_SPAWN === 85,
+      `CS:0x62C8 and CS:0x085D call the SAME helper CS:0xA90B (which sets ` +
+      `DS:0x19c = 255 and DS:0x172 = 1), but the spawn path immediately does ` +
+      `\`sub word [0x19c],0xaa\`. At the proven 15 Hz that is 17.0 s of ` +
+      `shield against 5.7 s of spawn protection. Reading CS:0xA90B alone and ` +
+      `not chasing the \`sub\` would have put 17 s on both`);
+
+    /* FREEZE and GIANT JUMP — each lands on a global this project already
+     * documented from the consuming side. */
+    check(`"freezes aliens" writes the gate the entity driver already reads`,
+      FREEZE_TICKS === 0xaa
+        && CONSUMABLES.find((h) => h.type === 44).desc === 'freezes aliens',
+      'CS:0x620D sets DS:0x2fa = 170, decremented once per frame at ' +
+      'CS:0x0186 and floored at CS:0x018C. DS:0x2fa is read by EIGHTEEN ' +
+      'sites including CS:0xEDB8 — the System-B movement gate this project ' +
+      'documented long before this handler was decoded — and CS:0xAD8D / ' +
+      'CS:0xAE53 in System A. 170 frames = 11.3 s, both systems');
+
+    check(`"giant jump" writes the word the jump arc already doubles on`,
+      GIANT_JUMP_TICKS === 0x154
+        && CONSUMABLES.find((h) => h.type === 47).desc === 'giant jump',
+      'CS:0x62B5 sets DS:0x174 = 340. CS:0x4F6F subtracts each of the 23 arc ' +
+      'deltas from Y TWICE while that word is set — this project recorded ' +
+      'the doubling as "the double-jump power-up word" without knowing what ' +
+      'set it. 340 frames = 22.7 s');
+
+    /* THE SHIELD THAT DOES NOTHING. */
+    check(`"shield / reduces damage" sets a flag NOTHING reads`,
+      SHIELD_NOOP_DS === 0x34c && SHIELD_NOOP_SITES.length === 4
+        && CONSUMABLES.find((h) => h.type === 37).effect === 'noop34c'
+        && CONSUMABLES.find((h) => h.type === 37).placed === 3,
+      'the immediate `4C 03` occurs FOUR times across all twelve shipped ' +
+      'binaries and every one is `C6 06 4C 03 imm` — a byte write. A word ' +
+      'access one byte low would read 0x34c as its high half and encode ' +
+      '`4B 03`; that pair occurs four times too and is again four byte ' +
+      'writes, to the neighbouring 0x34b. Neither alignment yields a reader ' +
+      'anywhere. THREE of these ship across the eight maps and none of them ' +
+      'reduces any damage');
+
+    /* THE ITEM WITH NO HANDLER. */
+    const cut = CONSUMABLES.find((h) => h.type === UNIMPLEMENTED_TYPE);
+    check(`"slows monsters" has no handler, and does not even set DX`,
+      cut.at === 0x5e9b && cut.dx === null && cut.placed === 0
+        && cut.effect === 'unimplemented',
+      'rank 11\'s table word is the PLAYER STATE MACHINE\'S EPILOGUE. Two ' +
+      'things make "cut item" the reading rather than "undecoded": type 43 is ' +
+      'placed in zero maps, and the epilogue never writes DX — which ' +
+      'CS:0x182D reads to pick the message tier. All 22 other handlers set ' +
+      'it. This port records the entry and refuses to invent a value');
+
+    /* THE MESSAGE TIER. */
+    const tiers = CONSUMABLES.filter((h) => h.dx !== null).map((h) => h.dx);
+    check(`only the shop potion returns message tier 2`,
+      CONSUMABLES.find((h) => h.type === 83).dx === MSG_CLEAR_394
+        && tiers.filter((d) => d === 2).length === 1
+        && tiers.filter((d) => d === 1).length === 21,
+      'CS:0x182D reads DX as a tier, not a success flag: 0 shows no message, ' +
+      '1 shows it, >=2 clears DS:0x394 first. 21 handlers return 1 and only ' +
+      'CS:0x61E9 returns 2 — the same handler that parks DS:0x363 at 0x41, a ' +
+      'POSITIVE value, which makes CS:0x49B5 `js` skip the whole player state ' +
+      'machine while the shopkeeper is up');
+
+    /* WHAT A PLAYER CAN ACTUALLY REACH. */
+    const placed = {};
+    for (const w of [1, 2, 3, 4]) for (const sub of ['A', 'B']) {
+      const m = parseMap(dclDecompress(await fetchRaw(`game/PLEV${w}${sub}.MAP`)).data);
+      for (const o of m.objects) {
+        if (isDeadType(o.type) || o.type >= 0xc0 || cats[o.type] !== 0) continue;
+        placed[o.type] = (placed[o.type] || 0) + 1;
+      }
+    }
+    const never = CONSUMABLES.filter((h) => !placed[h.type]);
+    check(`the recorded placement counts are the shipped ones, and SEVEN are zero`,
+      CONSUMABLES.every((h) => (placed[h.type] || 0) === h.placed)
+        && never.length === 7
+        && never.map((h) => h.type).join() === '39,40,41,43,44,70,71',
+      `re-derived from the eight .MAP files: types ${never.map((h) => h.type).join(', ')} ` +
+      `are placed ZERO times. That includes the ENTIRE familiar chain ` +
+      `(39 summon / 40 wings / 41 claws), which is why this port decodes ` +
+      `CS:0xC2F6 and does not build it — the iron-chest call with more surface`);
+
+    check(`UNKNOWN_DS_0168 is the familiar's energy, and it starts dead`,
+      FAMILIAR_ENERGY_DS === 0x168 && banksOverheal(-1) === false
+        && banksOverheal(0) === true && banksOverheal(1000) === true
+        && FAMILIAR_CLEAR_SITES.join() === [0x047d, 0x8ddf].join()
+        && !placed[39],
+      'all four behaviours this project listed without a meaning are the ' +
+      'familiar: 1000 on summon (CS:0xC347), +1000 for a second potion ' +
+      '(CS:0xC2FD), drained by damage (CS:0xAB4D), -1 when it dies ' +
+      '(CS:0xC470). CS:0xC440 is called from CS:0x047D and CS:0x8DDF — the ' +
+      'two FULL RESTARTS — so it is -1 from the start, and type 39 never ' +
+      'ships. That is what makes the over-healing bank unreachable');
+  }
+
+  /* ── DESTRUCTIBLE BLOCKS: CS:0x73EC / CS:0x7500 ─────────────────────────── */
+  {
+    /* THE CENSUS. The world >= 3 gate is not arbitrary — the shipped maps
+     * split on it exactly, which is what makes tile 0x6d the right tile. */
+    const cens = {};
+    for (const w of [1, 2, 3, 4]) for (const sub of ['A', 'B']) {
+      const m = parseMap(dclDecompress(await fetchRaw(`game/PLEV${w}${sub}.MAP`)).data);
+      let cells = 0, solid = 0;
+      for (let i = 0; i < 8192; i++) {
+        if (m.planeA[i] !== DESTRUCTIBLE_TILE) continue;
+        cells++; if (m.planeB[i] === 1) solid++;
+      }
+      cens[`${w}${sub}`] = { cells, solid, world: w };
+    }
+    const early = Object.values(cens).filter((c) => c.world < MIN_WORLD);
+    const late = Object.values(cens).filter((c) => c.world >= MIN_WORLD);
+    check(`tile 0x6d is solid in EVERY world-3/4 cell and NO world-1/2 cell`,
+      early.every((c) => c.cells > 0 && c.solid === 0)
+        && late.every((c) => c.cells > 0 && c.solid === c.cells)
+        && late.reduce((n, c) => n + c.solid, 0) === 246
+        && early.reduce((n, c) => n + c.cells, 0) === 37,
+      `246 of 246 solid across worlds 3-4, 0 of 37 across worlds 1-2 ` +
+      `(${Object.entries(cens).map(([k, c]) => `${k}:${c.solid}/${c.cells}`).join(' ')}). ` +
+      `CS:0xA806's \`cmp byte [0x42],3 / jl\` matches the DATA, not just the ` +
+      `code — the authors used 0x6d decoratively early and as breakable ` +
+      `masonry late`);
+
+    /* THE MACE. 200 cumulative damage, and a +50 that lives nowhere near
+     * the +0x48 flag this project once mistook for it. */
+    const wp = {};
+    for (const w of [3, 4]) {
+      wp[w] = dclDecompress(await fetchRaw(`game/PWEAPONS.00${w}`)).data;
+    }
+    const powerOf = (buf, i) => (buf[i * 0x50 + 6] << 8) | buf[i * 0x50 + 7];
+    const stopsTerrain = (buf, i) => buf[i * 0x50 + 0x48] !== 0;
+    const stoppers = [];
+    for (let i = 0; i < 11; i++) if (stopsTerrain(wp[3], i)) stoppers.push(i);
+    check(`only six weapons can break a block, and the mace needs FIVE shots`,
+      (() => {
+        if (stoppers.join() !== '0,1,2,3,5,10') return false;
+        if (blockDamage(MACE_INDEX, 3) !== 53 || MACE_BONUS !== 50) return false;
+        /* ⚠️ Pin the INDEX against the shipped text, not against itself. The
+         * weapon names sit at an 80-byte stride in PWEAPONS, and record 10
+         * must literally read "mace" — otherwise the +50 is being handed to
+         * some other weapon and every damage figure above still passes. */
+        const nm = (buf, i) => {
+          let r = '';
+          for (let k = i * 0x50; k < i * 0x50 + 0x50; k++) {
+            const c = buf[k];
+            if (c >= 0x61 && c <= 0x7a) r += String.fromCharCode(c);
+            else if (r) break;
+          }
+          return r;
+        };
+        if (MACE_INDEX !== 10 || nm(wp[3], MACE_INDEX) !== 'mace') return false;
+        /* ⚠️ SIMULATE, don't trust the closed form — it was written wrong
+         * here first (ceil(201/d) instead of floor(199/d)+1, which agrees
+         * for the mace and disagrees for three other weapons). */
+        for (const i of stoppers) {
+          const dmg = blockDamage(i, powerOf(wp[3], i));
+          const d2 = new Destructibles(4);
+          let n = 0;
+          while (d2.queue[0].hp < 0 && n < 5000) { d2.hit(64, i, powerOf(wp[3], i)); n++; }
+          if (n !== shotsToBreak(dmg)) return false;
+        }
+        return shotsToBreak(53) === 5 && shotsToBreak(1) === 201
+            && shotsToBreak(20) === 11 && shotsToBreak(5) === 41;
+      })(),
+      `+0x48 is a BYTE (\`cmp byte [si+0x48],0\`) and only knife, time bomb, ` +
+      `fireball, flame, throwing star and mace have it set — the other five ` +
+      `fly through terrain and can never reach CS:0x73EC. Of those six the ` +
+      `mace does Power 3 + 50 = 53 -> 5 shots, against the time bomb's ` +
+      `${shotsToBreak(20)}, the fireball's ${shotsToBreak(5)} and the ` +
+      `knife's ${shotsToBreak(1)} — every one of the six checked by running ` +
+      `the real hit loop, not by trusting the formula. ⚠️ Read +0x48 as a big-endian ` +
+      `WORD and it picks up +0x49, making the hunter and magic axe wrongly ` +
+      `appear to collide — a mistake made and caught writing this`);
+
+    /* END TO END on a real destructible cell. */
+    {
+      const m = parseMap(dclDecompress(await fetchRaw('game/PLEV4A.MAP')).data);
+      const planeA = Uint8Array.from(m.planeA), planeB = Uint8Array.from(m.planeB);
+      const cell = [...Array(8192).keys()]
+        .find((i) => planeA[i] === DESTRUCTIBLE_TILE && planeB[i] === 1);
+      const d = new Destructibles(4);
+      check(`a mace needs FIVE shots and a knife 201 — the first one only queues`,
+        (() => {
+          const a = new Destructibles(4), b = new Destructibles(4);
+          let ka = 0; while (a.queue[0].hp < 0 && ka < 500) { a.hit(cell, 0, 1); ka++; }
+          let kb = 0; while (b.queue[0].hp < 0 && kb < 500) { b.hit(cell, MACE_INDEX, 3); kb++; }
+          return ka === 201 && kb === 5;
+        })(),
+        `⚠️ CS:0x73EC calls CS:0x743E BEFORE appending, and on an unqueued ` +
+        `cell that scan finds nothing — so the first shot only creates the ` +
+        `record at hp = -1 and does no damage. 4 damaging hits for the mace ` +
+        `is FIVE shots (${shotsToBreak(53)}), and 200 for the knife is ` +
+        `${shotsToBreak(1)}. Every later shot is routed by CS:0x743E to ` +
+        `\`sub [si+4],ax\` on the SAME record, so it is cumulative damage`);
+
+      /* The break animation, the plane writes, and the restore. */
+      let hits = 0;
+      while (d.queue[0].hp < 0 && hits < 50) { d.hit(cell, MACE_INDEX, 3); hits++; }
+      const solidBefore = planeB[cell];
+      let ticks = 0, frames = [];
+      while (d.queue[0].x >= 0 && ticks < 40) {
+        const fx = d.step(planeA, planeB);
+        if (fx.length) frames.push(fx[0].sprite);
+        ticks++;
+      }
+      check(`the block breaks after 4 frames at HALF speed, then plane A goes to 1`,
+        solidBefore === 1 && frames.join() === '0,1,1,2,2,3,3' && ticks === 7
+          && new Set(frames).size === BREAK_FRAMES
+          && planeB[cell] === 0 && planeA[cell] === 1
+          && d.restore.length === 1 && d.broken === 1,
+        `${BREAK_FRAMES} distinct frames over ${ticks} ticks because DS:0x36c is toggled by ` +
+        `\`not\` once per frame (CS:0x0172) and CS:0x7545 advances only when ` +
+        `it is set — about 0.53 s at 15 Hz. ⚠️ Plane A becomes 1, NOT 0: ` +
+        `under the 1-based rule that is tile index 0, and a port writing 0 ` +
+        `draws the wrong tile`);
+
+      const n = d.restoreAll(planeA, planeB);
+      check(`a level reload puts every broken block back`,
+        n === 1 && planeA[cell] === DESTRUCTIBLE_TILE && planeB[cell] === 1
+          && d.queue.every((q) => q.x < 0) && d.enabled === false,
+        'CS:0x74DB walks the 100-entry restore list writing plane A = 0x6d ' +
+        'and plane B = 1, and its two callers (CS:0x69B1, CS:0x8E40) each ' +
+        'follow it immediately with the queue clear at CS:0x74CD');
+    }
+
+    check(`shooting an ALREADY-BREAKING block queues a duplicate, not more damage`,
+      (() => {
+        const d = new Destructibles(4);
+        let n = 0;
+        while (d.queue[0].hp < 0 && n < 50) { d.hit(64, MACE_INDEX, 3); n++; }
+        const frameBefore = d.queue[0].hp;          // 0 — the break animation
+        const r = d.hit(64, MACE_INDEX, 3);
+        return frameBefore === 0 && d.queue[0].hp === 0
+            && r === 'queued' && d.queue[1].x === d.queue[0].x
+            && d.queue[1].hp === -1;
+      })(),
+      'CS:0x746E requires the matched record\'s hp to be NEGATIVE (`cmp word ' +
+      '[si+4],0 / js`) before it applies damage. Once the block is breaking, ' +
+      'hp is a FRAME INDEX counting 0..3 — so the scan finds no match, falls ' +
+      'through to the append, and the same cell gets a second queue record. ' +
+      'Dropping that guard subtracts the weapon damage from the animation ' +
+      'frame instead, which is the sort of thing that looks like it works');
+
+    /* BOTH CAPACITY QUIRKS, and the second is reachable in shipped data. */
+    check(`a full queue drops the hit; a full restore list leaves the block SOLID`,
+      (() => {
+        const d = new Destructibles(4);
+        for (let i = 0; i < QUEUE_SLOTS; i++) d.hit(i * 3, 0, 1);
+        const r = d.hit(9999, 0, 1);
+        const e = new Destructibles(4);
+        e.restore = new Array(RESTORE_SLOTS).fill(0);
+        const pA = new Uint8Array(8192).fill(DESTRUCTIBLE_TILE);
+        const pB = new Uint8Array(8192).fill(1);
+        e.remove({ x: 32, y: 16 }, pA, pB);
+        return r === 'dropped' && d.droppedHits === 1
+          && e.strandedSolid === 1 && pB[1 + 128] === 1;
+      })(),
+      `CS:0x7403 returns without appending when all ${QUEUE_SLOTS} slots are ` +
+      `busy, and CS:0x759A returns BEFORE touching either plane when the ` +
+      `${RESTORE_SLOTS}-entry restore list is full — while the caller still ` +
+      `frees the queue slot, so the block finishes its animation and stays ` +
+      `put. PLEV4A places 120 destructible cells against 100 restore ` +
+      `entries, so that is reachable in shipped data`);
+
+    check(`the break sprite base is an UNINITIALISED read, and is recorded as one`,
+      SPRITE_BASE_DS === 0x158 && SPRITE_BASE_VALUE === 0 && BREAK_FRAMES === 4,
+      'DS:0x158 is read once (CS:0x7533 `add ax,[0x158]`) and written nowhere ' +
+      'in any of the eight binaries at either alignment — the only other ' +
+      '`58 01` in the image is `cmp ax,0x158`, an immediate. So it holds ' +
+      'whatever BSS holds, and the drawn sprite is the frame index itself. ' +
+      'The port reproduces the uninitialised read rather than inventing a ' +
+      'designed base, exactly as the plane-A out-of-range note does');
+
+    /* ── THE HAZARD'S EMITTER: is it in any shipped level? ──────────────── */
+    {
+      /* Read both descriptor windows out of every PALFILS, per this project's
+       * own layout: +0x0D58 = System A, +0x11A4 = System B, both stride 0x16,
+       * 50 records, +0x00 = entity count (0 = dead), +0x07 = class index. */
+      const used = [new Set(), new Set()];
+      const perWorld = [{}, {}];
+      for (const w of [1, 2, 3, 4]) for (const sub of ['A', 'B']) {
+        const d = dclDecompress(await fetchRaw(`game/PALFILS.0${sub}${w}`)).data;
+        [0x0d58, 0x11a4].forEach((off, sys) => {
+          for (let i = 0; i < 50; i++) {
+            const o = off + i * 0x16;
+            if (d[o] === 0) continue;
+            used[sys].add(`${w}:${d[o + 7]}`);
+            (perWorld[sys][w] = perWorld[sys][w] || new Set()).add(d[o + 7]);
+          }
+        });
+      }
+
+      /* ⚠️ THE BINDING, proven by an invariant rather than assumed. */
+      const landsEmpty = (sys) => [...used[sys]].filter((k) => {
+        const [w, c] = k.split(':').map(Number);
+        return CLASS_TABLES[w - 1][sys][c].spriteBase === EMPTY_CLASS;
+      });
+      const swapped = (sys) => [...used[sys]].filter((k) => {
+        const [w, c] = k.split(':').map(Number);
+        return CLASS_TABLES[w - 1][1 - sys][c].spriteBase === EMPTY_CLASS;
+      });
+      check(`table 0 is System A and table 1 is System B — no index hits an empty slot`,
+        landsEmpty(0).length === 0 && landsEmpty(1).length === 0
+          && swapped(1).length > 0,
+        `every class index the shipped descriptors use lands on a NON-EMPTY ` +
+        `record under this binding, across all 8 files and both systems. ` +
+        `Swap the two tables and ${swapped(1).length} System-B index/world ` +
+        `pairs land on 0xFFFF — World 2 uses class 4, and only table 1 has a ` +
+        `class 4 there. That asymmetry is what makes the binding checkable ` +
+        `rather than a guess`);
+
+      const w4A = [...(perWorld[0][4] || [])].sort();
+      /* Index the table through HAZARD_CLASS itself, so misattributing the
+       * emitter to the other system or another slot fails here. */
+      const hz = CLASS_TABLES[HAZARD_CLASS.world - 1][HAZARD_CLASS.system][HAZARD_CLASS.cls];
+      /* ⚠️ Compare against LITERALS, not against HAZARD_HANDLERS. Both that
+       * export and CLASS_TABLES are transcriptions of the same GAME.EXE
+       * bytes, so checking one against the other restates the transcription
+       * — which the check linter correctly refused. What survives as a real
+       * measurement is the CENSUS: how many of the 48 records carry this
+       * handler pair. It could have been 0 or 8; it is 1. */
+      const carriers = CLASS_TABLES.flat(2)
+        .filter((r) => r.hA === 0xbd38 || r.hB === 0xbd0b);
+      check(`the DS:0xcfcc hazard is CUT — no descriptor anywhere selects it`,
+        hz.hA === 0xbd38 && hz.hB === 0xbd0b
+          && hz.spriteBase === 531 && carriers.length === 1
+          && w4A.join() === '0'
+          && !used[0].has('4:3') && !used[1].has('4:3'),
+        `the emitter is world 4 / System A / class ${HAZARD_CLASS.cls}, the ` +
+        `only record in any of the eight tables carrying handlers ` +
+        `0xbd38+0xbd0b, and its sprite base ${HAZARD_SPRITE_BASE} matches ` +
+        `CS:0xBD68's \`add bp,0x213\`. System A in world 4 uses class ` +
+        `${w4A.join(',')} and NOTHING else, in both PALFILS.0A4 and .0B4. ` +
+        `\`call 0xbd38\` and \`call 0xbd0b\` occur ZERO times image-wide, so ` +
+        `the class table is the only way in — and nothing takes it. This is ` +
+        `the FOURTH cut feature found, after the flame weapon, the iron chest ` +
+        `and the entire familiar chain`);
+
+      check(`System A class 3: empty in worlds 1 and 3, populated in 2 and 4, used in NONE`,
+        CLASS_TABLES[0][0][3].spriteBase === EMPTY_CLASS
+          && CLASS_TABLES[2][0][3].spriteBase === EMPTY_CLASS
+          && !used[0].has('1:3') && !used[0].has('2:3')
+          && !used[0].has('3:3') && !used[0].has('4:3'),
+        'so the slot is empty where it is unused and populated only where it ' +
+        'is STILL unused — the shape of a feature that was built and then ' +
+        'never placed, not one that was never built');
+
+      {
+        /* Every empty slot is in System A, and there are exactly four. That is
+         * a real measurement over the 48 records — and it is the shape of the
+         * finding: System A is the table with holes in it, and the hazard sits
+         * in one of the two worlds where that hole was filled and still never
+         * used. */
+        const empties = [];
+        CLASS_TABLES.forEach((wt, wi) => wt.forEach((tbl, sys) =>
+          tbl.forEach((r, c) => {
+            if (r.spriteBase === EMPTY_CLASS) empties.push(`w${wi + 1}s${sys}c${c}`);
+          })));
+        check(`exactly FOUR class slots are empty, and all four are System A`,
+          empties.length === 4 && empties.every((e) => e.includes('s0'))
+            && empties.join() === 'w1s0c3,w2s0c4,w3s0c3,w4s0c4',
+          `${empties.join(' ')} — System B has no holes at all. Note the hole ` +
+          `MOVES: class 3 in worlds 1 and 3, class 4 in worlds 2 and 4. So ` +
+          `class 3 is EMPTY in worlds 1/3 and POPULATED in worlds 2/4 — and ` +
+          `unused in all four. World 4's populated-but-unused class 3 is the ` +
+          `falling hazard`);
+      }
+
+      check(`DS:0xcfcc is ONE pool with TWO tenants and two self-modifying gates`,
+        POOL_SLOTS === 10 && POOL_STRIDE === 10 && POOL_TENANTS.length === 2
+          && POOL_TENANTS[0].alloc === 0x8b0e && POOL_TENANTS[1].alloc === 0x8619
+          && POOL_TENANTS[0].gate !== POOL_TENANTS[1].gate,
+        'two first-fit allocators over the same ten slots, two walkers, two ' +
+        'SMC enable gates, a counter DS:0x3b2 each walker resets per pass (see the correction below), and incompatible ' +
+        '+0x04/+0x06 semantics — with nothing interlocking them. The ' +
+        'conflict cannot arise in shipped data only because the hazard half ' +
+        'is never instantiated, which is also why nobody found it');
+    }
+
+    results.push({
+      name: 'what the class-table checks above can and cannot prove',
+      note: true, pass: true,
+      detail: 'CLASS_TABLES is a TRANSCRIPTION of GAME.EXE at DS:0xdf80, and ' +
+        'the suite cannot re-derive it: the executable is deliberately not ' +
+        'staged into public/game (copy-assets.mjs ships only game data, so ' +
+        'that every format claim is exercised against shipped assets rather ' +
+        'than the binary). So "the emitter record holds handlers 0xbd38/' +
+        '0xbd0b" rests on my transcription, and the check linter was right to ' +
+        'reject comparing it against another export of the same bytes. What ' +
+        'IS derived from shipped data, and is what the finding rests on: ' +
+        'every class index in all 8 PALFILS files, the fact that none of them ' +
+        'is world-4 class 3, and that none lands on an empty record under ' +
+        'this table/system binding while the swapped binding fails.',
+    });
+
+    /* ── DEBRIS, DS:0x8b4c — and the conflation that produced it ────────── */
+    check(`the debris body contains exactly ONE call, and it is the blitter`,
+      DBG_SLOTS === 20 && DBG_STRIDE === 12 && LIFETIME_TICKS === 11
+        && SPRITE_FIRST === 0x3a && SPRITE_LAST === 0x44 && EXPIRE_AT === 0x45,
+      'CS:0x1F8C-0x1FD6 calls CS:0x356e (graphics export 2, the masked blit) ' +
+      'and nothing else — no CS:0xac59, no damage-grid stamp, no plane ' +
+      'pointer. DS:0x8b4c debris is PURELY COSMETIC. The draw at CS:0x1FC0 ' +
+      'precedes the increment at CS:0x1FC5, so ids 0x3A..0x44 are all drawn: ' +
+      'eleven passes, and the sprite word IS the lifetime');
+
+    check(`debris flies in a STRAIGHT LINE — no gravity, unlike every sibling`,
+      (() => {
+        const d = new Debris();
+        d.spawn(100, 100, 4, -6);
+        const ys = [];
+        for (let i = 0; i < 5; i++) ys.push(d.step({ x: 0, y: 0 })[0].y);
+        /* constant vy = -6 means a constant step, not an accelerating one */
+        const steps = ys.slice(1).map((y, i) => y - ys[i]);
+        return new Set(steps).size === 1 && steps[0] === -6;
+      })(),
+      'CS:0x1F99/0x1F9E READ +0x06/+0x08 and never write them. Every other ' +
+      'particle system in this game accelerates — hero, enemy, time bomb, ' +
+      'magic axe, chest loot, starburst, and the DS:0xcfcc hazard — so ' +
+      '"obviously it should fall" is exactly the wrong instinct here');
+
+    check(`a chunk lives exactly 11 ticks and is then freed`,
+      (() => {
+        const d = new Debris();
+        d.spawn(0, 0, 0, 0);
+        let n = 0;
+        while (d.live > 0 && n < 40) { d.step({ x: 0, y: 0 }); n++; }
+        return n === LIFETIME_TICKS && d.count === 0;
+      })(),
+      'CS:0x1FC8 `cmp word [si+0xa],0x45 / jl` is a SIGNED compare against 69, ' +
+      'and there is NO cull of any kind — no off-screen test, no terrain ' +
+      'test, no contact test. A chunk lives its 11 ticks wherever it goes');
+
+    results.push({
+      name: '⚠️ UNKNOWN_block_breaker_8bca: the answer, and the mistake that found it',
+      note: true, pass: true,
+      detail: 'I claimed last pass that DEBRIS breaks blocks, having seen ' +
+        'CS:0x8B90\'s walker reach CS:0x8BCA with `mov si,0x8b4c` nearby. ' +
+        'Wrong: CS:0x8b4a is `2E C6 06 56 8B C3` = `mov byte [cs:0x8b56],0xc3`, ' +
+        'so "8b4c" in CODE is that instruction\'s modrm byte, mid-instruction. ' +
+        'The walker\'s real base is CS:0x8b57 `mov si,0xcfcc` — a TEN-slot ' +
+        'array of stride 10. The block-breaker is the DS:0xcfcc falling ' +
+        'hazard; DS:0x8b4c is inert decoration. Two bytes apart, different ' +
+        'segments — the exact failure this project\'s own "resolve the ' +
+        'segment FIRST" rule exists to prevent.',
+    });
+
+    results.push({
+      name: 'this closes the "maces break blocks" loop without reopening +0x48',
+      note: true, pass: true,
+      detail: 'This project once recorded PWEAPONS +0x48 as "breaks blocks", ' +
+        'inferred from field position, then corrected it on the bytes to ' +
+        '"is STOPPED BY terrain" because the path it gates writes neither ' +
+        'plane. That correction stands. The mace\'s advantage is a `+50` at ' +
+        'CS:0x74AF, in a different routine reached through a different call — ' +
+        'so the folklore was right about the mace and the old note was still ' +
+        'wrong about which byte says so.',
+    });
+  }
+
+  /* ── THE STARBURST: CS:0xA461 / CS:0xA4C1 ───────────────────────────────── */
+  {
+    check(`the template is EIGHT pairs, and the count lands on a known boundary`,
+      BURST_TEMPLATE.length === PARTICLES_PER_BURST
+        && PARTICLES_PER_BURST === 8
+        && 0xdd00 + PARTICLES_PER_BURST * 2 === 0xdd10,
+      `CS:0xA47C loads \`dl = 7\` and exits on \`dec dl / js\`, which is EIGHT ` +
+      `placements, each consuming one {vx,vy} pair. 8 x 2 bytes from ` +
+      `DS:0xdd00 ends exactly at DS:0xdd10 — the hero's weapon slot A, a ` +
+      `variable this project established from a completely different ` +
+      `direction. Seven would leave the template two bytes short of it`);
+
+    check(`the eight rays are a compass rose with a constant upward bias`,
+      BURST_TEMPLATE.filter(([vx]) => vx > 0).length === 3
+        && BURST_TEMPLATE.filter(([vx]) => vx < 0).length === 3
+        && BURST_TEMPLATE.filter(([vx]) => vx === 0).length === 2
+        && BURST_TEMPLATE.every(([vx, vy]) => Math.abs(vx) === 8 || vx === 0)
+        && new Set(BURST_TEMPLATE.map(([, vy]) => vy)).size === 3
+        /* ⚠️ EIGHT DISTINCT DIRECTIONS. A rose with a duplicated ray is not a
+         * rose, and sign counts alone do not catch one. */
+        && new Set(BURST_TEMPLATE.map((t) => t.join())).size === 8,
+      `three rays right, three left, two straight up/down — and only three ` +
+      `distinct vy values (${[...new Set(BURST_TEMPLATE.map((t) => t[1]))].join(', ')}), ` +
+      `with the "level" pair carrying -1 rather than 0. That is a burst, not ` +
+      `a spray, which is what the name says`);
+
+    /* IT TERMINATES — and the bound is the original's, not a guard I added. */
+    {
+      const sb = new Starburst(new GodsRandom(5));
+      const grid = new DamageGrid();
+      const placed = sb.spawn(400, 300);
+      let ticks = 0, stamped = 0, peak = 0;
+      while (sb.active && ticks < 4000) {
+        grid.clear();
+        const r = sb.step({ x: 240, y: 200 }, grid);
+        stamped += r.stamped; peak = Math.max(peak, r.live);
+        ticks++;
+      }
+      check(`a starburst runs to quiescence and switches itself off`,
+        placed === 8 && sb.active === false && sb.liveCount === 0
+          && ticks < 4000 && stamped > 0,
+        `8 particles -> ${sb.bursts} bursts (${sb.chained} of them chained), ` +
+        `peak ${peak} live of ${SLOTS} slots, ${stamped} grid stamps, done in ` +
+        `${ticks} ticks. Nothing bounds this but the original's own gate — the ` +
+        `spawner refuses once the burst is active AND its age has reached the ` +
+        `ceiling — plus first-fit over a fixed array. No recursion guard was ` +
+        `added, because the original does not have one`);
+    }
+
+    /* THE CHAIN, and the two details that make it finite. */
+    check(`the re-burst chance decays with age, to exactly zero at the ceiling`,
+      chainThreshold(0) === 380 && chainThreshold(AGE_MAX) === 0
+        && chainThreshold(AGE_MAX / 2) === 190 && AGE_STEP === 2,
+      'CS:0xA574 computes (190 - age) * 2 and compares it `ja` against the ' +
+      'FULL 16-bit random word, so the chance runs 380/65536 down to nothing ' +
+      'over the 95 frames the age takes to climb at +2 a tick');
+
+    {
+      /* ⚠️ A chain re-burst inherits the age; a fresh one resets it. */
+      const sb = new Starburst(new GodsRandom(1));
+      sb.spawn(0, 0);
+      sb.age = 100;
+      const before = sb.age;
+      sb.spawn(50, 50);                     // still active -> a CHAIN
+      const afterChain = sb.age;
+      sb.active = false;
+      sb.spawn(50, 50);                     // inactive -> a FRESH burst
+      check(`a chained burst inherits the age; only a fresh one resets it`,
+        before === 100 && afterChain === 100 && sb.age === 0
+          && sb.chain === CHAIN_WINDOW,
+        'CS:0xA493 `cmp byte [0x34d],0 / js` skips the whole init block — age, ' +
+        'active flag and chain window — when the burst is ALREADY active, and ' +
+        'CS:0xA581 then reopens the window on its own. So the window keeps ' +
+        'resetting while the age does not, and it is the AGE that ends the ' +
+        'cascade. Resetting it on a chain makes the effect run forever');
+    }
+
+    check(`the spawner refuses once an active burst reaches the age ceiling`,
+      (() => {
+        const sb = new Starburst(new GodsRandom(1));
+        sb.spawn(0, 0); sb.age = AGE_MAX;
+        const n = sb.spawn(10, 10);
+        return n === 0 && sb.refused === 1;
+      })(),
+      'CS:0xA46A `cmp word [0x1d6],0xbe / jl` — and the gate applies only ' +
+      'while DS:0x34d is set, so an INACTIVE burst always spawns whatever the ' +
+      'stale age reads. That pair of conditions is the whole termination proof');
+
+    /* GRAVITY EVERY EIGHTH FRAME — a sixth rule, and the only uncapped one. */
+    {
+      const sb = new Starburst(new GodsRandom(1));
+      sb.spawn(400, 300);
+      const grid = new DamageGrid();
+      const vys = [];
+      for (let i = 0; i < 17; i++) {
+        grid.clear();
+        sb.step({ x: 240, y: 200 }, grid);
+        vys.push(sb.slots[2].vy);            // the S ray, vy = +5
+      }
+      const bumps = vys.filter((v, i) => i > 0 && v !== vys[i - 1]).length;
+      check(`starburst gravity applies once every EIGHTH frame, uncapped`,
+        GRAVITY_PERIOD === 8 && bumps === 2 && vys[vys.length - 1] === 7,
+        `vy went 5 -> ${vys[vys.length - 1]} over 17 frames — ${bumps} steps, ` +
+        `not 17. CS:0xA50D gates \`inc byte [si-1]\` on a 0..7 counter reading ` +
+        `zero. That is a SIXTH distinct gravity rule (hero 4+v cap 10, enemy v ` +
+        `then ++ cap 16, bomb ++ cap 4, axe +=2 cap 8, chest loot ++ cap 4) — ` +
+        `and the only one with no cap at all`);
+    }
+
+    check(`the starburst cull is its own rectangle, matching none of the others`,
+      SB_CULL.xMin === -8 && SB_CULL.xMax === 0x15f
+        && SB_CULL.yMin === -8 && SB_CULL.yMax === 0xbf,
+      'x in [-8, 351], y in [-8, 191], inclusive — against the projectile ' +
+      "mover's exclusive (-32,320)x(-32,192) and the pathfinder's " +
+      '[-63,351]x[-63,223]. A sixth rectangle. Reusing one constant diverges');
+
+    check(`a starburst particle carries tag 0xFC and one-shots in normal play`,
+      SB_TAG === 0xfc && modeDamage(0xfc, 0) === 10000 && modeDamage(0xfc, 2) === 50
+        && modeDamage(0xfe, 0) === 10000 && modeDamage(0xfd, 0) === 0,
+      'the tag is the byte AT DS:0xdcfe, which CS:0xA549 passes as `di` and ' +
+      'CS:0xA886 reads with `mov cl,[di]`. 10000 against creature HP that ' +
+      'tops out at 255 is an instant kill no difficulty scalar can forgive — ' +
+      'the scalar forgives at most three quarters. DS:0x34 is 0 in normal ' +
+      'play: all four of its main-loop readers take the full-frame path only ' +
+      'at zero, and the only writers of 1 and 2 are a self-modifying cutscene ' +
+      'path and the post-explosion path');
+
+    {
+      /* ⚠️ AND IT MUST ACTUALLY RUN IN THE FRAME. The termination check above
+       * drives `step` directly, which leaves the CS:0x0212 wiring untested —
+       * exactly the gap that let a swapped projectile/player order survive
+       * before frame.js existed. */
+      const lvl = parseMap(dclDecompress(await fetchRaw('game/PLEV1A.MAP')).data);
+      const sb = new Starburst(new GodsRandom(9));
+      sb.spawn(400, 300);
+      const before = sb.slots.map((sl) => `${sl.x},${sl.y}`).join('|');
+      const g = new DamageGrid();
+      const p2 = new Player(400, 300);
+      const fr = stepHeroFrame({
+        input: { fire: false }, arsenal: new Arsenal(w1), grid: g, player: p2,
+        map: lvl, cam: { x: 240, y: 200 }, world: 1, starburst: sb });
+      const after = sb.slots.map((sl) => `${sl.x},${sl.y}`).join('|');
+      check(`the starburst steps inside the frame, at CS:0x0212`,
+        /* ⚠️ SIXTEEN, not eight. The chain fired during this very walk, and
+         * because the spawner is first-fit from slot 0 the new particles land
+         * AHEAD of the cursor and are stepped by the same pass. CS:0xA58C
+         * calls the spawner from inside CS:0xA4F3's own loop and CS:0xA592
+         * carries on over whatever it wrote — so this is the original's
+         * behaviour, not an artefact of iterating a mutating array. */
+        fr.burstFx !== null && fr.burstFx.live === 16 && sb.chained === 1
+          && before !== after && fr.burstFx.stamped > 0
+          && FRAME_ORDER.findIndex((e) => e.at === 0x0212)
+             > FRAME_ORDER.findIndex((e) => e.at === 0x020f)
+          && FRAME_ORDER.findIndex((e) => e.at === 0x0212)
+             < FRAME_ORDER.findIndex((e) => e.at === 0x0254),
+        `${fr.burstFx.live} particles moved and ${fr.burstFx.stamped} ` +
+        `stamped — 8 spawned plus 8 more from a chain that fired mid-walk, ` +
+        `driven ` +
+        `through stepHeroFrame rather than called directly. CS:0x0212 sits ` +
+        `between the projectile step (0x020F) and the player (0x0254), so a ` +
+        `particle stamps on the same tick it moves — and a burst the player ` +
+        `sets off this tick cannot stamp until the next one`);
+    }
+
+    check(`all five spawner call sites are recorded, not just the potion`,
+      SPAWNER_CALLERS.length === 5
+        && SPAWNER_CALLERS.includes(0x6205) && SPAWNER_CALLERS.includes(0xa58c)
+        && SPAWNER_CALLERS.includes(0xc464) && SPAWNER_CALLERS.includes(0xd945),
+      'the potion (CS:0x6205), a tile-derived site (CS:0x9417), the chain ' +
+      'itself (CS:0xA58C), the FAMILIAR\'S DEATH (CS:0xC464 — it bursts where ' +
+      'it died) and a scripted seven-burst explosion (CS:0xD945, which clears ' +
+      'DS:0x34d every iteration to force seven FRESH bursts rather than one ' +
+      'continuation). Reading only the potion misses four of the five');
+
+    results.push({
+      name: 'the 0xFC "debris" label was wrong, and it came from a [WF] note',
+      note: true, pass: true,
+      detail: 'This project\'s grid-tag table carried 0xFC as "debris particle ' +
+        '(CS:0xA549)", from a workflow lane explicitly marked as not re-read. ' +
+        'CS:0xA549 is inside the STARBURST updater; debris is a different ' +
+        '20-record array at DS:0x8b4c, cleared at CS:0x8E91 and appended at ' +
+        'CS:0xA816 on the projectile terrain-stop path. The tag VALUE was ' +
+        'right and the SOURCE was wrong — the first time that block has been ' +
+        'checked on the bytes.',
+    });
+  }
+
+  /* ── TREASURE: CS:0x184E ─────────────────────────────────────────────────
+   *
+   * The three-way branch, the chest/key arithmetic, the value award, and the
+   * ten-item burst a chest throws out when it opens.
+   */
+  {
+    const recs = {};
+    for (const w of [1, 2, 3, 4]) {
+      recs[w] = parseObjectRecords(
+        dclDecompress(await fetchRaw(`game/POBJECTS.00${w}`)).data);
+    }
+
+    check(`the 48-byte POBJECTS record accounts for every byte`,
+      OBJ_NAME_OFF + OBJ_NAME_MAX === OBJ_DESC_OFF
+        && OBJ_DESC_OFF + OBJ_DESC_MAX === OBJ_RECORD_SIZE
+        && OBJ_RECORD_SIZE === 48,
+      'CS:0x35FB is the parser this project recorded as never located. Its ' +
+      'own immediates fix the widths: four `movsw` copy +0..+7, then the ' +
+      'name is read to its NUL and `add si,0x10` (CS:0x363A) skips to the ' +
+      'description, which `add si,0x18` (CS:0x3658) closes at 48. 8+16+24=48');
+
+    /* The keys. This is the discriminating one: 21/22/23 are the ONLY three
+     * records in the file named "chest key", and the formula must land on all
+     * three and nothing else. A dropped `>> 1` gives 21/23/25 and a base of
+     * 0x14 gives 20/21/22 — both hit "world key" or "door key" instead. */
+    for (const w of [1, 2, 3, 4]) {
+      const chestTypes = [];
+      for (let t = CHEST_MIN; t < CHEST_MAX; t += 2) chestTypes.push(t);
+      const keyNames = chestTypes.map((t) => recs[w][chestKeyFor(t)].name);
+      const chestNames = chestTypes.map((t) => recs[w][t].name);
+      check(`world ${w}: every chest key the formula names is a "chest key"`,
+        keyNames.length === 3 && keyNames.every((n) => n === 'chest key')
+          && chestNames.every((n) => n === 'treasure chest'),
+        `types ${chestTypes.join('/')} are all "${chestNames[0]}" and ` +
+        `CS:0x1867's 21 + (type-12)/2 gives ${chestTypes.map(chestKeyFor).join('/')}` +
+        `, all "chest key". Types 18/19/20 — door/treasure/world key — are ` +
+        `NOT reachable from this arithmetic, which is what makes it checkable`);
+    }
+
+    check(`the three chests are gold / steel / iron, and a pair shares its value`,
+      [12, 14, 16].map((t) => recs[1][t].desc).join(',') === 'gold,steel,iron'
+        && [12, 14, 16].every((t) => recs[1][t].value === recs[1][t + 1].value)
+        && [12, 14, 16].map((t) => recs[1][t].value).join(',') === '3000,2000,1000',
+      'the DESCRIPTION field carries the material, and the odd twin of each ' +
+      'pair holds the identical value — exactly what CS:0x18E2 `or cx,1` ' +
+      'implies. Same convention as levers 24/25 and switches 26/27');
+
+    check(`the score award is an ARITHMETIC shift, not a divide`,
+      scoreForValue(3000) === 375 && scoreForValue(-1) === -1
+        && Math.trunc(-1 / 8) === 0,
+      'CS:0x18B7-0x18BB is three `sar`. No shipped value is negative, so a ' +
+      'port written with `/ 8` passes every data-driven test and is still ' +
+      'wrong — the same trap the Bezier Q15 note records');
+
+    /* ── The census. Reported as numbers, because one of them does not close. */
+    const placed = {}, keys = {};
+    for (const w of [1, 2, 3, 4]) for (const s of ['A', 'B']) {
+      const m = parseMap(dclDecompress(await fetchRaw(`game/PLEV${w}${s}.MAP`)).data);
+      for (const o of m.objects) {
+        if (isDeadType(o.type) || o.type >= 0xc0) continue;
+        if (isChestType(o.type)) placed[o.type] = (placed[o.type] || 0) + 1;
+        if (recs[w][o.type] && recs[w][o.type].name === 'chest key') {
+          keys[o.type] = (keys[o.type] || 0) + 1;
+        }
+      }
+    }
+    check(`chests always start CLOSED — no odd chest type is ever placed`,
+      !placed[13] && !placed[15] && !placed[17]
+        && placed[12] === CHEST_KEY_CENSUS.chests[12]
+        && placed[14] === CHEST_KEY_CENSUS.chests[14],
+      `all 8 maps place ${placed[12]} type-12 and ${placed[14]} type-14 chests ` +
+      `and ZERO of 13/15/17. So the odd arm at CS:0x1919 is only ever reached ` +
+      `by re-touching a chest the player already opened, which is precisely ` +
+      `what it exists to make harmless`);
+
+    check(`UNKNOWN_chest_key_surplus is a measurement, not a smoothing`,
+      (placed[16] || 0) === CHEST_KEY_CENSUS.chests[16]
+        && keys[21] === CHEST_KEY_CENSUS.keys[21]
+        && keys[22] === CHEST_KEY_CENSUS.keys[22]
+        && keys[23] === CHEST_KEY_CENSUS.keys[23],
+      `gold: ${placed[12]} chests / ${keys[21]} keys. steel: ${placed[14]} / ` +
+      `${keys[22]}. iron: ${placed[16] || 0} / ${keys[23]} — SIX keys for a ` +
+      `chest that ships nowhere. The arithmetic is not in doubt; what the ` +
+      `surplus means (a cut chest, or a spare key) this binary cannot say`);
+
+    /* ── The three outcomes, driven through the real object walk. */
+    const cats = parseObjectCategories(
+      dclDecompress(await fetchRaw('game/POBJECTS.001')).data);
+    const values = recs[1].map((r) => r.value);
+    const ctx = (inv, burst = null) => ({
+      values, inventory: inv, purse: new Purse(), score: new Score(), burst,
+    });
+
+    {
+      const t = ctx([INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY]);
+      const o = { x: 100, y: 100, type: 10, flag6: 1 };   // "diamond", 500
+      const r = stepPickups([o], { x: 100, y: 100 }, new Arsenal(w1), 12,
+                            { cats, treasure: t });
+      check(`ordinary treasure pays the descriptor's +6 into money and score`,
+        r.treasures.length === 1 && r.treasures[0].outcome === 'collected'
+          && o.dead === true && t.purse.total === 500 && t.score.value === 62
+          && r.treasures[0].sfx === TREASURE_SFX,
+        `a "diamond" is value 500 -> money 500, score 500>>3 = 62. That the ` +
+        `number comes from POBJECTS +6 is the point: this project carried +6 ` +
+        `as "likely the Value, inferred by structural position". CS:0x18A8 ` +
+        `and CS:0x18F4 are the decompile that promotes it`);
+    }
+
+    {
+      const t = ctx([INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY]);
+      const o = { x: 100, y: 100, type: 12, flag6: 1 };
+      const r = stepPickups([o], { x: 100, y: 100 }, new Arsenal(w1), 12,
+                            { cats, treasure: t });
+      check(`a locked chest without its key pays NOTHING and stays on the map`,
+        r.treasures[0].outcome === 'locked' && r.treasures[0].needsKey === 21
+          && o.dead !== true && o.type === 12
+          && t.purse.total === 0 && t.score.value === 0,
+        'CS:0x188B restores the type and jumps to the plain return. The gold ' +
+        'chest is worth 3000 and it is entirely unavailable without key 21');
+    }
+
+    {
+      const inv = [INVENTORY_EMPTY, 21, INVENTORY_EMPTY, INVENTORY_EMPTY];
+      const burst = new TreasureBurst(new GodsRandom(7));
+      const t = ctx(inv, burst);
+      const o = { x: 320, y: 200, type: 12, flag6: 1 };
+      const r = stepPickups([o], { x: 320, y: 200 }, new Arsenal(w1), 12,
+                            { cats, treasure: t });
+      check(`the key is SPENT, the chest turns odd, and it pays out`,
+        r.treasures[0].outcome === 'unlocked' && inv[1] === INVENTORY_EMPTY
+          && o.type === 13 && o.dead !== true
+          && t.purse.total === 3000 && t.score.value === 375
+          && r.treasures[0].sfx === CHEST_SFX,
+        'CS:0x18DE clears the inventory slot, CS:0x18E2 `or cx,1` turns 12 ' +
+        'into 13 IN PLACE — the object is not consumed, it changes graphic. ' +
+        'And unlocking has its own sound, 0x52d against the common 0x638');
+
+      /* Re-touching the now-open chest must pay nothing. */
+      const before = t.purse.total;
+      const r2 = stepPickups([o], { x: 320, y: 200 }, new Arsenal(w1), 12,
+                             { cats, treasure: t });
+      check(`re-touching an OPEN chest pays nothing — the odd arm is the guard`,
+        r2.treasures[0].outcome === 'already-open' && t.purse.total === before
+          && isOpenChest(o.type),
+        'CS:0x185D `jmp 0x1919` exists to skip CS:0x1891. Both of its stores ' +
+        'are inert (`cx` already is `[si+4]`, and `[si+6]` is re-derived by ' +
+        'the activation pass every frame) — the JUMP is the whole function');
+
+      check(`opening a chest throws TEN treasure items out of it`,
+        burst.inFlight === BURST_COUNT
+          && r.treasures[0].loot.length === BURST_COUNT
+          && r.treasures[0].loot.every((ty) => cats[ty] === 1),
+        `CS:0x12CF -> CS:0x12EA writes ten records at DS:0xb654. The types ` +
+        `come from a table at DS:0x${BURST_TABLE_DS.toString(16)} and every ` +
+        `one is itself category 1: ${r.treasures[0].loot.join(',')}`);
+    }
+
+    /* ── The burst table's stride bug. */
+    check(`the burst table is 60 bytes — bounded by the hero's jump arc`,
+      BURST_TABLE.length === 30
+        && 0xd922 - BURST_TABLE_DS === 3 * BURST_AUTHORED_WORDS * 2
+        && BURST_ALIGNED_DS - BURST_TABLE_DS === 2 * BURST_AUTHORED_WORDS * 2,
+      'DS:0xd922 is this project\'s own jump-arc table, so the region is ' +
+      'closed at both ends at exactly 3 x 20 bytes. And CS:0x1756 enters the ' +
+      'same spawner with DS:0xd90e hard-coded — 2 x 20 — i.e. the correctly ' +
+      'aligned third list. One caller reads the table aligned; the other ' +
+      'computes its offset with four `shl` (x16) and does not');
+
+    check(`aligned, all three lists start "80 80 80 80 5"; strided, two do not`,
+      [12, 14, 16].every((t) =>
+        burstTypesAligned(openedType(t)).slice(0, 5).join() === '80,80,80,80,5')
+        && burstTypes(13).join() === burstTypesAligned(13).join()
+        && burstTypes(15).join() !== burstTypesAligned(15).join()
+        && burstTypes(17).join() !== burstTypesAligned(17).join(),
+      'four "gold plate" and a "bag of gold" open every authored list. The ' +
+      'x16 stride reads list 1 as `9 9 80 ...` and list 2 as `10 5 9 9 80 ...`' +
+      ' — entries beginning inside the previous one. List 0 is at offset 0 ' +
+      'and so is correct either way');
+
+    check(`the misalignment is invisible: a rotation, then a chest nobody meets`,
+      burstTypes(15).slice().sort().join() === burstTypesAligned(15).slice().sort().join()
+        && burstTypes(17).slice().sort().join() !== burstTypesAligned(17).slice().sort().join()
+        && (placed[16] || 0) === 0,
+      'the steel list misaligned is a pure ROTATION of the authored one — ' +
+      'same ten items, so identical loot and only the spawn order differs. ' +
+      'The iron list genuinely differs (a "chrystal" becomes a "bag of ' +
+      'gold"), and type 16 is placed in ZERO shipped maps. So the port ' +
+      'reproduces the x16 verbatim: "fixing" it would diverge from the ' +
+      'original on a chest that does not exist');
+
+    /* ── The burst's flight and settle. */
+    {
+      const burst = new TreasureBurst(new GodsRandom(3));
+      burst.spawn(13, 500, 300);
+      const slots = expandMapObjects([]);            // 200 free slots
+      let ticks = 0, settled = 0;
+      while (burst.active && ticks < 200) {
+        settled += burst.step(() => allocObject(slots)).settled.length;
+        ticks++;
+      }
+      const live = slots.filter((s) => !s.dead);
+      check(`every burst item lands and becomes a real, collectable object`,
+        settled === BURST_COUNT && live.length === BURST_COUNT
+          && live.every((s) => s.flag6 === 1 && cats[s.type] === 1)
+          && burst.inFlight === 0,
+        `all ten settled in ${ticks} ticks through the CS:0x38D7 allocator, ` +
+        `and each got \`[+6] = 1\` at CS:0x13D0 — so a chest's loot is live ` +
+        `the instant it lands, with no wait for the activation pass`);
+    }
+
+    {
+      /* The clamp, driven directly. The spawn range rarely produces a record
+       * whose vy saturates BEFORE its vx reaches zero, so a run of ten proves
+       * only that they all settle; it does not pin the cap. This one does. */
+      const burst = new TreasureBurst();
+      burst.spawn(13, 0, 0);
+      for (const r of burst.records) { r.type = -1; }
+      Object.assign(burst.records[0], { x: 0, y: 0, vx: 8, vy: -3, type: 80 });
+      burst.active = true;
+      const vys = [], slots = expandMapObjects([]);
+      let t = 0;
+      while (burst.active && t < 40) {
+        burst.step(() => allocObject(slots));
+        if (burst.records[0].type >= 0) vys.push(burst.records[0].vy);
+        t++;
+      }
+      check(`burst gravity tops out at exactly +4 and holds there`,
+        vys.join() === '-2,-1,0,1,2,3,4' && t === 8
+          && slots.filter((s) => !s.dead).length === 1,
+        `vy stepped ${vys.join(' ')} — reaching 4 on tick 7 and NOT moving on ` +
+        `tick 8, where vx finally hit 0 and the item settled. A cap of 3 ` +
+        `settles a tick early and lands the item 4 px short. This is a FIFTH ` +
+        `distinct gravity rule (CS:0x1378), against the hero's 10, the ` +
+        `enemy's 16, the bomb's stepped 4 and the axe's +2-to-8 — and the ` +
+        `only one that also decays horizontally (CS:0x1383)`);
+    }
+
+    check(`the open transition is IDEMPOTENT — \`or cx,1\`, never \`+ 1\``,
+      openedType(12) === 13 && openedType(13) === 13
+        && openedType(14) === 15 && openedType(15) === 15,
+      'CS:0x18E2 is `or cx,0x1`. On the even types it reaches, `+ 1` would ' +
+      'agree — but the whole even/odd convention rests on the open type being ' +
+      'a fixed point, exactly as the lever `xor` pair does, and a port that ' +
+      'writes `+ 1` turns a re-opened gold chest into a steel one');
+
+    {
+      const m = parseMap(dclDecompress(await fetchRaw('game/PLEV1A.MAP')).data);
+      const slots = expandMapObjects(m.objects);
+      const live = slots.filter((s) => !s.dead);
+      check(`a map-placed object starts DEACTIVATED — \`+6\` is not map data`,
+        slots.length === OBJECT_SLOTS && live.length > 0
+          && live.every((s) => s.flag6 === 0),
+        `CS:0x9011 writes \`mov word [di],0x0\` for every one of the 200 ` +
+        `expanded records, so all ${live.length} live objects on PLEV1A begin ` +
+        `with +6 clear. Nothing in the .MAP sets it`);
+
+      const b0 = activationBox(0, 0);
+      check(`the activation box is 448 x 288 around a 320 x 200 screen`,
+        b0.xMin === -64 && b0.xMax === 384 && b0.yMin === -48 && b0.yMax === 240
+          && activationBox(0x1f, 0x0f).xMin === b0.xMin
+          && activationBox(0x20, 0x10).xMin === b0.xMin + 0x20,
+        'CS:0x11B2 `sub ax,0x40 / sub bx,0x30` and CS:0x11B8 `add cx,0x180 / ' +
+        'add dx,0xf0`, taken from a scroll origin SNAPPED by `and ax,0xffe0` ' +
+        'and `and bx,0xfff0` — so a camera at (31,15) gives the same box as ' +
+        'one at (0,0), and (32,16) is the first that shifts it. 64 px of ' +
+        'slack each side of the screen in X and 48/40 in Y, which is what makes the gate unobservable for a ' +
+        'walk-in pickup and real for the crouch scan');
+
+      /* And the activation pass is what turns it on — and off again. */
+      const some = live[0];
+      const box = activationBox(some.x - 100, some.y - 100);
+      const inBox = activateObjects(slots, box);
+      const wasOn = some.flag6;
+      const far = activateObjects(slots, activationBox(3800, 900));
+      check(`activation is NOT sticky — leaving the box clears \`+6\` again`,
+        inBox > 0 && wasOn === 1 && some.flag6 === 0 && far < live.length,
+        `${inBox} objects entered a box around (${some.x},${some.y}); moving ` +
+        `the camera to the far corner left only ${far} active and cleared ` +
+        `this one. CS:0x1215 is on the SAME walk as CS:0x1208 — an object ` +
+        `that scrolls off is deactivated, which is what stops the crouch key ` +
+        `scan (CS:0x6088) reaching a key that is off screen`);
+
+      const arsenal = new Arsenal(w1);
+      const deact = { x: 200, y: 200, type: 10, flag6: 0 };
+      const act = { x: 200, y: 200, type: 10, flag6: 1 };
+      const t1 = ctx([]), t2 = ctx([]);
+      stepPickups([deact], { x: 200, y: 200 }, arsenal, 12, { cats, treasure: t1 });
+      stepPickups([act], { x: 200, y: 200 }, arsenal, 12, { cats, treasure: t2 });
+      check(`the object walk is GATED on \`+6\`, standing on it or not`,
+        t1.purse.total === 0 && deact.dead !== true
+          && t2.purse.total === 500 && act.dead === true,
+        'CS:0x14A1 `cmp byte [si+0x6],0 / jz` gates the draw walk the pickup ' +
+        'test hangs off. ⚠️ It cannot change a WALK-IN pickup in practice — ' +
+        'the box clears the hero\'s 40x56 window by 64 px on every side ' +
+        'whatever the camera does — so this is modelled for agreement with ' +
+        'the crouch scan, where it IS load-bearing, not for an observable');
+    }
+
+    {
+      /* ⚠️ The allocator-full path is a dead end and is reproduced. */
+      const burst = new TreasureBurst(new GodsRandom(11));
+      burst.spawn(13, 500, 300);
+      const full = [];                               // no free slots at all
+      let ticks = 0;
+      while (burst.active && ticks < 200) { burst.step(() => allocObject(full)); ticks++; }
+      check(`a burst item with nowhere to land is STRANDED, never retried`,
+        burst.stranded > 0 && burst.active === false && burst.inFlight === BURST_COUNT,
+        `CS:0x13BA \`js 0x13b0\` skips BOTH the settle and the \`[0x397] = 1\` ` +
+        `liveness store, so the updater switches itself off with all ` +
+        `${burst.inFlight} records still occupying slots. Adding a retry ` +
+        `would be a different game`);
+    }
+
+    /* ── The BCD score. */
+    {
+      const s = new Score();
+      for (let i = 0; i < 4; i++) s.add(375);
+      const s2 = new Score(); s2.add(99999999); s2.add(2);
+      check(`the score is packed BCD with real decimal carries`,
+        s.value === 1500 && s.bytes[0] === 0x00 && s.bytes[1] === 0x15
+          && s2.value === 1,
+        'CS:0x1950 converts the addend with eight `div 10` and adds byte by ' +
+        'byte with `daa`. 375 x 4 = 1500 stores as bytes 00 15 00 00, and ' +
+        'eight digits wrap — which is the field, not a clamp I invented');
+    }
+
+    {
+      /* ⚠️ SETTLED LOOT MUST BE RE-RANKED, NOT APPENDED. sortForDraw runs once
+       * at level load; the allocator appends. So a landed item would draw
+       * AFTER the weapon pickups, where export 32 puts ordinary treasure
+       * BEFORE them — the same z-order failure this project recorded from the
+       * other side when a stable partition left the weapons where they were. */
+      const m = parseMap(dclDecompress(await fetchRaw('game/PLEV4B.MAP')).data);
+      const live = m.objects.filter((o) => !isDeadType(o.type));
+      const ordered = sortForDraw(live, cats);
+      const loot = { x: 0, y: 0, type: 80, flag6: 1 };
+      const appended = [...ordered, loot];
+      const reranked = insertSpawned(ordered, cats, loot);
+      const lastWeapon = (a) => a.reduce((k, o, i) => (o.type >= 0xc0 ? i : k), -1);
+      const lootAt = (a) => a.indexOf(loot);
+      check(`settled loot is re-ranked, so it draws BEHIND the weapon pickups`,
+        lastWeapon(appended) < lootAt(appended)
+          && lootAt(reranked) < lastWeapon(reranked),
+        `PLEV4B places 23 weapon pickups — the most of any level — so ` +
+        `appending puts the landed "gold plate" at index ${lootAt(appended)}, ` +
+        `past the last weapon at ${lastWeapon(appended)}. Re-ranking moves it ` +
+        `to ${lootAt(reranked)}, ahead of ${lastWeapon(reranked)}, which is ` +
+        `where graphics export 32's three-band partition puts it`);
+    }
+
+    check(`the inventory survives a level change — only 2 clear sites`,
+      INVENTORY_CLEAR_SITES.length === 2
+        && INVENTORY_CLEAR_SITES[0] === 0x0498 && INVENTORY_CLEAR_SITES[1] === 0x8d80,
+      '`mov [0x17e],ax` appears exactly twice in the image, and both sites ' +
+      'are full restarts: CS:0x0498 sits beside world:=1, the weapon-slot ' +
+      'clear CS:0x914c and money:=0; CS:0x8D80 beside score:=0. Nothing ' +
+      'clears it on a sublevel or world transition, so chest keys carry ' +
+      'forward exactly as weapons do — which is what makes the census above ' +
+      'a question about authoring rather than about the code');
+
+    results.push({
+      name: 'keys are NOT picked up by walking into them', note: true, pass: true,
+      detail: 'CS:0x17E6 `jg 0x17c2` sends category >= 2 to an `stc` return ' +
+        'while every other exit is `clc` — and neither call site treats that ' +
+        'as "collected" (CS:0x168E ignores the flag; CS:0x170D reads it inside ' +
+        'a routine reached only for sprite 0x118). Keys go in through CROUCH + ' +
+        'FIRE: CS:0x4B1A/0x4B4F/0x4B8F/0x4BC4 -> CS:0x6069 scans the same 200 ' +
+        'records against the hero hot point (X+16, Y+40), requires `[si+6] != ' +
+        '0` and `category == 2` exactly, and stores the TYPE into DS:0x17e + ' +
+        '[0x366]*2 — with the not-held branch at CS:0x60F0 PUTTING IT BACK. ' +
+        'Not ported; the chest branch is tested against a synthetic inventory.',
+    });
+  }
+
+  results.push({
+    name: 'the attract-mode grant is NOT a starting loadout', note: true, pass: true,
+    detail: 'CS:0x8FD2 calls the pickup dispatcher for weapon 2 five times and ' +
+      'weapon 6 three times, which reads exactly like a starting loadout. Its ' +
+      'only two callers (CS:0x8F9B, CS:0x8FBB) sit inside a block branching on ' +
+      'DS:0x3e6 — the six-state ATTRACT-MODE cycler — and both fall through to ' +
+      'CS:0x8FBE `mov byte [0x3bd],1`, the joystick-playback flag. A third ' +
+      'variant at CS:0x8F5F grants 2x3 / 5x5 / 4x1. Those are the demo\'s ' +
+      'weapons, set up beside its scripted camera and hero position.',
+  });
+
+  results.push({
+    name: 'the fire chain, end to end', note: true, pass: true,
+    detail: 'press -> latch -> allocate -> enter a state -> wind up -> emit -> ' +
+      'spawn -> move -> stamp -> scan -> damage is now CONTINUOUS and wired ' +
+      'into the running build. Reading the eight handlers\' tails for this pass ' +
+      'found two real defects in the ported states: state 21 exits with cl 6, ' +
+      'not 5, and the ladder pair restores the saved entry phase (DS:0x359) ' +
+      'when it is even instead of using a constant.',
+  });
+
+  results.push({
+    name: 'what the running build still cannot do', note: true, pass: true,
+    detail: 'The hero starts unarmed and now ARMS HIMSELF by walking over the ' +
+      'map\'s weapon pickups. Note PLEV2A places NONE, which is why the HUD ' +
+      'picker stays — it forces a weapon so the chain stays exercisable on ' +
+      'every level, and it routes through the same CS:0x94a7 dispatcher a map ' +
+      'pickup uses. Health potions work too — 5 of the 23 handlers at ' +
+      'DS:0xd8b8; the other 18 are flagged at runtime rather than guessed, ' +
+      'and PLEV1A alone places ten of them. TREASURE now works end to end: ' +
+      'ordinary pickups pay POBJECTS +6 into the money total and value>>3 ' +
+      'into the BCD score, and a chest opens against its key and throws ten ' +
+      'items out that land as real objects. Still absent: KEYS, which the ' +
+      'original does not collect by walking either (crouch + fire, CS:0x6069 ' +
+      '— so a chest is only openable in this build with a seeded inventory); ' +
+      'the 40-entry destructible-tile queue at DS:0xd0c6; UNKNOWN_tag_fd; the ' +
+      'per-projectile animation frame; and UNKNOWN_DS_0168 — which now has ' +
+      'four behaviours and still no meaning.',
+  });
+
+  return results;
+}

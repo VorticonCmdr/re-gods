@@ -1,0 +1,24 @@
+{
+  "name": "gods-web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Evidence-grounded HTML5/JS port of GODS (The Bitmap Brothers, DOS 1991)",
+  "scripts": {
+    "assets": "node tools/copy-assets.mjs",
+    "dev": "npm run assets && vite",
+    "build": "npm run assets && vite build",
+    "preview": "vite preview",
+    "verify": "node tools/lint-checks.mjs && node tools/verify-node.mjs",
+    "hero": "node tools/hero-sheet.mjs",
+    "frame": "node tools/frame-node.mjs",
+    "world": "node tools/render-node.mjs",
+    "objects": "node tools/object-sheet.mjs",
+    "enemies": "node tools/enemy-sheet.mjs",
+    "hunt": "node tools/hunt.mjs",
+    "lint": "node tools/lint-checks.mjs"
+  },
+  "devDependencies": {
+    "vite": "^7.1.5"
+  }
+}
