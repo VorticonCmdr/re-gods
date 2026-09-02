@@ -61,6 +61,52 @@ bytes is a genuine cross-check, not a restatement.
 `npm run verify` runs the same suite headlessly, plus a jump-table symmetry check and
 a physics smoke test (terminal fall speed must be exactly 14 px/tick).
 
+## The 15 trigger ACTION verbs
+
+The port evaluated all 17 condition predicates for a long time and then threw the
+verdict away, so nothing a trigger decided ever happened: no door opened, no gate
+moved, and no level could end — ACT4 *is* the level-exit zone. `game/trigger-actions.js`
+executes all 15 verbs (`SS:0x3592`), reached the way the original reaches them —
+`CS:0x3A56 jmp bp` tail-jumps into the handler after three shared steps: the
+message, the key-consume (verbs 2,3,4,7,8 only) and the inventory-consume (bit 15
+of the action word only).
+
+End to end on `PLEV1A`, dispatching every plane-B event cell with the keys and
+levers the doors ask for: **23 plane-A cells and 14 plane-B cells change**, four
+doors open, six trap doors move, two teleport zones appear. With no keys and no
+levers, nothing opens — the conditions are the lock.
+
+Four findings this needed, none of them in the notes beforehand:
+
+- **`DS:0x2f8c` is the trapdoor table.** `CS:0x40C0` is one routine that both
+  patches the map and byte-swaps the 20 PALFILS `+0x1824` records into it, so
+  ACT7/ACT8 open and close *trap doors* — the mechanism behind the shipped
+  message *"a trap door closes beneath you"*.
+- **ACT8's miss guard is dead, and shipped data reaches it.** `CS:0x410c` reports
+  failure with `stc`, and ACT7 correctly tests `jc`; ACT8 tests `js`, which the
+  helper never sets. Measured: 8 of 60 ACT7 records miss and correctly do nothing,
+  while **5 of 48 ACT8 records** close a door anyway — and, because
+  `0x2f8c + 20*6 == 0x3004` exactly, the original's stray write lands on plane A
+  cells 4–5. That out-of-array store is clamped here and reported; the rest is
+  reproduced.
+- **The door tiles are per-world**, loaded by the only writer of `DS:0x14e`
+  (`CS:0x2C64`, 6 words from `DS:0xe8da`). Self-checking twice over: under the
+  1-based plane-A rule all four worlds' constants form a clean 2×3 rectangle on
+  the 10-column sheet, and every shipped ACT2 door cell already holds exactly
+  what ACT9 writes — the level data confirms the decode from the other side.
+- **`ACT2`'s `add ax,0xc` is annihilated** by a second `& 0xffe0` twelve bytes
+  later, so open and close land on the same cell.
+
+`node tools/mutate-actions.mjs` injects 15 plausible mis-ports and reports which
+the suite catches: **14 killed**. The survivor is equivalent on shipped data —
+re-keying the ACT5 consume onto the trigger index instead of the event record,
+which cannot differ because 0 of 727 selector-3 triggers is named by more than
+one record. The suite asserts that equivalence rather than claiming a kill.
+
+What is wired but still inert: the zone array is written and nothing reads it, so
+ACT4 records an exit that cannot be walked through and ACT3 a teleport that does
+not teleport (`CS:0x0324`/`CS:0x0FDF` are the consumers, both unported).
+
 ## The hero
 
 Drawn with real sprites, selected by the ported state machine (`game/states.js`):

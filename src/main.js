@@ -16,8 +16,10 @@ import { Renderer } from './render/renderer.js';
 import { Player, ST } from './game/player.js';
 import { runAllChecks, checkDescriptorAnchors, checkHeroSprites,
          checkSelectorsAndObjects, checkSpawn, checkEntityB,
-         checkWeaponsProjectiles } from './verify/checks.js';
+         checkWeaponsProjectiles, checkTriggerActions } from './verify/checks.js';
 import { EventRunner, parsePalfils, palfilsNameFor } from './game/events.js';
+import { makeActionContext, makeGates, DOOR_TILES,
+         ACTION_NAMES } from './game/trigger-actions.js';
 import { Camera } from './game/camera.js';
 import { spriteFor, STATE_INFO, UNMODELLED_PHASE_STATES } from './game/states.js';
 import { buildDescriptorMap, GROUP_STEMS, HERO_DESCRIPTOR_MAX } from './formats/descriptors.js';
@@ -98,7 +100,8 @@ async function loadLevel(key) {
     tiles = tiles.concat(extra.slice(0, count - 120));
   }
   const pfRaw = await fetchRaw(`game/${palfilsNameFor(key)}`);
-  const palfils = parsePalfils(dclDecompress(pfRaw).data);
+  const palfilsData = dclDecompress(pfRaw).data;
+  const palfils = parsePalfils(palfilsData);
 
   /* Object categories come from the world's own POBJECTS file (record +4,
    * big-endian). Verified byte-identical to the EXE's DS:0xef78 table for all
@@ -119,7 +122,7 @@ async function loadLevel(key) {
   const weapons = parseWeapons(
     dclDecompress(await fetchRaw(`game/PWEAPONS.00${key[0]}`)).data);
 
-  return { map, sheet, palette, tiles, tileCount: count, palfils, cats, drawObjects,
+  return { map, sheet, palette, tiles, tileCount: count, palfils, palfilsRaw: palfilsData, cats, drawObjects,
            objValues, groupsB, weapons, world: +key[0] };
 }
 
@@ -251,6 +254,7 @@ async function main() {
       checkDescriptorAnchors(fetchRaw), checkHeroSprites(fetchRaw),
       checkSelectorsAndObjects(fetchRaw), checkSpawn(fetchRaw),
       Promise.resolve(checkEntityB()), checkWeaponsProjectiles(fetchRaw),
+    checkTriggerActions(fetchRaw),
     ]) results.push(...await g);
     renderChecks(results);
     const mh = $('messages');
@@ -280,6 +284,31 @@ async function main() {
 
   let spawn = findSpawn(level.map);
   let player = new Player(spawn.x, spawn.y);
+  /* THE ACTION CONTEXT — what makes a fired trigger actually do something.
+   * planeA/planeB are the live map arrays (subarray views into the bulk), so a
+   * door written here is visible to the renderer and to collision on the very
+   * next frame. Rebuilt per level: the tile constants and the trapdoor table
+   * are both per-world. */
+  const buildActionCtx = (lvl, inv, ars) => makeActionContext({
+    planeA: lvl.map.planeA, planeB: lvl.map.planeB,
+    gates: makeGates(lvl.palfilsRaw),
+    tiles: DOOR_TILES[lvl.world - 1],
+    messages: lvl.map.messages,
+    categoryOf: (type) => lvl.cats[type],
+    inventory: inv,
+    weaponSlots: ars.slots.map((sl) => sl.weapon),
+    /* Same allocator the treasure burst uses — CS:0x38D7 first-fit, with the
+     * 200-slot ceiling measured against what is actually live. */
+    alloc: () => {
+      const live = lvl.drawObjects.reduce((n, o) => n + (o.dead ? 0 : 1), 0);
+      if (live >= OBJECT_SLOTS) return null;
+      const sl = { x: 0, y: 0, type: 0, flag6: 1, dead: false };
+      lvl.drawObjects.push(sl);
+      return sl;
+    },
+    onDiverge: (why) => { diverged.push(why); },
+  });
+  const diverged = [];
   let events = new EventRunner(level.map, level.palfils);
   /* ENEMIES. The runtime group slots (SS:0x36b4) plus the entities they
    * materialise (DS:0x536). Activation arrives from the plane-B event chain:
@@ -344,6 +373,9 @@ async function main() {
    * so. Nothing else reads this array. */
   let inventory = [chestKeyFor(CHEST_MIN), chestKeyFor(CHEST_MIN + 2),
                    chestKeyFor(CHEST_MIN + 4), INVENTORY_EMPTY];
+  /* Executing the verbs needs the inventory and the weapon slots, so the
+   * context is attached here rather than beside the EventRunner. */
+  events.actionCtx = buildActionCtx(level, inventory, arsenal);
   /* DS:0xb5dc — the marker list strategy 2 heads for. It is populated by the
    * object-pickup path when the hero takes an "attracts monsters" potion
    * (type 45, CS:0x163d). Pickups are not modelled, so it stays empty and the
@@ -414,6 +446,7 @@ async function main() {
      * The dev selector re-arms below, so equipping is re-applied rather than
      * carried; `reloadWorld` is what keeps the per-world Power swap honest. */
     arsenal = new Arsenal(level.weapons);
+    events.actionCtx = buildActionCtx(level, inventory, arsenal);
     equipFromUI();
     grid.clear();
     shotsFired = 0; creaturesShot = 0; picked = 0; consumed = 0; banked = 0;

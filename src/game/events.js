@@ -50,7 +50,11 @@
  */
 
 import { parseAllTriggers, evalTrigger, verbOf, isLive } from './trigger.js';
+import { fireTrigger } from './trigger-actions.js';
 import { SELECTOR_SPAWN_B } from './spawn.js';
+
+/** ACT5 chain limit — a port-only guard; see dispatchEvent(). */
+export const ACT5_MAX_DEPTH = 16;
 
 export const EVENT_TABLE_OFF = 0x0324;   // within PALFILS, -> DS:0x932c
 export const EVENT_COUNT     = 253;
@@ -117,9 +121,10 @@ export class EventRunner {
      * RESPAWN path (CS:0x485E) as well as from level load (CS:0x0095) — so
      * DYING RE-ARMS EVERY CONSUMED EVENT. When death lands, clear this set
      * there. UNKNOWN_event_rearm_scope: whether anything else calls it. */
-    this.consumed = new Set();
-    this.consumedEvents = new Set();   // selector-4 records, consumed at CS:0xde08
+    this.consumed = new Set();         // trigger indices, for reporting only
+    this.consumedEvents = new Set();   // DS:0x932c record ids — the real key
     this.onSpawnB = null;              // set by the host to receive activations
+    this.actionCtx = null;             // set by the host to EXECUTE the verbs
     this.lastCell = -1;
     this.log = [];
     this.unhandled = new Map();   // selector -> count, surfaced not swallowed
@@ -172,8 +177,21 @@ export class EventRunner {
 
     const v = this.map.planeB[cell];
     if (v < 3) return null;
+    return this.dispatchEvent(v - 3, state, 0);
+  }
 
-    const id = v - 3;
+  /**
+   * CS:0x6029 — dispatch one EVENT RECORD by index. Reached two ways: from the
+   * plane-B scan above, and from ACT5, which tail-jumps straight in here with
+   * `arg - 1` (CS:0x3D0A `mov ax,[di+0x12] / dec ax / jmp 0x6029`), so its
+   * argument is an event index and never a plane-B value.
+   *
+   * @param {number} depth ACT5 recursion depth. The original needs no such
+   *   guard — a fired trigger consumes its event record, so a chain always
+   *   terminates on the `js` at CS:0x6034 — but nothing in the hardware stops
+   *   a cycle through records that never fire. Reported, not silent.
+   */
+  dispatchEvent(id, state, depth = 0) {
     if (id >= EVENT_COUNT) return null;
     const ev = this.pal.events[id];
 
@@ -181,11 +199,20 @@ export class EventRunner {
      * one (0) both drop out here, before the 1-based bias is applied. */
     if (ev.selector === 0 || (ev.selector & 0x8000)) return null;
 
+    /* ⚠️ THE CONSUME IS KEYED ON THE EVENT RECORD, NOT THE TRIGGER.
+     * CS:0x39FE `mov word [si],0xffff` writes through SI, which CS:0x6032 left
+     * pointing at the DS:0x932c record — so it is the record that is spent,
+     * and CS:0x6034 re-tests that same word on re-entry. An earlier revision of
+     * this port keyed on the trigger index instead. Measured over all 8 PALFILS
+     * files the two are equivalent — 0 of 727 selector-3 triggers is named by
+     * more than one event record — so this is fidelity, not a bug fix, and the
+     * check that proves it is in the suite. */
+    if (this.consumedEvents.has(id)) return null;
+
     /* Selector 4 activates a System-B enemy group. The original CONSUMES the
      * event before it even looks for a free runtime slot (CS:0xde08), so the
      * consume is unconditional here too. */
     if (ev.selector === SELECTOR_SPAWN_B) {
-      if (this.consumedEvents.has(id)) return null;
       this.consumedEvents.add(id);
       if (this.onSpawnB) this.onSpawnB(ev.param);
       return null;
@@ -196,15 +223,32 @@ export class EventRunner {
       return null;
     }
     if (ev.param >= this.triggers.length) return null;
-    if (this.consumed.has(ev.param)) return null;
 
     const t = this.triggers[ev.param];
     if (!isLive(t)) return null;
     if (!evalTrigger(t, state)) return null;
 
-    this.consumed.add(ev.param);
+    this.consumedEvents.add(id);
+    this.consumed.add(ev.param);          // kept for reporting only
+
+    /* The shared prologue plus the verb — CS:0x39FE-0x3A56. With no action
+     * context wired the port falls back to its old report-only behaviour, so
+     * the evaluator stays testable in isolation. */
+    let result = null;
     const msg = this.map.messages[t.messageId] || null;
-    const entry = { trigger: ev.param, verb: verbOf(t), messageId: t.messageId, msg };
+    if (this.actionCtx) {
+      result = fireTrigger(t, this.actionCtx);
+      if (result.verb === 5 && result.dispatch !== undefined) {
+        if (depth >= ACT5_MAX_DEPTH) {
+          this.actionCtx.onDiverge(`ACT5 chain exceeded depth ${ACT5_MAX_DEPTH}`);
+        } else {
+          result.chained = this.dispatchEvent(result.dispatch, state, depth + 1);
+        }
+      }
+    }
+
+    const entry = { trigger: ev.param, event: id, verb: verbOf(t),
+                    messageId: t.messageId, msg, result };
     this.log.push(entry);
     return entry;
   }

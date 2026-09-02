@@ -193,6 +193,13 @@ for (const r of await checkWeaponsProjectiles(fetchRaw)) {
   console.log(line(r));
 }
 
+console.log('\n  the 15 trigger ACTION verbs (SS:0x3592):');
+const { checkTriggerActions } = await import('../src/verify/checks.js');
+for (const r of await checkTriggerActions(fetchRaw)) {
+  if (!r.pass && !r.note) bad++;
+  console.log(line(r));
+}
+
 /* --- camera: dead zone and clamps, from CS:0x5ea4-0x5f76 ----------------- */
 const { Camera, CAM_X_MAX, CAM_Y_MAX } = await import('../src/game/camera.js');
 const lvl = { world: 1, sublevel: 0 };

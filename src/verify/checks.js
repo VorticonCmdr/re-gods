@@ -7,6 +7,9 @@
  */
 
 import { dclDecompress } from '../formats/dcl.js';
+import { DOOR_TILES, ZONE_TELEPORT, ZONE_EXIT, makeGates, makeActionContext,
+         runAction, fireTrigger } from '../game/trigger-actions.js';
+import { consumesKey } from '../game/trigger.js';
 import { PI1_SIZE, decodePI1, TILE_COUNT } from '../formats/pi1.js';
 import { BULK_SIZE, parseMap } from '../formats/map.js';
 import { parseAllTriggers, isLive, verbOf, TRIG_COUNT } from '../game/trigger.js';
@@ -5034,6 +5037,404 @@ export async function checkWeaponsProjectiles(fetchRaw) {
       'the 40-entry destructible-tile queue at DS:0xd0c6; UNKNOWN_tag_fd; the ' +
       'per-projectile animation frame; and UNKNOWN_DS_0168 — which now has ' +
       'four behaviours and still no meaning.',
+  });
+
+  return results;
+}
+
+/* =====================================================================
+ * The 15 trigger ACTION verbs — SS:0x3592.
+ *
+ * Until these landed the port evaluated every trigger and discarded the
+ * verdict, so no door opened and no level could end (ACT4 is the exit zone).
+ * These checks target the seven traps the verbs encode; each was written to
+ * fail against a specific plausible mis-port, listed in the detail text.
+ * ===================================================================== */
+export async function checkTriggerActions(fetchRaw) {
+  const { results, check } = makeChecker();
+  const keys = ['1A','1B','2A','2B','3A','3B','4A','4B'];
+  const T = (over = {}) => ({ index: 0, condKind: [0,0,0], condArg: [0,0,0],
+    x: 0, y: 0, action: 0, actionArg: 0, messageId: 0, reserved: 0, ...over });
+
+  /* --- the per-world tile table ---------------------------------------- */
+  /* Self-checking: plane A is 1-BASED (tile = planeA - 1) and the sheet is 10
+   * columns, so a correct door constant must put t and t+1 in the SAME sheet
+   * row, and t+10 / t+20 directly beneath. A wrong base or a wrong stride
+   * breaks the rectangle. */
+  let rects = 0;
+  for (const w of DOOR_TILES) {
+    const t = w.open2 - 1;                       // -> tile index
+    const ok = (t % 10) + 1 <= 9 &&              // t and t+1 share a row
+               Math.floor(t / 10) + 2 <= 11;     // three rows fit in the sheet
+    if (ok) rects++;
+  }
+  check('DOOR_TILES: all 4 worlds form a clean 2x3 rect on the 10-col sheet',
+    rects === 4, `${rects}/4 (world1 base ${DOOR_TILES[0].open2} -> sheet row ` +
+    `${Math.floor((DOOR_TILES[0].open2 - 1) / 10)} cols ` +
+    `${(DOOR_TILES[0].open2 - 1) % 10},${(DOOR_TILES[0].open2 - 1) % 10 + 1})`);
+
+  /* --- ACT2 / ACT9: doors ---------------------------------------------- */
+  const doorAt = (verb, x, y, tiles) => {
+    const ctx = makeActionContext({ tiles });
+    runAction(T({ action: verb, x, y }), ctx);
+    return ctx;
+  };
+  const open = doorAt(2, 0x140, 0x100, DOOR_TILES[0]);
+  const cell = (0x140 >> 5) + (((0x100 + 8) & 0xfff0) << 3);
+  const base = DOOR_TILES[0].open2;
+  check('ACT2 writes 6 plane-A tiles as t, t+1 / t+10, t+11 / t+20, t+21',
+    open.planeA[cell] === base && open.planeA[cell + 1] === base + 1 &&
+    open.planeA[cell + 0x80] === base + 10 && open.planeA[cell + 0x81] === base + 11 &&
+    open.planeA[cell + 0x100] === base + 20 && open.planeA[cell + 0x101] === base + 21,
+    'kills the +1-per-row stride mutant');
+
+  let bCleared = 0, bTotal = 0;
+  for (const o of [0, 1, 0x80, 0x81, 0x100, 0x101]) {
+    bTotal++; if (open.planeB[cell + o] === 0) bCleared++;
+  }
+  /* planeB starts all-zero in a bare context, so count what ACT2 would have
+   * had to clear from a solid map instead. */
+  const solid = makeActionContext({ tiles: DOOR_TILES[0] });
+  solid.planeB.fill(1);
+  runAction(T({ action: 2, x: 0x140, y: 0x100 }), solid);
+  const cleared = [0, 1, 0x80, 0x81, 0x100, 0x101].filter((o) => solid.planeB[cell + o] === 0);
+  check('ACT2 clears THREE plane-B cells (left column only), not six',
+    cleared.length === 3 && cleared.every((o) => o % 2 === 0),
+    `cleared ${cleared.length}: [${cleared.join(', ')}] — kills the "clear all 6" mutant`);
+
+  /* Trap 2: `add ax,0xc` at CS:0x4285 is annihilated by the second mask at
+   * CS:0x4298. If it were real, open and close would land a tile apart. */
+  const closed = doorAt(9, 0x140, 0x100, DOOR_TILES[0]);
+  let closeCell = -1;
+  for (let i = 0; i < 8192; i++) if (closed.planeA[i] === DOOR_TILES[0].close9) { closeCell = i; break; }
+  /* Absolute, not just "the two agree" — an earlier version of this check
+   * compared open against close, and since both derive from one helper a
+   * mutation that shifted the helper moved both and survived. */
+  const expectCell = (0x140 >> 5) + (((0x100 + 8) & 0xfff0) << 3);
+  check('ACT2 and ACT9 land on the same, INDEPENDENTLY computed cell',
+    cell === expectCell && closeCell === expectCell,
+    `open ${cell}, close ${closeCell}, expected ${expectCell}`);
+
+  /* Trap 2 stated as a proof rather than a test. CS:0x4285 adds 12 to a value
+   * already masked with 0xffe0, and CS:0x4298 masks AGAIN before the shift, so
+   * for every multiple of 32 the add is invisible. A mutant that "restores"
+   * the +12 is therefore EQUIVALENT and cannot be killed — this is what makes
+   * that true, checked across the whole 4096-px world width. */
+  let plus12Differs = 0;
+  for (let x = 0; x < 4096; x++) {
+    const m = x & 0xffe0;
+    if ((((m + 12) & 0xffe0) >> 5) !== (m >> 5)) plus12Differs++;
+  }
+  check('the CS:0x4285 `add ax,0xc` is provably annihilated by the second mask',
+    plus12Differs === 0,
+    'differs for 0 of 4096 x positions — so that mutation is equivalent, not missed');
+
+  /* ⚠️ The cell arithmetic is only distinguishable OFF the tile grid, and every
+   * shipped record is on it (measured below) — so these two assertions exist
+   * precisely because the real data cannot tell the variants apart. Both pin
+   * the verbatim form: CS:0x4157 multiplies y by 8 rather than dividing into a
+   * row and multiplying by 128, and CS:0x427C biases y by +8 BEFORE masking. */
+  const offGridDoor = makeActionContext({ tiles: DOOR_TILES[0] });
+  runAction(T({ action: 2, x: 0x14c, y: 0x108 }), offGridDoor);
+  const wantDoor = (0x14c & 0xffe0) >> 5 | 0;
+  check('door cell keeps the +8 y-bias BEFORE the mask, off-grid',
+    offGridDoor.planeA[wantDoor + (((0x108 + 8) & 0xfff0) << 3)] === DOOR_TILES[0].open2,
+    'y=0x108 -> row 0x110, not 0x100 — the only way to observe CS:0x427C');
+
+  const offGridGate = makeActionContext({ tiles: DOOR_TILES[0], gates: makeGates(new Uint8Array(8760)) });
+  offGridGate.gates[0].x = 0x14c; offGridGate.gates[0].y = 0x108;
+  runAction(T({ action: 7, x: 0x14c, y: 0x108 }), offGridGate);
+  check('ACT7/ACT8 use y*8 verbatim, not (y>>4)*128',
+    offGridGate.planeA[(0x14c >> 5) + (0x108 << 3)] === DOOR_TILES[0].gateOpen &&
+    offGridGate.planeA[(0x14c >> 5) + ((0x108 >> 4) * 128)] !== DOOR_TILES[0].gateOpen,
+    'CS:0x4161 `shl bx,1` x3 — the two agree only when y % 16 == 0');
+
+  const r = DOOR_TILES[0].close9Right;
+  check('ACT9 right column is ONE repeated tile, left column strides +10',
+    closed.planeA[cell + 1] === r && closed.planeA[cell + 0x81] === r &&
+    closed.planeA[cell + 0x101] === r &&
+    closed.planeA[cell + 0x80] === DOOR_TILES[0].close9 + 10,
+    `right = ${r},${r},${r} — kills the "increment the right column too" mutant`);
+
+  /* --- ACT3 / ACT4: the shared zone array ------------------------------ */
+  check('ACT3 writes zone kind 1 (teleport), ACT4 kind 3 (level exit)',
+    ZONE_TELEPORT === 1 && ZONE_EXIT === 3 &&
+    (() => { const c = makeActionContext();
+             runAction(T({ action: 3, x: 0x200, y: 0x100, actionArg: 7 }), c);
+             return c.zones[0].kind === ZONE_TELEPORT; })() &&
+    (() => { const c = makeActionContext();
+             runAction(T({ action: 4, x: 0x200, y: 0x100, actionArg: 7 }), c);
+             return c.zones[0].kind === ZONE_EXIT; })(),
+    'kills the 1<->3 swap mutant');
+
+  /* Trap 6 — the counts really do disagree, and it is observable: with the
+   * first ten slots taken, ACT4 has nowhere to go and ACT3 does. */
+  const full = makeActionContext();
+  for (let i = 0; i < 10; i++) { full.zones[i].kind = 1; full.zones[i].x = -100 - i; }
+  const a4 = runAction(T({ action: 4, x: 0x400, y: 0x200 }), full);
+  const a3 = runAction(T({ action: 3, x: 0x400, y: 0x200 }), full);
+  check('ACT4 scans 10 zone slots, ACT3 scans 20 — the mismatch is real',
+    a4.ok === false && a3.ok === true && a3.slot === 10,
+    `ACT4 ${a4.reason}; ACT3 -> slot ${a3.slot}`);
+
+  /* Trap 7 — CS:0x4272 `add sp,0x2` aborts the caller. */
+  const dup = makeActionContext();
+  const d1 = runAction(T({ action: 3, x: 0x300, y: 0x140 }), dup);
+  const d2 = runAction(T({ action: 3, x: 0x300, y: 0x140 }), dup);
+  check('the duplicate-zone guard aborts its CALLER — a second zone is refused',
+    d1.ok === true && d2.ok === false && dup.zones[1].kind < 0,
+    `second attempt: ${d2.reason}`);
+
+  /* --- ACT7 / ACT8: the dead guard, against SHIPPED data ---------------- */
+  let a7Total = 0, a7Miss = 0, a8Total = 0, a8Miss = 0, aligned = 0, misaligned = 0;
+  for (const k of keys) {
+    const map = parseMap(dclDecompress(await fetchRaw(`game/PLEV${k}.MAP`)).data);
+    const pal = dclDecompress(await fetchRaw(`game/${palfilsNameFor(k)}`)).data;
+    const gates = makeGates(pal);
+    const live = new Set(gates.filter((g) => g.x < 0x8000).map((g) => `${g.x},${g.y}`));
+    for (const t of parseAllTriggers(map.bulk)) {
+      if (!isLive(t)) continue;
+      const v = verbOf(t);
+      if (v !== 7 && v !== 8) continue;
+      const hit = live.has(`${t.x},${t.y}`);
+      if (v === 7) { a7Total++; if (!hit) a7Miss++; } else { a8Total++; if (!hit) a8Miss++; }
+    }
+    for (const t of parseAllTriggers(map.bulk)) {
+      if (!isLive(t)) continue;
+      if (![2, 3, 4, 7, 8, 9].includes(verbOf(t))) continue;
+      if ((t.x % 32) === 0 && (t.y % 16) === 0) aligned++; else misaligned++;
+    }
+  }
+  check('all 279 shipped door/gate/zone records are exactly tile-aligned',
+    aligned === 279 && misaligned === 0,
+    `x%32==0 and y%16==0 for ${aligned}/279 — which is why the two checks above ` +
+    `have to leave the grid to say anything`);
+
+  check('ACT7/ACT8 record counts match the published histogram',
+    a7Total === 60 && a8Total === 48, `ACT7 ${a7Total}, ACT8 ${a8Total}`);
+  check('the ACT8 dead-guard path is REACHABLE in shipped data',
+    a7Miss === 8 && a8Miss === 5,
+    `${a7Miss} ACT7 misses (correctly inert) and ${a8Miss} ACT8 misses ` +
+    `(CS:0x4189 js never fires, so these close a door anyway)`);
+
+  /* ACT7 misses do nothing; ACT8 misses still write. Kills "give ACT8 a jc". */
+  const noGate = () => makeActionContext({ gates: makeGates(new Uint8Array(8760)) });
+  const m7 = noGate(); m7.gates.forEach((g) => { g.x = 0xfffe; g.y = 0xfffe; });
+  const before7 = m7.planeA[(0x400 >> 5) + (0x200 << 3)];
+  const res7 = runAction(T({ action: 7, x: 0x400, y: 0x200 }), m7);
+  const m8 = noGate(); m8.gates.forEach((g) => { g.x = 0xfffe; g.y = 0xfffe; });
+  let diverged = false;
+  m8.onDiverge = () => { diverged = true; };
+  const res8 = runAction(T({ action: 8, x: 0x400, y: 0x200 }), m8);
+  check('on a MISS: ACT7 is inert, ACT8 still closes the door',
+    res7.ok === false && m7.planeA[(0x400 >> 5) + (0x200 << 3)] === before7 &&
+    res8.ok === true && res8.missed === true &&
+    m8.planeA[(0x400 >> 5) + (0x200 << 3)] === DOOR_TILES[0].gateClose && diverged,
+    'kills the "unify the two guards" mutant');
+
+  /* --- the gate table IS the trapdoor table ---------------------------- */
+  const palA1 = dclDecompress(await fetchRaw('game/PALFILS.0A1')).data;
+  const g0 = makeGates(palA1);
+  check('DS:0x2f8c is seeded from the PALFILS +0x1824 trapdoor window',
+    g0.length === 20 && g0.some((g) => g.x < 0x8000 && g.open <= 1),
+    `${g0.filter((g) => g.x < 0x8000).length} live trapdoor records in PALFILS.0A1`);
+
+  /* --- ACT5: the consume is keyed on the EVENT RECORD ------------------ */
+  let shared = 0, sel3 = 0;
+  for (const k of keys) {
+    const b = dclDecompress(await fetchRaw(`game/${palfilsNameFor(k)}`)).data;
+    const dv = new DataView(b.buffer, b.byteOffset, b.byteLength);
+    const seen = new Map();
+    for (let i = 0; i < EVENT_COUNT; i++) {
+      const o = EVENT_TABLE_OFF + i * 4;
+      if (dv.getUint16(o, false) !== SELECTOR_TRIGGER) continue;
+      const p = dv.getUint16(o + 2, false);
+      seen.set(p, (seen.get(p) || 0) + 1);
+    }
+    sel3 += seen.size;
+    shared += [...seen.values()].filter((v) => v > 1).length;
+  }
+  check('keying the consume on the event record vs the trigger is equivalent here',
+    shared === 0 && sel3 === 727,
+    `${sel3} distinct selector-3 triggers, ${shared} named by more than one ` +
+    `record — so CS:0x39FE's real key is fidelity, not a behaviour change`);
+
+  /* --- the small verbs -------------------------------------------------- */
+  const tc = makeActionContext({ timer: 12345 });
+  runAction(T({ action: 14 }), tc);
+  check('ACT14 zeroes the 32-bit level timer (CS:0x3bc2)', tc.timer === 0);
+
+  const nop = makeActionContext();
+  nop.planeA.fill(9); const snap = nop.planeA.slice();
+  let touched = false;
+  for (const v of [11, 12, 13]) {
+    const res = runAction(T({ action: v }), nop);
+    if (!res.noop) touched = true;
+  }
+  check('ACT11/12/13 are three separate single-`C3` no-ops',
+    !touched && nop.planeA.every((b, i) => b === snap[i]) && nop.zones[0].kind < 0);
+
+  const ws = makeActionContext({ weaponSlots: [5, 8, 5] });
+  const w1 = runAction(T({ action: 10, actionArg: 5 }), ws);
+  check('ACT10 clears only the FIRST matching weapon slot',
+    w1.slot === 0 && ws.weaponSlots[0] === 0xffff && ws.weaponSlots[2] === 5,
+    'each arm of CS:0x3e3f ends in its own `ret`');
+
+  /* --- ACT0 / ACT1 ------------------------------------------------------ */
+  const mkObjs = (n) => Array.from({ length: n }, (_, i) =>
+    ({ x: 0, y: 0, type: 0xffff, flag6: 0, dead: true, slot: i }));
+  const o0 = makeActionContext({ objects: mkObjs(200), categoryOf: () => 1 });
+  let sounds = 0; o0.sfx = () => sounds++;
+  runAction(T({ action: 0, x: 0x100, y: 0x80, actionArg: 8 }), o0);
+  check('ACT0 spawns into the object array and marks DS:0x438 dirty',
+    o0.spawned.length === 1 && o0.spawned[0].type === 8 &&
+    o0.spawned[0].flag6 === 1 && o0.dirty[0] === 0xff && sounds === 1);
+
+  const oq = makeActionContext({ objects: mkObjs(200), categoryOf: () => 1 });
+  let qs = 0; oq.sfx = () => qs++;
+  const rq = runAction(T({ action: 0, actionArg: 0x42 }), oq);
+  check('ACT0 types 0x40..0x44 are placed but SILENT (CS:0x3DCC)',
+    rq.quiet === true && qs === 0 && oq.spawned.length === 1 && oq.last === null);
+
+  const o1 = makeActionContext({ objects: mkObjs(200) });
+  runAction(T({ action: 1, actionArg: 3 }), o1);
+  check('ACT1 stores the weapon type as arg + 0xC0',
+    o1.spawned[0].type === 0xc3, `got 0x${o1.spawned[0].type.toString(16)}`);
+
+  /* ACT1's allocator-failure branch differs from ACT0's. */
+  const fa0 = makeActionContext({ objects: [], categoryOf: () => 1 });
+  const fa1 = makeActionContext({ objects: [] });
+  runAction(T({ action: 0, actionArg: 8 }), fa0);
+  runAction(T({ action: 1, actionArg: 3 }), fa1);
+  check('on a full object table ACT0 returns bare; ACT1 still records DS:0x21e',
+    fa0.last === null && fa1.last !== null && fa1.last.type === 0xc3,
+    'CS:0x3DAF -> 0x3e07 vs CS:0x3E16 -> 0x3e2e');
+
+  /* --- ACT6 ------------------------------------------------------------- */
+  const objs = mkObjs(200);
+  for (let i = 0; i < 5; i++) {
+    objs[i] = { x: 0x100, y: 0x100, type: 50, flag6: 1, dead: false, slot: i };
+  }
+  const k6 = makeActionContext({ objects: objs, categoryOf: () => 4 });
+  const r6 = runAction(T({ action: 6, x: 0x100, y: 0x100 }), k6);
+  check('ACT6 kills at most TWO category-4 objects (CS:0x3CBA)',
+    r6.killed === 2 && objs.filter((o) => o.dead).length === 197,
+    `killed ${r6.killed}, kill-list entries ${k6.killList.filter((k) => k.flag >= 0).length}`);
+
+  const far = mkObjs(200);
+  far[0] = { x: 0x100 + 13, y: 0x100, type: 50, flag6: 1, dead: false, slot: 0 };
+  const k6b = makeActionContext({ objects: far, categoryOf: () => 4 });
+  check('ACT6 box is +/-12 INCLUSIVE — 13 px away is out',
+    runAction(T({ action: 6, x: 0x100, y: 0x100 }), k6b).killed === 0);
+
+  /* --- the shared prologue --------------------------------------------- */
+  check('the key-consume runs only for verbs {2,3,4,7,8}',
+    [2,3,4,7,8].every(consumesKey) && [0,1,5,6,9,10,11,12,13,14].every((v) => !consumesKey(v)));
+
+  const kc = makeActionContext({ inventory: [0x13, 0x80, 0x30, 0xffff] });
+  fireTrigger(T({ action: 2, condKind: [1,1,1], condArg: [0x13, 0x80, 0x30] }), kc);
+  check('the key-consume range is [0x12,0x17] u [0x7f,0x81]',
+    kc.inventory[0] === 0xffff && kc.inventory[1] === 0xffff && kc.inventory[2] === 0x30,
+    'CS:0x3B13-0x3B2A — 0x30 is outside both windows and survives');
+
+  /* --- end to end over every shipped record ---------------------------- */
+  let fired = 0, threw = 0, byVerb = new Array(15).fill(0);
+  for (const k of keys) {
+    const map = parseMap(dclDecompress(await fetchRaw(`game/PLEV${k}.MAP`)).data);
+    const pal = dclDecompress(await fetchRaw(`game/${palfilsNameFor(k)}`)).data;
+    const world = +k[0];
+    for (const t of parseAllTriggers(map.bulk)) {
+      if (!isLive(t)) continue;
+      const ctx = makeActionContext({
+        planeA: map.planeA.slice(), planeB: map.planeB.slice(),
+        objects: mkObjs(200), gates: makeGates(pal),
+        tiles: DOOR_TILES[world - 1], messages: map.messages,
+        categoryOf: () => 1,
+      });
+      try { fireTrigger(t, ctx); fired++; byVerb[verbOf(t)]++; }
+      catch (e) { threw++; }
+    }
+  }
+  check('every live shipped trigger fires without throwing',
+    threw === 0 && fired === EXPECTED.liveTriggers,
+    `${fired} records fired, ${threw} threw`);
+  check('the executed verb histogram matches the published one',
+    byVerb.every((n, i) => n === EXPECTED.verbHistogram[i]),
+    `[${byVerb.join(', ')}]`);
+
+  /* --- end to end on a real map ---------------------------------------- *
+   * The single check that says the feature works: dispatch every plane-B event
+   * cell on PLEV1A as a player standing on it would, with the keys and levers
+   * the doors ask for, and confirm the MAP ITSELF changes. Before the verbs
+   * landed this was necessarily 0 and 0. */
+  {
+    const map = parseMap(dclDecompress(await fetchRaw('game/PLEV1A.MAP')).data);
+    const palRaw = dclDecompress(await fetchRaw('game/PALFILS.0A1')).data;
+    const runner = new EventRunner(map, parsePalfils(palRaw));
+    runner.actionCtx = makeActionContext({
+      planeA: map.planeA, planeB: map.planeB,
+      gates: makeGates(palRaw), tiles: DOOR_TILES[0],
+      messages: map.messages, categoryOf: () => 1,
+      objects: Array.from({ length: 200 }, (_, i) =>
+        ({ x: 0, y: 0, type: 0xffff, flag6: 0, dead: true, slot: i })),
+      inventory: [0x12, 0x13, 0x14, 0x15],
+    });
+    const st = runner.makeState({ timer: 0, health: 24, lives: 3,
+                                  inventory: [0x12, 0x13, 0x14, 0x15] });
+    for (let i = 0; i < 64; i++) st.levers[i * 6 + 4] |= 1;   // every lever thrown
+    const a0 = map.planeA.slice(), b0 = map.planeB.slice();
+    const ran = {};
+    for (let cell = 0; cell < map.planeA.length; cell++) {
+      if (map.planeB[cell] < 3) continue;
+      runner.lastCell = -1;
+      const r = runner.dispatchEvent(map.planeB[cell] - 3, st, 0);
+      if (r && r.result) ran[r.verb] = (ran[r.verb] || 0) + 1;
+    }
+    let dA = 0, dB = 0;
+    for (let i = 0; i < a0.length; i++) {
+      if (a0[i] !== map.planeA[i]) dA++;
+      if (b0[i] !== map.planeB[i]) dB++;
+    }
+    check('END TO END on PLEV1A: firing the events MUTATES the map',
+      dA === 23 && dB === 14 && ran[2] === 4 && ran[7] === 6,
+      `${dA} plane-A and ${dB} plane-B cells changed; ` +
+      `${ran[2]} doors opened, ${ran[7]} trap doors, ` +
+      `${runner.actionCtx.zones.filter((z) => z.kind >= 0).length} zones created`);
+
+    /* The gate is the puzzle, not a bug: with no keys and no levers thrown the
+     * same walk opens NOTHING. */
+    const m2 = parseMap(dclDecompress(await fetchRaw('game/PLEV1A.MAP')).data);
+    const r2 = new EventRunner(m2, parsePalfils(palRaw));
+    r2.actionCtx = makeActionContext({
+      planeA: m2.planeA, planeB: m2.planeB, gates: makeGates(palRaw),
+      tiles: DOOR_TILES[0], messages: m2.messages, categoryOf: () => 1,
+    });
+    const bare = r2.makeState({ timer: 0 });
+    let opened = 0;
+    for (let cell = 0; cell < m2.planeA.length; cell++) {
+      if (m2.planeB[cell] < 3) continue;
+      r2.lastCell = -1;
+      const r = r2.dispatchEvent(m2.planeB[cell] - 3, bare, 0);
+      if (r && r.result && r.verb === 2) opened++;
+    }
+    check('...and with no keys and no levers, no door opens',
+      opened === 0, 'the conditions are the lock — COND1 (key) AND COND11 (lever)');
+  }
+
+  results.push({
+    name: 'what the ACTION verbs now do, and what they still do not',
+    note: true, pass: true,
+    detail: 'All 15 verbs execute. Doors open and close, trap doors move, ' +
+      'zones are created, objects and weapon pickups spawn, category-4 ' +
+      'objects are killed, the timer resets and weapon slots clear. What is ' +
+      'wired but INERT: the zone array is written and nothing reads it yet, ' +
+      'so ACT4 records a level exit that cannot be walked through and ACT3 a ' +
+      'teleport that does not teleport — CS:0x0324 and CS:0x0FDF are the ' +
+      'consumers, both unported. ACT0/ACT1 spawn through allocObject, which ' +
+      'appends rather than re-ranking, so a runtime object draws on top of ' +
+      'the weapon pickups where export 32 puts treasure behind. The kill ' +
+      'list at DS:0x8c3c is filled and never drawn (CS:0x3cc7 is its walker). ' +
+      'And the shop summon DS:0x361 is recorded, not honoured.',
   });
 
   return results;
