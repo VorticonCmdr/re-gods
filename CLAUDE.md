@@ -2350,7 +2350,36 @@ CS:0xE241  call 0x1000:efe7 ; jmp 0x1000:e0bb              ; DEAD: the SAME BCD-
 
 `[di+0x10]` (carried-item type) is the gate that ties everything together — it selects between the "ease + draw the carried icon" branch above **and** a *separate* drop path, reached elsewhere (`CS:0xE251`–`E282`, the position-cache/popup-drop block this document already documents): `CS:0xE25C cmp word[di+0x10],0 / js 0xe283` — carrying nothing skips straight to the `[di+0x19]` rank-check/`CS:0xEBB9` reset code; carrying something first drops it via `CS:0xBF5F` (recovering the display id: weapons pass through for `CS:0xBF5F`'s own `−0xC0`, ordinary types get `+0xB` pre-added so the SAME `id≥0xB → type=id−0xB` recovery inside `CS:0xBF5F` works unmodified) and only then falls into the identical `[di+0x19]` code.
 
-**So the drop and the rank-check/group-reset are two independent, sequential steps on one shared code path, not two readings of the same mechanism**: the leading `[di+0x10]` test decides whether an item gets dropped first; the `[di+0x19]` machinery that follows runs unconditionally either way. `CS:0xE251`/`E253`/`E259` also caches the entity's own position into `DS:0x202`/`DS:0x204` — the *same* scratch pair this document's `UNKNOWN_creature_death_anim` closure already found `CS:0xEFE7`'s caller using, and which a newly-noticed block in the master group loop (`CS:0xDF9D`–`E24F`, gated by a per-entity `INC word[0x1f4]` "entities in this state" counter feeding a whole-group-elimination test in `FUN_1000_df39`) also reads — `UNKNOWN_sysA_0x1f4_elimination_detector` flags this as a genuinely new, unchased residual: a counter comparing "dead" (`DS:0x3c3`) plus "this-state" (`DS:0x1f4`) entity counts against the group's total, most plausibly feeding a "whole group wiped out" event at the cached position, not traced further this pass.
+**So the drop and the rank-check/group-reset are two independent, sequential steps on one shared code path, not two readings of the same mechanism**: the leading `[di+0x10]` test decides whether an item gets dropped first; the `[di+0x19]` machinery that follows runs unconditionally either way. `CS:0xE251`/`E253`/`E259` also caches the entity's own position into `DS:0x202`/`DS:0x204` — the *same* scratch pair this document's `UNKNOWN_creature_death_anim` closure already found `CS:0xEFE7`'s caller using.
+
+### `UNKNOWN_sysA_0x1f4_elimination_detector` — CLOSED: a per-group "cleared" message, and the group-deactivation condition `[STATIC]`
+
+Reading `FUN_1000_df39`'s tail in full (`CS:0xDFAC`–`0xE000`, immediately after the per-entity loop this document's own six-stage-pipeline section already documents):
+
+```
+dfac  cl = [si]                               ; the group descriptor's own entity-count field
+dfae  cl -= [0x3c3] ; cl -= [0x1f4]            ; minus fully-dead, minus dying — the group's LIVE count
+dfb6  [bp+0x13] = cl                            ; cached into a NEW group-runtime field, +0x13
+dfb9  call 0x1000:eb37                          ; a side random-event roll — see below, not part of the elimination logic itself
+dfbc  cl = [0x3c3] ; cl += [0x1f4]              ; dead + dying
+dfc4  cmp cl,[si] / jnz 0xdff1                  ; not everyone dead-or-dying -> skip the whole block below
+dfc8  ax=[0x202]+8 ; bx=[0x204]+8               ; the cached "last interesting entity" position, +8 on both axes
+dfd5  cmp byte[bp+0x10],0 / jnz 0xdff1          ; group-runtime +0x10 — a ONE-SHOT "already announced" latch
+dfdb  cx = word[si+0x10]                        ; the GROUP DESCRIPTOR's OWN +0x10 field (BE u16 — a PREVIOUSLY UNDOCUMENTED PALFILS field)
+dfe0  or cx,cx / js 0xdfed                       ; negative -> no message configured for this group, skip the popup
+dfe4  call 0x1000:bf5f                           ; spawn it via the already-decoded popup system, at the cached position
+dfed  [bp+0x10] = 1                              ; latch — never announces twice
+dff1  cl = [0x3c3]                               ; fully-dead count ALONE (dying entities don't count here)
+dff5  cmp cl,[si] / jl 0xdffe                    ; still fewer fully-dead than the group total -> just advance
+dff9  [bp+0] = 0                                 ; ALL fully dead -> DEACTIVATE the group (state -> 0, slot freed for reuse)
+```
+
+So there are **two distinct thresholds, not one**: "dead + dying == total" is the trigger for a **one-shot popup/message**, read straight out of a previously-undocumented `PALFILS` field (`System-A group descriptor +0x10`, big-endian `u16`) — this is the mechanism behind "you cleared this group" style flavour text, fired the instant the last live entity starts dying rather than waiting for its death animation to finish, at the position cached from whichever entity most recently went through the death-draw path. "Dead == total" (strictly fully dead, not merely dying) is the **separate, stricter** condition that actually frees the group's runtime slot. A group that has just finished dying-but-not-yet-dead sits in a window where the message has fired but the slot is still occupied.
+
+Two further things fell out of reading this span that are worth recording but weren't chased to closure:
+
+- **`CS:0xE001`'s very first act, previously unread, is `DEC word[di+0x16]`, floored at `1`** (`CS:0xE006`–`0xE00F`). This document's own System-A pipeline section already documents `[di+0x16]` as triple-duty (steering-step cap, attack-speed comparator, animation-cadence divisor) but described it as a roughly-static per-class value; it is in fact a **live countdown with a floor of 1**, ticking down once per pipeline call. `UNKNOWN_sysA_0x16_refill` — where (or whether) it is ever reset to a larger value is not traced.
+- **`CS:0xEB37`**, called unconditionally right after the live-count computation, is a *second*, independent weighted random-event roll using the SAME descriptor `+0xa` weight field stage 1's reroll gate reads, either acting on a specific pre-selected group member (`[bp+0x11]`, the already-documented "which member" index from the materialise-time draw) or running a fresh weighted-bucket pick when none was pre-selected. It is gated on the group's OWN reroll-throttle counter reading zero (i.e., only rolls on ticks where no reroll happened) and, on its own separate low-probability branch, increments a wrapping 0–127 counter at group-runtime `+0xe2` (yet another previously-undocumented field). `UNKNOWN_eb37_purpose` — what this side event actually does past the member-selection and the `+0xe2` counter was not read this pass.
 
 ### `UNKNOWN_sysA_ec12_zone_table` / `UNKNOWN_sysA_field_0x1a_consumer` — CLOSED negative: the zone code is write-only, dead `[STATIC, exhaustive]`
 
