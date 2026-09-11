@@ -2235,7 +2235,35 @@ record 4 (k=4):  00 00 00 1a 33 4d 66 00 00 00                       -> {26, 51,
 record 5 (k=5):  00 00 15 2b 40 55 6b 00 00 00                       -> {21, 43, 64, 85, 107}
 ```
 
-Every non-zero value matches `floor(256 × i / (2k+2))` for `i = 1..k` (record `k`'s own live-value count), to the byte, across all 5 non-empty records — e.g. record 5: `256×1/12=21.3→21`, `256×2/12=42.7→43`, …, `256×5/12=106.7→107`. So this is a **generator for `k` evenly-spaced fractions of a byte's full 0–255 range**, one record per follower count — exactly the shape needed to space `k` trailing entities evenly around a queue/circle rather than stacking them at fixed 16-byte trail-buffer offsets, the way the ordinary (non-`0x80`) trail-follow path does. This strongly suggests `[bp+0x12]` is a **follower count or follower index** (offset `−2` to zero-base it against this table's own record numbering) and the alt-mode is a refinement used for larger trail-follow groups, spacing members proportionally rather than linearly. The downstream consumer of the fetched byte (past the already-documented `[bp+0xe2]`-wraparound fold-in) was not traced to a final goal-position write this pass, so the connection to `[di+0x1c]`/`[di+0x1e]` is inferred by analogy with the ordinary path, not directly observed.
+Every non-zero value matches `floor(256 × i / (2k+2))` for `i = 1..k` (record `k`'s own live-value count), to the byte, across all 5 non-empty records — e.g. record 5: `256×1/12=21.3→21`, `256×2/12=42.7→43`, …, `256×5/12=106.7→107`. So this is a **generator for `k` evenly-spaced fractions of a byte's full 0–255 range**, one record per follower count — exactly the shape needed to space `k` trailing entities evenly around a queue/circle rather than stacking them at fixed 16-byte trail-buffer offsets, the way the ordinary (non-`0x80`) trail-follow path does. This strongly suggests `[bp+0x12]` is a **follower count or follower index** (offset `−2` to zero-base it against this table's own record numbering) and the alt-mode is a refinement used for larger trail-follow groups, spacing members proportionally rather than linearly.
+
+**And the downstream code (`CS:0xE859`–`0xE882`, read immediately after) confirms the goal-write and reveals the shape is very likely genuinely circular, not just evenly-spaced-linear:**
+
+```
+e859  si += ax                          ; the fraction-derived offset indexes a SECOND table via si
+e85b  ax = word[si]                     ; read one word
+e85d  bx = word[si + 0x100]             ; read ANOTHER word, exactly 256 BYTES later in the same table
+e861  sar ax,0xa ; sar bx,0xa           ; both >> 10 (i.e. scaled down from a large fixed-point range)
+e867  cx = [bp+0xe0] - 4                ; the MOST RECENT trail-buffer slot (one step back from the write cursor)
+e874  bp += wrapped(cx)
+e879  ax += [bp+0x18] ; bx += [bp+0x1a] ; add the historical position at that freshest slot
+e87f  [di+0x1c] = ax ; [di+0x1e] = bx    ; <-- THE GOAL — confirmed, exactly like the ordinary path
+```
+
+So the alt-mode **does** write the entity's goal, exactly as inferred, but computes it very differently: it adds an `(Δx, Δy)` offset — read from two words **256 bytes apart** in a table indexed by the `0xD96E`-derived "fraction of 256" — to the *freshest* trail-buffer position (not a historical one N steps back, the way the ordinary conga-line path works).
+
+### `SINCOS.DAT` decoded, and `UNKNOWN_sysA_trail_follow_altmode_sincos` — CLOSED `[PROVEN]`
+
+A first attempt at this (naive little-endian, arbitrary stride guess) found no sine pattern and was recorded as a refutation — **that was an endianness mistake, corrected here.** Read as **big-endian** `i16`, `SINCOS.DAT`'s first 512 words are `sin(i × 2π/512) × 32767` to within **±1** (rounding) across the entire period — verified exhaustively against a computed reference for all 512 entries, not sampled:
+
+```python
+words = struct.unpack('>640h', open('SINCOS.DAT','rb').read())
+# words[i] == round(sin(i/512 * 2*pi) * 32767), max abs error 1, for i in 0..511
+```
+
+So `SINCOS.DAT` is a **1024-byte, 512-entry, big-endian `i16` sine table spanning one full 360° period** (amplitude `±32767`), and — because a quarter period is exactly `128` words `= 256` bytes — **`cos(θ)` is `sin(θ + 90°)`, reachable in the SAME table at a fixed `+256`-byte offset**, no separate cosine array needed. That is **exactly** the game code's own access pattern at `CS:0xE85B`/`0xE85D` (`ax = word[si]`, `bx = word[si + 0x100]`) — not a plausible-shaped coincidence but a byte-for-byte match to the table's own real period. This **confirms** the alt-mode's reading: it computes `(sin θ, cos θ)` — scaled by `>>10` inside the game (dividing the `±32767` amplitude down to a small pixel-scale radius) — from an angle `θ` derived from the `0xD96E` evenly-spaced-fraction table, and adds that `(Δx, Δy)` to the trail's freshest position. **The alt-mode genuinely arranges trail-follow members in a circle or arc around the leader**, radius set by whatever scaling happens before the `>>10`, angle picked by each follower's own evenly-spaced slice of the full turn.
+
+The trailing **128 words (bytes 1024–1279, `SINCOS.DAT`'s last 256 bytes)** are **not** part of the sine cycle — small values (`23, 16, 15, 0, …`) with no relation to the period-512 formula. `UNKNOWN_sincos_dat_tail` — what this trailing region holds is a fresh, unchased residual; the file's *first* 1024 bytes are now fully explained, the last 256 are not.
 - **Indices 5–8 — the four System-B goal strategies**, verbatim: hero-column, box-around-hero, marker-list, first-on-screen waypoint.
 
 **Shipped-data census, matching this document's own validation standard.** Across all 400 System-A descriptor slots (`PALFILS.0{A,B}{1-4}`, `DS:0x9d60`, 50 records × 8 files), only **74 are live** (`9/9/10/9/9/9/10/9`, entity count `[si+0] != 0`) — and the `[si+0x8]` nibble across every live record is in **`{0, 1, 2}`**, never reaching 3 or beyond. So in the shipped release **only strategies 0–2 (chase, the flock/target search, marker-seek) are ever selected** — the dead RET, the trail-follow, and all four B-shared goal strategies are real, reachable code with no bounds check, but no shipped System-A descriptor ever picks them.
