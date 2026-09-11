@@ -177,10 +177,34 @@ export function wallBlocks(map, x, y, dir) {
       || cellAt(map, si + 0x101) === CELL_SOLID;
 }
 
+/* CS:0x4a15-0x4a6a (idle's own UP handler) — the general "is there a ladder
+ * here" test: current row (head level) OR the row directly below it, with a
+ * single straddle split at sub-position 0x10 (not the wall probes' 8, and
+ * not one test per row — each row is tested at ONLY the column the split
+ * picks). Re-read off the disassembly while chasing the climb-entry bug
+ * below: a single-row test (what this used to be) is one vertical pixel of
+ * rounding away from missing a ladder the original would have found. Used
+ * for both entry (_ground) and continuation (_climb). */
 function climbableHere(map, x, y) {
   const si = mapCursor(x, y);
-  if (cellAt(map, si) === CELL_CLIMBABLE) return true;
-  if ((x & 0x1f) >= 8 && cellAt(map, si + 1) === CELL_CLIMBABLE) return true;
+  const col = (x & 0x1f) >= 0x10 ? 1 : 0;
+  return cellAt(map, si + col) === CELL_CLIMBABLE
+      || cellAt(map, si + MAP_COLS + col) === CELL_CLIMBABLE;
+}
+
+/* CS:0x598a-0x59e5 (walk-left) / CS:0x5bd2-0x5c02 (walk-right) — the
+ * DOWN-onto-ladder entry test, three rows (48 px, the hero's own height)
+ * below the current position. Unlike the test above, this one has an
+ * overlapping straddle window rather than a hard split: sub-position
+ * 0x0c..0x14 tries BOTH columns before giving up. (The original also gates
+ * this behind a `call 0x5b38 / jc` that falls to crouch instead when it
+ * fails — not modelled here; a port press that would have crouched may
+ * descend a ladder instead in that narrow edge case.) */
+function climbableThreeBelow(map, x, y) {
+  const si = mapCursor(x, y) + 3 * MAP_COLS;
+  const sub = x & 0x1f;
+  if (sub <= 0x14 && cellAt(map, si) === CELL_CLIMBABLE) return true;
+  if (sub >= 0x0c && cellAt(map, si + 1) === CELL_CLIMBABLE) return true;
   return false;
 }
 
@@ -461,25 +485,60 @@ export class Player {
       }
     }
 
-    if (input.up && climbableHere(map, this.x, this.y)) {
-      /* Ladder snap: add 0x20 then AND 0xFFE0 -> multiple of 32 (tile origin) */
+    /* ⚠️ JUMP vs CLIMB priority, re-read from CS:0x5a05-0x5a21 (walk-left),
+     * CS:0x5c49-0x5c65 (walk-right) and CS:0x49fe-0x4a6a (idle) — and it used
+     * to be backwards. UP alone used to launch a jump whenever the cell
+     * under the hero wasn't (yet) climbable, which is exactly what happens
+     * when a player walks toward a ladder holding UP the whole way: every
+     * tick before reaching the ladder's column jumps, and the jump's own
+     * horizontal carry then flies the hero straight over the ladder while
+     * airborne — climb is only ever entered from the ground/idle handlers,
+     * never from JUMP or FALL, so once airborne the ladder is unreachable
+     * until the hero lands past it and has to walk back.
+     *
+     * The real priority:
+     *   - UP together with the direction CURRENTLY being walked -> JUMP,
+     *     unconditionally, the map is never consulted (CS:0x5a0c / 0x5c50).
+     *   - UP alone (that direction NOT held, i.e. `!moving` here) -> check
+     *     for a climbable cell; climb if found.
+     *   - UP alone with no climbable cell -> nothing happens this tick
+     *     (CS:0x5a64 / CS:0x4a6a `jmp 0x5e9b`) — NOT a jump. */
+    if (moving && input.down && climbableThreeBelow(map, this.x, this.y)) {
+      /* CS:0x59ab (walk-left) / CS:0x5bf3 (walk-right) — descend onto a
+       * ladder three rows (48 px) below, tested before UP is even looked
+       * at. The port's ladder is simplified (see _climb's own note), so
+       * only the state transition and the X snap are reproduced. */
       this.x = (this.x + 0x20) & 0xFFE0;
       this.state = ST.CLIMB;
       this.stateIndex = S.CLIMB;
-      this.phase = 0;          // UNKNOWN_ladder_anim_phase
-      this.fromLadder = true;
+      this.phase = 0;           // UNKNOWN_ladder_anim_phase
+      this.fromLadder = false;
       return;
     }
     if (input.up) {
-      /* CS:0x5A17 — a GROUND take-off is `xor cl,cl / mov byte [0x358],0`.
-       * A LADDER take-off instead seeds phase 0x0D / 0x0C (CS:0x5927/0x5912),
-       * which is why the hero leaves a ladder in a different pose. */
-      this.state = ST.JUMP;
-      this.jumpCursor = 0;
-      this.stateIndex = this.facing < 0 ? S.JUMP_L : S.JUMP_R;
-      this.phase = this.fromLadder ? LADDER_JUMP_PHASE[this.stateIndex] : 0;
-      this.fromLadder = false;
-      return;
+      if (moving) {
+        /* CS:0x5A17 — a GROUND take-off is `xor cl,cl / mov byte [0x358],0`.
+         * A LADDER take-off instead seeds phase 0x0D / 0x0C
+         * (CS:0x5927/0x5912), which is why the hero leaves a ladder in a
+         * different pose. */
+        this.state = ST.JUMP;
+        this.jumpCursor = 0;
+        this.stateIndex = this.facing < 0 ? S.JUMP_L : S.JUMP_R;
+        this.phase = this.fromLadder ? LADDER_JUMP_PHASE[this.stateIndex] : 0;
+        this.fromLadder = false;
+        return;
+      }
+      if (climbableHere(map, this.x, this.y)) {
+        /* Ladder snap: add 0x20 then AND 0xFFE0 -> multiple of 32 (tile origin) */
+        this.x = (this.x + 0x20) & 0xFFE0;
+        this.state = ST.CLIMB;
+        this.stateIndex = S.CLIMB;
+        this.phase = 0;         // UNKNOWN_ladder_anim_phase
+        this.fromLadder = true;
+        return;
+      }
+      /* not climbable: UP goes unconsumed, exactly as the original leaves
+       * it — fall through to the normal ground continuation below. */
     }
     if (!solidThreeBelow(map, this.x, this.y)) this._enterFall();
   }
