@@ -2226,9 +2226,51 @@ ece7  pop di / mov [di+0xa],ax
 | `+0x01` | hit points per entity | | `+0x12` | spawn tile X (× 32) |
 | `+0x04`/`05` | BE flag word; **bit 9 = initial facing** | | `+0x13` | spawn tile Y (× 16) |
 | `+0x06` | lo nibble = fire rate; hi nibble `[WF]` | | `+0x14` | per-entity stagger, in frames |
-| `+0x07` | sprite-class index | | | |
+| `+0x07` | sprite-class index | | `+0x10` | BE `i16`; **group-clear reward popup id** — see below |
 
 **Measured across the 8 shipped levels:** 270 live descriptors (14/14/30/28/50/50/42/42), 217 selector-4 references and **zero dangling**, entity counts `{1,2,3,4,5,10}`, speeds `{1,7,8,9,10}`, spawn tiles X 1..126 and Y 1..60 — inside the 128×64 map every time.
+
+### `UNKNOWN_f030_item_drop` — CLOSED: a group-clear reward, and a previously undocumented descriptor field `+0x10` `[STATIC]`
+
+Found while tracing the System-B death path's score-award trampoline (`CS:0xF02A`, see *`UNKNOWN_creature_death_anim`* above): `FUN_1000_f030` (reached via `FUN_1000_ff20`'s dispatch, itself called from `FUN_1000_ed38`) turned out to belong to a genuinely different mechanism from the per-kill score award — **a bonus popup awarded once, when an entire System-B group has been cleared.**
+
+**`FUN_1000_ed38` is System B's per-group entity loop**, called from the already-documented per-frame head `FUN_1000_ed15` and from the materialise loop `FUN_1000_ec60`. Per entity, it dispatches on `[di+0x8]` (the entity's state/HP word):
+
+```
+ed64  cmp word [di+0x8],0 / jns 0xed6d
+ed6a    jmp 0xff20            ; NEGATIVE -> the state-sentinel dispatcher (below)
+ed6d  jz 0xed4b                ; ZERO -> [0x3c3]++ ("empty slot"), skip
+ed6f  call 0xedb8              ; POSITIVE (alive) -> the ordinary movement+contact routine
+```
+
+`FUN_1000_ff20` further splits the negative case by three sentinel values:
+
+```
+ff20  cmp word [di+0x8],-2 / jz 0xff4b      ; -2 = "waiting" (this document's already-documented spawn sentinel)
+ff26  cmp word [di+0x8],-3 / jz 0xff2f      ; -3 = respawn countdown
+ff2c    jmp 0xf030                          ; any OTHER negative -> mid-death-animation
+ff2f  dec word [di+0x6] / jz ...            ; countdown: on expiry, [di+0x8] := desc[+0x1] (HP) — reactivates
+ff2c  jmp 0xf030
+```
+
+**`FUN_1000_f030` is the death-animation frame advancer**, `inc byte[0x1f4]` (a per-group tally, reset to 0 by `FUN_1000_ed38` at the top of each group's loop) then, once `[di+0x4]` (the frame counter) reaches **7**, finalizes the entity to `[di+0x8]=0`/`[di+0x6]=0` — exactly the "empty slot" state `FUN_1000_ed38`'s own `jz 0xed4b` arm tests for on a later frame. Along the way it caches the entity's own world position into shared scratch `DS:0x202`/`0x204` and calls `CS:0xBF5F` (the already-documented, now-closed floating-item-icon popup spawner) with a converted type id from `[di+0x10]` — this is the **per-kill** score/popup this document's own *`UNKNOWN_creature_death_anim`* closure already covers, not the group-level one.
+
+**After the per-entity loop finishes, `FUN_1000_ed38` checks whether the whole group is spent:**
+
+```
+ed78  cl = [0x3c3] + [0x1f4]           ; empty-slot count + still-dying count
+ed80  cmp cl, [si]  / jnz 0xedaa        ; [si] = group descriptor +0x0, the entity count
+ed84  ax=[0x202] ; bx=[0x204] ; ax+=8   ; the world position LAST cached by a dying entity
+ed8e  cmp byte [bp+0x10],0 / jnz 0xedaa ; group-runtime +0x10 — "reward already given" flag
+ed94  cx = [si+0x10]                    ; descriptor +0x10, BE i16 — the REWARD popup id
+ed99  or cx,cx / js 0xeda6              ; negative -> no reward, just set the flag
+ed9d  call 0x1000:bf5f                  ; spawn the reward popup at the cached position
+eda6  [bp+0x10] = 1                     ; mark "reward given" — fires exactly once per group
+edaa  cmp [0x3c3], [si] / jl 0xedb6     ; only "empty" (not "dying") count matters here
+edb1    [bp+0] = 0                      ; ALL entities fully finished -> free the group-runtime slot
+```
+
+So a System-B monster group can carry its own **group-clear bonus item**, encoded as a signed 16-bit id in the previously-uncatalogued descriptor field `+0x10`, big-endian on disk like every other `SI`-read descriptor word in this document — negative means "no reward". The reward fires once, at the position of whichever entity happened to die last (cached via `DS:0x202`/`0x204`), gated by a new group-runtime field `+0x10` (a one-shot latch, distinct from and three fields after the already-documented `+0xe`/`copy of descriptor +0xe`... — this project's own `SS:0x36b4` stride-`0x12` runtime layout gains a newly-identified `+0x10` field: "group reward already awarded"), and only *after* that the group-runtime slot is freed and can be reallocated by a future trigger. `UNKNOWN_sysB_reward_ids` — which descriptor records ship a non-negative `+0x10` value, and what those ids decode to via the shared `CS:0xBF5F` `<0xB`-weapon / `≥0xB`-object split, was not censused this pass.
 
 ### The enemy sprite — `UNKNOWN_sysB_sprite_formula` CLOSED `[PROVEN]`
 
