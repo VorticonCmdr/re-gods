@@ -42,7 +42,9 @@ import { runSearch } from './game/pathfind-producers.js';
 import { GodsRandom } from './game/random.js';
 /* Contact and the grid scan are reached through game/frame.js, which owns the
  * order they must run in — see the note there. */
-import { Health, HEALTH_MAX } from './game/combat.js';
+import { Health, HEALTH_MAX, attackHero } from './game/combat.js';
+import { Nests } from './game/nest.js';
+import { EnemyShots } from './game/enemy-shots.js';
 import { Arsenal, spawnableWeapons } from './game/hero-fire.js';
 import { stepHeroFrame, stepCreatureDamage } from './game/frame.js';
 import { DamageGrid, damageForTag } from './game/collision.js';
@@ -374,6 +376,7 @@ async function main() {
   let burst = new TreasureBurst(new GodsRandom(1));
   let opened = 0, lootLanded = 0, sbStamps = 0, lastBurstFx = null;
   let lastBlockFx = [];
+  let lastNestFx = [], lastShotsFx = null;
   /* ⚠️ DEV SEED, exactly like the weapon picker above. The original puts a
    * "chest key" in DS:0x17e only through CROUCH + FIRE (CS:0x6069), which
    * this port does not implement — so with a truthful empty inventory the
@@ -395,13 +398,23 @@ async function main() {
   let enemies = [];
   let slotsA = new GroupSlots();
   let enemiesA = [];
-  /* Stage 6 (CS:0xe659) is ported — the reload timer, facing test and muzzle
-   * computation all run — but no projectile array is wired to receive the
-   * result yet, matching enemy-shots.js's own pre-existing not-yet-wired
-   * status (see its header: `EnemyShots` is fully built and tested but no
-   * caller in this file instantiates it, for either entity system). This
-   * counts armed shots so the gap is visible rather than silent. */
+  /* Stage 6 (CS:0xe659) is ported and now wired end to end: the reload
+   * timer, facing test and muzzle computation feed the shared EnemyShots
+   * array below, the same one the nest creature fires through. Counted
+   * separately so the split between the two firing paths stays visible. */
   let firedByA = 0;
+
+  /* CS:0x8611 / CS:0x1FE7-0x2039 — the world-2 nest creature and the shared
+   * enemy-shot array both exist as fully-ported, fully-tested modules
+   * (nest.js, enemy-shots.js) that no caller in this file instantiated
+   * before this pass. Wiring them here closes that gap for real, not just
+   * for System A's stage 6. */
+  let nests = new Nests(level.world, rng);
+  let shots = new EnemyShots();
+  /* CS:0x0172 `not byte [0x36c]` — the every-other-frame toggle the nest's
+   * hatch animation reads (DS:0x36c). Not modelled elsewhere in this port
+   * yet, so it is owned here. */
+  let tock = 0;
   const wireSpawn = () => {
     events.onSpawnB = (param) => {
       const d = level.groupsB[param];
@@ -502,6 +515,7 @@ async function main() {
       slots = new GroupSlots(); enemies = []; clamped = 0;
       slotsA = new GroupSlots(); enemiesA = []; clampedA = 0; firedByA = 0;
       rng = new GodsRandom(1);
+      nests = new Nests(level.world, rng); shots = new EnemyShots(); tock = 0;
       health = new Health();
       /* A real level change is not a game restart, so CS:0x914c does NOT run
        * and the weapon slots survive — only their counts are re-pinned
@@ -597,6 +611,17 @@ async function main() {
        * object walk because the walk's own gate (CS:0x14A1) reads what it
        * writes. The box is recomputed from the SNAPPED camera. */
       activateObjects(level.drawObjects, activationBox(cam.snapX, cam.snapY));
+      /* CS:0x1C91 `call 0x8611` — the world-2 nest creature's spawn, reached
+       * from the object walk's category-4/sprite-0x11d dispatch arm, NOT
+       * from the activation pass itself (a different per-frame walk over the
+       * same array). Reproduces the documented shipped bug faithfully: the
+       * object is marked dead here whether or not the spawn actually
+       * succeeded (wrong world, or all 10 nest slots already busy). */
+      for (const o of level.drawObjects) {
+        if (o.dead || o.type !== 115 || !(o.flag6 & 1)) continue;
+        nests.spawn(o.x - cam.snapX, o.y, cam.snapX);
+        o.dead = true;
+      }
       const fr = stepHeroFrame({
         input, arsenal, grid, player,
         map: level.map, cam: { x: cam.snapX, y: cam.snapY }, world: level.world,
@@ -708,6 +733,21 @@ async function main() {
         if (dest) switchLevel(nextLevelKey(sel.value));   // fire-and-forget
       }
 
+      /* CS:0x0282 — the nest walker, BEFORE the System-B entity step at
+       * 0x0285 (below) and after the (unported) brood gate at 0x027F. */
+      const nestContact = (box) => attackHero(
+        { x: box.x, y: box.y, w: box.w, h: box.h, strength: box.hp },
+        { x: player.x, y: player.y, state: player.stateIndex }, health,
+        { invuln: fx.invuln > 0 }).strengthOut;
+      const nestResult = nests.step(
+        { x: cam.snapX, y: cam.snapY }, { x: player.x }, fx.freeze,
+        nestContact, null, tock);
+      for (const s of nestResult.shots) {
+        shots.fire(s.x, s.y, s.dir, { x: cam.snapX, y: cam.snapY });
+      }
+      lastNestFx = nestResult.drawn;
+      tock ^= 1;                                      // CS:0x0172 `not`
+
       runSpawns();
       /* THE HUNT. CS:0xf11f/0xf1e5 run the pathfinder only from the two walk
        * modes, only on a tile crossing, and only when standing on ground —
@@ -738,7 +778,10 @@ async function main() {
         const muzzle = e.tick(
           { x: player.x, y: player.y }, e.desc,
           () => rng.next(), fx.freeze > 0);
-        if (muzzle) firedByA++;
+        if (muzzle) {
+          firedByA++;
+          shots.fire(muzzle.x, muzzle.y, muzzle.dir, { x: cam.snapX, y: cam.snapY });
+        }
       }
       /* CS:0x0285 — contact, then the damage-grid scan, with contact winning.
        * Also in game/frame.js, for the same reason. Both entity arrays flow
@@ -755,6 +798,16 @@ async function main() {
          * touches. Both the shield potion and spawn protection feed it. */
         invuln: fx.invuln > 0 ? 1 : 0,
       }).killed;
+      /* CS:0x02BA — enemy shots move and hit, AFTER every emitter that can
+       * fire one this tick (the nest at 0x0282, the entities at 0x0285), so
+       * unlike the hero's own shots (which step BEFORE the player emits) an
+       * enemy shot CAN hit on the very tick it is fired. A second, separate
+       * damage path from the hero's own (CS:0x4501, not the grid) — see
+       * enemy-shots.js's header for the three ways it differs. */
+      lastShotsFx = shots.step(
+        { x: cam.snapX, y: cam.snapY },
+        { x: player.x, y: player.y, state: player.stateIndex },
+        level.map.planeB, health, null);
       /* CS:0x02c6 — the bar chases the target one unit per frame, and the
        * death test reads the BAR, so a fatal hit leaves a rescue window. */
       /* CS:0x0186 `dec word [0x2fa]` floored at CS:0x018C, CS:0xA99B
@@ -856,6 +909,23 @@ async function main() {
         else { outOfRange++; renderer.strokeRect(sx, sy, 24, 24, 11); }
       }
 
+      /* THE WORLD-2 NEST CREATURE — CS:0x8611/0x8688, already in screen
+       * space (nest.js computes x-camX/y-camY itself). Sprites 512-520
+       * (the creature), 285 (the object it stands on), 108-114 (death). */
+      for (const d of lastNestFx) {
+        const nf = hero && hero.frames[d.sprite];
+        if (nf) renderer.blitSprite(nf, d.x, d.y);
+        else { outOfRange++; renderer.strokeRect(d.x, d.y, 16, 16, 10); }
+      }
+
+      /* ENEMY SHOTS — CS:0x1FE7/0x2039, the shared mechanism by which any
+       * shooting enemy fires (the nest, and now System A's stage 6). */
+      if (lastShotsFx) for (const d of lastShotsFx) {
+        const sf = hero && hero.frames[d.sprite];
+        if (sf) renderer.blitSprite(sf, d.x, d.y);
+        else { outOfRange++; renderer.strokeRect(d.x, d.y, 8, 8, 9); }
+      }
+
       /* PROJECTILES. Drawn after the enemies and before the hero. The sprite
        * is the weapon's own pinned descriptor (+0x0c, or +0x1e when facing
        * selects the second one); the per-projectile animation frame (+0x04
@@ -899,6 +969,7 @@ async function main() {
         (unstamped ? ` · ${unstamped} unstamped object types!` : '') +
         ` · ${enemies.filter((e) => e.alive).length}/${enemies.length} enemies` +
         ` · ${enemiesA.filter((e) => e.alive).length}/${enemiesA.length} sysA` +
+        ` · ${nests.live} nests · ${shots.live} shots` +
         ` · hp ${health.bar}/${health.target > HEALTH_MAX ? HEALTH_MAX : health.target}`        + (health.dead ? ' DEAD' : '') +
         ` · money ${purse.total} · score ${score.value}` +
         ` · lives ${fx.lives}` +
