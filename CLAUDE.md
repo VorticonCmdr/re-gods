@@ -2548,28 +2548,69 @@ df37  jmp df62                          ; done
 4. **A new descriptor field, `+0xe`**, is copied verbatim into group-runtime `+0x6` at the end of every materialise pass. Its consumer is not traced. `UNKNOWN_sysA_descriptor_0e`.
 5. **`CS:0xff59` runs exactly once per group activation** (only when the per-entity stagger counter is still 0, i.e. only for the group's first entity). `UNKNOWN_sysA_ff59` — **CLOSED**: it is a self-contained **"spawn flash" one-shot visual effect**, not entity logic. It plays sfx `0x46` unconditionally, then allocates into a **previously-uncatalogued 10-slot × 6-byte pool at `DS:0xac90`** (sitting immediately before, and structurally a sibling of, the world-1 statue hazard array at `DS:0xaccc` this document documents elsewhere — allocator `CS:0xb0da`, clear `CS:0xb0c3`, walker `CS:0xb0ef` called from the main loop at `CS:0x028E`), seeding `{entityWorldX, entityWorldY, state=7}` at the triggering entity's own spawn position. The walker (gated on a shared "any active" flag `DS:0x1f6`, the same auto-disarm-when-empty pattern this document documents for several other pools) draws sprite `100 + state` via the shared entity blitter `CS:0x3569` and decrements `state` once per tick, freeing the slot once it goes negative — **an 8-frame (sprites 100–107), one-shot flash animation** at the spawn point, no physics, no collision, purely decorative. `CS:0xff59` also writes `[di+6]=5`, `[di+8]=0xFFFD` (−3) and the shared gate `DS:0x1f6=1` onto the *triggering* entity itself; those three writes are not chased further here (`UNKNOWN_sysA_spawn_flash_entity_fields`, a new, narrower residual).
 
+### `UNKNOWN_sysA_dormant_respawn` — CLOSED: states −2/−3 are a delayed reawaken, distinct from ordinary dying `[STATIC]`
+
+Reading `FUN_1000_e2ec` (reached from the master loop, `CS:0xDF98 jmp 0xe2ec`, whenever `[di+8] < 0`) in full rather than just its already-documented `<= −4` fallthrough:
+
+```
+e2ec  cmp word[di+8],-2 / jz 0xe31a        ; state == -2 -> the FLASH arm
+e2f2  cmp word[di+8],-3 / jz 0xe2fb        ; state == -3 -> the REAWAKEN arm
+e2f8  jmp 0xe247                           ; state <= -4 -> the already-documented ordinary death draw
+
+; state == -3, REAWAKEN:
+e2fb  dec word[di+6] / jz 0xe303           ; a countdown at +0x6 — ticks down, does nothing while nonzero
+e303  al = [si+1]                          ; SI is still the GROUP DESCRIPTOR — reads its own +0x1 byte
+e308  cl = ss:[0x435]                      ; the outer loop's own per-slot counter (this entity's index within the group)
+e30d  cmp cl,[bp+0x11] / jnz 0xe314        ; is THIS the group's pre-selected member (the same field CS:0xEB37 elects)?
+e312    shl ax,1                           ;   if so, DOUBLE the descriptor byte
+e314  [di+8] = ax                          ; either way, this becomes the entity's NEW state — reactivating it
+
+; state == -2, FLASH:
+e31a  dec word[di+6] / jz 0xe322           ; the SAME countdown field, same shape
+e322    call 0x1000:ff59                    ; the already-documented "spawn flash" one-shot visual (UNKNOWN_sysA_ff59)
+```
+
+So this closes two of the three previously-"unresolved" fields in one pass: **`+0x6` is a dormant/reawaken countdown**, reused identically by both special states, and **`+0x8` (state) has a THIRD region beyond "positive=alive" and "≤−4=ordinary dying"**: `−2` and `−3` are a genuine **delayed-respawn mechanism** — an entity is parked dormant for `[di+6]` ticks, then either (`−2`) plays the spawn-flash effect (a "something's about to reappear here" cue) or (`−3`) is reactivated outright, with its fresh state value pulled from the group descriptor's own `+0x1` byte — **doubled specifically for the group's pre-selected member** (`[bp+0x11]`, the same materialise-time random draw `CS:0xEB37`'s leader-election reads). `UNKNOWN_sysA_0x8_states_-2/-3_producer` — no write of `−2` or `−3` into `[di+8]` was located this pass, so what actually *parks* an entity into this dormant state (as opposed to what happens once it's there) remains open; `UNKNOWN_descriptor_0x1` narrows what the group descriptor's own `+0x1` byte represents beyond "a reawaken state value, doubled for the elected member."
+
+### `DS:0x296` — CLOSED: a facing-deadzone snapshot, not a new mechanism `[STATIC]`
+
+`CS:0xE003` caches the entity's own world X (`[di]`) into `DS:0x296` at the very top of the pipeline, before stage 1 runs; `CS:0xE06E`–`E08B` (the pipeline's own tail, past the `[di+0x19]` rank check) reads it back and diffs against the POST-pipeline X:
+
+```
+e06e  cx = [0x296] - ax          ; ax = the CURRENT (post-pipeline) X -> cx = net X displacement this whole tick
+e074  jz 0xe08c                   ; no net movement -> leave facing alone
+e078  cmp cx,2  / jl 0xe08c        ; moved right by < 2px -> too small, leave facing alone
+e07d    [di+0x27] = 1              ; moved right by >= 2px -> facing := RIGHT
+e083  cmp cx,-2 / jg 0xe08c        ; moved left by < 2px -> leave facing alone
+e088    [di+0x27] = 0              ; moved left by >= 2px -> facing := LEFT
+```
+
+So `DS:0x296` is simply the snapshot half of a **2px facing-deadzone**: `[di+0x27]` (the already-documented facing flag `CS:0xE199`'s sprite resolver reads) only flips once the whole pipeline pass has actually moved the entity at least 2px net in one direction, preventing 1px steering jitter from flickering the sprite's facing every tick.
+
 ### Consolidated System-A entity record layout, `DS:0x0e96`, stride `0x28` `[PROVEN, from this session's reads]`
 
 | off | field | established by |
 |---|---|---|
 | `+0x00`/`+0x02` | world X / Y | materialise loop, stage 2, already-known |
 | `+0x04` | animation frame | `CS:0xe199`, materialise loop |
-| `+0x06` | (unresolved beyond earlier general notes) | — |
-| `+0x08` | state word; `0xfffe` = "waiting" at spawn; shared contact/death sentinel per the existing `CS:0xff93` closure | materialise loop, existing doc |
+| `+0x06` | dormant/reawaken countdown, shared by states −2 and −3 | `FUN_1000_e2ec`, this session |
+| `+0x08` | state word: `>0` alive, `0xfffe` "waiting" at spawn, `−2`/`−3` dormant/reawaken (this session), `≤−4` ordinary dying | materialise loop, `FUN_1000_e2ec`, existing doc |
 | `+0xc` | (unresolved) | — |
 | `+0xe` | per-entity reload/reserve timer for the generic fire path | `CS:0xe659` (stage 6) |
+| `+0x10` | carried-item TYPE, negative = carrying nothing | this session (`UNKNOWN_df62_full_flow`) |
 | `+0x12`/`+0x14` | velocity X/Y | stages 2/3/4/5, existing doc |
-| `+0x16` | triple-duty: steering-step cap (stage 2), attack-speed comparator (stage 3, existing doc), animation-cadence divisor (`CS:0xe199`) | this session |
-| `+0x19` | gates whether stage 2 evaluates the FINE (8px) arrival check at all | stage 2 |
-| `+0x1a` | spawn-zone code, 0..7, written once by `CS:0xec12` at materialise time | materialise loop |
+| `+0x16` | windup countdown: refilled to 10 by stage 3's attack arm, floored at 1 generically / 2 inside the trail-follow handler | this session |
+| `+0x19` | dual-use: (a) per-tick reroll-queue rank, gating stage 2's FINE arrival check and stage-1's `CS:0xEBB9` group reset on death; (b) the trail-follow leader-election flag `CS:0xEB37` sets | stage 2, this session |
+| `+0x1a` | spawn-zone code, 0..7, written once by `CS:0xec12` at materialise time — dead, never read (`UNKNOWN_sysA_field_0x1a_consumer`, closed negative) | materialise loop |
 | `+0x1b` | COARSE arrival flag (32px cell match) | stage 2 |
 | `+0x1c`/`+0x1e` | goal X/Y | stage 2, existing doc; seeded to spawn point by the materialise loop |
+| `+0x20`/`+0x22` | carried item's own EASED screen/world position | this session (`UNKNOWN_df62_full_flow`) |
 | `+0x24` | sticky per-entity strategy byte (existing doc, stage 1) | existing |
 | `+0x25` | FINE arrival flag (8px both axes) — read by stage 5 (snap-to-goal) and by stage 3 (existing doc, attack gate) | stage 2, stage 5 |
 | `+0x26` | animation reseed countdown | `CS:0xe199`, materialise loop |
-| `+0x27` | facing flag, read by `CS:0xe199` (+3/+4 sprite offset) and written in stage 1 (existing doc, `e07d`/`e088`) | existing, `CS:0xe199` |
+| `+0x27` | facing flag, driven by a 2px deadzone diff against the pre-pipeline X (`DS:0x296`, this session); read by `CS:0xe199` (+3/+4 sprite offset) | this session, `CS:0xe199` |
 
-Fields not touched by any routine read this session (`+0x06`, `+0xc`, and the bytes between the known offsets) remain unresolved; the table above is not claimed complete, only what this session's reads pin down.
+Fields not touched by any routine read this session (`+0xc`, and the bytes between the known offsets) remain unresolved; the table above is not claimed complete, only what this session's reads pin down. `UNKNOWN_sysA_0x29c_cache` — a fresh, unchased scratch pair: `CS:0xE328`–`E32E` (a code span immediately after `FUN_1000_e2ec`'s own body, not yet attributed to a specific caller) caches `[di]`/`[di+2]` into `DS:0x29c`/(presumably `0x29e`, unread), a third position-snapshot pair alongside the already-documented `DS:0x202`/`0x204` and `DS:0x296` — not traced this pass.
 
 The hero carries **three weapon slots**, each holding a weapon index or a negative value when empty:
 
