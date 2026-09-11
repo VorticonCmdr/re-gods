@@ -1583,7 +1583,27 @@ The branch past `CS:0x351F` (`cmp byte[0x38a],3 / jz 0x3560` — skip if this se
 
 So `FUN_1000_3506`, the first time it runs, loads the **small-font sprite atlas** on top of refreshing the status-panel backdrop — which makes sense for any of its 8 call sites (level load, hiscores screen, game over, disk-swap prompt): all of them need to render text over this backdrop, and the small font has to be resident before that can happen.
 
-`ax = ([0x134] − 0x1e00) >> 3` converts an absolute value into a **sprite-descriptor index** — `0x1e00` is this document's own already-documented sprite-descriptor arena base (`DS:0x0e`, set to `0x1e00` at `CS:0x294b`; also the weapon sprite-index base `di = 0x1e00 + val*8`), and `>> 3` divides by the 8-byte descriptor stride. So `DS:0x134` most plausibly holds an absolute descriptor address (out of export 22's own return, or a scratch the loader leaves behind) and `DS:0x138` ends up holding the `smallfnt` group's own **base descriptor index** — needed by any caller that must turn a font character into a sprite id. `UNKNOWN_export22_call_args` — the exact roles of `DS:0x130`/`0x132`/`0x134` as export 22's three pushed parameters, `SS:0x414`, and `DS:0x43e` were not traced past this call site.
+`ax = ([0x134] − 0x1e00) >> 3` converts an absolute value into a **sprite-descriptor index** — `0x1e00` is this document's own already-documented sprite-descriptor arena base (`DS:0x0e`, set to `0x1e00` at `CS:0x294b`; also the weapon sprite-index base `di = 0x1e00 + val*8`), and `>> 3` divides by the 8-byte descriptor stride. So `DS:0x134` most plausibly holds an absolute descriptor address (out of export 22's own return, or a scratch the loader leaves behind) and `DS:0x138` ends up holding the `smallfnt` group's own **base descriptor index** — needed by any caller that must turn a font character into a sprite id.
+
+**`UNKNOWN_export22_call_args` — largely CLOSED: the trailing three parameters are OUTPUT/chained state, threaded across multiple export-22 calls `[STATIC]`.** The clinching site is `FUN_1000_2882` (`CS:0x2882`–`0x28D7`), export 22's **first-ever caller** in the whole binary — called exactly once, from `entry` (`CS:0x006c`), i.e. unconditionally at `GAME.EXE` startup, before any level or screen logic runs:
+
+```
+2897  push 0x1e00        ; [BP+8] — the descriptor-arena BASE (the same constant this
+                          ;   document already ties to DS:0x0e and the weapon sprite index)
+289d  push 0x0            ; [BP+6]
+28a1  push 0x4300          ; [BP+4]
+28a5  push 0x43e           ; [BP+2] — an output-pointer scratch, reused by later callers
+28a9  push 0xe9a0          ; [BP+0] — the worklist pointer
+28ac  call 0x1000:2342     ; export 22
+28af  ax = [bp+0x4] -> [0x130] AND [0x12a]     ; the callee has REWRITTEN this stack slot
+28b8  ax = [bp+0x6] -> [0x132] AND [0x12c]
+28c1  ax = [bp+0x8] -> [0x134] AND [0x12e]
+28d7  sub word [0x134], 0x8                     ; back off one descriptor stride
+```
+
+`DS:0xe9a0` reads (via `read_memory`) as `"always\0\0shop.pi1\0lev?*.map\0…"` — a one-entry, double-NUL-terminated worklist naming only the **`always`** group, the atlas this document already establishes as sprite indices 0–169, loaded first. So `FUN_1000_2882` is the startup **`always`-group loader**, and the three trailing pushed words are not fixed literals consumed once — they are **output parameters export 22 overwrites through the caller's own stack frame** (read back from the identical `[bp+n]` slots after the call returns) and then **persisted to `DS:0x130`/`0x132`/`0x134`** (each duplicated to a second home three bytes later, `0x12a`/`0x12c`/`0x12e` — a "committed" copy alongside a "current" one). `CS:0x28D7`'s `sub word[0x134],8` backs the returned arena pointer off by one 8-byte descriptor stride, plausibly converting an export-22 "one past the last descriptor written" return into "the last descriptor's own address," ready to hand to the *next* group load as its own starting base.
+
+**That chaining is exactly what `FUN_1000_3506`'s own export-22 call does** (documented above): instead of literal seeds, it pushes the *live* `DS:0x134`/`0x132`/`0x130` — i.e. it continues the arena bookkeeping `FUN_1000_2882` started at boot, appending the `smallfnt` group onto whatever the `always` group (and, via `FUN_1000_2a37`'s own write to `DS:0x134` at `CS:0x2BC0`, presumably further per-level groups too) already claimed. This is the machine-level mechanism behind this document's and the port's own already-established "cumulative descriptor index across groups" model (`GROUP_STEMS`/`buildDescriptorMap` in `gods-web`) — confirmed here as real running state threaded through export 22's calling convention, not just an offline indexing convenience. `UNKNOWN_export22_0x4300_role` — the second trailing parameter (seeded `0x4300`, plausibly a destination segment or an arena byte-limit) and `SS:0x414`/`DS:0x43e`'s own exact roles remain untraced past this pattern.
 
 **The consumer.** Not found by the direct-operand searches this document's own ranked item implicitly invited (`[0x88]`/`[0x86]` dereferences, checked exhaustively across all 12 non-PKLITE-packed shipped executables with zero hits) — because nothing ever addresses it that way. `GAME.EXE` instead **preloads a register**. Five sites in the image reach `call 0x3596` with `si` freshly set to `0x86`:
 
