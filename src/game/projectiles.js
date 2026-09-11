@@ -95,24 +95,48 @@ export const HANDLER_TABLE = [
 export const NULL_HANDLERS = [4, 5, 18];
 export const CUT_WEAPON = 3;              // "flame"
 
-/* The four handlers decoded here, keyed by table index. Each adjusts the
+/* The six handlers decoded here, keyed by table index. Each adjusts the
  * muzzle and then writes the same three-entry volley.
  *
  * ⚠️ 13 IS NOT 1 WITH A DIFFERENT Y. Handler 1 begins `add ax,0x10 /
  * sub bx,0xc`; handler 13 jumps PAST both to 0x98d1 after its own `sub bx,8`,
  * so it never applies the +0x10 X offset that its same-facing sibling does.
- * Mirroring 1 to build 13 puts every shot 16 px off. */
+ * Mirroring 1 to build 13 puts every shot 16 px off.
+ *
+ * ── 10/11 — the HUNTER, CS:0x9aca (left) / CS:0x9a82 (right) ─────────────
+ *
+ * Same muzzle-adjust/volley-count shape as 0/1 (`dy=-0xc`, only the left arm
+ * touches X, `+0x10`), but the per-entry `dir` is not a small index into
+ * `DIRS` — it is the hunter's own PACKED SIGNED VELOCITY (see
+ * `unpackHunterVel`), written as a literal per iteration rather than read
+ * from a table:
+ *
+ *   9A99  mov word [di],0xb00     ; entry 0: vx=+11 (0x0b), vy=0    — straight
+ *   9AAF  mov word [di],0xb07     ; entry 1: vx=+11, vy=+7          — angled down
+ *   9AC5  mov word [di],0xbf9     ; entry 2: vx=+11, vy=-7 (0xf9)   — angled up
+ *   (mirrored on the left arm: 0xf500 / 0xf507 / 0xf5f9, vx=-11)
+ *
+ * a 3-shot fan the hunter then homes out of once its mover starts steering.
+ * ⚠️ Neither arm writes weapon `+0x0e` (the facing field handlers 0/1 set) —
+ * a genuine asymmetry, not an oversight in this port. */
 export const HANDLERS = {
   0:  { facing: -1, dx: 0,    dy: -0x0c, dirs: DIRS.left,  at: 0x9919 },
   1:  { facing: +1, dx: 0x10, dy: -0x0c, dirs: DIRS.right, at: 0x98cb },
+  10: { facing: -1, dx: 0x10, dy: -0x0c, dirs: [0xf500, 0xf507, 0xf5f9], at: 0x9aca },
+  11: { facing: +1, dx: 0,    dy: -0x0c, dirs: [0x0b00, 0x0b07, 0x0bf9], at: 0x9a82 },
   12: { facing: -1, dx: 0,    dy: -0x08, dirs: DIRS.left,  at: 0x996a },
   13: { facing: +1, dx: 0,    dy: -0x08, dirs: DIRS.right, at: 0x9964 },
 };
 
-/* Handlers 2/3, 6/7, 8/9, 10/11, 14/15 and 16..21 are not decoded. Shipped
- * weapons reference 2/3 (fireball), 6/7 (spear), 8/9 (hunter), 10/11 (time
- * bomb) and 14/15 (magic axe). UNKNOWN_projectile_handlers. */
-export const DECODED_HANDLERS = [0, 1, 12, 13];
+/* Handlers 2/3, 6/7, 8/9, 14/15 and 16..21 are not decoded. Shipped weapons
+ * reference 2/3 (fireball), 6/7 (spear), 8/9 (time bomb) and 14/15 (magic
+ * axe). ⚠️ CORRECTION — this line used to read "8/9 (hunter), 10/11 (time
+ * bomb)", backwards from the table this project's own CLAUDE.md records
+ * elsewhere (time bomb 8/9, hunter 10/11) and from what CS:0x9a82/0x9aca
+ * actually decode to (the 3-shot fan above, matching the hunter's own
+ * documented mover). UNKNOWN_projectile_handlers stands for 2/3, 6/7, 8/9,
+ * 14/15. */
+export const DECODED_HANDLERS = [0, 1, 10, 11, 12, 13];
 
 /**
  * CS:0x98d1 — how many of the three entries a volley fills.
@@ -510,18 +534,41 @@ export function stepFireball(area, cam, wobble, opts = {}) {
  * count DS:0x33c (initialised to 0xFF = -1 at CS:0x021E, so N creatures leave
  * it at N-1).
  *
- * CS:0x9e36 then walks that list and takes the entry with the SMALLEST key:
+ * CS:0x9e36 then walks that list and takes the entry with the LARGEST key.
+ *
+ * ⚠️ CORRECTION — an earlier revision of this file (and of the reverse-
+ * engineering notes it was ported from) said "the SMALLEST key", read off
+ * `cmp dx,[si] / jnl skip`. Re-read with a concrete trace rather than from
+ * the mnemonics alone: `dx` (the running best) starts at `0xFFFF` (signed
+ * -1), the lowest value any real key can beat, and `JNL`/`JGE` SKIPS
+ * (keeps the old best) exactly when `dx >= [si]` — i.e. it REPLACES only
+ * when `dx < [si]`, which walks the running best UP toward the largest key
+ * seen, not down toward the smallest. Traced concretely against keys
+ * `[5, 3]` in scan order: record 1 (key 5) always wins the first compare
+ * (`-1 < 5`); record 2 (key 3) then loses (`5 >= 3`, skip) — final best is
+ * 5, the larger of the two, not 3.
  *
  *   9E37  cl = [0x33c]              ; count-1
- *   9E3B  si = 0x8c52 ; dx = 0xffff ; best := +inf
+ *   9E3B  si = 0x8c52 ; dx = 0xffff ; best := -1 (beaten by any real key)
  *   9E45  add si,6                  ; advance FIRST, so the first read is 0x8c58
  *   9E48  cmp cl,0 / js done
- *   9E4F  cmp dx,[si] / jnl skip    ; keep only a strictly smaller key
+ *   9E4F  cmp dx,[si] / jge skip    ; skip (keep old) when dx already >= this key
  *   9E53  ax = [si-4] ; bx = [si-2] ; dx = [si]
+ *   9E67  cmp dx,0 / js justReturn  ; nothing beat -1 -> no target found
+ *   9E6C  mov word [bp],0           ; the WINNING record's own key is ZEROED —
+ *                                   ; a second hunter shot searching the same
+ *                                   ; tick finds it again but now scores worst
+ *                                   ; (0), so it prefers an unclaimed target
  *
- * So the hunter chases whichever creature the scan ranked lowest, and it can
- * only ever chase creatures the scan actually visited THIS frame. Ordering
- * matters: run the mover before the scan and the list is last frame's.
+ * So the hunter chases whichever creature the scan ranked HIGHEST (per this
+ * project's separate finding that the key is the entity's own current
+ * sprite id — an authoring-order artifact, not a threat/distance score), and
+ * it can only ever chase creatures the scan actually visited THIS frame.
+ * Ordering matters: run the mover before the scan and the list is last
+ * frame's — which is also what the ORIGINAL does: CS:0x021E (the list-count
+ * reset) sits AFTER CS:0x020F (the projectile/hunter step) and BEFORE
+ * CS:0x0285 (the scan that rebuilds it), so the hunter always reads the
+ * PREVIOUS tick's list by design, not a bug to route around.
  *
  * ⚠️ For this mover `dir` is NOT a velocity-table index — it is a PACKED
  * SIGNED VELOCITY PAIR, and the halves are the reverse of the obvious:
@@ -549,10 +596,17 @@ export const TARGET_LIST_START = 0x8c54;
 export const TARGET_STRIDE = 6;
 export const hunterTurnRate = (st) => Math.min(2, Math.max(1, st.count - st.base - 2));
 
-/** CS:0x9e36 — the creature with the smallest key, or null. */
+/**
+ * CS:0x9e36 — the creature with the LARGEST key, or null (see the correction
+ * above). `list` mutates: the winning entry's key is zeroed in place
+ * (CS:0x9e6c), the same "consume the target" step the original does, so a
+ * second hunter shot searching the same array this tick scores that entry
+ * worst rather than re-picking it.
+ */
 export function pickTarget(list) {
-  let best = null, key = 0xffff;
-  for (const t of list) if (t.key < key) { key = t.key; best = t; }
+  let best = null, key = -1;         // CS:0x9e3e — the sentinel any real key beats
+  for (const t of list) if (t.key > key) { key = t.key; best = t; }
+  if (best) best.key = 0;            // CS:0x9e6c
   return best;
 }
 
@@ -748,8 +802,64 @@ export function stepTimeBomb(p, state, cam, wallAt) {
  *   9FC3  cmp bx,-16  / jl
  * and off-screen only SKIPS the stamp and draw (jumps to 0x9fd9) — it does
  * not despawn. A hunter that leaves the screen keeps flying and can come
- * back. UNKNOWN_hunter_negative_tag: CS:0x9fc8 negates a negative tag around
- * the stamp and restores it, which is not modelled here.
+ * back.
+ *
+ * ── `UNKNOWN_hunter_negative_tag` — the STAMP half, CLOSED `[PROVEN]` ────
+ *
+ * CS:0x9FC8, read in full:
+ *
+ *   9FC8  cmp word [di],0 / jns 0x9fd6      ; tag non-negative -> just stamp
+ *   9FCD  neg word [di]                     ; NEGATIVE -> flip positive...
+ *   9FCF  call 0xa7b6                       ; ...stamp (the SAME shared
+ *   9FD2  neg word [di]                     ; terrain-aware stamp/collision
+ *                                            ; routine every other mover
+ *                                            ; uses)...then flip back
+ *   9FD6  call 0xa7b6                       ; already non-negative -> stamp
+ *
+ * So the tag's SIGN is a genuine state flag distinct from its magnitude: the
+ * magnitude is the ordinary 1..27 tag the shared damage grid expects, and
+ * the sign is flipped to positive only for the instant `0xa7b6` needs to
+ * read it, because a negative byte would corrupt the grid write and the
+ * `CS:0x9320` tag decode. `CS:0xa7b6` internally re-checks `weapon+0x48`
+ * (`breaksTerrain`, false for the hunter) before falling through to the
+ * ordinary 2x2/3x3 stamp, so hunter shots pass through terrain and stamp the
+ * grid exactly like every other weapon once the sign is normalised.
+ *
+ * ── The other half — WHY the tag is negative, tied to CS:0x9E9E ──────────
+ *
+ * `CS:0x9EFA`'s own dispatch (`cmp word [di],0 / jnz` then `js 0x9e9e`) reads
+ * as: tag==0 -> empty slot; tag<0 -> `0x9e9e`; tag>=0 -> `0x9f04`, the target
+ * SEARCH this file already ports (`CS:0x9e36`/`pickTarget`). The spawn
+ * handlers write NEGATIVE tags from birth (`neg dx` then `dec dx` per entry
+ * — see the `HANDLERS[10]`/`[11]` note above), so a fresh hunter shot's
+ * FIRST tick takes the `0x9e9e` arm, not the search. That arm re-reads the
+ * packed `[di+6]` velocity the spawn handler ALSO wrote as a literal (the
+ * 3-shot fan), applies it as plain ballistic motion, DAMPS it toward zero
+ * one unit per axis per tick (drag), and once both components reach exactly
+ * zero writes the sentinel `[di+6] = 0x0f00` (unreachable by any real
+ * clamped-to-±6 steered velocity) and does a SINGLE `neg word [di]` —
+ * flipping the tag positive for the first time. From the NEXT tick on, tag
+ * is positive, `CS:0x9EFA` routes to the search+steer path every tick
+ * thereafter (nothing in that path ever re-negates it), and the hunter
+ * homes for the rest of its life. So the negative tag is a genuine, but
+ * TRANSIENT, "ballistic launch" phase — the 3-shot fan flies its initial
+ * spread and decays before homing takes over.
+ *
+ * ⚠️ `UNKNOWN_hunter_ballistic_launch` — NOT PORTED, DELIBERATELY. `0x9E74`
+ * onward (reached when the dispatch's OTHER branch, `cmp cx,0xf00 / jge`,
+ * finds the packed dir word already at-or-past the sentinel) layers a
+ * cyclic re-aim/cooldown counter on top of this that was not fully traced
+ * with confidence — a `dl`-cycling threshold computed from `(dl+2)&3`
+ * shifted and XCHG'd into a comparison against the incrementing `[di+6]`
+ * high byte, whose exact intent is not established. Rather than port a
+ * mechanism this project does not yet trust its own reading of, this port's
+ * hunter SKIPS the ballistic launch and drag-decay phase entirely and
+ * begins homing from the muzzle on tick 1: it uses the ordinary
+ * `spawnVolley()` path (positive, incrementing tag, like every other
+ * weapon) rather than the original spawn handler's `neg`/`dec` sequence.
+ * The gameplay difference is a missing few-tick "spread then converge"
+ * flourish at the muzzle; homing itself, the target search (with the
+ * max-key correction above) and the stamp are otherwise faithful.
  */
 export const HUNTER_VEL_CLAMP = 6;        // CS:0x9f6a / 0x9f74
 export const HUNTER_TARGET_BIAS = 6;      // CS:0x9f55 / 0x9f5b
@@ -784,4 +894,69 @@ export function stepHunter(p, target, rate) {
   const vy = hunterSteerAxis(vel.vy, p.y, gy, rate);
   p.dir = ((vx & 0xff) << 8) | (vy & 0xff);   // CS:0x9f9d / 0x9fa0
   return { vx, vy };
+}
+
+/* ── CS:0xA00D — the no-target arm, and the array walk around it ─────────
+ *
+ * `CS:0x9F0A cmp dx,0 / jns 0x9f12 / jmp 0xa00d`: when `pickTarget()` finds
+ * nothing this tick, the shot does not just idle — it drops a MOVING debris
+ * spark (game/debris.js) at its CURRENT position, carrying its CURRENT
+ * velocity (the same hi/lo-byte `dir` unpack `stepHunter` uses elsewhere,
+ * corroborating that packing independently), and despawns:
+ *
+ *   A00D  si = 0x8b4c ; walk to a free debris slot ; store {x, y}
+ *         then the velocity from the SAME hi/lo split as CS:0x9F41
+ *   (the record's own tag is cleared by the caller on return)
+ *
+ * This bail happens BEFORE any position update this tick, so the spark
+ * lands at last tick's resting spot, not a moved one.
+ */
+export const HUNTER_NO_TARGET_AT = 0xa00d;
+
+/**
+ * CS:0x9EF7's outer walk, simplified per the note above (search+steer every
+ * live tick — no ballistic launch/coast phase).
+ *
+ * @param {Array} area     the 9-slot projectile area (this weapon's own)
+ * @param {{count:number, base:number}} st  for the turn rate
+ * @param {Array} targets  the hunter target list — MUTATED (see pickTarget)
+ * @param {{x:number,y:number}} cam
+ * @param {{grid, weapon, planeB, debris}} opts
+ */
+export function stepHunterArray(area, st, targets, cam, opts = {}) {
+  const { grid = null, weapon = null, planeB = null, debris = null } = opts;
+  let moved = 0, stamped = 0, noTarget = 0;
+  const rate = hunterTurnRate(st);
+  for (let i = 0; i < MOVER_WALK; i++) {
+    const p = area[i];
+    if (!p || p.tag === 0) continue;                    // CS:0x9EFA
+    const target = pickTarget(targets);
+    if (!target) {                                       // CS:0x9F0A -> 0xA00D
+      if (debris) {
+        const vel = unpackHunterVel(p.dir);
+        debris.spawn(p.x, p.y, vel.vx, vel.vy);
+      }
+      p.tag = 0;
+      noTarget++;
+      continue;
+    }
+    stepHunter(p, target, rate);                          // CS:0x9F12-0x9FA0
+    moved++;
+    const sx = p.x - cam.x, sy = p.y - cam.y;
+    if (sx <= HUNTER_CULL.xMin || sy <= HUNTER_CULL.yMin
+        || sx >= HUNTER_CULL.xMax || sy >= HUNTER_CULL.yMax) continue;  // CS:0x9FB3-9FC6 — skip stamp+draw, NOT despawn
+    if (!grid || !weapon) continue;
+    const style = DRAW_STYLES[weapon.drawStyle];
+    if (!style) continue;
+    if (style.stamp === 'terrain2x2' && weapon.breaksTerrain && planeB) {
+      const wx = (p.x + 8) & ~0x1f, wy = (p.y + 8) & ~0xf;
+      if (planeB[(wy >> 4) * 128 + (wx >> 5)] === 1) { p.tag = 0; continue; }
+    }
+    const sy2 = style.at === 0x9d19 ? sy - 0x10 : sy;
+    const ok = style.stamp === '3x3'
+      ? grid.stamp3x3(sx, sy2, p.tag)
+      : grid.stamp2x2(sx, sy2, p.tag);
+    if (ok) stamped++;
+  }
+  return { moved, stamped, noTarget };
 }

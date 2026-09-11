@@ -581,8 +581,8 @@ async function main() {
   /* ── the weapon picker, now a CHEAT rather than the only way to arm ──────
    * Real pickups work: walking over a type >= 0xC0 object arms the hero
    * through the original's own slot selector. This dropdown stays because
-   * only 5 of the 11 weapons have a decoded spawn handler and a given level
-   * may not place one of those five — it forces a weapon so the fire chain
+   * only 6 of the 11 weapons have a decoded spawn handler and a given level
+   * may not place one of those six — it forces a weapon so the fire chain
    * stays exercisable. It now routes through the SAME dispatcher a map pickup
    * uses, so it cannot diverge from it. Default is "none", as shipped. */
   const spawnable = spawnableWeapons(level.weapons);
@@ -1029,7 +1029,8 @@ async function main() {
       const live = [...arsenal.live()].length;
       $('shots').textContent =
         `${shotsFired} fired · ${live} live · ${arsenal.stamped} stamps · ` +
-        `${creaturesShot} killed · ${arsenal.hitTerrain} walled · ` +
+        `${creaturesShot} killed · ${arsenal.hitTerrain} walled` +
+        (arsenal.noTarget ? ` · ${arsenal.noTarget} hunter shots found no target` : '') + ` · ` +
         `${picked} picked up · ${consumed} consumed` +
         (banked ? ` (+${banked} banked)` : '') + ` · held ` +
         (arsenal.slots.map((sl, i) => sl.weapon < 0 ? null

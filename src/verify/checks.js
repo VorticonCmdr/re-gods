@@ -124,7 +124,8 @@ import { SLOT_STRIDE, PROJECTILE_SIZE, GROUP_STRIDE, GROUP_ENTRIES,
          TARGET_STRIDE, AXE_STATE_STRIDE, AXE_BOUNCE_VX, AXE_GRAVITY,
          AXE_VY_CAP, AXE_SPRITE_BASE, newAxeState, stepMagicAxe, axeSprite,
          HUNTER_VEL_CLAMP, HUNTER_TARGET_BIAS, HUNTER_CULL, hunterSteerAxis,
-         stepHunter, FUSE_START, FUSE_EXPLODE, BOMB_FRAGMENTS, BOMB_SPRITE_BASE,
+         stepHunter, stepHunterArray, HUNTER_NO_TARGET_AT,
+         FUSE_START, FUSE_EXPLODE, BOMB_FRAGMENTS, BOMB_SPRITE_BASE,
          BOMB_BOUNCE, BOMB_GRAVITY_CAP, stepTimeBomb,
          PROJECTILE_VELOCITY, setWeaponArc, resetWeaponArc,
          MOVER_WALK, CULL, stepProjectiles,
@@ -3006,12 +3007,21 @@ export async function checkWeaponsProjectiles(fetchRaw) {
     'the wobble is mover 1 only — sharing one step function loses the fireball arc');
 
   /* ── mover 4: hunter homing ───────────────────────────────────────────── */
-  check(`the hunter picks the target with the SMALLEST key`,
-    pickTarget([{ x: 1, y: 1, key: 40 }, { x: 2, y: 2, key: 7 },
-                { x: 3, y: 3, key: 90 }]).x === 2
+  /* ⚠️ CORRECTED. This test used to assert the SMALLEST key wins, matching a
+   * misreading of `cmp dx,[si] / jnl` that stood uncorrected in both this
+   * file and CLAUDE.md. Traced concretely (see projectiles.js's header):
+   * `dx` starts at -1, beaten by any real key, and the compare only replaces
+   * the running best when it is EXCEEDED — so the LARGEST key wins. */
+  const targets = [{ x: 1, y: 1, key: 40 }, { x: 2, y: 2, key: 7 },
+                   { x: 3, y: 3, key: 90 }];
+  check(`the hunter picks the target with the LARGEST key, and CONSUMES it`,
+    pickTarget(targets).x === 3
+    && targets[2].key === 0             // CS:0x9e6c — the winner's key is zeroed
     && pickTarget([]) === null && TARGET_STRIDE === 6,
-    'CS:0x9e4f `cmp dx,[si] / jnl` keeps only a strictly smaller key; the list is ' +
-    '6-byte {x, y, key} records built by the COLLISION SCANNER at CS:0xAA8D');
+    'CS:0x9e4f `cmp dx,[si] / jge` keeps the OLD best only when it already ' +
+    '>= this key, so the running best walks UP toward the largest, not down ' +
+    'toward the smallest; the list is 6-byte {x, y, key} records built by ' +
+    'the COLLISION SCANNER at CS:0xAA8D');
 
   /* ⚠️ X is the HIGH byte and Y the LOW one — the reverse of the obvious. */
   const hv = unpackHunterVel(0x02fe);
@@ -3075,10 +3085,88 @@ export async function checkWeaponsProjectiles(fetchRaw) {
     detail: 'DS:0x8c54 is filled by the per-frame CREATURE SCAN (CS:0xAA8D appends ' +
       '{x, y, key} and bumps DS:0x33c, which starts at 0xFF). The hunter only ' +
       'reads it. So ordering matters: run the mover before the scan and it ' +
-      "homes on last frame's creatures. UNKNOWN_hunter_turn — the steering " +
-      'arithmetic past CS:0x9f5b is unread, so the port models target selection ' +
-      'and the packed-velocity decode but not the turn.',
+      "homes on last frame's creatures. `UNKNOWN_hunter_turn` is now CLOSED — " +
+      'the steering itself (hunterSteerAxis, above) and the spawn/stamp/no-' +
+      'target chain (below) are all ported; the coast/re-aim cycle a fresh ' +
+      "shot's NEGATIVE tag drives before it starts homing is not — see " +
+      '`UNKNOWN_hunter_ballistic_launch` in projectiles.js.',
   });
+
+  /* ── the hunter, wired end to end: spawn handlers 10/11, the array walk,
+   * the stamp, and the no-target arm CS:0xA00D — game/hero-fire.js ────────
+   *
+   * These are integration-level (the array walk, stamping, debris), tested
+   * directly here rather than only through the full player state machine,
+   * matching how the other movers above are tested. */
+  {
+    const st = { count: 1, base: 1 };                 // volleySize -> 1 shot
+    const { entries, facing } = spawnVolley(st, 11, 19, 100, 100);   // right
+    check(`spawnVolley(handler 11) writes the hunter's own packed-velocity fan`,
+      facing === 1 && entries.length === 1 && entries[0].dir === 0x0b00
+      && entries[0].x === 100 && entries[0].y === 100 - 0x0c,
+      'HANDLERS[11] (CS:0x9a82): dy=-0xc like handler 1, but `dir` is the ' +
+      'literal packed velocity 0xb00/0xb07/0xbf9 (vx=+11, vy 0/+7/-7) rather ' +
+      'than a DIRS index — a straight-line fan the hunter steers out of');
+    const left = spawnVolley(st, 10, 19, 100, 100);
+    check(`handler 10 (left) mirrors 11 and offsets X by +0x10`,
+      left.facing === -1 && left.entries[0].dir === 0xf500
+      && left.entries[0].x === 100 + 0x10,
+      'HANDLERS[10] (CS:0x9aca): `add ax,0x10` before the write, vx=-11 — the ' +
+      'asymmetry (only ONE arm touches X) matches handlers 0/1 exactly');
+
+    const grid = new DamageGrid();
+    const debris = new Debris();
+    /* A minimal synthetic weapon fixture, NOT the shipped PWEAPONS record —
+     * `w1` (the parsed table) isn't in scope yet this far up the function
+     * (it's declared later, alongside the `armed()`/spawnableWeapons tests).
+     * `breaksTerrain: false` matches this project's own documented finding
+     * for the hunter ("lightning bolt, spear, axe, hunter and magic axe
+     * pass through" walls); `drawStyle` only needs to select a real entry
+     * in DRAW_STYLES for this test to exercise the dispatch. The shipped
+     * hunter record's own fields are cross-checked elsewhere (the "every
+     * spawnable weapon's pinned sprite resolves inside `objects`" check). */
+    const huntWeapon = { breaksTerrain: false, drawStyle: 0 };
+
+    /* No target this tick -> CS:0xA00D: a MOVING spark (not stationary — it
+     * carries the shot's own velocity) at the shot's CURRENT position, then
+     * despawn. */
+    const noTargetArea = [{ tag: 19, x: 200, y: 200, dir: 0x0203 }];
+    const r1 = stepHunterArray(noTargetArea, st, [], { x: 0, y: 0 },
+      { grid, weapon: huntWeapon, planeB: null, debris });
+    check(`with no target, the hunter drops a MOVING debris spark and despawns`,
+      r1.noTarget === 1 && noTargetArea[0].tag === 0
+      && debris.live === 1 && debris.slots.find((s) => s.alive).vx === 2
+      && debris.slots.find((s) => s.alive).vy === 3,
+      'CS:0x9F0A `cmp dx,0 / jns / jmp 0xa00d` — unlike the terrain-stop and ' +
+      "enemy-shot puffs (both stationary), this one keeps the shot's OWN " +
+      'velocity, split the same hi/lo way stepHunter reads it');
+
+    /* A live target -> steer toward it, then stamp the grid. */
+    const homingArea = [{ tag: 19, x: 0, y: 0, dir: 0 }];   // dir=0 -> vx=vy=0
+    const hunterTargets = [{ x: 1000, y: 1000, key: 5 }];
+    const r2 = stepHunterArray(homingArea, st, hunterTargets, { x: 0, y: 0 },
+      { grid, weapon: huntWeapon, planeB: null, debris });
+    check(`with a target, the hunter steers toward it and stamps the grid`,
+      r2.moved === 1 && r2.noTarget === 0
+      && unpackHunterVel(homingArea[0].dir).vx > 0
+      && unpackHunterVel(homingArea[0].dir).vy > 0
+      && hunterTargets[0].key === 0            // CS:0x9e6c — consumed
+      && r2.stamped === 1,
+      `CS:0x9F12-0x9FA0 (steer, applied) into 0x9FC8-0x9FD9 (the shared ` +
+      `terrain-aware stamp, drawStyle ${huntWeapon.drawStyle}) — the same ` +
+      'chain every other weapon uses once its velocity is resolved');
+
+    /* Off-screen: skip the stamp, but do NOT despawn — a different cull with
+     * a different effect from every other mover. */
+    const offscreen = [{ tag: 19, x: 5000, y: 5000, dir: 0 }];
+    const r3 = stepHunterArray(offscreen, st, [{ x: 5000, y: 5000, key: 1 }],
+      { x: 0, y: 0 }, { grid, weapon: huntWeapon, planeB: null, debris });
+    check(`off-screen the hunter still moves and is NOT despawned`,
+      r3.moved === 1 && r3.stamped === 0 && offscreen[0].tag !== 0,
+      'CS:0x9FB3-0x9FC6 skip straight to the loop tail, never touching the ' +
+      "tag — a hunter shot that leaves the screen keeps flying and can " +
+      'come back, unlike the common mover\'s cull which despawns');
+  }
 
   /* ── mover 5: the magic axe bounces ───────────────────────────────────── */
   check(`the axe's state array is 9 records of ${AXE_STATE_STRIDE} bytes`,
@@ -3574,7 +3662,7 @@ export async function checkWeaponsProjectiles(fetchRaw) {
     const stems = ok.map((i) => (dmap[PINNED_SPRITE[i]] || {}).stem);
     const objectStems = GROUP_STEMS.objects;
     check(`every spawnable weapon's pinned sprite resolves inside \`objects\``,
-      ok.length === 5 && stems.length === 5
+      ok.length === 6 && stems.length === 6
         && stems.every((s) => s && objectStems.includes(s)),
       `descriptors ${ok.map((i) => PINNED_SPRITE[i]).join(', ')} -> ` +
       `${stems.join(', ')}. main.js loads always + objects + level<N>; a ` +
@@ -3585,12 +3673,14 @@ export async function checkWeaponsProjectiles(fetchRaw) {
   /* ── how much of the arsenal is actually reachable ────────────────────── */
   {
     const s = spawnableWeapons(w1);
-    check(`exactly 5 of the 11 shipped weapons have a decoded spawn handler`,
-      s.ok.length === 5 && s.ok.join() === '0,4,5,7,10',
-      `handlers 12/13 are decoded but NO shipped weapon references them, so ` +
-      `the decoded set covers ${s.ok.length} weapons in practice, not 4 ` +
-      `families of 11. The other six are counted at the call site rather than ` +
-      `throwing, the same treatment the out-of-range \`dir\` gets`);
+    check(`exactly 6 of the 11 shipped weapons have a decoded spawn handler`,
+      s.ok.length === 6 && s.ok.join() === '0,4,5,7,8,10',
+      `handlers 12/13 are decoded but NO shipped weapon references them, and ` +
+      `the hunter (8) uses its OWN pair (10/11, the 3-shot fan) rather than ` +
+      `the 0/1 the other five share, so the decoded set covers ` +
+      `${s.ok.length} weapons in practice, not 4 families of 11. The other ` +
+      `five are counted at the call site rather than throwing, the same ` +
+      `treatment the out-of-range \`dir\` gets`);
     const cut = s.blocked.filter((b) => b.cut);
     check(`the one weapon with a NULL handler pair is the cut "flame"`,
       cut.length === 1 && cut[0].index === CUT_WEAPON,

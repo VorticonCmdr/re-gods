@@ -60,8 +60,16 @@
 
 import { WEAPON_SLOTS, MAX_SUBSLOTS, tagFor, allocateShots, armWeapon,
          reloadWorld } from './weapons.js';
-import { spawnVolley, stepProjectiles, DECODED_HANDLERS, NULL_HANDLERS,
-         AREA_ENTRIES, ENTRIES_REACHABLE, GROUP_ENTRIES, muzzle } from './projectiles.js';
+import { spawnVolley, stepProjectiles, stepHunterArray, DECODED_HANDLERS,
+         NULL_HANDLERS, AREA_ENTRIES, ENTRIES_REACHABLE, GROUP_ENTRIES,
+         muzzle } from './projectiles.js';
+
+/** CS:0x9130/0x9137/0x913E all compare a slot word against 8 — the hunter.
+ *  Duplicated from frame.js rather than imported, to keep this file's own
+ *  dependency graph one-way (frame.js already depends on combat.js and
+ *  pickup.js; nothing gains from adding a hero-fire.js <-> frame.js edge
+ *  for one integer). */
+export const HUNTER_WEAPON = 8;
 
 /** Player states whose handler reaches the allocator (see the census above). */
 export const FIRE_CAPABLE_STATES = [0, 1, 8, 9, 11, 12, 13, 14];
@@ -139,6 +147,13 @@ export class Arsenal {
     this.stamped = 0;
     this.hitTerrain = 0;
     this.fired = 0;
+    /* CS:0x1D2/0x33C — the hunter's own target list, built by
+     * stepCreatureDamage() at CS:0x0285 (frame.js) and read here one tick
+     * later at CS:0x020F, matching the original's own ordering (the count
+     * reset CS:0x021E sits between the two). Empty until a hunter is
+     * equipped (frame.js only populates it then). */
+    this.targets = [];
+    this.noTarget = 0;               // CS:0xA00D — shots that found nothing
   }
 
   /** CS:0x9115 — a NEW pickup re-bases the count, so the volley drops to one. */
@@ -179,10 +194,11 @@ export class Arsenal {
    * ⚠️ THE GUARD, and why it is a counter rather than a throw. `spawnVolley`
    * raises on an undecoded handler, which is right for a unit test and wrong
    * on a path that runs whenever the player presses fire: of the 11 shipped
-   * weapons only FIVE use the decoded pair 0/1 (knife, lightning bolt,
-   * throwing star, axe, mace). The other six would kill the frame. Handlers
-   * 12/13 are decoded but no shipped weapon references them, so the decoded
-   * set covers 5 of 11 in practice, not 4 families of 11.
+   * weapons only SIX use a decoded pair — five share 0/1 (knife, lightning
+   * bolt, throwing star, axe, mace) and the hunter uses its own 10/11 (the
+   * 3-shot fan, see projectiles.js). The other five would kill the frame.
+   * Handlers 12/13 are decoded but no shipped weapon references them, so the
+   * decoded set covers 6 of 11 in practice, not "a family of 4" against 11.
    *
    * Same reasoning as the `dir` guard in stepProjectiles: skip and count, so a
    * routing bug is visible in the panel instead of fatal in play.
@@ -216,16 +232,29 @@ export class Arsenal {
 
   /**
    * CS:0x9455 — walk the three slots and run each one's mover.
-   * Only the common mover (weapon +0x1A == 0) is stepped here; the other five
-   * are ported in projectiles.js but are per-weapon and are wired as those
-   * weapons become reachable. Counted, not silently skipped.
+   * The common mover (weapon +0x1A == 0) and the hunter (CS:0x9ef7,
+   * `stepHunterArray`) are stepped here; the other four (fireball, time
+   * bomb, magic axe, and flame's null mover) are ported in projectiles.js
+   * but are per-weapon and wired as those weapons become reachable. Counted,
+   * not silently skipped.
+   *
+   * @param {?object} debris  the DS:0x8b4c owner — the hunter's no-target
+   *   arm (CS:0xA00D) drops a moving spark into it when it finds nothing.
    */
-  step(cam, grid, planeB, world, planeA = null, blocks = null) {
+  step(cam, grid, planeB, world, planeA = null, blocks = null, debris = null) {
     let moved = 0, culled = 0;
     const hits = [];                              // this tick's terrain-stops
     for (const s of this.slots) {
       if (s.weapon < 0) continue;                // CS:0x9477 `cmp [di],0 / jns`
       const w = this.weapons[s.weapon];
+      if (s.weapon === HUNTER_WEAPON) {
+        const r = stepHunterArray(s.area, s.st, this.targets, cam,
+          { grid, weapon: w, planeB, debris });
+        moved += r.moved;
+        this.stamped += r.stamped;
+        this.noTarget += r.noTarget;
+        continue;
+      }
       const r = stepProjectiles(s.area, cam, {
         grid, weapon: w, planeB, world, planeA, blocks,
         weaponIndex: s.weapon, pickupCount: s.st ? s.st.count : 0 });
