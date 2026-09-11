@@ -2589,6 +2589,16 @@ A6B8  cmp dx,4  / jnl move     ; moving left:  only when (x & 0x1f) < 4
 A6C4  mov cx,0x4               ; vx := +4
 ```
 
+**And WHICH cell gets tested is decoded too, `CS:0xA5A5` (right) / `CS:0xA5D9` (left).** Both take X **and** Y — a probe that drops Y (as an earlier revision of the `gods-web` port's own `wallAt(x, dir)` signature did) cannot reproduce this. The tile cell is the usual `0x5004 + (x&~0x1f)>>5 + ((y&~0xf)<<3)`, and the NEIGHBOUR tested depends on the Y sub-tile remainder:
+
+```
+A5C6  and bx,0xf / jz 0xa5d2        ; y HAS a sub-tile remainder ->
+A5CB  cmp byte [si+0x81],1 / jz     ;   test row+1, col+1 (diagonal)
+A5D2  cmp byte [si+0x1],1           ; y remainder == 0 -> same row, col+1
+```
+
+⚠️ Read the offsets literally, not by the comment gloss above them: `+0x81` (129 = 128+1) is tested when the Y remainder is **nonzero**, and it is **row+1, col+1** — a diagonal look-ahead, not "the same row". `+0x1` (same row, col+1) is tested when the remainder is **zero**. The left probe mirrors it at `si-1` (same row) / `si+0x7f` (row+1, col−1). `ZF` on return is the comparison result (`byte == 1` → wall); the caller's own `jnz` after the `call` reads "not a wall → keep flying".
+
 ⚠️ **And the bounce is a fixed ±4, not a reflection** — an incoming +12 leaves as −4.
 
 ⚠️ **A FOURTH distinct gravity rule.** `A703 add cx,2 / cmp cx,8 / jng / sub cx,2`. Collected, no two alike:
@@ -2601,6 +2611,19 @@ A6C4  mov cx,0x4               ; vx := +4
 | **magic axe** | **`v += 2`** | **8** |
 
 Lifetime is `A737 dec word [si+0x4] / js` — **decrement then test the sign**, so a life of 2 survives two ticks and dies on the third. Sprite is `0x1aa + ((weaponFrame + phase) mod 6) + 1`, and **`0x1aa` = 426 = `PINNED_SPRITE[9]`**, the magic axe's own pinned descriptor — an independent check on that table from a routine that never reads it. Bounces play sfx `0x09` (`CS:0xa7ad`).
+
+**On expiry, `CS:0xA7A1 call 0xa633` drops a debris spark** carrying the state record's OWN current `{vx, vy}` (`cx=[si]`, `dx=[si+2]`) — a MOVING spark, not the stationary puffs the terrain-stop and enemy-shot-hits-hero paths drop, and notably **after** that same tick's own gravity clamp has already run (the instruction order is position-update → gravity → cull → lifetime-test), so the spark's `vy` is the post-gravity value. This closes one of the five `CS:0xA633` callers catalogued under *`DS:0x8b4c` — debris* above.
+
+**The spawn handlers, table indices 14 (left, `CS:0x9bc1`) / 15 (right, `CS:0x9b15`) — previously undecoded — are now read in full.** Same muzzle/volley-count shape as every other pair, but `dy = -0x10` (twice the common `-0xc`) and, unusually, **neither `dx` nor `dir` is mirrored by facing** — both handlers open `add ax,0x10 / sub bx,0x10`, and both write `dir = {1, 0, 2}` to every entry regardless of facing:
+
+```
+9B40  [di]=tag(dx) / [di+2]=x(stosw,ax) / [di+4]=y(bx) / [di+6]=dir(1, then 0, then 2)
+9B52  [si]=4                    ; state.vx := +4  (RIGHT, CS:0x9b15); LEFT (0x9bc1) writes -4
+9B59  cx=[0xdf14] ; [si+2]=cx   ; state.vy := the LIVE PROJECTILE_VELOCITY[dir].vy
+9B62  [si+4]=0x32               ; state.life := 50
+```
+
+`dir` carries no meaning here to mirror, because `stepMagicAxe`'s own body never reads a projectile's `dir` field — movement comes entirely from the paired `DS:0xdec6` state record, which these same handlers seed. The state slot index is computed from the entry's own TAG (`(tag-1) mod 9`-shaped, via two `cmp cx,0xa / sub cx,9` folds), landing on the exact array position the mover will later walk to by loop index, since the tag numbering and the record's physical slot share one numbering. ⚠️ `DS:0xdf14` etc. are read out of the SAME mutable `DS:0xdf0e` velocity table the weapon-arc potions overwrite (already documented above) — so a magic axe's initial `vy` genuinely depends on whichever arc potion is active the moment it's thrown, and a port must read that table live at spawn time rather than bake a constant.
 
 `UNKNOWN_projectile_movers` is **CLOSED** — see the time bomb above.
 
