@@ -2452,7 +2452,9 @@ Since `FUN_1000_ff93` itself never touches `CX`/`DX` (confirmed by its full disa
 
 **Mover 4, `CS:0x9ef7` — hunter, and it does home.** But the interesting part is not the weapon:
 
-> ⚠️ **The target list is built by the COLLISION SCANNER, not by the weapon.** During the per-frame creature scan, `CS:0xAA8D` appends `{x, y, key}` — six bytes — to a list growing from `DS:0x8c54` (`mov word [0x1d2],0x8c54`, `CS:0x0218`) and bumps the count `DS:0x33c` (initialised to `0xFF` = −1 at `CS:0x021E`, so N creatures leave it at N−1). `CS:0x9e36` then walks that list and takes the entry with the **smallest key** (`cmp dx,[si] / jnl` keeps only a strictly smaller one).
+> ⚠️ **The target list is built by the COLLISION SCANNER, not by the weapon.** During the per-frame creature scan, `CS:0xAA8D` appends `{x, y, key}` — six bytes — to a list growing from `DS:0x8c54` (`mov word [0x1d2],0x8c54`, `CS:0x0218`) and bumps the count `DS:0x33c` (initialised to `0xFF` = −1 at `CS:0x021E`, so N creatures leave it at N−1). `CS:0x9e36` then walks that list and takes the entry with the **largest** key.
+>
+> ⚠️ **Correction, found porting this mover.** This line used to say "the smallest key… `cmp dx,[si] / jnl` keeps only a strictly smaller one" — a misreading of the mnemonic that survived uncorrected. Traced with a concrete example rather than from the mnemonic alone: `dx` (the running best) seeds at `0xFFFF` (signed −1, the lowest value any real non-negative key can beat), and `JNL`/`JGE` **skips** (keeps the OLD best, does not replace) exactly when `dx >= [si]` — so it replaces only when `dx < [si]`, walking the running best **UP** toward the largest key, never down. Walked by hand against keys `[5, 3]` in scan order: record 1 (key 5) beats the −1 seed and becomes best; record 2 (key 3) then loses (`5 >= 3`, skip) — final best is 5, not 3. `CS:0x9e6c mov word [bp],0` then zeroes the WINNING record's own key, so a second hunter shot searching the same list this tick scores that creature worst rather than re-picking it — a natural "spread across live targets" side effect.
 
 So the hunter can only chase creatures the scan actually visited **this frame**, and ordering matters: run the mover before the scan and it homes on last frame's creatures. That also gives the damage grid a second consumer — it is not only a hit test.
 
@@ -2507,7 +2509,66 @@ Flight uses the globals `DS:0x1c8` (vx), `0x1ca` (vy), `0x1cc` (state) rather th
 
 Four arcs of falling amplitude (4, 3, 2, 1), so the bomb visibly settles rather than stopping dead.
 
-**All six movers are now decoded.** `UNKNOWN_projectile_movers` is CLOSED; the only remaining hole in the subsystem is the hunter's steering arithmetic past `CS:0x9f5b` (`UNKNOWN_hunter_turn`).
+**All six movers are now decoded.** `UNKNOWN_projectile_movers` is CLOSED.
+
+### `UNKNOWN_hunter_turn` — CLOSED: the steering, the spawn handlers, the stamp, and why the tag is born negative `[PROVEN]`
+
+The steering itself, past `CS:0x9f5b`, is a per-axis accelerate-toward-goal with a fall-through quirk:
+
+```
+9F61  cmp ax,[ss:0x420] / jl 0x9f72     ; left of goal -> accelerate toward it
+9F68  sub cx,bp                          ; else decelerate by the turn rate
+9F6A  cmp cx,-6 / jnl 0x9f72
+9F6F  mov cx,-6                          ; pinned to the −6 floor...
+9F72  add cx,bp                          ; ...and the rate is ADDED BACK — falls through
+9F74  cmp cx,6 / jng done / mov cx,6     ; ceiling, same shape
+```
+
+⚠️ **The low clamp falls through into the increment.** A plain `clamp(v − rate, −6, 6)` sits flat at −6; the real code pins to −6 and then re-adds the rate, so at rate 1 the velocity oscillates −6, −5, −6, −5… forever rather than settling. Same shape on Y (`CS:0x9f83`–`0x9f94`). The goal is offset `+6` on both axes first (`CS:0x9f55`/`0x9f5b`), so the hunter aims **into** the creature's body, not its corner.
+
+**The spawn handlers, table indices 10 (left, `CS:0x9aca`) and 11 (right, `CS:0x9a82`) — previously undecoded — are the hunter's own 3-shot fan, not a `DIRS` lookup:**
+
+```
+9A82  neg dx                 ; RIGHT: dx (tag, IN) flips negative
+9A84  sub bx,0xc              ; muzzle Y, same -0xc every base handler uses
+9A87  bp = [si+8] - [si+6] + 1 ; the volley count, same formula as 0/1
+9A8E  [di]=dx / [di+2]=ax(stosw) / [di+4]=bx / [di+6]=0xb00   ; entry 0: vx=+11,vy=0
+9AA0  dec bp / jz done
+9AA3  dec dx ; [di]=dx / ... / [di+6]=0xb07                   ; entry 1: vx=+11,vy=+7
+9AB6  dec bp / jz done
+9AB9  dec dx ; [di]=dx / ... / [di+6]=0xbf9                   ; entry 2: vx=+11,vy=-7
+```
+
+`9AA0` mirrors it at `CS:0x9aca` (left), with `add ax,0x10` before the write (matching handler 1's own muzzle asymmetry — only ONE arm of a pair ever touches X) and dirs `0xf500/0xf507/0xf5f9` (vx=−11). **Neither arm writes weapon `+0x0e`** (the facing field handlers 0/1 both set) — a genuine, unexplained asymmetry.
+
+⚠️ **The record's own TAG is written NEGATIVE from birth** (`neg dx` then `dec dx` per entry) — not a stray bug, but load-bearing: `CS:0x9EFA`'s own dispatch reads the sign of `[di]` as a state flag:
+
+```
+9EFA  cmp word [di],0 / jnz 0x9f02   ; tag==0 -> empty slot, skip entirely
+9F02  js 0x9e9e                       ; tag<0  -> COAST (ballistic, below)
+       [falls through]                ; tag>=0 -> SEARCH (0x9f04, CS:0x9e36)
+```
+
+So a freshly-spawned hunter shot's FIRST tick takes the COAST arm, not the search. That arm (`CS:0x9E9E`–`0x9EFA`) applies the packed `[di+6]` literal the spawn handler just wrote as **plain ballistic motion** (no steering), **damps it toward zero one unit per axis per tick** (drag), and once BOTH components reach exactly zero, writes the sentinel `[di+6] = 0x0F00` (unreachable by any steered velocity, since steering clamps to ±6 on both axes) and does a **single** `neg word [di]` — flipping the tag positive for the first time. From the next tick on the tag is positive, dispatch always takes the SEARCH arm (`CS:0x9F04`, `CS:0x9E36`), and nothing in that path ever re-negates it — so the hunter homes for the rest of its life once the initial spread decays.
+
+`UNKNOWN_hunter_coast_reaim` — `CS:0x9E74`–`0x9E94`, reached when the COAST arm's own dispatch (`cmp cx,0xf00 / jge 0x9e74`, testing the packed dir word already at-or-past the rest sentinel) takes the OTHER branch, layers a cyclic counter on top (`cx += 0x100` into `[di+6]`'s high byte, then a `dl`-cycling threshold built from `(dl+2)&3` shifted and `xchg`'d into a comparison) whose exact intent — a periodic re-aim cooldown, most plausibly — was not traced to full confidence this pass and is left open.
+
+**The stamp, `CS:0x9FC8`, and why the tag's sign has to be flipped for it:**
+
+```
+9FC8  cmp word [di],0 / jns 0x9fd6      ; tag non-negative -> just stamp
+9FCD  neg word [di]                     ; NEGATIVE -> flip positive...
+9FCF  call 0xa7b6                       ; ...the SAME shared terrain-aware
+9FD2  neg word [di]                     ; stamp every other mover uses...
+9FD4  jmp 0x9fd9                        ; ...then flip back
+9FD6  call 0xa7b6                       ; already non-negative -> stamp directly
+```
+
+So the tag's magnitude is always the ordinary 1..27 slot tag the shared damage grid and `CS:0x9320`'s tag decode expect; the SIGN is a private state flag (ballistic vs. homing) that would corrupt both if it ever reached the grid unflipped, so it is normalised for exactly the instant the shared stamp needs it. `CS:0xa7b6` internally re-tests `weapon+0x48` (`breaksTerrain`, `0` for the hunter — it is one of the five weapons that pass straight through terrain), so hunter shots never stop at walls, only stamp.
+
+**The cull, `CS:0x9FB3`–`0x9FC6`, is a third shape**: `x ∈ (−16, 320]`, `y ∈ (−16, 192]`, narrower than the common mover's `(−32, 320)`, and — unlike every other mover — going out of it only skips the stamp+draw (`jmp 0x9fd9`), never despawns. A hunter shot that leaves the screen keeps flying and can come back.
+
+Together this closes `UNKNOWN_hunter_turn` fully: steering, the two spawn handlers, the stamp, the cull, and the tag's sign are all read to the byte. Only the coast phase's periodic re-aim cooldown (`UNKNOWN_hunter_coast_reaim`) remains open, and it cannot change whether a shot ever stamps or homes — only how long its opening spread lasts before it does.
 
 ### Mover 5, `CS:0xa678` — the magic axe bounces `[PROVEN]`
 
@@ -2541,7 +2602,9 @@ A6C4  mov cx,0x4               ; vx := +4
 
 Lifetime is `A737 dec word [si+0x4] / js` — **decrement then test the sign**, so a life of 2 survives two ticks and dies on the third. Sprite is `0x1aa + ((weaponFrame + phase) mod 6) + 1`, and **`0x1aa` = 426 = `PINNED_SPRITE[9]`**, the magic axe's own pinned descriptor — an independent check on that table from a routine that never reads it. Bounces play sfx `0x09` (`CS:0xa7ad`).
 
-`UNKNOWN_projectile_movers` is **CLOSED** — see the time bomb above. (`UNKNOWN_hunter_turn`, listed here in an earlier revision as the last gap, is also closed — see the turn-rate formula, `CS:0x9f12`, above.)
+`UNKNOWN_projectile_movers` is **CLOSED** — see the time bomb above.
+
+⚠️ **This line used to also claim `UNKNOWN_hunter_turn` closed, pointing at the turn-RATE formula (`CS:0x9f12`, the `[si+8]-[si+6]-2` clamp).** That was premature: the turn rate is a scalar multiplier, not "the hunter's steering arithmetic" the item actually named — the per-axis accelerate-toward-goal logic (`CS:0x9f61` onward) was still unread at the time. It is now genuinely closed, along with the two spawn handlers, the stamp, and why the tag is born negative — see *`UNKNOWN_hunter_turn` — CLOSED* right after the hunter mover section above.
 
 ### The move→stamp link, and a long-standing claim corrected `[PROVEN]`
 
@@ -3832,6 +3895,7 @@ Two more weapon fields fell out of this: **`+0x02` is a draw-style index** into 
 13. **`UNKNOWN_pobjects_field2`** — the 48-byte record's `+0x02`, copied verbatim into the runtime descriptor and 0 in all 528 records.
 14. Remaining small gaps: `UNKNOWN_playfield_height`; `UNKNOWN_unpack_ax_param`; `UNKNOWN_map_header_word` / `UNKNOWN_map_header_table`; `UNKNOWN_x_parity_at_spawn`; `UNKNOWN_act_dx_source`; `UNKNOWN_projectile_handlers` (table entries 2/3, 6/7, 8/9, 10/11, 14/15); `UNKNOWN_projectile_area_upper`; `UNKNOWN_alt_emitter` (`DS:0x16a`/`0x16c`, selected by `DS:0x33d`); `POBJECTS` category codes `4`/`5`. Folded in from a continuation line that was stranded 1,480 lines from its own list marker: `UNKNOWN_ladder_anim_phase`; `UNKNOWN_camera_alt_path` (`DS:0x32`); `UNKNOWN_camera_init`. (`UNKNOWN_jump_anim_phase`, `UNKNOWN_state_4`, `UNKNOWN_state_18`/`19` and `UNKNOWN_climb_down_rate` travelled on that same stranded line and are **closed** — see *The jump animation phase*, *States 4, 7, 18 and 19*, and *The ladder controls*.)
 15. **`UNKNOWN_d2be_pool`** — a previously undocumented 20-slot × 22-byte pool at `DS:0xd2be`, found chasing two of `CS:0xA633`'s (debris) five callers — see *Three producer shapes* under *`DS:0x8b4c` — debris*. Its own hero-hit test, flat 2-damage subtract and debris puff are decoded; its record layout beyond the leading tag word and `+0x12`, and what `CS:0x7a0b` (called once per active record from its walker `FUN_1000_dc37`) does, are not. What kind of hazard this is — a second shot type, something else — is unestablished.
+16. **`UNKNOWN_hunter_coast_reaim`** — `CS:0x9E74`–`0x9E94`, the periodic re-aim/cooldown a fresh hunter shot's ballistic-launch phase cycles through before its single sign-flip hands it to homing (see *`UNKNOWN_hunter_turn` — CLOSED*). The `dl`-cycling threshold (`(dl+2)&3`, shifted, `xchg`'d into a comparison against the incrementing `[di+6]` high byte) was read but not traced to confidence; most plausibly a periodic re-aim cooldown, not confirmed. Cannot affect whether a shot ever homes or stamps — only how long the opening spread lasts.
 
 ⚠️ `UNKNOWN_openlist_field4` was listed here *and* in the resolved list below. It is **closed** — the resolved entry is correct.
 
