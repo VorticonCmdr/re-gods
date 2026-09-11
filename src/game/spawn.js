@@ -9,8 +9,11 @@
  *     -> System-B group descriptor  PALFILS +0x11A4 + param*0x16
  *     -> next frame, CS:0xec60 materialises `count` entities
  *
- * SELECTOR 4 IS SYSTEM B; selector 5 is System A, which has no ported
- * movement layer and is deliberately not handled here.
+ * SELECTOR 4 IS SYSTEM B (CS:0xde08 / CS:0xec60, this file's original
+ * scope); SELECTOR 5 IS SYSTEM A (CS:0xde42 / CS:0xde7d) — parsed here by
+ * parseGroupsA and materialised by entity-a.js's EntityA/CLASS_TABLES_A,
+ * ported in a later session. See entity-a.js's header for what is and is
+ * not simulated for System A.
  *
  * THE ACTIVATION HANDLER — CS:0xde08, and the ORDER matters:
  *     de08  mov word [si],0xffff        ; THE EVENT IS CONSUMED FIRST
@@ -55,13 +58,46 @@
  */
 
 export const DESC_B_OFF = 0x11A4;   // -> DS:0xa1ac
-export const DESC_A_OFF = 0x0D58;   // -> DS:0x9d60  (System A, not ported)
+export const DESC_A_OFF = 0x0D58;   // -> DS:0x9d60
 export const DESC_STRIDE = 0x16;
 export const DESC_COUNT  = 50;
 export const RUNTIME_SLOTS = 10;    // SS:0x36b4, stride 0x12
 export const MAX_ENTITIES  = 10;    // per group; the original never checks this
 export const SELECTOR_SPAWN_B = 4;
 export const SELECTOR_SPAWN_A = 5;
+
+/** Parse the 50 System-A group descriptors out of a decompressed PALFILS.
+ *  Field positions per entity-a.js's header table and CLAUDE.md's System-A
+ *  pipeline closure this session. +0x01 (hp) is read by structural analogy
+ *  with System B, not from a System-A-specific instruction — see
+ *  UNKNOWN_sysA_descriptor_hp in entity-a.js. */
+export function parseGroupsA(buf) {
+  const out = [];
+  for (let i = 0; i < DESC_COUNT; i++) {
+    const o = DESC_A_OFF + i * DESC_STRIDE;
+    const b = buf.subarray(o, o + DESC_STRIDE);
+    out.push({
+      index: i,
+      count:   b[0x00],                       // materialise loop, CS:0xde80
+      hp:      b[0x01],                        // UNKNOWN_sysA_descriptor_hp
+      flags:  (b[0x04] << 8) | b[0x05],       // big-endian; bit 0x100 = random-member select
+      fireByte: b[0x06],                       // stage 6 (CS:0xe659): lo nibble reload rate, hi nibble direction/config
+      cls:     b[0x07],                        // sprite-class index, CS:0xe199
+      seedPair:   b[0x08],                     // stage 1 strategy nibble pair, CS:0xe748
+      seedWeight: b[0x09],                     // stage 1 weight, 7-bit
+      speedCap:   signByte(b[0x0b]),           // stage 4 (CS:0xe44d) clamp
+      stepCap:    signByte(b[0x0c]),           // stage 2 (CS:0xe336) steering-step cap partner, also stage 3's (unported) range gate
+      extra:      b[0x0e],                     // copied to group-runtime +0x6 at materialise; consumer not traced
+      attackGate: b[0x0f],                     // stage 3 (CS:0xe487) gate — stage 3 is NOT ported
+      tileX:   b[0x12],
+      tileY:   b[0x13],
+      live:    b[0x00] !== 0,
+    });
+  }
+  return out;
+}
+
+const signByte = (b) => (b & 0x80 ? b - 0x100 : b);
 
 /** Parse the 50 System-B group descriptors out of a decompressed PALFILS. */
 export function parseGroupsB(buf) {

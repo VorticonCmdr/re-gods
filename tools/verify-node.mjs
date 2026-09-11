@@ -186,6 +186,20 @@ for (const r of checkEntityB()) {
   console.log(line(r));
 }
 
+console.log('\n  System-A enemy locomotion (CS:0xe001, stages 1/2/4/5/6):');
+const { checkEntityA } = await import('../src/verify/checks.js');
+for (const r of checkEntityA()) {
+  if (!r.pass && !r.note) bad++;
+  console.log(line(r));
+}
+
+console.log('\n  System-A spawn chain and strategy census:');
+const { checkSpawnA } = await import('../src/verify/checks.js');
+for (const r of await checkSpawnA(fetchRaw)) {
+  if (!r.pass && !r.note) bad++;
+  console.log(line(r));
+}
+
 console.log('\n  weapons, fire slots and projectile spawn:');
 const { checkWeaponsProjectiles } = await import('../src/verify/checks.js');
 for (const r of await checkWeaponsProjectiles(fetchRaw)) {

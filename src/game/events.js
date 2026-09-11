@@ -51,7 +51,7 @@
 
 import { parseAllTriggers, evalTrigger, verbOf, isLive } from './trigger.js';
 import { fireTrigger } from './trigger-actions.js';
-import { SELECTOR_SPAWN_B } from './spawn.js';
+import { SELECTOR_SPAWN_B, SELECTOR_SPAWN_A } from './spawn.js';
 
 /** ACT5 chain limit — a port-only guard; see dispatchEvent(). */
 export const ACT5_MAX_DEPTH = 16;
@@ -124,6 +124,7 @@ export class EventRunner {
     this.consumed = new Set();         // trigger indices, for reporting only
     this.consumedEvents = new Set();   // DS:0x932c record ids — the real key
     this.onSpawnB = null;              // set by the host to receive activations
+    this.onSpawnA = null;              // set by the host to receive System-A activations
     this.actionCtx = null;             // set by the host to EXECUTE the verbs
     this.lastCell = -1;
     this.log = [];
@@ -215,6 +216,14 @@ export class EventRunner {
     if (ev.selector === SELECTOR_SPAWN_B) {
       this.consumedEvents.add(id);
       if (this.onSpawnB) this.onSpawnB(ev.param);
+      return null;
+    }
+
+    /* Selector 5 — System A, same consume-before-lookup shape as selector 4
+     * (CS:0xde42 `mov word [si],0xffff` before the runtime-slot search). */
+    if (ev.selector === SELECTOR_SPAWN_A) {
+      this.consumedEvents.add(id);
+      if (this.onSpawnA) this.onSpawnA(ev.param);
       return null;
     }
 

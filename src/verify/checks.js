@@ -22,8 +22,11 @@ import { STATE_INFO, STATE_TABLE, spriteFor, NON_RENDERING_STATES, jumpPhase,
 import { emittableStates } from '../game/player.js';
 import { MODE, MODE_TABLE, EntityB, hopDelta, hopCursorNext,
          groundBelow, onScreen } from '../game/entity.js';
-import { parseGroupsB, GroupSlots, spriteForEntity, CLASS_TABLES_B,
+import { parseGroupsB, parseGroupsA, GroupSlots, spriteForEntity, CLASS_TABLES_B,
          CREATURE_DESCRIPTOR_BASE, MAX_ENTITIES } from '../game/spawn.js';
+import { EntityA, CLASS_TABLES_A, spriteForEntityA, rollStrategy,
+         stageAccelerate, stageApply, stageFacingAndFire,
+         SPRITE_BASE_8FRAME, SPRITE_BASE_6FRAME } from '../game/entity-a.js';
 import { SELECTOR_TABLE, SELECTOR_TRIGGER, EVENT_TABLE_OFF, EVENT_COUNT,
          palfilsNameFor, parsePalfils, EventRunner } from '../game/events.js';
 import { spriteForType, parseObjectCategories, isDeadType, isUnstamped,
@@ -1263,6 +1266,109 @@ export function checkEntityB() {
 }
 
 
+/* System A's six-stage pipeline (CS:0xe001), in isolation — see entity-a.js's
+ * header for what is and is not ported. */
+export function checkEntityA() {
+  const { results, check } = makeChecker();
+
+  /* Stage 2's arrival test rounds position+16 down to a multiple of 32, so
+   * two positions that round to the same 32px cell are "arrived" even when
+   * not pixel-identical, and the velocity decays toward zero rather than
+   * being cleared outright. */
+  const e = new EntityA({ x: 100, y: 100 });
+  e.goalX = 100; e.goalY = 100;
+  e.vx = 5; e.vy = -5; e.stepCap = 4;
+  stageAccelerate(e, 4);
+  check(`arrived at the goal cell decays velocity toward zero, doesn't clear it`,
+    e.arrivedCoarse && e.vx === 1 && e.vy === -1, `vx=${e.vx} vy=${e.vy}`);
+  for (let i = 0; i < 5; i++) stageAccelerate(e, 4);
+  check(`velocity decay stops AT zero, doesn't overshoot`, e.vx === 0 && e.vy === 0);
+
+  /* Not arrived: a proportional step toward the goal, clamped by min(own
+   * cap, descriptor +0xc), added to (not replacing) the existing velocity. */
+  const e2 = new EntityA({ x: 0, y: 0 });
+  e2.goalX = 800; e2.goalY = 0;
+  e2.stepCap = 100;
+  stageAccelerate(e2, 3);   // desc.stepCap = 3, smaller than e2.stepCap
+  check(`the smaller of the two step caps wins, and it ACCUMULATES`,
+    e2.vx === 3, `vx=${e2.vx} (expected min(own,desc) = 3)`);
+  const beforeVx = e2.vx;
+  stageAccelerate(e2, 3);
+  check(`stage 2 accumulates onto existing velocity, not overwrites`,
+    e2.vx === beforeVx + 3, `vx=${e2.vx}`);
+
+  /* Stage 5: frozen means no movement at all, even mid-flight. */
+  const e3 = new EntityA({ x: 10, y: 10 });
+  e3.vx = 4; e3.vy = 0;
+  stageApply(e3, true);
+  check(`DS:0x2fa (freezes aliens) stops stage 5 outright`, e3.x === 10 && e3.y === 10);
+  stageApply(e3, false);
+  check(`unfrozen, stage 5 applies velocity`, e3.x === 14 && e3.y === 10);
+
+  /* Fine-arrival snaps straight to the goal, overriding velocity. */
+  const e4 = new EntityA({ x: 50, y: 50 });
+  e4.goalX = 47; e4.goalY = 53; e4.vx = 99; e4.vy = 99; e4.arrivedFine = true;
+  stageApply(e4, false);
+  check(`the FINE-arrival flag snaps position to the goal, ignoring velocity`,
+    e4.x === 47 && e4.y === 53);
+
+  /* Stage 6: no fire capability (fireByte 0), no reload nibble, zero
+   * velocity, and the reload-not-elapsed case must all refuse to fire. */
+  const f0 = new EntityA({ x: 0, y: 0 });
+  check(`fireByte 0 never arms`, stageFacingAndFire(f0, 0x00) === null);
+  const f1 = new EntityA({ x: 0, y: 0 }); f1.vx = 0;
+  check(`zero own velocity means no fire, even with a live fireByte`,
+    stageFacingAndFire(f1, 0x31) === null);
+  const f2 = new EntityA({ x: 0, y: 0 }); f2.vx = 4;
+  const shot = stageFacingAndFire(f2, 0x31);   // hi nibble 3, lo nibble 1
+  check(`facing right (vx>0) fires from x+32, dir = +hiNibble`,
+    shot && shot.x === f2.x + 0x20 && shot.dir === 3, JSON.stringify(shot));
+  const f3 = new EntityA({ x: 0, y: 0 }); f3.vx = -4;
+  const shotL = stageFacingAndFire(f3, 0x31);
+  check(`facing left (vx<0) fires from x-8, dir = -hiNibble`,
+    shotL && shotL.x === f3.x - 8 && shotL.dir === -3, JSON.stringify(shotL));
+
+  /* CS:0xe748 — the low nibble wins with probability (weight+1)/128. Extreme
+   * weights should never/always swap, matching the doc's own closed-form
+   * reading (weight=127 can never swap, weight=0 swaps 127/128). */
+  let neverSwapped = true, alwaysSwapped = true;
+  for (let r = 0; r < 128; r++) {
+    if (rollStrategy(0x21, 127, () => r) !== 1) neverSwapped = false;   // lo=1
+    if (r > 0 && rollStrategy(0x21, 0, () => r) !== 2) alwaysSwapped = false; // hi=2
+  }
+  check(`seed weight 127 never swaps to the high nibble`, neverSwapped);
+  check(`seed weight 0 swaps to the high nibble on every nonzero roll`, alwaysSwapped);
+
+  /* The two special sprite bases carry NO facing offset and their own
+   * frame-cycle lengths (8 and 6), unlike the default 4-frame + offset case. */
+  const tables = { 1: [{ base: SPRITE_BASE_8FRAME, w: 32, h: 32 },
+                       { base: SPRITE_BASE_6FRAME, w: 32, h: 32 }] };
+  const s8 = new EntityA({ x: 0, y: 0 }); s8.cls = 0; s8.frame = 5; s8.facing = 0;
+  check(`sprite base 496 (0x1f0) draws base+frame with no facing offset`,
+    spriteForEntityA(1, 0, s8, tables) === SPRITE_BASE_8FRAME + 5);
+  const s6 = new EntityA({ x: 0, y: 0 }); s6.cls = 1; s6.frame = 3; s6.facing = 1;
+  check(`sprite base 486 (0x1e6) also carries no facing offset`,
+    spriteForEntityA(1, 1, s6, tables) === SPRITE_BASE_6FRAME + 3);
+
+  /* Default class, world < 2: frame remapped through [0,1,2,1] BEFORE the
+   * +3 facing offset (only when facing===0); world >= 2: frame added
+   * directly, offset is +4. */
+  const dTables = { 1: [{ base: 1000, w: 32, h: 32 }], 2: [{ base: 1000, w: 32, h: 32 }] };
+  const w1 = new EntityA({ x: 0, y: 0 }); w1.cls = 0; w1.frame = 3; w1.facing = 0;
+  check(`world<2 default class remaps frame 3 -> 1 via DS:0xdf78, +3 offset`,
+    spriteForEntityA(1, 0, w1, dTables) === 1000 + 1 + 3,
+    `${spriteForEntityA(1, 0, w1, dTables)}`);
+  w1.facing = 1;
+  check(`facing=1 ("last moved right") adds NO offset`,
+    spriteForEntityA(1, 0, w1, dTables) === 1000 + 1);
+  const w2 = new EntityA({ x: 0, y: 0 }); w2.cls = 0; w2.frame = 3; w2.facing = 0;
+  check(`world>=2 default class adds the raw frame directly, +4 offset`,
+    spriteForEntityA(2, 0, w2, dTables) === 1000 + 3 + 4);
+
+  return results;
+}
+
+
 /* The enemy spawn chain, end to end, on shipped level data. Every figure here
  * is re-derived from the PALFILS bytes at run time — none is transcribed. */
 export async function checkSpawn(fetchRaw) {
@@ -2046,6 +2152,92 @@ export async function checkSpawn(fetchRaw) {
       '(object type 45 sets DS:0x399) and 3 is the per-world waypoint list — ' +
       'both closed; all four are implemented.',
   });
+
+  return results;
+}
+
+
+/* System A's spawn chain and its shipped-data strategy census. Every figure
+ * here is re-derived from the PALFILS bytes at run time. */
+export async function checkSpawnA(fetchRaw) {
+  const { results, check } = makeChecker();
+  const keys = ['1A','1B','2A','2B','3A','3B','4A','4B'];
+
+  let live = 0, refs = 0, badRef = 0, overCount = 0;
+  const perFile = [];
+  const loHist = {}, share = { 0: 0, 1: 0, 2: 0, 3: 0 };
+  for (const k of keys) {
+    const buf = dclDecompress(await fetchRaw(`game/${palfilsNameFor(k)}`)).data;
+    const groups = parseGroupsA(buf);
+    let n = 0;
+    for (const g of groups) {
+      if (!g.live) continue;
+      live++; n++;
+      if (g.count > MAX_ENTITIES) overCount++;
+      const lo = g.seedPair & 0xf, hi = (g.seedPair >> 4) & 0xf;
+      loHist[lo] = (loHist[lo] || 0) + 1;
+      /* CS:0xe748: the low nibble is used with probability (weight+1)/128 —
+       * see rollStrategy's own header. This is the SAME measurement this
+       * project already makes for System B's pathfinder seed. */
+      const pLow = (g.seedWeight + 1) / 128;
+      share[lo] = (share[lo] || 0) + pLow;
+      share[hi] = (share[hi] || 0) + (1 - pLow);
+    }
+    perFile.push(n);
+    const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+    for (let i = 0; i < EVENT_COUNT; i++) {
+      const o = EVENT_TABLE_OFF + i * 4;
+      if (dv.getUint16(o, false) !== 5) continue;   // selector 5 = System A
+      refs++;
+      const p = dv.getUint16(o + 2, false);
+      if (!(groups[p] && groups[p].live)) badRef++;
+    }
+  }
+
+  check(`74 live System-A group descriptors (9/9/10/9/9/9/10/9, any order)`,
+    live === 74, `${live} — ${perFile.join('/')}`);
+  check(`every selector-5 event names a live descriptor`,
+    badRef === 0, `${refs} references, ${badRef} dangling`);
+  check(`no live descriptor's low strategy nibble exceeds 2`,
+    Object.keys(loHist).every((k) => +k <= 2), JSON.stringify(loHist));
+
+  results.push({
+    name: 'shipped System-A strategy nibbles (lo, before the weight roll)',
+    note: true, pass: true,
+    detail: `0 (chase) ${loHist[0] || 0}, 1 (weighted search, NOT PORTED) ${loHist[1] || 0}, ` +
+      `2 (marker-seek, NOT PORTED) ${loHist[2] || 0}`,
+  });
+  const total = live;
+  results.push({
+    name: 'measured EFFECTIVE strategy share (nibble + weight roll, CS:0xe748)',
+    note: true, pass: true,
+    detail: `0: ${(share[0] / total * 100).toFixed(1)}%, ` +
+      `1: ${(share[1] / total * 100).toFixed(1)}% (unimplemented -> sits still), ` +
+      `2: ${(share[2] / total * 100).toFixed(1)}% (unimplemented -> sits still) — ` +
+      `so roughly ${((share[1] + share[2]) / total * 100).toFixed(0)}% of spawned System-A ` +
+      'entities visibly stand still under this port, not a small residual.',
+  });
+
+  /* End-to-end on real level data: a materialised entity whose strategy
+   * rolls to 0 must actually move toward the hero over several ticks. */
+  const buf1a = dclDecompress(await fetchRaw(`game/${palfilsNameFor('1A')}`)).data;
+  const groups1a = parseGroupsA(buf1a);
+  const chaseDesc = groups1a.find((g) => g.live && (g.seedPair & 0xf) === 0);
+  if (chaseDesc) {
+    const ent = new EntityA({ x: chaseDesc.tileX * 32, y: chaseDesc.tileY * 16,
+                               cls: chaseDesc.cls, hp: chaseDesc.hp || 10 });
+    ent.state = ent.hp;   // skip the pre-life FSM — this check is about locomotion
+    ent.strategy = 0;     // force strategy 0 so this is deterministic, not a coin flip
+    const hero = { x: ent.x + 500, y: ent.y };
+    const startDist = Math.abs(hero.x - ent.x);
+    for (let i = 0; i < 60; i++) ent.tick(hero, chaseDesc, () => 0, false);
+    const endDist = Math.abs(hero.x - ent.x);
+    check(`a strategy-0 (chase) entity closes distance to the hero over 60 ticks`,
+      endDist < startDist, `${startDist}px -> ${endDist}px`);
+  } else {
+    results.push({ name: 'strategy-0 chase end-to-end', note: true, pass: true,
+      detail: 'no live world-1a descriptor rolls strategy 0 on its low nibble — skipped' });
+  }
 
   return results;
 }

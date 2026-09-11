@@ -15,7 +15,7 @@ import { Clock, LOGIC_HZ } from './engine/clock.js';
 import { Renderer } from './render/renderer.js';
 import { Player, ST } from './game/player.js';
 import { runAllChecks, checkDescriptorAnchors, checkHeroSprites,
-         checkSelectorsAndObjects, checkSpawn, checkEntityB,
+         checkSelectorsAndObjects, checkSpawn, checkEntityB, checkEntityA, checkSpawnA,
          checkWeaponsProjectiles, checkTriggerActions,
          checkZones } from './verify/checks.js';
 import { EventRunner, parsePalfils, palfilsNameFor } from './game/events.js';
@@ -33,9 +33,10 @@ import { CONSUMABLES, WEAPON_ARCS, INVULN_TICKS_SPAWN } from './game/consumables
 import { Starburst, SPRITE_BASE as SB_SPRITE } from './game/starburst.js';
 import { Destructibles } from './game/destructible.js';
 import { resetWeaponArc, setWeaponArc } from './game/projectiles.js';
-import { parseGroupsB, GroupSlots, spriteForEntity, MAX_ENTITIES,
+import { parseGroupsB, parseGroupsA, GroupSlots, spriteForEntity, MAX_ENTITIES,
          CREATURE_DESCRIPTOR_BASE } from './game/spawn.js';
 import { EntityB, MODE, MODE_TABLE, groundBelow, isDying } from './game/entity.js';
+import { EntityA, CLASS_TABLES_A, spriteForEntityA } from './game/entity-a.js';
 import { VERDICT_NONE } from './game/pathfind.js';
 import { runSearch } from './game/pathfind-producers.js';
 import { GodsRandom } from './game/random.js';
@@ -116,6 +117,7 @@ async function loadLevel(key) {
    * is what the treasure award at CS:0x18A8 pays out. */
   const objValues = parseObjectRecords(objRaw).map((r) => r.value);
   const groupsB = parseGroupsB(dclDecompress(pfRaw).data);
+  const groupsA = parseGroupsA(dclDecompress(pfRaw).data);
   const drawObjects = sortForDraw(map.objects.filter((o) => !isDeadType(o.type)), cats);
 
   /* PWEAPONS is per-world, and Power (+0x06) genuinely differs between them —
@@ -126,7 +128,7 @@ async function loadLevel(key) {
     dclDecompress(await fetchRaw(`game/PWEAPONS.00${key[0]}`)).data);
 
   return { map, sheet, palette, tiles, tileCount: count, palfils, palfilsRaw: palfilsData, cats, drawObjects,
-           objValues, groupsB, weapons, world: +key[0] };
+           objValues, groupsB, groupsA, weapons, world: +key[0] };
 }
 
 /* THE HERO'S SPRITES.
@@ -258,6 +260,7 @@ async function main() {
       checkSelectorsAndObjects(fetchRaw), checkSpawn(fetchRaw),
       Promise.resolve(checkEntityB()), checkWeaponsProjectiles(fetchRaw),
     checkTriggerActions(fetchRaw), checkZones(fetchRaw),
+    Promise.resolve(checkEntityA()), checkSpawnA(fetchRaw),
     ]) results.push(...await g);
     renderChecks(results);
     const mh = $('messages');
@@ -390,11 +393,25 @@ async function main() {
   const markers = [];
   let slots = new GroupSlots();
   let enemies = [];
+  let slotsA = new GroupSlots();
+  let enemiesA = [];
+  /* Stage 6 (CS:0xe659) is ported — the reload timer, facing test and muzzle
+   * computation all run — but no projectile array is wired to receive the
+   * result yet, matching enemy-shots.js's own pre-existing not-yet-wired
+   * status (see its header: `EnemyShots` is fully built and tested but no
+   * caller in this file instantiates it, for either entity system). This
+   * counts armed shots so the gap is visible rather than silent. */
+  let firedByA = 0;
   const wireSpawn = () => {
     events.onSpawnB = (param) => {
       const d = level.groupsB[param];
       if (!d || !d.live) return;
       slots.activate(d);
+    };
+    events.onSpawnA = (param) => {
+      const d = level.groupsA[param];
+      if (!d || !d.live) return;
+      slotsA.activate(d);
     };
   };
   wireSpawn();
@@ -420,6 +437,27 @@ async function main() {
                         cls: d.cls, delay }),
           { desc: d }));      // the pathfinder reads +0x08/+0x09/+0x0c/+0x0d
         delay += d.stagger;
+      }
+      slot.state = 1;
+    }
+  };
+  /* CS:0xde7d, System A. Deliberately reproduced/disclosed quirks — see
+   * entity-a.js's header: no per-entity stagger (the original's own DX
+   * register never advances in this loop) and count clamped the same way
+   * System B's is (the original has no bound either). */
+  let clampedA = 0;
+  const runSpawnsA = () => {
+    for (const slot of slotsA.slots) {
+      if (slot.state !== 2) continue;
+      const d = slot.desc;
+      if (d.count === 0) continue;
+      const n = Math.min(d.count, MAX_ENTITIES);
+      if (d.count > MAX_ENTITIES) clampedA++;
+      const x = d.tileX * 32, y = d.tileY * 16;
+      for (let i = 0; i < n; i++) {
+        enemiesA.push(Object.assign(
+          new EntityA({ x, y, cls: d.cls, hp: d.hp || 1, delay: 0 }),
+          { desc: d }));
       }
       slot.state = 1;
     }
@@ -461,7 +499,9 @@ async function main() {
       spawn = findSpawn(level.map);
       player = new Player(spawn.x, spawn.y);
       events = new EventRunner(level.map, level.palfils);
-      slots = new GroupSlots(); enemies = []; clamped = 0; rng = new GodsRandom(1);
+      slots = new GroupSlots(); enemies = []; clamped = 0;
+      slotsA = new GroupSlots(); enemiesA = []; clampedA = 0; firedByA = 0;
+      rng = new GodsRandom(1);
       health = new Health();
       /* A real level change is not a game restart, so CS:0x914c does NOT run
        * and the weapon slots survive — only their counts are re-pinned
@@ -691,9 +731,22 @@ async function main() {
         }
         e.tick(level.map.planeB, verdict);
       }
+      runSpawnsA();
+      /* System A's own pipeline, CS:0xe001 — stages 1/2/4/5/6, per entity.
+       * Stage 3 (the attack) is not ported; see entity-a.js's header. */
+      for (const e of enemiesA) {
+        const muzzle = e.tick(
+          { x: player.x, y: player.y }, e.desc,
+          () => rng.next(), fx.freeze > 0);
+        if (muzzle) firedByA++;
+      }
       /* CS:0x0285 — contact, then the damage-grid scan, with contact winning.
-       * Also in game/frame.js, for the same reason. */
-      creaturesShot += stepCreatureDamage(enemies, {
+       * Also in game/frame.js, for the same reason. Both entity arrays flow
+       * through the SAME shared routine (CS:0xff93/0xac59 are proven common
+       * to both systems — see CLAUDE.md's "Entity contact" section) — a
+       * separate call here would silently make System-A creatures unable to
+       * hurt or be hurt by the hero. */
+      creaturesShot += stepCreatureDamage([...enemies, ...enemiesA], {
         grid, cam: { x: cam.snapX, y: cam.snapY },
         hero: { x: player.x, y: player.y, state: player.stateIndex },
         health, decodeTag, difficulty, arsenal,
@@ -789,6 +842,20 @@ async function main() {
         else { outOfRange++; renderer.strokeRect(sx, sy, 24, 24, 12); }
       }
 
+      /* SYSTEM-A ENEMIES — sprite = CS:0xe199, class base + frame (+ a
+       * world-dependent facing offset). Drawn in the same pass as System B's,
+       * since the original's shared draw call (CS:0x3569) doesn't
+       * distinguish the two either. */
+      for (const e of enemiesA) {
+        if (e.state <= 0) continue;   // waiting / materialising / dying
+        const sx = e.x - camX, sy = e.y - camY;
+        if (sx < -64 || sy < -64 || sx > SCREEN_W || sy > SCREEN_H) continue;
+        const eid = spriteForEntityA(level.world, e.cls, e, CLASS_TABLES_A);
+        const ef = eid !== null && hero && hero.frames[eid];
+        if (ef) renderer.blitSprite(ef, sx, sy);
+        else { outOfRange++; renderer.strokeRect(sx, sy, 24, 24, 11); }
+      }
+
       /* PROJECTILES. Drawn after the enemies and before the hero. The sprite
        * is the weapon's own pinned descriptor (+0x0c, or +0x1e when facing
        * selects the second one); the per-projectile animation frame (+0x04
@@ -831,6 +898,7 @@ async function main() {
         (outOfRange ? ` · ${outOfRange} out-of-range!` : '') +
         (unstamped ? ` · ${unstamped} unstamped object types!` : '') +
         ` · ${enemies.filter((e) => e.alive).length}/${enemies.length} enemies` +
+        ` · ${enemiesA.filter((e) => e.alive).length}/${enemiesA.length} sysA` +
         ` · hp ${health.bar}/${health.target > HEALTH_MAX ? HEALTH_MAX : health.target}`        + (health.dead ? ' DEAD' : '') +
         ` · money ${purse.total} · score ${score.value}` +
         ` · lives ${fx.lives}` +
