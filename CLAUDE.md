@@ -2308,7 +2308,26 @@ So `[di+0x19]` is not a boolean gate at all — it is **the group-runtime reroll
 - `FUN_1000_df62` (`CS:0xE289`) reads it, compares against `1`, and branches to `CALL 0x1000:ebb9` when true, else `DEC byte[bp+0x12]` — **undoing** the group counter's own advance, as if giving the slot back — immediately after this same function calls the popup spawner `CS:0xBF5F` with the entity's own carried-item fields (`[di+0x20]`/`[di+0x22]`, this document's already-documented System-A carried-item position) and a type-adjusted `CX`. Read together with this session's own `UNKNOWN_bf5f_popup_id` closure, this refines the already-documented "drop the carried item" mechanism: a normal drop goes through the popup spawner (so most dropped items become a floating icon, not a solid object), and **only the entity whose reroll rank is exactly 1 — the first granted this tick — proceeds to `CS:0xEBB9`**; every other entity that rolled this tick has its own throttle advance reversed.
 - `FUN_1000_ebe5` (`CS:0xEBEB`) reads `[di+0x19]` and compares it against **another group member's own `[si+0x19]`** (`si` sourced from `DS:0x294`, the already-documented "current group's entity base" shadow global), gated by rotating a bit out of the group's "rolled" bitmask per candidate — a genuine ordinal scan across the group, not a boolean test.
 
-So `[di+0x19]`'s real role is: **exactly one entity per group per tick — the one stamped `1`, i.e. first through the reroll gate — is privileged** by at least two of its four consumers, with a third (`ebe5`) running a fuller rank comparison across the whole group. `UNKNOWN_ebb9_reroll_effect` and `UNKNOWN_df62_full_flow` narrow the residual to exactly what the privileged entity's `CALL 0xEBB9` does, and to `FUN_1000_df62`'s complete control flow (only a linear disassembly window was read here, not a verified branch graph).
+So `[di+0x19]`'s real role is: **exactly one entity per group per tick — the one stamped `1`, i.e. first through the reroll gate — is privileged** by at least two of its four consumers, with a third (`ebe5`) running a fuller rank comparison across the whole group.
+
+### `UNKNOWN_ebb9_reroll_effect` — CLOSED: a synchronized whole-group strategy reset `[STATIC]`
+
+`CS:0xEBB9`, the privileged (rank-1) entity's own call target, is a **group-wide reset**, not a per-entity effect:
+
+```
+ebb9  [bp+0x12] = 0                 ; the GROUP's own reroll-throttle counter -> back to 0
+ebbd  [bp+0x14] = 0                 ; the GROUP's own "rolled" bitmask -> cleared
+ebc2  al = [si]                     ; SI here is still the GROUP DESCRIPTOR pointer (this entity system's `+0x0` = entity count field)
+ebc4  si = [0x294]                  ; the already-documented "current group's entity base" shadow global
+ebc8  cx = sign_extend(al)          ; loop count := the group's own entity count
+ebcb  [si+0x19] = 0                 ; each member's own reroll stamp -> 0
+ebcf  [si+0x25] = 0                 ; each member's own FINE-arrival flag -> 0
+ebd3  [si+0xa] = 1                  ; a movement-related field, set uniformly
+ebd8  [si+0x24] = 0xff              ; each member's own STICKY strategy byte -> unset (0xFF, "reroll a fresh strategy next stage-1 pass")
+ebdc  si += 0x28 ; loop 0xebcb      ; next member, stride 0x28 (System A's own entity stride)
+```
+
+So `CALL 0xEBB9` walks **every entity in the group** and force-unsets each one's own sticky strategy byte (`+0x24`) — the field stage 1 (`CS:0xE6E4`) checks first to decide "roll a fresh strategy vs. keep the current one." The whole `[di+0x19]` mechanism now reads as a coherent design: it exists so that when one entity in a group is granted the (randomly-weighted, budget-capped) reroll, only that ONE entity — the first through the gate this tick — gets to trigger a **synchronized reset of the entire group's goal strategy**, rather than each member rerolling independently and out of sync. Every other entity that also rolled this tick (rank ≠ 1) has its own individual throttle slot given back instead (`FUN_1000_df62`'s `DEC byte[bp+0x12]`), so the group's reroll budget isn't wasted on entities that don't get to act. `UNKNOWN_df62_full_flow` — `FUN_1000_df62`'s complete branch structure (only a linear window was read here, not a verified control-flow graph) and the exact relationship between its `CS:0xBF5F` popup-spawner call and this reset — remains the one open piece.
 
 ### `UNKNOWN_sysA_ec12_zone_table` / `UNKNOWN_sysA_field_0x1a_consumer` — CLOSED negative: the zone code is write-only, dead `[STATIC, exhaustive]`
 
@@ -3997,16 +4016,38 @@ Reading the object-touch dispatcher (`CS:0x15F1`–`0x1652`, the same function t
 
 ```
 1764  push ax,dx           ; save the base position/count
-1766  push ax,bx,cx,dx,bp   ; re-push the SAME four call args every iteration
+1766  push ax,bx,cx,dx,bp   ; re-push all FIVE call args every iteration — CS:0xC041 consumes and PRESERVES them via its own push/pop
 176b  call 0x1000:c041      ; the shared object-respawn allocator, already documented
-176e  pop bp,dx,cx,bx,ax
-1773  add ax,bp             ; accumulate the allocator's own return value into the running X
+176e  pop bp,dx,cx,bx,ax    ; restores the SAME values pushed at 0x1766 — the call itself doesn't touch the caller's copies
+1773  add ax,bp             ; X += BP, the CALLER's own fixed per-iteration step (NOT the allocator's return — see below)
 1775  dec dx / jns 0x1766   ; loop DX+1 times
 1778  pop dx,ax
 177a  ret
 ```
 
-So `CS:0x1764` is a **generic "spawn `DX+1` copies of object `CX` starting at `(AX,BX)`" loop** built directly on top of the already-documented single-object respawn routine, reused by at least the sprite-`0x118`/type-110 "treasure chest" object (called three times in `FUN_1000_16F9`, i.e. up to three separate burst counts) in addition to whatever `CS:0xCCC6` does. `UNKNOWN_16f9_burst_counts` — the three `DX` values `FUN_1000_16F9` passes, and what `CS:0xCCC6`'s own call is for — were not read this pass.
+So `CS:0x1764` is a **generic "spawn `DX+1` copies of object `CX`, starting at `(AX,BX)` and stepping X by a fixed `BP` each time" loop**, built on the already-documented single-object respawn routine.
+
+### `UNKNOWN_16f9_burst_counts` — CLOSED: a hidden "treasure vault" object that scatters 28 items in three waves `[STATIC]`
+
+`FUN_1000_16F9` (the sprite-`0x118`/`POBJECTS` type-110 `"treasure chest"` handler) is a one-shot trap, not a passive pickup:
+
+```
+1700  cmp byte[0x360],0 / jnz 0x175c    ; a ONE-SHOT LATCH — already fired -> do nothing
+1707  bx += 8 ; ax += 8                  ; nudge the touch-test box
+170d  call 0x1000:177d                   ; the GENERIC pickup contact test (this document's own "the contact test")
+1710  jnc 0x175c                         ; not touched this tick -> leave
+1712  mov byte[0x360],1                  ; LATCH — never fires again
+1717  ax=0xd40 bx=0x320 cx=0x15(21) dx=9 bp=0x10   ; wave 1: 10 copies of type 21, X step 16
+1726  call 0x1000:1764
+1729  ax += 8 ; bx += 0x12               ; move the spawn origin down-right for the next wave
+172f  cx=0x10(16) dx=8                    ; wave 2: 9 copies of type 16, same X step (bp unchanged, still 0x10)
+1735  call 0x1000:1764
+1738  bx += 0x12
+173b  cx=0x12(18) dx=8                    ; wave 3: 9 copies of type 18
+1741  call 0x1000:1764
+```
+
+Reading the three spawned `POBJECTS` types directly (decompressed `POBJECTS.001`): **type 21 = `"chest key"`, type 16 = `"treasure chest"` (description `"iron"`), type 18 = `"door key"`.** So touching this hidden object once scatters **10 chest keys, 9 iron treasure chests, and 9 door keys** — 28 objects in total — across three horizontal rows (`Y` stepping `0x12`=18px between waves, `X` stepping `0x10`=16px within each wave). This is the first documented dynamic source of **iron chests** (`POBJECTS` type 16) — this document's own chest census records **zero** iron chests placed statically in any of the eight shipped `.MAP` files, so every iron chest a player can ever see comes from this trap object firing, not from level data. **But no shipped map places one.** Decompressing all eight `.MAP` files and scanning every one of their 200×8 object records for `type == 110` finds **zero hits in all eight levels.** So this is a **seventh cut feature**, in the same family as the `flame` weapon, the unplaced familiar potions, and the world-4 System-A environmental hazard: fully implemented — contact test, one-shot latch, three-wave 28-item scatter — and permanently unreachable in the shipped release, because the level editor never placed the one object that triggers it. `CS:0xCCC6`'s own, structurally unrelated call into `CS:0x1764` was not chased.
 
 The marker record's own trailing bytes (beyond the `{x, y}` that `0xf7bb`'s consumer reads) were not located this pass — the write site past `CS:0x1652` continues into a `PUSH DI / PUSH DS` sequence consistent with the shared message-display call this document documents elsewhere, not an obvious marker-array store, so `UNKNOWN_marker_record`'s original question (what the record's other two bytes hold) stays open.
 
