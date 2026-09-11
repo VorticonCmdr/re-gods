@@ -198,6 +198,27 @@ Config reaches the children through the **DOS EXEC command tail** (param block a
 
 Sound overlays open their own data files by unprefixed name: `ROL.EXE` → `player.bin` + `godsrle.rl` (7th char patched `'a'+n` → `PGODSRL{A..G}.RL`), `TDY.EXE` → `tandy.bin`, `BPR.EXE` → `beeper.bin`. `ADL.EXE` contains no filename strings at all.
 
+### `UNKNOWN_unpack_ax_param` — site located and value pinned, semantics still `[UNKNOWN]`
+
+This token lost its own defining prose at some point (a project self-audit, `analysis/audit-2026-09/items.txt`, confirmed it as a bare, undefined name — the only trace of the original question was the sibling, already-closed `UNKNOWN_export9_ax_param`, which suggested the naming convention but not this one's content). What follows is fresh work, not a recovery of lost prose.
+
+The shared file-load wrapper, `CS:0x257E`, is what every overlay/asset open funnels through (filename-buffer prep, DOS open+read, then the actual DCL decompress). Its tail, immediately before the far call into the just-loaded `unpack.exe` entry point (`CS:0x25A8`, `callf 0x40ec:0000` post-relocation — this document's own already-established runtime segment):
+
+```
+2598  mov dx,0x1666          ; the "P"-prefixed filename buffer
+259B  call 0x1000:25bb       ; open + read the compressed file, stash a {offset,seg} pointer at DS:0x2f6/0x2f8
+259E  mov ax,0x89f3          ; <- the AX parameter, a bare constant, set unconditionally
+25A1  pop es / pop di        ; restore the CALLER's ES:DI (the decompression OUTPUT buffer)
+25A3  mov cx,[0x102]         ; compressed byte count (from the read)
+25A7  push ds
+25A8  callf 0x40ec:0000      ; -> UNPACK.EXE entry
+25AD  pop ds
+```
+
+**`AX = 0x89F3` is a literal immediate, not a computed value and not a GAME.EXE address** — disassembling `CS:0x89F3` as if AX held a same-segment callback offset lands mid-instruction inside an unrelated routine (the `DS:0x8014` brood-array walker), which rules out the "it's a callback pointer into the host" hypothesis this document uses elsewhere for the graphics/sound driver interface (`ROL.EXE`'s `DS:0x0044`, `VGA/EGA`'s `DS:0x00a1`) — those are genuine near/far function pointers into real code; `0x89F3` is not. `ES:DI` (the destination buffer) and `CX` (the compressed length) are the two registers that visibly vary per call; `AX` does not, across every call site disassembled this pass.
+
+**What `UNPACK.EXE` itself does with `AX` is not established** — that requires disassembling `UNPACK.EXE` (a separate PKLITE-unpacked-derivative binary per this document's own *`GAME.EXE` and `INSTALL.EXE` are unpacked derivatives* section), which was not done this pass. `UNKNOWN_unpack_entry_ax_semantics` narrows the residual to exactly that: the call site, the exact constant, and its "not an address" status are now `[PROVEN]`; only the constant's *meaning inside `UNPACK.EXE`* remains open.
+
 ### `WIBBLE.EXE` invocation — **now CLOSED**, see *Unpacking the PKLITE binaries*
 
 > The paragraph below records how far the pre-unpack analysis got. The four packed binaries it names as unchecked have since been unpacked and searched; nothing invokes `WIBBLE.EXE`.
@@ -704,6 +725,33 @@ Not a separate system — it is part of the state machine's per-tick epilogue, a
 
 `UNKNOWN_playfield_height` — the visible playfield height, and the 16 px between the 160-row backdrop and the 144 px of tiles, are not established. A port should not hard-code either number as "the viewport".
 - **A scripted nudge exists** at `0x5ef1`: on world 3 sublevel `'a'`, once the hero enters the box `x ∈ [0x340, 0x400]`, `y ∈ [0x2a0, 0x330]`, a latch at `DS:0x3d5` is set and `camY −= 4` with `bx −= 0x14` applies on every later tick.
+
+### `UNKNOWN_camera_alt_path` — CLOSED: a scripted pan-to-target camera mode `[PROVEN]`
+
+`DS:0x32` is a small-integer mode selector for the camera epilogue, read at `CS:0x5EB3` (`!= 0` → skip the whole hero-follow camera and `call 0x5e22` instead) and twice more *inside* `0x5e22` itself (`cmp byte[0x32],2 / jg`, at `CS:0x5E4C` and `CS:0x5E84`).
+
+**`CS:0x5e22` is a second, independent camera-mover**, pushing the scroll origin `[0xa]`/`[0xc]` toward a *fixed* target pair `DS:0x2ec`/`DS:0x2ee` instead of toward the hero:
+
+```
+5E22  bp := 0                              ; a per-call "both axes reached" counter
+5E24  dx = [0x2ec] ; cmp dx,[0xa] / jz 5E53 ; X already at target -> count it, skip the step
+5E2E  jg 5E37 (target > current -> ADD [0xa],4)  else  SUB [0xa],4     ; flat ±4/tick, same rate as the normal camera's X
+5E3C  re-test dx==[0xa]; if so, SNAP [0xa]:=dx exactly (overshoot correction),
+        then cmp byte[0x32],2 / jg 5E54 (skip the count when the mode is > 2) else INC bp
+5E54  dx = [0x2ee] - [0xc]                  ; Y delta
+        jg (target below) / else (target above): SAR dx,1 (halve, floor -1 on the
+        odd remainder — the IDENTICAL proportional-catch-up shape the normal camera's
+        own Y axis uses), ADD [0xc],dx
+5E7A  re-test [0x2ee]==[0xc]; if so and byte[0x32]<=2, INC bp (Y counted as reached)
+```
+
+So `0x5e22` is not a stub — it is the *general form* of the documented per-tick camera (flat ±4 X, proportional-halving Y), just aimed at a scripted world-space point instead of the hero's screen position, and it tracks how many axes have converged in `bp` (unread by the caller in the bytes examined here, so its consumer is not chased further).
+
+**`DS:0x32` values 1 and 3 are both set by the same per-world scripted-sequence machinery this document already documents** (`DS:0x34`/`DS:0x375` cutscene engine, `CS:0xC49C` installer, `SS:0x537a` per-world entry table): two call sites, `CS:0xCBCE`/`CS:0xCBD4` (target `0xb60,0x78`) and `CS:0xCD7B`/`CS:0xCD81` (target `0xa0,0x354`), each set `DS:0x2ec`/`DS:0x2ee` and then `cmp byte[0x32],0 / jnz skip / mov byte[0x32],1` (turn the alt-camera on, once, if not already on); a third site, `CS:0xCC07`, sets it to **3** after a scripted countdown (`DS:0x250`) expires and a driver export call runs, immediately followed by a self-modifying gate patch (`mov byte cs:[0xcbc7],0xc3`) disabling the routine that reached it — a one-shot step in a larger scripted sequence.
+
+**`DS:0x32` is reset to 0 on hero spawn/respawn**, `CS:0x8D43`–`0x8D53`, inside the same routine this document already cites for state-4 spawn-idle and the health-bar refill (`CS:0x8d6`/`CS:0x84B`): `cmp byte[0x32],0 / jz skip`, else show a message (`DX = filename-template+0x4a`, the same `call 0x37e3` used for the .MAP/PALFILS message path) and then unconditionally `mov byte[0x32],0` — so any in-flight scripted pan is cut short and the camera returns to normal hero-follow the instant the hero dies or a level (re)loads reaches this point.
+
+A port implementing only the dead-zone hero-follow camera diverges exactly during these per-world scripted sequences (values 1/3, targets `(0xb60,0x78)`/`(0xa0,0x354)` in the two sites read here) and is safe everywhere else, since `DS:0x32` starts at 0 (BSS) and is force-reset on every spawn.
 
 ## The plane-B event probe rounds X but floors Y `[PROVEN]`
 
@@ -1512,6 +1560,27 @@ count × u16 BE                      UNKNOWN_map_header_table
 ```
 
 The four section sizes are hardcoded immediates in the parser (`0x2000` words, `0x258`, `0x730`, `0x4b0`) and sum to 21824 exactly — the same for all eight files, with only the variable header making total sizes differ (21834–21874).
+
+### `UNKNOWN_map_header_word` and `UNKNOWN_map_header_table` — CLOSED: both are unread by the parser `[PROVEN]`
+
+`CS:0x3711`–`0x3724`, the very start of `FUN_1000_36f8` after the shared-loader call, is the whole header handler:
+
+```
+3711  mov si,0x0
+3714  lodsw si            ; AX := count (byte-swapped, native), SI auto-advances to 2
+3717  add si,0x2          ; SI := 4   -- the SECOND +2, skipping the header_word FIELD ITSELF
+371a  shl ax,1            ; AX := count*2
+371c  add si,ax           ; SI := 4 + count*2   == exactly the header's total byte length
+371e  mov di,0x3004        ; plane A destination
+3721  mov cx,0x2000
+3724  rep movsw es:di,si   ; the bulk copy starts at SI — i.e. AT the computed skip
+```
+
+**Neither the header word (offset 2) nor any entry of the header table (offset 4..4+count×2) is ever loaded into a register.** The `add si,0x2` is a blind constant advance past the header-word field, not a read of it, and the table is skipped by pure arithmetic (`count*2`) with no loop that touches its bytes. This is the identical shape this document already established for `POBJECTS +0x02` (dead, copied verbatim) and the `.DAT` word2 field (dead, proven never read) — a third instance of the same authoring pattern: **the map header is entirely unread by the shipped parser**, both the single word and the variable-length table. `count` (offset 0) is the only header field the code actually consumes, and only as an arithmetic skip length, never compared or stored anywhere.
+
+This also confirms exactly *which* function threads `DS:0x15e` (the `.map` filename pointer `FUN_1000_36f8` consumes): `FUN_1000_2a37`'s own tail, `CS:0x2B0D`–`0x2B1B`, sets `SI := 0x298a` (the filename-template base, offset **0** — not `+0xAA`, which is the PALFILS entry a few instructions earlier at `CS:0x2A89`), stores it to `DS:0x15e`, then `call 0x1000:36f8` directly. So `FUN_1000_2a37` performs *both* loads in sequence — PALFILS first (`+0xAA`, `CS:0x2A97`), then the `.map` file (`+0`, `CS:0x2B1B`) — which sharpens this document's own earlier "correction" (*"the load it actually performs is template entry `+0xAA`… It is **not** the map load path"*): that was true of the code the earlier pass was looking at, but the same function goes on, a dozen instructions later, to also be the map load path. Both readings are needed to describe `FUN_1000_2a37` correctly.
+
+The port already parses and exposes both fields (`gods-web/src/formats/map.js`) without interpreting them; this closure says that is the correct behaviour — there is nothing to interpret.
 
 **Tiles are 32×16 pixels, so a level world is 128×64 tiles = 4096×1024 px.** Proven from the accessor's index math (`x` masked to a multiple of 32, `y` to 16, row stride 128) and corroborated by the data: object-record `x` maxes at 3946–4048 (< 4096) and `y` at 936–984 (< 1024).
 
@@ -3336,6 +3405,14 @@ CS:0x0291  call 0x8b56    ; the DS:0xcfcc falling hazard (cut)
 
 Types **50, 73, 96, 97, 115, 117, 130** are category 4, identically in all four `POBJECTS` files. **Six of the seven have an empty name and an empty description**; the exception is type 50, named `"spike"`. That fits: categories 0–3 are potion / treasure / keys / levers — all things the hero picks up and all named — while category 4 holds things that are *done to* the hero. A category-4 object is also rejected by the walk-in pickup path (`CS:0x17E6 jg` sends category ≥ 2 away), so it never needs text. `POBJECTS` categories 4 and 5 remain `UNKNOWN` as enums, but this is what 4 looks like.
 
+### `pobjects-cat-4-5` — category 5 census `[PROVEN, enum meaning still open]`
+
+Decompressed all four `POBJECTS.00{1-4}` (`blast.py`) and read every 48-byte record directly (not via the game's own id-based type formula, which is unsafe for world 4 — see below). **Category 5 has exactly 22 members, identical across all four worlds once the already-documented world-4 `+5` id drift is corrected for**: types `49, 55, 64, 65, 66, 67, 68, 81, 82, 95, 102, 103, 104, 105, 106, 107, 108, 111, 112, 113, 114, 131`. Confirmed self-consistent two ways: worlds 1–3 (base id `170+type`) agree on this set exactly, and world 4's own raw ids (base `175`) read as this same set **minus 5** on every one of the 22 records (`54,60,69,70,71,72,73,86,87,100,107,108,109,110,111,112,113,116,117,118,119,136`), which is precisely the already-documented world-4 `+0x08`/`+0x0c`/`+0x1e`/id authoring-drift pattern applied consistently — not a different, world-specific category-5 roster.
+
+**Every single category-5 record has an empty name, an empty description, and `Value = 0`** — a stronger blank-field pattern than category 4's (which has one named, valued member, `"spike"`). Sprite ids for the 22 types (`170 + type`, or `302+` if ≥`0xC0` — none are) run `219, 225, 234, 235, 236, 237, 238, 251, 252, 265, 272, 273, 274, 275, 276, 277, 278, 281, 282, 283, 284, 301`. No dedicated `cmp cx,<sprite>` dispatch site for any of these 22 values was found in the portion of the object-array walk read this pass (`CS:0x1511`–`0x1CC6`, the same chain that resolved the world-2 nest at sprite `0x11d`/285); a full sweep of every `CMP CX,imm16`/`CMP AX,imm16` in that walker for all 22 sprite ids was not run, so absence of a dedicated handler is not exhaustively proven, only not found where category 4's hits were found.
+
+The one behavioural fact this document already had — category 5 draws behind ordinary objects in the same swap-suppression rule as category 3 (`CS:0x0731 cmp word[si+0x4],5 / jz 0x775 -> no swap`) — still stands and is the only established consequence. Given the total blankness (no name, no description, no value, unlike category 4's one exception), category 5 is at least as plausible a candidate for "purely structural/never-instantiated" filler as it is for a second creature-hazard category; the enum's *meaning* remains open, only its *membership* is now settled.
+
 ### `UNKNOWN_ce64_pool` — CLOSED: a sixth creature type, world 3 only, and it is the real reason `DS:0x34` ever reduces starburst/aura damage `[STATIC]`
 
 `DS:0xce64` is a **third** 10-slot × 10-byte pool, independent of the `DS:0xcfcc` nest/hazard pool it merely shares a clear-loop tail with. Its own allocator is `CS:0x7F0D` (re-read here byte-for-byte, not decompiled):
@@ -3881,6 +3958,47 @@ Each mover index lands on its own weapon's routine — mover 1 = `0x9d97` (fireb
 
 *(Note: the weapon-name order is `knife, time bomb, fireball, flame, lightning bolt, throwing star, spear, axe, hunter, magic axe, mace`, read out of the records' own text at the 80-byte stride. Getting it from memory instead put fireball and lightning bolt in each other's places and made this document's `+0x48` list look wrong when it is right.)*
 
+### `UNKNOWN_projectile_handlers` — CLOSED for the three that were actually still open `[PROVEN]`
+
+⚠️ **Two of the five pairs this residual named were already decoded elsewhere in this document and never cross-linked**: entries 10/11 (hunter) are the hunter's own 3-shot fan, fully read under *`UNKNOWN_hunter_turn` — CLOSED*; entries 14/15 (magic axe) are read under *Mover 5, `CS:0xa678` — the magic axe bounces*. Only **2/3 (fireball)**, **6/7 (spear)** and **8/9 (time bomb)** were genuinely undecoded, and all three are read here.
+
+**Entries 2/3 — fireball, `CS:0x99d7` (right) / `CS:0x996f` (left).** Not a simple muzzle-offset variant like the other pairs — it is a full volley writer, structurally identical to handlers 0/1's `bp = [si+8]-[si+6]+1` loop, but it *also* seeds the fireball's own per-projectile Y-accumulator on every shot spawned:
+
+```
+99D7  ax += 0x10 ; bx -= 0x6                      ; muzzle nudge (right)
+99DD  cx = dx - [0x340] - 1 ; shl cx,1             ; -> word index into DS:0xdefc
+99E6  bp = [si+8] - [si+6] + 1                     ; volley count, the shared formula
+99ED  [di]=dx(tag) / stosw(x)/[di]=bx(y)/[di]=4(dir) ; write the {tag,x,y,dir} record
+99FF  [si+0xe] = 0xffff                             ; (weapon scratch, not chased further)
+9A04  si = 0xdefc + cx ; [si] = 0xfffa (-6)         ; SEED the fall accumulator to -6
+9A11  dec bp / jz 9a41 ; inc dx ; … loop            ; next shot in the volley
+```
+
+The `DS:0xdefc + cx` write is exactly the "per-projectile Y accumulator that accelerates" this document already documents under *Mover 1, `CS:0x9d97` — fireball* (`dx = index within the slot`, `add bx,[si]` then `inc word[si]` every tick) — seeding it at **−6** gives the shot a brief rise before gravity takes over, matching the fireball's visibly lobbed arc. `0x996f` (left) is the byte-for-byte mirror, confirmed by its own table slot and the shared tail.
+
+**Entries 6/7 — spear, `CS:0x9a48` (left) / `CS:0x9a42` (right).** Both are two-instruction muzzle adjustments that tail-jump into the base handlers, the same pattern already documented for 12/13:
+
+```
+9A42  sub bx,0x4  / jmp 0x98d1     ; right: -4 px Y, then reuse handler 1's body
+9A48  sub bx,0x4 / sub ax,0x18 / jmp 0x991c  ; left: -4 px Y AND -24 px X, then handler 0's body
+```
+
+So the spear's muzzle is raised half as much as the mace/lightning-bolt pair (`-4` against their `-0xc`/`-0x10` variants), and only the **left**-facing shot gets an extra `-0x18` pull-back on X — an asymmetry with no stated reason, consistent with this document's other muzzle-offset asymmetries (the hunter's, the axe's, the common emitters').
+
+**Entries 8/9 — time bomb, `CS:0x9a7a` (left) / `CS:0x9a51` (right).** These are the spawn handler this document's own *Mover 3, `CS:0xa058` — the time bomb* section already decoded the flight physics for, without ever naming the table indices that reach it:
+
+```
+9A51  ax += 0x10                                    ; right muzzle nudge
+9A54  [0x1c8]=4 (vx) / [0x1cc]=0xffff (state) / [0x1ca]=0 (vy)
+9A66  bx -= 0x20 ; bx &= 0xfffc
+9A6C  [di]=dx(tag) / [di+2]=ax(x) / [di+4]=bx(y) / [di+6]=0x2f(47, the 3.1s fuse)
+9A7A  [0x1c8] = 0xfffc (-4)  ; jmp 0x9a5a           ; left: same body, vx negated first
+```
+
+`0x2f` (47 ticks) is the exact fuse value this document already records ("seeds `0x2f` = 47 ticks ≈ 3.1 s"), and `DS:0x1c8`/`0x1ca`/`0x1cc` are the exact globals `Mover 3` already documents the flight using — this closure is purely "which table entries reach that code," not new physics.
+
+The port's `projectiles.js` (`HANDLER_TABLE`) already names all five addresses (including the two closed elsewhere); the three above are what a port needs to implement that it did not already have decoded prose for.
+
 ### `UNKNOWN_projectile_mover` — CLOSED `[PROVEN]`
 
 ```
@@ -3940,7 +4058,20 @@ dir 2  +12,+3     dir 5  -12,+3      (down)
 
 Two more weapon fields fell out of this: **`+0x02` is a draw-style index** into a second table at `DS:0xdf26` (`UNKNOWN_weapon_02` — ⚠️ **the table is since decoded: three entries**, and `+0x02` is 0..2 across all 44 shipped records, so the `CS:0x9118` zeroing below is a range guard; see *The move→stamp link*). ⚠️ Note the pickup path *zeroes* `+0x02` when it reads exactly 3 (`CS:0x9118`); "a style index reset when it equals 3" is odd enough that these may be two readings of one word rather than one field, and **`+0x04` is the current animation frame** with **`+0x1c` its frame count**, stepped up or down by facing and wrapped at the mover's tail (`CS:0x9d74`). Both are runtime state, reset on pickup.
 
-**Collision is CLOSED, and it was never a pairwise test** — see *Projectile collision — an occupancy grid, not a hit test*. Projectiles stamp, and creatures scan, one 8×8 screen-space occupancy grid at `DS:0x16ca`; terrain is a separate mechanism, the weapon `+0x48` stop at `CS:0xA7B7`/`0xA7EF`. ⚠️ **This paragraph stood for several passes claiming the opposite** — *"still missing … the pixel-mask scan at `0xaad1`–`0xab3f` … are next"* — using a name the document retracts in three other places (the `### The scanner` heading, the closing note of *`UNKNOWN_hero_combat_details`*, and the resolved list) for a routine that is the **damage-grid scanner**, and asserting a gap its own *Projectile collision* section had already closed. Genuinely still open from that pass: **`UNKNOWN_creature_death_anim`** — `0xf02a`, the arm `CS:0xEDFD` takes on a negative entity `+0x08`, is unread — and **`UNKNOWN_alt_emitter`** (`DS:0x16a`/`0x16c`, selected by `DS:0x33d`, *a* writer of which is `0xc368`, weapon auto-select by Power). ⚠️ `0x8687`, listed here as *"ruled out by reading"*, is now identified as the world-2 nest walker (`UNKNOWN_cfcc_cotenant`) and reaches the damage path itself at `CS:0x874F`; it was ruled out correctly as the *mechanism*, and is misleading left standing as unrelated.
+**Collision is CLOSED, and it was never a pairwise test** — see *Projectile collision — an occupancy grid, not a hit test*. Projectiles stamp, and creatures scan, one 8×8 screen-space occupancy grid at `DS:0x16ca`; terrain is a separate mechanism, the weapon `+0x48` stop at `CS:0xA7B7`/`0xA7EF`. ⚠️ **This paragraph stood for several passes claiming the opposite** — *"still missing … the pixel-mask scan at `0xaad1`–`0xab3f` … are next"* — using a name the document retracts in three other places (the `### The scanner` heading, the closing note of *`UNKNOWN_hero_combat_details`*, and the resolved list) for a routine that is the **damage-grid scanner**, and asserting a gap its own *Projectile collision* section had already closed. Genuinely still open from that pass: **`UNKNOWN_creature_death_anim`** — `0xf02a`, the arm `CS:0xEDFD` takes on a negative entity `+0x08`, is unread — and **`UNKNOWN_alt_emitter`**, now **CLOSED** (see immediately below). ⚠️ `0x8687`, listed here as *"ruled out by reading"*, is now identified as the world-2 nest walker (`UNKNOWN_cfcc_cotenant`) and reaches the damage path itself at `CS:0x874F`; it was ruled out correctly as the *mechanism*, and is misleading left standing as unrelated.
+
+### `UNKNOWN_alt_emitter` — CLOSED: `DS:0x16a`/`0x16c` is the FAMILIAR's own world position `[PROVEN]`
+
+The port (`gods-web/src/game/projectiles.js`) had already worked out the muzzle arithmetic — `+0x10` on Y always, `+8` on X only when firing right (`CS:0x975e`/`CS:0xc450`: `ADD AX,0x4` / `ADD BX,0x4`, read here as the general-case nudge, folded into a caller-specific `+8`/`+0x10` at the two sites actually traced) — and the trigger (`DS:0x33d != 0`, written by `CS:0xc389` inside the weapon-auto-select-by-Power routine that starts at `CS:0xc368`, both addresses genuine — `0xc368` is the routine entry, `0xc389` the specific `mov byte[0x33d],0xff` instruction inside it). What neither the ledger nor the port had was **what `DS:0x16a`/`0x16c` themselves are** — that is now closed.
+
+**They are the familiar creature's own current world X/Y**, established four independent ways:
+
+1. **Seeded at level/respawn init from the hero's own spawn position.** `CS:0x8C56`–`0x8C64`, inside the same spawn/respawn routine already documented for state 4 and the health refill: `cmp word[0x168],0 / js skip` (only when the familiar is alive — `DS:0x168` is the already-documented familiar energy) `→ mov [0x16a],ax ; mov [0x16c],bx ; sub word[0x16c],0x28` — `ax`/`bx` at this point hold the hero's own just-loaded spawn X/Y, so the familiar starts 40 px above the hero.
+2. **The familiar's own death spawns a starburst at this position**, exactly matching this document's own already-documented call-site table (*The starburst — five call sites*, `CS:0xC464`, "the familiar's death — a burst at its last remembered spot, gated on `DS:0x391`"): `CS:0xC447`–`0xC469` reads `[0x16a]`/`[0x16c]`, adds `+4` to both, and conditionally calls `0xa461` (the starburst spawner) when `[0x391]==0`.
+3. **The familiar shares the Hunter weapon's target-search routine**, `CS:0x9e36` (called at `CS:0xC0A3`/`CS:0xC163`), and the code immediately around those calls reads/writes `[0x16a]`/`[0x16c]` as the familiar's own position for goal-seeking and comparison against the returned target — the same routine this document already documents the Hunter projectile using to home in on whichever on-screen creature has the lowest sprite id.
+4. **The familiar stamps its own position onto the damage grid**, `CS:0xC2B6`–`0xC2DB`: `[0x16a]`/`[0x16c]` minus the scroll origin `[0xa]`/`[0xc]`, fed through the exact `DI = 0x16ca + (x>>3) + …` formula this document's `CS:0xA860` 2×2 stamp uses — so the familiar is a stampable/damageable occupant of the shared projectile-collision grid, like a creature.
+
+So "the second muzzle position" framing was half right and half a red herring: `DS:0x33d` does gate a muzzle switch in the fire path (already resolved by the port), but the *position it switches to* is not a second emitter offset at all — it is wherever the player's own familiar currently stands. A port that models the familiar as a tracked entity with a world position already has everything needed; one that treats `0x16a`/`0x16c` as a fixed alternate muzzle constant does not.
 
 ## Open questions — ranked
 
@@ -3964,7 +4095,18 @@ Two more weapon fields fell out of this: **`+0x02` is a draw-style index** into 
 11. ~~`UNKNOWN_object_flag6_bits`~~ — **CLOSED `[STATIC]`**, see the section of that name under *`UNKNOWN_object_flag6` — CLOSED*. Exhaustive 256-instruction displacement-6 census closes to 23 genuine hits, all literal 0/1 — bit 0 is the whole story.
 12. **`UNKNOWN_chest_key_surplus`** — six `"chest key"` type 23 ship for a chest (type 16) that ships nowhere. Data question, not a code one.
 13. **`UNKNOWN_pobjects_field2`** — the 48-byte record's `+0x02`, copied verbatim into the runtime descriptor and 0 in all 528 records.
-14. Remaining small gaps: `UNKNOWN_playfield_height`; `UNKNOWN_unpack_ax_param`; `UNKNOWN_map_header_word` / `UNKNOWN_map_header_table`; `UNKNOWN_x_parity_at_spawn`; `UNKNOWN_act_dx_source`; `UNKNOWN_projectile_handlers` (table entries 2/3, 6/7, 8/9, 10/11, 14/15); `UNKNOWN_projectile_area_upper`; `UNKNOWN_alt_emitter` (`DS:0x16a`/`0x16c`, selected by `DS:0x33d`); `POBJECTS` category codes `4`/`5`. Folded in from a continuation line that was stranded 1,480 lines from its own list marker: `UNKNOWN_ladder_anim_phase`; `UNKNOWN_camera_alt_path` (`DS:0x32`); `UNKNOWN_camera_init`. (`UNKNOWN_jump_anim_phase`, `UNKNOWN_state_4`, `UNKNOWN_state_18`/`19` and `UNKNOWN_climb_down_rate` travelled on that same stranded line and are **closed** — see *The jump animation phase*, *States 4, 7, 18 and 19*, and *The ladder controls*.)
+14. Remaining small gaps — swept this pass (see `analysis/audit-2026-09/` for the self-audit that first flagged several of these as evidence-debt rather than research debt, i.e. tokens with no recoverable defining prose anywhere in the project):
+    - ~~`UNKNOWN_map_header_word`~~ / ~~`UNKNOWN_map_header_table`~~ — **CLOSED**, see *`UNKNOWN_map_header_word` and `UNKNOWN_map_header_table` — CLOSED* under *The `.MAP` level format*. Both fields are provably unread by the parser (a blind `+2` skip plus a `count*2` arithmetic skip, no load of either).
+    - ~~`UNKNOWN_camera_alt_path`~~ (`DS:0x32`) — **CLOSED**, see *`UNKNOWN_camera_alt_path` — CLOSED* under *The camera*. A 0/1/3-valued scripted-camera-pan-to-target mode, target `DS:0x2ec`/`0x2ee`, reset on every hero spawn/respawn.
+    - ~~`UNKNOWN_alt_emitter`~~ (`DS:0x16a`/`0x16c`) — **CLOSED**, see *`UNKNOWN_alt_emitter` — CLOSED* under *Projectile collision*. It is the familiar creature's own world position, not a second muzzle constant.
+    - `UNKNOWN_projectile_handlers` — the three genuinely-undecoded pairs (fireball 2/3, spear 6/7, time bomb 8/9) are **CLOSED**, see *`UNKNOWN_projectile_handlers` — CLOSED for the three that were actually still open*; entries 10/11 (hunter) and 14/15 (magic axe) were already decoded elsewhere in this document under different headings and only needed cross-linking, now done.
+    - `POBJECTS` category codes `4`/`5` — category 5's **membership** is now settled (22 types, identical across worlds once the world-4 id drift is corrected for, every one blank name/description/value=0) — see *`pobjects-cat-4-5` — category 5 census* under *What category 4 is, from the data side*. Its **enum meaning** is still open; no dedicated code consumer was found for any of the 22 sprite ids in the object-array walk (search not exhaustive).
+    - `UNKNOWN_unpack_ax_param` — the call site and the exact constant (`AX = 0x89F3`, a literal, not a same-segment callback address) are now `[PROVEN]`, see the section of that name under *Execution model*; `UNPACK.EXE`'s own interpretation of it is not, since that binary was not disassembled this pass.
+    - `UNKNOWN_x_parity_at_spawn`, `UNKNOWN_act_dx_source` — **confirmed evidence-debt, not research debt**: the project's own self-audit (`analysis/audit-2026-09/items.txt`) already established both tokens occur exactly once in this document, as bare names inside this packed list, with zero defining prose anywhere in the project (ledger, port, or docs) — genuinely unrecoverable as written, not merely unresearched. For `act_dx_source`, if the intended question was "where does the trigger ACTION dispatch get its `DX` argument from" (the audit's own labelled guess, not a confirmed reading of a lost original), the answer is now on record: `CS:0x3A40`–`0x3A56`, the shared ACTION-verb dispatch prologue, never touches `DX` at all — unlike the CONDITION dispatch (`CS:0x3A58`, pre-loaded `CX`=kind/`DX`=arg by its caller `CS:0x39D1`), each ACTION handler must read its own `[DI+0x12]` arg directly. No corresponding guess resolves `x_parity_at_spawn`; the hero-spawn/respawn routine (`CS:0x8C30`–`0x8CC7`, read in full this pass while investigating `camera_init`) contains no parity test on any spawn coordinate.
+    - `UNKNOWN_projectile_area_upper` — per the audit's own recommendation, downgraded to an **informational note, not answerable from the binary**: both the fire-slot allocator and the mover reach exactly 9 of a weapon slot's 18 record positions; the remaining 9 are provably untouched by both sides and most plausibly an authoring-tool or ST-port sizing artefact. Zero port impact.
+    - `UNKNOWN_playfield_height` — still genuinely open; three static measurements (160-row backdrop, 144 px tile coverage, the `0x360` camera clamp) disagree and none is self-evidently "the viewport". Resolving it needs a live measurement (a DOSBox screenshot, reading where the status panel begins in scanlines), not more static reading — not attempted this pass.
+    - `UNKNOWN_ladder_anim_phase` — the underlying ping-pong mechanics (`0x565C`/`0x5688`, `DS:0x347` as the direction toggle, the turnaround sound) were re-read this pass and match this document's existing *The ladder controls* description exactly; both arms of that specific ping-pong (the DOWN-only climb loop entered via `jmp 0x564b`) apply the *same* Y movement (`add [0x17c],6`) regardless of phase, so "which arm is up and which is down" — the residual the port's own status table (`gods-web/README.md`) names — is not a movement-direction question at all here, only a **sprite-pose** one (which `cl` value renders the left-foot-forward frame vs the right-foot-forward frame). That is an art-correspondence question, not a code-flow one, and needs the same frame-rendering cross-check this project already used to pin the turn and jump animations, not disassembly — not attempted this pass.
+    - `UNKNOWN_camera_init` — partially advanced, not closed. Two attract-mode-only camera+hero teleport sites were newly traced this pass (`CS:0x8F47`/`0x8F83`, gated on the demo-cycler state `DS:0x3e6`, giving `(0xce0,0x200)`/`(0xd60,0x260)` at state 2 and `(0xa0,0x340)`/`(0xa0,0x3c0)` at state 4 — the exact "scripted camera and hero position" this document already gestured at without naming), and the hero spawn/respawn routine (`CS:0x8C30`–`0x8CC7`) was read in full and does **not** write `DS:0xa`/`0xc` anywhere in it. So the real-gameplay camera-origin-at-level-load question — what the port's own `camera.js:63` comment already flags as untraced — remains open; only the demo-mode analogue is now pinned down.
 15. **`UNKNOWN_b1c2`** — `FUN_1000_b1c2` is `CS:0xdb4e`'s (the `DS:0xd2be` line-hazard pool's shared hero-hit helper) OTHER caller, `CS:0xb236`. Its own three call sites (`CS:0x022D`, `0x0a02`, `0x929b`) sit immediately after `CS:0xAD88`'s (the selector-2 spawn driver) three documented call sites, suggesting a related but distinct hazard that reuses `db4e` rather than operating on the `d2be` array itself. Not investigated past locating it.
 16. **`UNKNOWN_hunter_coast_reaim`** — `CS:0x9E74`–`0x9E94`, the periodic re-aim/cooldown a fresh hunter shot's ballistic-launch phase cycles through before its single sign-flip hands it to homing (see *`UNKNOWN_hunter_turn` — CLOSED*). The `dl`-cycling threshold (`(dl+2)&3`, shifted, `xchg`'d into a comparison against the incrementing `[di+6]` high byte) was read but not traced to confidence; most plausibly a periodic re-aim cooldown, not confirmed. Cannot affect whether a shot ever homes or stamps — only how long the opening spread lasts.
 
