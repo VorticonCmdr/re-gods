@@ -1,0 +1,1401 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>GODS asset viewer</title>
+<style>
+  :root {
+    --bg: #14161a; --panel: #1b1e24; --panel2: #20242b; --border: #2c313a;
+    --text: #d8dce3; --dim: #8890a0; --accent: #5aa9ff; --accent2: #ffb454;
+    --ok: #5fd68a; --bad: #ff6b6b; --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    display: flex; flex-direction: column; background: var(--bg); color: var(--text);
+    font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  }
+  header {
+    display: flex; align-items: center; gap: .75rem; padding: .6rem 1rem;
+    background: var(--panel); border-bottom: 1px solid var(--border); flex: 0 0 auto;
+  }
+  header h1 { font-size: 14px; margin: 0; font-weight: 600; white-space: nowrap; }
+  header h1 span { color: var(--dim); font-weight: 400; }
+  header .spacer { flex: 1; }
+  header .note { color: var(--dim); font-size: 11px; }
+  button, .btn {
+    background: var(--panel2); color: var(--text); border: 1px solid var(--border);
+    border-radius: 5px; padding: .35rem .7rem; font-size: 12px; cursor: pointer;
+  }
+  button:hover, .btn:hover { border-color: var(--accent); color: var(--accent); }
+  button.primary { background: #234a78; border-color: #2f6cb3; color: #cfe6ff; }
+  #status { font-size: 11px; color: var(--dim); min-width: 10em; }
+  #app { flex: 1; display: flex; min-height: 0; }
+  #sidebar {
+    width: 300px; flex: 0 0 auto; border-right: 1px solid var(--border);
+    overflow-y: auto; background: var(--panel); padding: .5rem;
+  }
+  #sidebar input[type=text] {
+    width: 100%; padding: .4rem .5rem; margin-bottom: .5rem; background: var(--panel2);
+    border: 1px solid var(--border); border-radius: 5px; color: var(--text); font-size: 12px;
+  }
+  details.cat { margin-bottom: 2px; }
+  details.cat > summary {
+    cursor: pointer; padding: .35rem .4rem; border-radius: 4px; font-weight: 600;
+    font-size: 11.5px; color: var(--accent2); list-style: none; display: flex; gap: .4em;
+  }
+  details.cat > summary::-webkit-details-marker { display: none; }
+  details.cat > summary::before { content: "▸"; color: var(--dim); }
+  details.cat[open] > summary::before { content: "▾"; }
+  details.cat > summary .n { color: var(--dim); font-weight: 400; }
+  ul.filelist { list-style: none; margin: 0; padding: 0 0 .4rem .9rem; }
+  ul.filelist li {
+    padding: .22rem .4rem; border-radius: 4px; cursor: pointer; font-family: var(--mono);
+    font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    display: flex; justify-content: space-between; gap: .5em;
+  }
+  ul.filelist li:hover { background: var(--panel2); }
+  ul.filelist li.sel { background: #234a78; color: #cfe6ff; }
+  ul.filelist li .err { color: var(--bad); }
+  ul.filelist li .sz { color: var(--dim); font-size: 10.5px; }
+  #main { flex: 1; overflow: auto; padding: 1rem 1.25rem; min-width: 0; }
+  h2 { margin: 0 0 .3rem; font-size: 16px; }
+  h3 { margin: 1.2rem 0 .4rem; font-size: 13px; color: var(--accent2); }
+  .fileheader {
+    display: flex; align-items: baseline; gap: .8rem; flex-wrap: wrap;
+    padding-bottom: .6rem; margin-bottom: .8rem; border-bottom: 1px solid var(--border);
+  }
+  .tag {
+    display: inline-block; padding: .1rem .5rem; border-radius: 99px; font-size: 10.5px;
+    background: var(--panel2); border: 1px solid var(--border); color: var(--dim);
+  }
+  .tag.ok { color: var(--ok); border-color: #2c5b3c; }
+  .tag.bad { color: var(--bad); border-color: #6b2c2c; }
+  table { border-collapse: collapse; width: 100%; font-size: 12px; margin-bottom: 1rem; }
+  table.compact td, table.compact th { padding: .18rem .5rem; }
+  th, td { text-align: left; padding: .3rem .6rem; border-bottom: 1px solid var(--border); }
+  th { color: var(--dim); font-weight: 600; font-size: 11px; text-transform: uppercase; position: sticky; top: 0; background: var(--bg); }
+  tr:hover td { background: var(--panel2); }
+  td.num, th.num { text-align: right; font-family: var(--mono); }
+  pre.hex, pre.code {
+    background: #0e1013; border: 1px solid var(--border); border-radius: 6px;
+    padding: .7rem; overflow: auto; font-family: var(--mono); font-size: 11.5px;
+    line-height: 1.4; max-height: 60vh; white-space: pre;
+  }
+  .canvaswrap { overflow: auto; border: 1px solid var(--border); border-radius: 6px; background: #0e1013; display: inline-block; }
+  canvas { image-rendering: pixelated; display: block; }
+  .pal { display: flex; gap: 2px; margin: .4rem 0; flex-wrap: wrap; }
+  .pal .sw { width: 22px; height: 22px; border-radius: 3px; border: 1px solid #000; position: relative; }
+  .pal .sw span { position: absolute; bottom: -14px; left: 0; font-size: 9px; color: var(--dim); }
+  .row { display: flex; gap: 1rem; flex-wrap: wrap; align-items: flex-start; }
+  .col { min-width: 0; }
+  .controls { display: flex; gap: .5rem; align-items: center; margin: .5rem 0; flex-wrap: wrap; }
+  .controls label { font-size: 11.5px; color: var(--dim); display: flex; gap: .3em; align-items: center; }
+  .frameGrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(44px,1fr)); gap: 3px; max-width: 520px; }
+  .frameGrid .fcell {
+    border: 1px solid var(--border); border-radius: 4px; padding: 3px; cursor: pointer;
+    display: flex; flex-direction: column; align-items: center; background: #0e1013;
+  }
+  .frameGrid .fcell:hover, .frameGrid .fcell.sel { border-color: var(--accent); }
+  .frameGrid .fcell .idx { font-size: 9px; color: var(--dim); }
+  .welcome { max-width: 780px; }
+  .welcome p { color: var(--dim); }
+  .welcome kbd { background: var(--panel2); border: 1px solid var(--border); border-radius: 3px; padding: 0 .3em; font-family: var(--mono); }
+  .catgrid { display: grid; grid-template-columns: repeat(auto-fill,minmax(230px,1fr)); gap: .6rem; margin-top: 1rem; }
+  .catcard { border: 1px solid var(--border); border-radius: 6px; padding: .6rem .7rem; background: var(--panel); }
+  .catcard b { color: var(--accent2); font-size: 12.5px; }
+  .catcard .cnt { float: right; color: var(--dim); }
+  .catcard p { margin: .3rem 0 0; font-size: 11.5px; color: var(--dim); }
+  .drop { border: 2px dashed var(--border); border-radius: 8px; padding: 2rem; text-align: center; color: var(--dim); margin: 1rem 0; }
+  .drop.over { border-color: var(--accent); color: var(--accent); }
+  .marker {
+    position: absolute; border-radius: 50%; transform: translate(-50%,-50%);
+    box-shadow: 0 0 0 1px rgba(0,0,0,.6); cursor: help;
+  }
+  .legend { display: flex; gap: .8rem; flex-wrap: wrap; font-size: 11px; color: var(--dim); margin: .4rem 0; }
+  .legend .sw { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: .3em; vertical-align: middle; }
+  .warn { color: var(--accent2); }
+  .small { font-size: 11px; color: var(--dim); }
+  a.dl { color: var(--accent); text-decoration: none; }
+  a.dl:hover { text-decoration: underline; }
+  audio { width: 320px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>GODS asset viewer <span>— local, in-browser, decodes only</span></h1>
+  <button id="btnFolder" class="primary">Load folder…</button>
+  <button id="btnFiles">Add files…</button>
+  <input type="file" id="inpFolder" webkitdirectory multiple hidden>
+  <input type="file" id="inpFiles" multiple hidden>
+  <div class="spacer"></div>
+  <span id="status">no files loaded</span>
+  <span class="note">files never leave this browser tab</span>
+</header>
+
+<div id="app">
+  <aside id="sidebar">
+    <input type="text" id="filter" placeholder="filter files…">
+    <div id="catlist"></div>
+  </aside>
+  <main id="main"></main>
+</div>
+
+<script>
+'use strict';
+
+/* ════════════════════════════════════════════════════════════════════════
+ * DOM helpers
+ * ════════════════════════════════════════════════════════════════════════ */
+function h(tag, props, ...kids) {
+  const e = document.createElement(tag);
+  if (props) for (const [k, v] of Object.entries(props)) {
+    if (v == null) continue;
+    if (k === 'class') e.className = v;
+    else if (k === 'style' && typeof v === 'object') Object.assign(e.style, v);
+    else if (k.startsWith('on') && typeof v === 'function') e.addEventListener(k.slice(2).toLowerCase(), v);
+    else e.setAttribute(k, v);
+  }
+  for (const c of kids.flat(Infinity)) {
+    if (c == null || c === false) continue;
+    e.appendChild(c.nodeType ? c : document.createTextNode(String(c)));
+  }
+  return e;
+}
+function table(headers, rows, opts) {
+  const t = h('table', { class: opts && opts.compact ? 'compact' : '' });
+  t.append(
+    h('thead', null, h('tr', null, ...headers.map((x) => h('th', { class: x && x.num ? 'num' : '' }, x.label || x)))),
+    h('tbody', null, ...rows.map((r) => h('tr', null, ...r.map((c, i) =>
+      h('td', { class: headers[i] && headers[i].num ? 'num' : '' }, c)))))
+  );
+  return t;
+}
+function clear(el) { while (el.firstChild) el.removeChild(el.firstChild); }
+function fmtSize(n) { return n < 1024 ? n + ' B' : (n / 1024).toFixed(1) + ' KB'; }
+function hex2(n) { return n.toString(16).padStart(2, '0'); }
+function hex4(n) { return n.toString(16).padStart(4, '0'); }
+function signed8(b) { return b >= 128 ? b - 256 : b; }
+function signedNibble(n) { return n >= 8 ? n - 16 : n; }
+
+function download(filename, blob) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 30000);
+}
+function downloadBytes(bytes, filename, mime) {
+  download(filename, new Blob([bytes], { type: mime || 'application/octet-stream' }));
+}
+function downloadCanvasPNG(canvas, filename) {
+  canvas.toBlob((blob) => download(filename, blob));
+}
+
+function readAsciiz(buf, off, maxlen) {
+  let end = off; const lim = Math.min(off + maxlen, buf.length);
+  while (end < lim && buf[end] !== 0) end++;
+  return new TextDecoder('latin1').decode(buf.subarray(off, end));
+}
+
+function hexDump(bytes, maxBytes) {
+  maxBytes = maxBytes || 8192;
+  const n = Math.min(bytes.length, maxBytes);
+  const lines = [];
+  for (let i = 0; i < n; i += 16) {
+    const row = bytes.subarray(i, Math.min(i + 16, n));
+    let hex = '', asc = '';
+    for (let j = 0; j < 16; j++) {
+      if (j < row.length) {
+        const b = row[j];
+        hex += hex2(b) + ' ';
+        asc += (b >= 32 && b < 127) ? String.fromCharCode(b) : '.';
+      } else hex += '   ';
+      if (j === 7) hex += ' ';
+    }
+    lines.push(hex4(i >> 16 ? i : i).toString ? i.toString(16).padStart(6, '0') + '  ' + hex + ' ' + asc : '');
+  }
+  if (n < bytes.length) lines.push(`… truncated, showing ${n} of ${bytes.length} bytes …`);
+  return lines.join('\n');
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+ * DCL (PKWARE "implode"/blast) decompressor
+ * Direct transliteration of this project's verified gods-web/src/formats/dcl.js,
+ * itself a port of zlib's contrib/blast.c. Every P-prefixed GODS asset opens
+ * with header bytes 00 06 (uncoded literals, 4096-byte dictionary).
+ * ════════════════════════════════════════════════════════════════════════ */
+const LEN_BASE  = [3, 2, 4, 5, 6, 7, 8, 9, 10, 12, 16, 24, 40, 72, 136, 264];
+const LEN_EXTRA = [0, 0, 0, 0, 0, 0, 0, 0,  1,  2,  3,  4,  5,  6,   7,   8];
+const LITLEN = [
+  11,124,8,7,28,7,188,13,76,4,10,8,12,10,12,10,8,23,8,9,7,6,7,8,7,6,55,8,23,24,
+  12,11,7,9,11,12,6,7,22,5,7,24,6,11,9,6,7,22,7,11,38,7,9,8,25,11,8,11,9,12,8,
+  12,5,38,5,38,5,11,7,5,6,21,6,10,53,8,7,24,10,27,44,253,253,253,252,252,252,
+  13,12,45,12,45,12,61,12,45,44,173,
+];
+const LENLEN  = [2, 35, 36, 53, 38, 23];
+const DISTLEN = [2, 20, 53, 230, 247, 151, 248];
+function expandRep(rep) {
+  const out = [];
+  for (const b of rep) { const len = b & 15, run = (b >> 4) + 1; for (let i = 0; i < run; i++) out.push(len); }
+  return out;
+}
+function buildHuffman(lengths) {
+  const count = new Int32Array(16);
+  for (const l of lengths) count[l]++;
+  count[0] = 0;
+  const offs = new Int32Array(16);
+  let s = 0;
+  for (let l = 1; l < 16; l++) { offs[l] = s; s += count[l]; }
+  const symbol = new Int32Array(lengths.length);
+  for (let sym = 0; sym < lengths.length; sym++) { const l = lengths[sym]; if (l) symbol[offs[l]++] = sym; }
+  return { count, symbol };
+}
+const LIT_H = buildHuffman(expandRep(LITLEN));
+const LEN_H = buildHuffman(expandRep(LENLEN));
+const DIST_H = buildHuffman(expandRep(DISTLEN));
+class BitReader {
+  constructor(data) { this.d = data; this.p = 0; this.buf = 0; this.cnt = 0; }
+  bits(need) {
+    let val = this.buf;
+    while (this.cnt < need) {
+      if (this.p >= this.d.length) throw new Error('DCL: out of input');
+      val |= this.d[this.p++] << this.cnt;
+      this.cnt += 8;
+    }
+    this.buf = val >>> need; this.cnt -= need;
+    return val & ((1 << need) - 1);
+  }
+  decode(hh) {
+    let code = 0, first = 0, index = 0;
+    for (let len = 1; len < 16; len++) {
+      code |= this.bits(1) ^ 1;
+      const cnt = hh.count[len];
+      if (code < first + cnt) return hh.symbol[index + (code - first)];
+      index += cnt; first = (first + cnt) << 1; code <<= 1;
+    }
+    throw new Error('DCL: invalid code');
+  }
+}
+function dclDecompress(data) {
+  const br = new BitReader(data);
+  const litFlag = br.bits(8);
+  const dictSize = br.bits(8);
+  if (dictSize < 4 || dictSize > 6) throw new Error(`DCL: bad dictionary size ${dictSize}`);
+  let out = new Uint8Array(1 << 16), n = 0;
+  const push = (b) => { if (n === out.length) { const big = new Uint8Array(out.length * 2); big.set(out); out = big; } out[n++] = b; };
+  for (;;) {
+    if (br.bits(1)) {
+      const sym = br.decode(LEN_H);
+      const length = LEN_BASE[sym] + (LEN_EXTRA[sym] ? br.bits(LEN_EXTRA[sym]) : 0);
+      if (length === 519) break;
+      const nbits = (length === 2) ? 2 : dictSize;
+      const dist = ((br.decode(DIST_H) << nbits) | br.bits(nbits)) + 1;
+      if (dist > n) throw new Error('DCL: distance before start of output');
+      for (let i = 0; i < length; i++) push(out[n - dist]);
+    } else {
+      push(litFlag ? br.decode(LIT_H) : br.bits(8));
+    }
+  }
+  return { data: out.subarray(0, n), litFlag, dictSize, consumed: br.p };
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+ * PI1 — Atari ST DEGAS low-res bitmap
+ * ════════════════════════════════════════════════════════════════════════ */
+const PI1_SIZE = 32034, PI1_HEADER = 34, SCREEN_W = 320, SCREEN_H = 200;
+function decodePI1(buf) {
+  if (buf.length !== PI1_SIZE) throw new Error(`PI1: expected ${PI1_SIZE} bytes, got ${buf.length}`);
+  const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+  const resolution = dv.getUint16(0, false);
+  if (resolution !== 0) throw new Error(`PI1: expected low-res (0), got ${resolution}`);
+  const paletteRaw = new Uint16Array(16), palette = new Uint8Array(16 * 4);
+  for (let i = 0; i < 16; i++) {
+    const w = dv.getUint16(2 + i * 2, false);
+    paletteRaw[i] = w;
+    const r = (w >> 8) & 7, g = (w >> 4) & 7, b = w & 7;
+    palette[i * 4 + 0] = Math.round((r * 255) / 7);
+    palette[i * 4 + 1] = Math.round((g * 255) / 7);
+    palette[i * 4 + 2] = Math.round((b * 255) / 7);
+    palette[i * 4 + 3] = 255;
+  }
+  const indices = new Uint8Array(SCREEN_W * SCREEN_H);
+  let src = PI1_HEADER, dst = 0;
+  for (let y = 0; y < SCREEN_H; y++) {
+    for (let group = 0; group < SCREEN_W / 16; group++) {
+      const p0 = (buf[src] << 8) | buf[src + 1], p1 = (buf[src + 2] << 8) | buf[src + 3];
+      const p2 = (buf[src + 4] << 8) | buf[src + 5], p3 = (buf[src + 6] << 8) | buf[src + 7];
+      src += 8;
+      for (let bit = 15; bit >= 0; bit--) {
+        const m = 1 << bit;
+        indices[dst++] = ((p0 & m) ? 1 : 0) | ((p1 & m) ? 2 : 0) | ((p2 & m) ? 4 : 0) | ((p3 & m) ? 8 : 0);
+      }
+    }
+  }
+  return { palette, paletteRaw, indices, width: SCREEN_W, height: SCREEN_H };
+}
+const TILE_W = 32, TILE_H = 16, TILE_COLS = 10, TILE_ROWS = 12, TILE_COUNT = 120;
+function sliceTiles(img) {
+  const tiles = [];
+  for (let n = 0; n < TILE_COUNT; n++) {
+    const col = n % TILE_COLS, row = (n / TILE_COLS) | 0;
+    const t = new Uint8Array(TILE_W * TILE_H);
+    const ox = col * TILE_W, oy = row * TILE_H;
+    for (let y = 0; y < TILE_H; y++) {
+      const s = (oy + y) * SCREEN_W + ox;
+      t.set(img.indices.subarray(s, s + TILE_W), y * TILE_W);
+    }
+    tiles.push(t);
+  }
+  return tiles;
+}
+function renderIndexedToCanvas(canvas, indices, w, hgt, palette) {
+  canvas.width = w; canvas.height = hgt;
+  const ctx = canvas.getContext('2d');
+  const imgData = ctx.createImageData(w, hgt);
+  for (let i = 0; i < w * hgt; i++) {
+    const idx = indices[i] & 0xF;
+    imgData.data[i * 4 + 0] = palette[idx * 4 + 0];
+    imgData.data[i * 4 + 1] = palette[idx * 4 + 1];
+    imgData.data[i * 4 + 2] = palette[idx * 4 + 2];
+    imgData.data[i * 4 + 3] = 255;
+  }
+  ctx.putImageData(imgData, 0, 0);
+  return canvas;
+}
+function scaledCanvas(indices, w, hgt, palette, scale) {
+  const off = renderIndexedToCanvas(document.createElement('canvas'), indices, w, hgt, palette);
+  const c = document.createElement('canvas');
+  c.width = Math.max(1, Math.round(w * scale));
+  c.height = Math.max(1, Math.round(hgt * scale));
+  const ctx = c.getContext('2d');
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(off, 0, 0, w, hgt, 0, 0, c.width, c.height);
+  return c;
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+ * P*.DAT sprite atlas
+ * ════════════════════════════════════════════════════════════════════════ */
+function parseAtlas(buf) {
+  const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+  const count = dv.getUint16(0, false);
+  const expected = 2 + 10 * count;
+  if (buf.length !== expected) throw new Error(`atlas: ${buf.length} bytes, expected 2 + 10*${count} = ${expected}`);
+  const frames = [];
+  for (let i = 0; i < count; i++) {
+    const o = 2 + i * 10;
+    frames.push({
+      w: dv.getUint16(o + 0, false) + 1, h: dv.getUint16(o + 2, false) + 1,
+      word2: dv.getUint16(o + 4, false), x: dv.getUint16(o + 6, false), y: dv.getUint16(o + 8, false),
+    });
+  }
+  return { count, frames };
+}
+function cutFrame(img, frame) {
+  const { x, y, w, h } = frame;
+  const out = new Uint8Array(w * h);
+  for (let row = 0; row < h; row++) {
+    const s = (y + row) * SCREEN_W + x;
+    out.set(img.indices.subarray(s, s + w), row * w);
+  }
+  return out;
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+ * .MAP level format
+ * ════════════════════════════════════════════════════════════════════════ */
+const BULK_SIZE = 21824, MAP_COLS = 128, MAP_ROWS = 64, PLANE_SIZE = MAP_COLS * MAP_ROWS;
+const OBJ_OFF = 0x4000, OBJ_COUNT = 200, MSG_OFF = 0x44B0, MSG_COUNT = 40, TRIG_OFF = 0x4BE0;
+const TILE_COUNTS = { '1A': 110, '1B': 126, '2A': 133, '2B': 118, '3A': 124, '3B': 110, '4A': 118, '4B': 123 };
+function parseMap(buf) {
+  const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+  const count = dv.getUint16(0, false);
+  const headerWord = dv.getUint16(2, false);
+  const bulkStart = 4 + count * 2;
+  if (buf.length - bulkStart !== BULK_SIZE) throw new Error(`MAP: bulk is ${buf.length - bulkStart} bytes, expected ${BULK_SIZE}`);
+  const bulk = buf.subarray(bulkStart);
+  const planeA = bulk.subarray(0, PLANE_SIZE), planeB = bulk.subarray(PLANE_SIZE, PLANE_SIZE * 2);
+  const objects = [];
+  for (let i = 0; i < OBJ_COUNT; i++) {
+    const o = OBJ_OFF + i * 6;
+    objects.push({ x: (bulk[o] << 8) | bulk[o + 1], y: (bulk[o + 2] << 8) | bulk[o + 3], type: (bulk[o + 4] << 8) | bulk[o + 5] });
+  }
+  const messages = [];
+  for (let i = 0; i < MSG_COUNT; i++) {
+    const e = MSG_OFF + i * 4;
+    const off = (bulk[e + 2] << 8) | bulk[e + 3];
+    if (off === 0) { messages.push(null); continue; }
+    const start = MSG_OFF + off;
+    if (start >= BULK_SIZE) { messages.push(null); continue; }
+    let end = start;
+    while (end < BULK_SIZE && bulk[end] !== 0) end++;
+    const s = new TextDecoder('latin1').decode(bulk.subarray(start, end));
+    messages.push(s.length ? s : null);
+  }
+  return { count, headerWord, bulk, planeA, planeB, objects, messages, cols: MAP_COLS, rows: MAP_ROWS };
+}
+const TRIG_COUNT = 100, TRIG_RECSIZE = 24;
+function parseAllTriggers(bulk) {
+  const dv = new DataView(bulk.buffer, bulk.byteOffset, bulk.byteLength);
+  const out = [];
+  for (let i = 0; i < TRIG_COUNT; i++) {
+    const o = TRIG_OFF + i * TRIG_RECSIZE;
+    const u = (k) => dv.getUint16(o + k, false);
+    out.push({
+      index: i, condKind: [u(0), u(4), u(8)], condArg: [u(2), u(6), u(10)],
+      x: u(12), y: u(14), action: u(16), actionArg: u(18), messageId: u(20), reserved: u(22),
+    });
+  }
+  return out;
+}
+function triggerIsLive(t) {
+  return !!(t.condKind[0] | t.condKind[1] | t.condKind[2] | t.condArg[0] | t.condArg[1] | t.condArg[2] |
+            t.x | t.y | t.action | t.actionArg | t.messageId | t.reserved);
+}
+const CONDITION_NAMES = [
+  'always (bare RET — the unused-slot filler)', 'item IS in inventory', 'item is NOT in inventory',
+  'weapon slot MATCHES arg', 'weapon slot matches NONE', 'event word < 0', 'event word >= 0',
+  'health > arg', 'health < arg', 'level timer/17 > arg*5', 'level timer/17 < arg*5',
+  'lever bit SET', 'lever bit CLEAR', 'score < threshold', 'score > threshold', 'lives > arg', 'lives < arg',
+];
+const ACTION_NAMES = [
+  'spawn object (arg=type)', 'spawn weapon pickup (arg=weapon idx)', 'open 2x3 door',
+  'create teleport zone (arg=packed col<<8|row)', 'create level-exit zone', 'dispatch plane-B event (arg=event idx)',
+  'kill nearby category-4 objects', 'gate OPEN', 'gate CLOSE', 'close 2x3 door',
+  'clear weapon slot matching arg', 'no-op', 'no-op', 'message / precondition gate', 'zero level timer',
+];
+
+/* ════════════════════════════════════════════════════════════════════════
+ * PWEAPONS.00x — mirrors gods-web/src/game/weapons.js exactly, including the
+ * three EXE-pinned fields (the file's own +0x0c/+0x1e/+0x08 are discarded at
+ * load time by GAME.EXE, so the port — and this viewer — serve the pinned
+ * image values instead and keep the file's own bytes only for comparison).
+ * ════════════════════════════════════════════════════════════════════════ */
+const WEAPON_STRIDE = 0x50, WEAPON_COUNT = 11;
+const PINNED_08      = [1, 5, 3, 4, 8, 1, 6, 4, 5, 3, 3];
+const PINNED_SPRITE  = [331, 339, 343, 347, 363, 369, 373, 377, 385, 426, 437];
+const PINNED_SPRITE2 = [0, 0, 0, 0, 366, 0, 375, 0, 0, 0, 0];
+const WEAPON_NAMES = ['knife', 'time bomb', 'fireball', 'flame', 'lightning bolt',
+                       'throwing star', 'spear', 'axe', 'hunter', 'magic axe', 'mace'];
+const MOVER_NAMES = ['common (CS:0x9c6d)', 'fireball (CS:0x9d97)', 'NULL — cut weapon (flame)',
+                      'time bomb (CS:0xa058)', 'hunter (CS:0x9ef7)', 'magic axe (CS:0xa678)'];
+function parseWeapons(buf) {
+  const be = (o) => (buf[o] << 8) | buf[o + 1];
+  const out = [];
+  for (let i = 0; i < WEAPON_COUNT; i++) {
+    const o = i * WEAPON_STRIDE;
+    out.push({
+      index: i, name: WEAPON_NAMES[i] || '?',
+      slotAClass: be(o + 0x00), power: be(o + 0x06),
+      file08: be(o + 0x08), unknown08: PINNED_08[i], maxShots: be(o + 0x0a),
+      sprite: PINNED_SPRITE[i], sprite2: PINNED_SPRITE2[i],
+      fileSprite: be(o + 0x0c), fileSprite2: be(o + 0x1e),
+      breaksTerrain: buf[o + 0x48] !== 0, flag49: buf[o + 0x49] !== 0, value: be(o + 0x4a),
+      handlerLeft: buf[o + 0x13], handlerRight: buf[o + 0x17],
+      mover: buf[o + 0x1b], moverName: MOVER_NAMES[buf[o + 0x1b]] || '?',
+      drawStyle: be(o + 0x02), frame: be(o + 0x04), frameCount: be(o + 0x1c),
+      facing: be(o + 0x0e) === 0xffff ? -1 : 1,
+      textGuess: asciiRunIn(buf, o, WEAPON_STRIDE),
+    });
+  }
+  return out;
+}
+function asciiRunIn(buf, off, len) {
+  let best = '';
+  let cur = '';
+  for (let i = off; i < off + len; i++) {
+    const b = buf[i];
+    if (b >= 32 && b < 127) cur += String.fromCharCode(b);
+    else { if (cur.length > best.length) best = cur; cur = ''; }
+  }
+  if (cur.length > best.length) best = cur;
+  return best.trim();
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+ * POBJECTS.00x
+ * ════════════════════════════════════════════════════════════════════════ */
+const OBJ_STRIDE = 0x30, OBJ_TYPES = 132;
+const OBJ_CATEGORY_NAMES = [
+  'potion / consumable', 'treasure', 'key', 'lever / switch',
+  'unnamed (hazard-related; every record blank — see CLAUDE.md category 4)',
+  'unnamed (all blank — see CLAUDE.md category 5 census)',
+];
+function parsePobjects(buf) {
+  const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+  const out = [];
+  for (let i = 0; i < OBJ_TYPES; i++) {
+    const o = i * OBJ_STRIDE;
+    const category = dv.getUint16(o + 4, false);
+    out.push({
+      type: i, id: dv.getUint16(o + 0, false), field2: dv.getUint16(o + 2, false),
+      category, categoryName: OBJ_CATEGORY_NAMES[category] || `unknown (${category})`,
+      value: dv.getUint16(o + 6, false),
+      name: readAsciiz(buf, o + 0x08, 16), desc: readAsciiz(buf, o + 0x18, 24),
+      sprite: 170 + i,
+    });
+  }
+  return out;
+}
+function objectSprite(type) { return type < 0xC0 ? 170 + type : 302 + (type - 0xC0); }
+
+/* ════════════════════════════════════════════════════════════════════════
+ * BEZIER.DAT — 4 x 200 BE u16 Bernstein cubic basis tables, Q16 fixed point
+ * (65536 = 1.0). NOT DCL-compressed on disk.
+ * ════════════════════════════════════════════════════════════════════════ */
+function parseBezier(buf) {
+  const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+  const tabs = [[], [], [], []];
+  for (let t = 0; t < 4; t++) for (let i = 0; i < 200; i++) tabs[t].push(dv.getUint16(t * 400 + i * 2, false));
+  return tabs;
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+ * .MUS / .RL — container of Standard MIDI Files
+ * u16 LE count; count x u32 LE absolute offset; u16 pad; concatenated blobs.
+ * ════════════════════════════════════════════════════════════════════════ */
+function parseMusicContainer(buf) {
+  const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+  const count = dv.getUint16(0, true);
+  const offsets = [];
+  for (let i = 0; i < count; i++) offsets.push(dv.getUint32(2 + i * 4, true));
+  const blobs = [];
+  for (let i = 0; i < count; i++) {
+    const start = offsets[i];
+    const end = i + 1 < count ? offsets[i + 1] : buf.length;
+    const data = buf.subarray(Math.min(start, buf.length), Math.min(Math.max(start, end), buf.length));
+    const isSMF = data.length >= 4 && data[0] === 0x4D && data[1] === 0x54 && data[2] === 0x68 && data[3] === 0x64;
+    let smf = null;
+    if (isSMF && data.length >= 14) {
+      const d2 = new DataView(data.buffer, data.byteOffset, data.byteLength);
+      smf = { format: d2.getUint16(8, false), ntrks: d2.getUint16(10, false), division: d2.getUint16(12, false) };
+    }
+    blobs.push({ index: i, start, end, length: data.length, data, isSMF, smf });
+  }
+  return { count, blobs };
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+ * PGOD0x.PAT — per-class scripted movement path
+ * 50 x 8-byte directory {u16 field0 (disk placeholder), u32 field2 (dead
+ * running offset), u16 length}; payload starts at file offset 0x190 and is
+ * laid out by summing the LIVE entries' lengths in index order. An unused
+ * directory slot is all-0xFFFF (field0 reads negative as i16, per the "an
+ * entry whose +0 is negative is skipped" rule) — verified against PGOD01.PAT,
+ * whose last 12 of 50 slots are exactly that pattern and whose 38 remaining
+ * entries match CLAUDE.md's own "38 live entries" figure for that file.
+ * ════════════════════════════════════════════════════════════════════════ */
+function parsePat(buf) {
+  const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+  const DIRCOUNT = 50, ENTRY = 8;
+  const entries = [];
+  let cursor = 0x190;
+  for (let i = 0; i < DIRCOUNT; i++) {
+    const o = i * ENTRY;
+    const field0 = dv.getUint16(o + 0, false);
+    const length = dv.getUint16(o + 6, false);
+    const live = field0 < 0x8000 && length > 0 && length < 0xFFFF;
+    const e = { index: i, field0, field2raw: dv.getUint32(o + 2, false), length: live ? length : 0 };
+    if (live && cursor + length <= buf.length) { e.payloadStart = cursor; e.payloadEnd = cursor + length; cursor += length; }
+    else { e.payloadStart = null; e.payloadEnd = null; }
+    entries.push(e);
+  }
+  return { entries, totalPayload: cursor - 0x190, fileLength: buf.length };
+}
+function patEntryPath(buf, entry) {
+  const start = entry.payloadStart, end = entry.payloadEnd;
+  if (start == null || end - start < 4) return null;
+  const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+  const tagLE = buf[start] | (buf[start + 1] << 8);
+  let x0, y0, cursor;
+  if (tagLE === 0x4523) { x0 = dv.getUint16(start + 2, false); y0 = dv.getUint16(start + 4, false); cursor = start + 6; }
+  else { x0 = dv.getUint16(start + 0, false); y0 = dv.getUint16(start + 2, false); cursor = start + 4; }
+  const pts = [{ x: x0, y: y0 }];
+  let x = x0, y = y0;
+  for (let p = cursor; p < end; p++) {
+    const b = buf[p];
+    const dy = signedNibble(b & 0xF), dx = signedNibble((b >> 4) & 0xF);
+    x += dx; y += dy; pts.push({ x, y });
+  }
+  return { absolute: tagLE === 0x4523, start: { x: x0, y: y0 }, points: pts };
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+ * PJOY{G,L}{1,2,3}.DAT — recorded attract-mode input
+ * ════════════════════════════════════════════════════════════════════════ */
+function parseJoy(buf) {
+  const out = [];
+  for (let i = 0; i < buf.length; i++) {
+    const b = buf[i];
+    out.push({
+      index: i, byte: b,
+      fire: !!(b & 0x80), axis1: (b >> 2) & 0x3, axis2: b & 0x3,
+      isTerminator: b === 0xFF,
+    });
+  }
+  return out;
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+ * PALFILS.0{A,B}{1-4} — partial parse: only the sub-tables with a fully
+ * documented field layout. The remaining windows (spawn table @0x0000,
+ * selector-2 spawner @0x0718, the @0x189C region) are shown as raw hex —
+ * CLAUDE.md does not give complete per-field struct layouts for those.
+ * ════════════════════════════════════════════════════════════════════════ */
+const PALFILS_OFF = {
+  spawn:     { off: 0x0000, stride: 8,    count: 100 },
+  events:    { off: 0x0324, stride: 4,    count: 253 },
+  spawner2:  { off: 0x0718, stride: 0x10, count: 100 },
+  groupA:    { off: 0x0D58, stride: 0x16, count: 50 },
+  groupB:    { off: 0x11A4, stride: 0x16, count: 50 },
+  levers:    { off: 0x15F0, stride: 6,    count: 64 },
+  lookup:    { off: 0x1770, stride: 6,    count: 30 },
+  trapdoors: { off: 0x1824, stride: 6,    count: 20 },
+  driverTbl: { off: 0x189C, stride: 0x1c, count: 25 },
+  hintKeys:  { off: 0x1B58, stride: 2,    count: 40 },
+  hintText:  { off: 0x1BA8, stride: 0x28, count: 40 },
+};
+function parsePalfilsEvents(buf) {
+  const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+  const { off, stride, count } = PALFILS_OFF.events;
+  const out = [];
+  for (let i = 0; i < count; i++) {
+    const o = off + i * stride;
+    if (o + 4 > buf.length) break;
+    out.push({ index: i, selector: dv.getUint16(o, false), param: dv.getUint16(o + 2, false) });
+  }
+  return out;
+}
+function parsePalfilsLevers(buf) {
+  const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+  const { off, stride, count } = PALFILS_OFF.levers;
+  const out = [];
+  for (let i = 0; i < count; i++) {
+    const o = off + i * stride;
+    if (o + 6 > buf.length) break;
+    const x = dv.getUint16(o, false), y = dv.getUint16(o + 2, false), type = dv.getUint16(o + 4, false);
+    if (x === 0 && y === 0 && type === 0) continue;
+    out.push({ index: i, x, y, type, on: !!(type & 1) });
+  }
+  return out;
+}
+function parsePalfilsLookup(buf) {
+  const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+  const { off, stride, count } = PALFILS_OFF.lookup;
+  const out = [];
+  for (let i = 0; i < count; i++) {
+    const o = off + i * stride;
+    if (o + 6 > buf.length) break;
+    out.push({ index: i, key: dv.getUint16(o, false), x: dv.getUint16(o + 2, false), y: dv.getUint16(o + 4, false) });
+  }
+  return out;
+}
+function parsePalfilsTrapdoors(buf) {
+  const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+  const { off, stride, count } = PALFILS_OFF.trapdoors;
+  const out = [];
+  for (let i = 0; i < count; i++) {
+    const o = off + i * stride;
+    if (o + 6 > buf.length) break;
+    const x = dv.getUint16(o, false), y = dv.getUint16(o + 2, false), open = dv.getUint16(o + 4, false);
+    out.push({ index: i, x, y, open, planeBSolidWhenClosed: (open ^ 1) & 1 });
+  }
+  return out;
+}
+function parsePalfilsHints(buf) {
+  const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+  const keysOff = PALFILS_OFF.hintKeys, textOff = PALFILS_OFF.hintText;
+  const out = [];
+  for (let i = 0; i < keysOff.count; i++) {
+    const ko = keysOff.off + i * keysOff.stride;
+    const to = textOff.off + i * textOff.stride;
+    if (to + textOff.stride > buf.length) break;
+    const key = dv.getInt16(ko, false);
+    const text = readAsciiz(buf, to, textOff.stride);
+    if (key < 0 && !text) continue;
+    out.push({ index: i, key, text });
+  }
+  return out;
+}
+function parsePalfilsGroup(buf, which) {
+  const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+  const spec = PALFILS_OFF[which];
+  const out = [];
+  for (let i = 0; i < spec.count; i++) {
+    const o = spec.off + i * spec.stride;
+    if (o + spec.stride > buf.length) break;
+    const count = buf[o];
+    if (count === 0) continue;
+    out.push({
+      index: i, entityCount: count, hp: buf[o + 1],
+      flagWord: dv.getUint16(o + 4, false),
+      fireRateLo: buf[o + 6] & 0xF, spriteClass: buf[o + 7],
+      stratLo: buf[o + 8] & 0xF, stratHi: (buf[o + 8] >> 4) & 0xF, weight: buf[o + 9],
+      speedOrCap: signed8(buf[o + 0xb]), steerClampOrSpawnY: which === 'groupB' ? buf[o + 0x13] : signed8(buf[o + 0xc]),
+      spawnTileX: which === 'groupB' ? buf[o + 0x12] : undefined,
+      spawnTileY: which === 'groupB' ? buf[o + 0x13] : undefined,
+      costBudget: which === 'groupA' ? signed8(buf[o + 0xd]) : undefined,
+      attackGate: which === 'groupA' ? buf[o + 0xf] : undefined,
+      stagger: which === 'groupB' ? buf[o + 0x14] : undefined,
+    });
+  }
+  return out;
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+ * File classification
+ * ════════════════════════════════════════════════════════════════════════ */
+function classify(name) {
+  const n = name.toUpperCase();
+  if (n === 'GODS.INI') return 'ini';
+  if (n === 'HISCORES.BIN') return 'hiscores';
+  if (n === 'SINCOS.DAT') return 'sincos';
+  if (n === 'BEZIER.DAT') return 'bezier';
+  if (/^PWEAPONS\.00[1-4]$/.test(n)) return 'weapons';
+  if (/^POBJECTS\.00[1-4]$/.test(n)) return 'objects';
+  if (/^PALFILS\.0[AB][1-4]$/.test(n)) return 'palfils';
+  if (/^PGOD0[1-4]\.PAT$/.test(n)) return 'pat';
+  if (/^PJOY[GL][1-3]\.DAT$/.test(n)) return 'joy';
+  if (n.endsWith('.MAP')) return 'map';
+  if (n.endsWith('.PI1')) return 'pi1';
+  if (n.endsWith('.DAT')) return 'atlas';
+  if (n.endsWith('.MUS') || n.endsWith('.RL')) return 'music';
+  if (n.endsWith('.SB')) return 'pcm';
+  if (n.endsWith('.BIN')) return 'bin';
+  return 'raw';
+}
+const CATS = [
+  ['pi1', 'Images (.PI1 — DEGAS ST bitmap)', 'One 320×200×16-colour Atari ST bitmap per file. Standalone screens (PBACKSCR, PSTBACK…), sprite sheets paired with a .DAT atlas, or level tile sheets (PBITS/PXTRA).'],
+  ['atlas', 'Sprite atlases (.DAT)', 'Frame index {w,h,x,y} into the same-stem .PI1. PJOY*.DAT files match the extension but are recorded input, not atlases.'],
+  ['map', 'Levels (.MAP)', 'Two 128×64 tile planes, 200 object records, 40 messages, 100 trigger records. Rendered with the paired PBITS/PXTRA tile sheet and PLEVEL palette when loaded.'],
+  ['weapons', 'Weapons (PWEAPONS.00x)', '11 fixed 80-byte records per world. Three fields are pinned at the EXE-image value and the file\'s own copies are discarded at load — shown for comparison.'],
+  ['objects', 'Objects (POBJECTS.00x)', '132 fixed 48-byte records: id, category, value, 16-byte name, 24-byte description.'],
+  ['palfils', 'Level data (PALFILS.0*)', 'Hint text, lever/trapdoor/event tables and per-world entity group descriptors. Only the fully-documented windows are decoded; the rest is raw hex.'],
+  ['music', 'Music (.MUS / .RL)', 'A container of Standard MIDI File blobs (plus a few non-SMF "type 2" blobs whose event payload is still only partially understood).'],
+  ['pat', 'Scripted paths (PGOD0x.PAT)', 'Per-class scripted movement: a start position plus a byte-per-tick signed-nibble delta path.'],
+  ['joy', 'Recorded input (PJOY*.DAT)', 'Flat, headerless attract-mode joystick/button recordings, terminated by 0xFF.'],
+  ['bezier', 'Bezier tables (BEZIER.DAT)', 'Four 200-entry Q16 Bernstein cubic basis tables. Not DCL-compressed.'],
+  ['ini', 'Config (GODS.INI)', 'Plain text, written by INSTALL.EXE.'],
+  ['pcm', 'Raw audio (.SB)', '8-bit unsigned PCM. Sample rate is not established from the binary — playback rate here is a labelled guess.'],
+  ['bin', 'Driver blobs (.BIN)', 'Sound-driver payloads (PPLAYER/PTANDY/PBEEPER/PBUMLIST). Structure undecoded — raw hex only.'],
+  ['hiscores', 'High scores (HISCORES.BIN)', 'Mutable runtime state written by GAME.EXE, not a shipped asset. Not DCL-compressed.'],
+  ['sincos', 'Trig table (SINCOS.DAT)', 'Not DCL-compressed; internal layout not documented in the ledger. Raw hex only.'],
+  ['raw', 'Other / undecoded', 'Everything else — shown as a hex dump.'],
+];
+const CAT_TITLE = Object.fromEntries(CATS.map((c) => [c[0], c[1]]));
+
+/* ════════════════════════════════════════════════════════════════════════
+ * App state & file loading
+ * ════════════════════════════════════════════════════════════════════════ */
+const state = { files: new Map(), order: [], selected: null, filter: '' };
+
+function addFile(name, raw) {
+  const key = name.toUpperCase();
+  const entry = { name, raw, decoded: raw, packed: false, error: null, category: classify(name) };
+  if (raw.length >= 2 && raw[0] === 0x00 && raw[1] === 0x06) {
+    try {
+      const r = dclDecompress(raw);
+      entry.decoded = r.data;
+      entry.packed = true;
+      entry.consumedAll = r.consumed === raw.length;
+    } catch (e) { entry.error = 'DCL decompress failed: ' + e.message; }
+  }
+  if (!state.files.has(key)) state.order.push(key);
+  state.files.set(key, entry);
+}
+function getFile(name) { return state.files.get(String(name).toUpperCase()); }
+
+function loadFileArray(files) {
+  const arr = Array.from(files);
+  document.getElementById('status').textContent = `loading ${arr.length} files…`;
+  Promise.all(arr.map((f) => f.arrayBuffer().then((buf) => ({ name: f.name.split('/').pop(), raw: new Uint8Array(buf) }))))
+    .then((entries) => {
+      for (const e of entries) addFile(e.name, e.raw);
+      rebuildSidebar();
+      updateStatus();
+      if (!state.selected) showWelcome();
+    });
+}
+
+function updateStatus() {
+  const n = state.files.size;
+  const errs = [...state.files.values()].filter((e) => e.error).length;
+  document.getElementById('status').textContent = n === 0 ? 'no files loaded'
+    : `${n} files loaded${errs ? `, ${errs} failed to decompress` : ''}`;
+}
+
+/* ---- directory drag & drop (Chromium) ---- */
+function traverseEntry(entry, out) {
+  return new Promise((resolve) => {
+    if (entry.isFile) {
+      entry.file((f) => { out.push(f); resolve(); });
+    } else if (entry.isDirectory) {
+      const reader = entry.createReader();
+      const all = [];
+      const readBatch = () => reader.readEntries((ents) => {
+        if (!ents.length) { Promise.all(all.map((e) => traverseEntry(e, out))).then(resolve); return; }
+        all.push(...ents); readBatch();
+      });
+      readBatch();
+    } else resolve();
+  });
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+ * Sidebar
+ * ════════════════════════════════════════════════════════════════════════ */
+function rebuildSidebar() {
+  const root = document.getElementById('catlist');
+  clear(root);
+  const byCat = {};
+  for (const k of state.order) {
+    const e = state.files.get(k);
+    if (!e) continue;
+    const q = state.filter.toLowerCase();
+    if (q && !e.name.toLowerCase().includes(q)) continue;
+    (byCat[e.category] = byCat[e.category] || []).push(e);
+  }
+  for (const [cat, title] of CATS.map((c) => [c[0], c[1]])) {
+    const list = byCat[cat];
+    if (!list) continue;
+    list.sort((a, b) => a.name.localeCompare(b.name));
+    const ul = h('ul', { class: 'filelist' }, ...list.map((e) => {
+      const li = h('li',
+        { onclick: () => selectFile(e.name) },
+        h('span', null, e.name),
+        e.error ? h('span', { class: 'err' }, '✕') : h('span', { class: 'sz' }, fmtSize(e.decoded.length))
+      );
+      if (state.selected && state.selected.toUpperCase() === e.name.toUpperCase()) li.className = 'sel';
+      return li;
+    }));
+    const det = h('details', { class: 'cat', open: state.filter ? '' : null },
+      h('summary', null, title.split(' (')[0], h('span', { class: 'n' }, ` (${list.length})`)),
+      ul);
+    root.appendChild(det);
+  }
+  if (!state.order.length) {
+    root.appendChild(h('div', { class: 'small', style: { padding: '.5rem' } }, 'Load the GODS directory to begin.'));
+  }
+}
+
+function selectFile(name) {
+  state.selected = name;
+  rebuildSidebar();
+  render();
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+ * Main renderer
+ * ════════════════════════════════════════════════════════════════════════ */
+function fileHeader(entry) {
+  const wrap = h('div', { class: 'fileheader' },
+    h('h2', null, entry.name),
+    h('span', { class: 'tag' }, CAT_TITLE[entry.category] || entry.category),
+    entry.packed ? h('span', { class: 'tag ok' }, `DCL: ${fmtSize(entry.raw.length)} → ${fmtSize(entry.decoded.length)}${entry.consumedAll ? '' : ' ⚠ trailing bytes'}`)
+                 : h('span', { class: 'tag' }, `raw, not DCL-compressed — ${fmtSize(entry.raw.length)}`),
+    entry.error ? h('span', { class: 'tag bad' }, entry.error) : null,
+    h('span', { class: 'spacer', style: { flex: '1' } }, ''),
+    h('button', { onclick: () => downloadBytes(entry.decoded, entry.name + '.decoded.bin') }, 'download decoded bytes'),
+    entry.packed ? h('button', { onclick: () => downloadBytes(entry.raw, entry.name) }, 'download raw (packed)') : null,
+  );
+  return wrap;
+}
+
+function render() {
+  const main = document.getElementById('main');
+  clear(main);
+  if (!state.selected) { showWelcome(); return; }
+  const entry = getFile(state.selected);
+  if (!entry) { showWelcome(); return; }
+  main.appendChild(fileHeader(entry));
+  if (entry.error && !['bin', 'raw', 'hiscores', 'sincos'].includes(entry.category)) {
+    main.appendChild(h('p', { class: 'warn' }, 'Could not decompress — showing raw bytes instead.'));
+    main.appendChild(h('pre', { class: 'hex' }, hexDump(entry.raw)));
+    return;
+  }
+  try {
+    RENDERERS[entry.category](main, entry);
+  } catch (err) {
+    main.appendChild(h('p', { class: 'warn' }, 'Parse error: ' + err.message));
+    main.appendChild(h('pre', { class: 'hex' }, hexDump(entry.decoded)));
+    console.error(err);
+  }
+}
+
+function showWelcome() {
+  const main = document.getElementById('main');
+  clear(main);
+  const counts = {};
+  for (const e of state.files.values()) counts[e.category] = (counts[e.category] || 0) + 1;
+  const w = h('div', { class: 'welcome' },
+    h('h2', null, 'GODS asset viewer'),
+    h('p', null,
+      'Drop the game directory below, or click ', h('b', null, 'Load folder…'), ' up top. ',
+      'Everything decompresses and decodes in this tab — nothing is uploaded anywhere. ',
+      'Formats follow the reverse-engineering ledger in this project\'s CLAUDE.md; anything not fully decoded there is shown as raw hex rather than guessed.'),
+    h('div', { id: 'dropzone', class: 'drop' }, 'or drop the GODS folder (or its files) here'),
+    h('div', { class: 'catgrid' }, ...CATS.map(([cat, title, desc]) =>
+      h('div', { class: 'catcard' }, h('b', null, title.split(' (')[0]), h('span', { class: 'cnt' }, counts[cat] || 0), h('p', null, desc)))),
+  );
+  main.appendChild(w);
+  wireDropzone(document.getElementById('dropzone'));
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+ * Per-category renderers
+ * ════════════════════════════════════════════════════════════════════════ */
+const RENDERERS = {};
+
+RENDERERS.ini = (main, entry) => {
+  main.appendChild(h('pre', { class: 'code' }, new TextDecoder('latin1').decode(entry.decoded)));
+};
+
+RENDERERS.hiscores = RENDERERS.sincos = RENDERERS.bin = RENDERERS.raw = (main, entry) => {
+  main.appendChild(h('pre', { class: 'hex' }, hexDump(entry.decoded)));
+};
+
+RENDERERS.pcm = (main, entry) => {
+  const buf = entry.decoded;
+  main.appendChild(h('p', { class: 'small' }, `${buf.length} bytes, 8-bit unsigned PCM. Mean ${
+    (buf.reduce((a, b) => a + b, 0) / buf.length).toFixed(1)}.`));
+  const canvas = h('canvas', { width: 800, height: 160 });
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#0e1013'; ctx.fillRect(0, 0, 800, 160);
+  ctx.strokeStyle = '#5aa9ff'; ctx.beginPath();
+  const step = buf.length / 800;
+  for (let x = 0; x < 800; x++) {
+    const v = buf[Math.floor(x * step)] || 128;
+    const y = 160 - (v / 255) * 160;
+    x === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+  main.appendChild(h('div', { class: 'canvaswrap' }, canvas));
+  const rateSel = h('select', null, ...[8000, 11025, 16000, 22050].map((r) => h('option', { value: r }, r + ' Hz')));
+  rateSel.value = '11025';
+  const playBtn = h('button', { onclick: () => {
+    const rate = Number(rateSel.value);
+    const ctx2 = new (window.AudioContext || window.webkitAudioContext)();
+    const ab = ctx2.createBuffer(1, buf.length, rate);
+    const ch = ab.getChannelData(0);
+    for (let i = 0; i < buf.length; i++) ch[i] = (buf[i] - 128) / 128;
+    const src = ctx2.createBufferSource(); src.buffer = ab; src.connect(ctx2.destination); src.start();
+  } }, '▶ play');
+  main.appendChild(h('div', { class: 'controls' },
+    h('label', null, 'guessed sample rate — not established from the binary:', rateSel), playBtn));
+};
+
+RENDERERS.pi1 = (main, entry) => {
+  const img = decodePI1(entry.decoded);
+  const scaleSel = h('select', null, ...[1, 2, 3].map((s) => h('option', { value: s }, s + 'x')));
+  const wrap = h('div', { class: 'canvaswrap' });
+  const redraw = () => { clear(wrap); wrap.appendChild(scaledCanvas(img.indices, img.width, img.height, img.palette, Number(scaleSel.value))); };
+  scaleSel.onchange = redraw;
+  main.appendChild(h('div', { class: 'controls' }, h('label', null, 'zoom:', scaleSel),
+    h('button', { onclick: () => downloadCanvasPNG(renderIndexedToCanvas(document.createElement('canvas'), img.indices, img.width, img.height, img.palette), entry.name + '.png') }, 'download PNG')));
+  main.appendChild(wrap); redraw();
+
+  main.appendChild(h('h3', null, 'Palette (16 × 0x0RGB)'));
+  main.appendChild(h('div', { class: 'pal' }, ...Array.from({ length: 16 }, (_, i) =>
+    h('div', { class: 'sw', style: { background: `rgb(${img.palette[i*4]},${img.palette[i*4+1]},${img.palette[i*4+2]})` } },
+      h('span', null, hex4(img.paletteRaw[i]))))));
+
+  const n = entry.name.toUpperCase();
+  if (/^PBITS|^PXTRA/.test(n)) {
+    main.appendChild(h('h3', null, 'Tile grid (10 × 12, 32×16 px each — row-major, index = row*10+col)'));
+    const tiles = sliceTiles(img);
+    const grid = h('div', { class: 'frameGrid' });
+    tiles.forEach((t, i) => grid.appendChild(h('div', { class: 'fcell' },
+      h('div', null, scaledCanvas(t, TILE_W, TILE_H, img.palette, 2)), h('div', { class: 'idx' }, i))));
+    main.appendChild(grid);
+  }
+
+  const stem = entry.name.replace(/\.PI1$/i, '');
+  const atlasEntry = getFile(stem + '.DAT');
+  if (atlasEntry && atlasEntry.category === 'atlas' && !atlasEntry.error) {
+    try {
+      const atlas = parseAtlas(atlasEntry.decoded);
+      main.appendChild(h('h3', null, `Sprite frames (paired ${atlasEntry.name}, ${atlas.count} frames)`));
+      renderAtlasFrames(main, img, atlas);
+    } catch (e) { main.appendChild(h('p', { class: 'warn' }, 'paired atlas failed to parse: ' + e.message)); }
+  }
+};
+
+function renderAtlasFrames(main, img, atlas) {
+  const detail = h('div', { class: 'canvaswrap' });
+  const info = h('div', { class: 'small' });
+  const grid = h('div', { class: 'frameGrid' });
+  let sel = null;
+  const showFrame = (i) => {
+    if (sel != null) grid.children[sel].classList.remove('sel');
+    sel = i; grid.children[i].classList.add('sel');
+    const f = atlas.frames[i];
+    const px = cutFrame(img, f);
+    clear(detail); detail.appendChild(scaledCanvas(px, f.w, f.h, img.palette, Math.min(8, Math.max(1, Math.floor(200 / Math.max(f.w, f.h))))));
+    clear(info); info.appendChild(h('span', null, `#${i} — ${f.w}×${f.h} at (${f.x},${f.y})`));
+  };
+  atlas.frames.forEach((f, i) => {
+    const c = scaledCanvas(cutFrame(img, f), f.w, f.h, img.palette, Math.min(2, 40 / Math.max(f.w, f.h)));
+    grid.appendChild(h('div', { class: 'fcell', onclick: () => showFrame(i) }, c, h('div', { class: 'idx' }, i)));
+  });
+  main.appendChild(h('div', { class: 'row' }, h('div', { class: 'col' }, grid), h('div', { class: 'col' }, detail, info)));
+  if (atlas.frames.length) showFrame(0);
+}
+
+RENDERERS.atlas = (main, entry) => {
+  const n = entry.name.toUpperCase();
+  if (/^PJOY[GL][1-3]\.DAT$/.test(n)) { RENDERERS.joy(main, entry); return; }
+  const atlas = parseAtlas(entry.decoded);
+  const stem = entry.name.replace(/\.DAT$/i, '');
+  const pi1Entry = getFile(stem + '.PI1');
+  main.appendChild(h('p', { class: 'small' }, `${atlas.count} frames.`));
+  if (pi1Entry && !pi1Entry.error) {
+    try {
+      const img = decodePI1(pi1Entry.decoded);
+      renderAtlasFrames(main, img, atlas);
+      return;
+    } catch (e) { main.appendChild(h('p', { class: 'warn' }, 'paired .PI1 failed: ' + e.message)); }
+  } else {
+    main.appendChild(h('p', { class: 'warn' }, `paired ${stem}.PI1 not loaded — showing the raw index table.`));
+  }
+  main.appendChild(table(
+    ['#', { label: 'w', num: true }, { label: 'h', num: true }, { label: 'x', num: true }, { label: 'y', num: true }, { label: 'word2', num: true }],
+    atlas.frames.map((f, i) => [i, f.w, f.h, f.x, f.y, f.word2])));
+};
+
+RENDERERS.weapons = (main, entry) => {
+  const recs = parseWeapons(entry.decoded);
+  main.appendChild(h('p', { class: 'small' },
+    'Columns marked ★ are pinned at the GAME.EXE image value; this file\'s own bytes for them are shown alongside for comparison but are discarded at load time.'));
+  main.appendChild(table(
+    ['#', 'name', { label: 'power', num: true }, { label: 'value', num: true }, { label: 'maxShots', num: true },
+     { label: 'sprite★', num: true }, { label: 'file sprite', num: true }, { label: 'sprite2★', num: true },
+     'breaksTerrain', 'mover', { label: 'drawStyle', num: true }, 'facing', 'text (heuristic)'],
+    recs.map((r) => [r.index, r.name, r.power, r.value, r.maxShots, r.sprite, r.fileSprite,
+      r.sprite2 || '—', r.breaksTerrain ? 'yes' : 'no', r.moverName, r.drawStyle,
+      r.facing > 0 ? 'right' : 'left', r.textGuess || '—'])));
+};
+
+RENDERERS.objects = (main, entry) => {
+  const recs = parsePobjects(entry.decoded);
+  main.appendChild(table(
+    ['type', { label: 'sprite', num: true }, { label: 'id (file)', num: true }, 'category',
+     { label: 'value', num: true }, 'name', 'description'],
+    recs.map((r) => [r.type, r.sprite, r.id, r.categoryName, r.value, r.name || '—', r.desc || '—'])));
+};
+
+RENDERERS.bezier = (main, entry) => {
+  const tabs = parseBezier(entry.decoded);
+  const canvas = h('canvas', { width: 640, height: 260 });
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#0e1013'; ctx.fillRect(0, 0, 640, 260);
+  const colors = ['#5aa9ff', '#ffb454', '#5fd68a', '#ff6b6b'];
+  tabs.forEach((tab, ti) => {
+    ctx.strokeStyle = colors[ti]; ctx.beginPath();
+    tab.forEach((v, i) => {
+      const x = (i / 199) * 640, y = 260 - (v / 65536) * 260;
+      i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+  });
+  main.appendChild(h('div', { class: 'legend' }, ...['q0', 'q1', 'q2', 'q3'].map((n, i) =>
+    h('span', null, h('span', { class: 'sw', style: { background: colors[i] } }), n))));
+  main.appendChild(h('div', { class: 'canvaswrap' }, canvas));
+  main.appendChild(h('p', { class: 'small' }, 'Q16 fixed point (65536 = 1.0), Bernstein cubic basis, t = i/200. At t=0.5, q0[100] should read 8192 (0.125) and q1[100] 24576 (0.375): ' +
+    `got q0[100]=${tabs[0][100]}, q1[100]=${tabs[1][100]}.`));
+};
+
+RENDERERS.music = (main, entry) => {
+  const c = parseMusicContainer(entry.decoded);
+  main.appendChild(h('p', { class: 'small' }, `${c.count} blobs.`));
+  main.appendChild(table(
+    ['#', { label: 'offset', num: true }, { label: 'length', num: true }, 'type', 'SMF header', ''],
+    c.blobs.map((b) => [
+      b.index, '0x' + b.start.toString(16), b.length, b.isSMF ? 'Standard MIDI File' : 'non-SMF ("type 2")',
+      b.smf ? `format ${b.smf.format}, ${b.smf.ntrks} track(s), division ${b.smf.division}` : '—',
+      b.isSMF
+        ? h('a', { class: 'dl', href: '#', onclick: (ev) => { ev.preventDefault(); download(`${entry.name}.blob${b.index}.mid`, new Blob([b.data], { type: 'audio/midi' })); } }, 'download .mid')
+        : h('a', { class: 'dl', href: '#', onclick: (ev) => { ev.preventDefault(); downloadBytes(b.data, `${entry.name}.blob${b.index}.bin`); } }, 'download raw'),
+    ])));
+  main.appendChild(h('p', { class: 'small' }, 'Non-SMF blobs carry a 512-byte reserved region and a 9×19-byte per-OPL-channel table; the event stream past that is still UNKNOWN per the ledger — shown as hex below on selection.'));
+};
+
+RENDERERS.pat = (main, entry) => {
+  const p = parsePat(entry.decoded);
+  const live = p.entries.filter((e) => e.length > 0);
+  main.appendChild(h('p', { class: 'small' }, `${live.length} of 50 directory slots are live (length > 0); ${p.totalPayload} payload bytes after the 400-byte directory.`));
+  const detail = h('div');
+  const showEntry = (e) => {
+    clear(detail);
+    const path = patEntryPath(entry.decoded, e);
+    if (!path) { detail.appendChild(h('p', { class: 'small' }, 'too short to decode a path')); return; }
+    const pts = path.points;
+    const xs = pts.map((p) => p.x), ys = pts.map((p) => p.y);
+    const minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
+    const W = 360, H = 240, pad = 10;
+    const sx = (v) => pad + (maxX > minX ? ((v - minX) / (maxX - minX)) * (W - 2 * pad) : W / 2);
+    const sy = (v) => pad + (maxY > minY ? ((v - minY) / (maxY - minY)) * (H - 2 * pad) : H / 2);
+    const canvas = h('canvas', { width: W, height: H });
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#0e1013'; ctx.fillRect(0, 0, W, H);
+    ctx.strokeStyle = '#5aa9ff'; ctx.beginPath();
+    pts.forEach((p, i) => { const x = sx(p.x), y = sy(p.y); i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y); });
+    ctx.stroke();
+    ctx.fillStyle = '#5fd68a'; ctx.beginPath(); ctx.arc(sx(pts[0].x), sy(pts[0].y), 3, 0, 7); ctx.fill();
+    ctx.fillStyle = '#ff6b6b'; const last = pts[pts.length - 1]; ctx.beginPath(); ctx.arc(sx(last.x), sy(last.y), 3, 0, 7); ctx.fill();
+    detail.appendChild(h('div', { class: 'canvaswrap' }, canvas));
+    detail.appendChild(h('p', { class: 'small' },
+      `entry #${e.index} — ${path.absolute ? 'absolute start (0x4523 tag)' : 'screen-relative start'} ` +
+      `(${path.start.x},${path.start.y}), ${pts.length - 1} delta steps. `,
+      h('span', { class: 'sw', style: { background: '#5fd68a', display: 'inline-block', width: '9px', height: '9px', borderRadius: '50%' } }), ' start · ',
+      h('span', { class: 'sw', style: { background: '#ff6b6b', display: 'inline-block', width: '9px', height: '9px', borderRadius: '50%' } }), ' end'));
+  };
+  main.appendChild(table(
+    ['slot', { label: 'field0', num: true }, { label: 'length', num: true }, { label: 'payload start', num: true }, ''],
+    live.map((e) => [e.index, e.field0, e.length, '0x' + e.payloadStart.toString(16),
+      h('button', { onclick: () => showEntry(e) }, 'plot path')])));
+  main.appendChild(detail);
+  if (live.length) showEntry(live[0]);
+};
+
+RENDERERS.joy = (main, entry) => {
+  const rows = parseJoy(entry.decoded);
+  main.appendChild(h('p', { class: 'small' }, `${rows.length} recorded input bytes. bit7=fire, bits{3,2}=axis1, bits{1,0}=axis2; 0xFF terminates.`));
+  main.appendChild(h('pre', { class: 'hex' }, rows.slice(0, 4000).map((r) =>
+    `${String(r.index).padStart(5)}  0x${hex2(r.byte)}  ${r.byte.toString(2).padStart(8, '0')}  fire=${r.fire ? 1 : 0} axis1=${r.axis1} axis2=${r.axis2}${r.isTerminator ? '  <-- 0xFF terminator' : ''}`
+  ).join('\n') + (rows.length > 4000 ? `\n… truncated, showing 4000 of ${rows.length}` : '')));
+};
+
+RENDERERS.palfils = (main, entry) => {
+  const buf = entry.decoded;
+  const hints = parsePalfilsHints(buf);
+  main.appendChild(h('h3', null, `Hint text (${hints.length} entries)`));
+  main.appendChild(table(['key (world X)', 'text'], hints.map((h2) => [h2.key, h2.text])));
+
+  const events = parsePalfilsEvents(buf);
+  main.appendChild(h('h3', null, `Event table (${events.filter((e) => e.selector || e.param).length} / ${events.length} non-empty)`));
+  main.appendChild(table(['#', 'selector', 'param'], events.filter((e) => e.selector || e.param).map((e) => [e.index, e.selector, e.param])));
+
+  const levers = parsePalfilsLevers(buf);
+  main.appendChild(h('h3', null, `Levers / switches (${levers.length})`));
+  main.appendChild(table(['#', 'x', 'y', 'object type', 'state'], levers.map((l) => [l.index, l.x, l.y, l.type, l.on ? 'on' : 'off'])));
+
+  const lookup = parsePalfilsLookup(buf).filter((l) => l.key || l.x || l.y);
+  main.appendChild(h('h3', null, `Key/lookup table (${lookup.length})`));
+  main.appendChild(table(['#', 'key', 'x', 'y'], lookup.map((l) => [l.index, l.key, l.x, l.y])));
+
+  const traps = parsePalfilsTrapdoors(buf).filter((t) => t.x || t.y);
+  main.appendChild(h('h3', null, `Trap doors (${traps.length})`));
+  main.appendChild(table(['#', 'x', 'y', 'open'], traps.map((t) => [t.index, t.x, t.y, t.open ? 'open' : 'closed'])));
+
+  for (const [which, title] of [['groupA', 'System-A entity group descriptors'], ['groupB', 'System-B entity group descriptors']]) {
+    const recs = parsePalfilsGroup(buf, which);
+    main.appendChild(h('h3', null, `${title} (${recs.length} live of 50)`));
+    main.appendChild(h('p', { class: 'small' }, 'Field offsets shared across both tables are well documented; a few (marked —) are only established for one table.'));
+    main.appendChild(table(
+      ['#', 'count', 'hp', 'flagWord', 'spriteClass', 'strat lo/hi', 'weight', 'speed/cap', 'spawn tile x/y', 'stagger', 'costBudget', 'attackGate'],
+      recs.map((r) => [r.index, r.entityCount, r.hp, hex4(r.flagWord), r.spriteClass,
+        `${r.stratLo}/${r.stratHi}`, r.weight, r.speedOrCap,
+        r.spawnTileX != null ? `${r.spawnTileX}/${r.spawnTileY}` : '—',
+        r.stagger != null ? r.stagger : '—', r.costBudget != null ? r.costBudget : '—', r.attackGate != null ? r.attackGate : '—'])));
+  }
+
+  main.appendChild(h('h3', null, 'Undecoded windows (raw hex)'));
+  for (const [which, label] of [['spawn', 'spawn table @0x0000 (100×8, fields not fully specified)'],
+                                 ['spawner2', 'selector-2 spawner @0x0718 (100×16)'],
+                                 ['driverTbl', 'driver-handed table @0x189C (25×0x1c)']]) {
+    const spec = PALFILS_OFF[which];
+    main.appendChild(h('details', null, h('summary', null, label),
+      h('pre', { class: 'hex' }, hexDump(buf.subarray(spec.off, Math.min(buf.length, spec.off + spec.stride * spec.count)), 4096))));
+  }
+};
+
+RENDERERS.map = (main, entry) => {
+  const map = parseMap(entry.decoded);
+  const key = (/^PLEV(\d[AB])\.MAP$/i.exec(entry.name) || [])[1];
+  const world = key ? key[0] : null;
+  main.appendChild(h('p', { class: 'small' },
+    `${map.cols}×${map.rows} tiles (${map.cols*32}×${map.rows*16} px). ${map.objects.filter((o) => (o.type & 0x8000) === 0).length} live objects. `,
+    `${map.messages.filter(Boolean).length} messages.`));
+
+  /* ── tile render ── */
+  let tileImg = null, extraImg = null, paletteImg = null, tileCount = 120;
+  if (key) {
+    tileCount = TILE_COUNTS[key.toUpperCase()] || 120;
+    const bits = getFile('PBITS' + key + '.PI1');
+    const xtra = getFile('PXTRA' + key + '.PI1');
+    const lvl = getFile('PLEVEL' + key + '.PI1');
+    try { if (bits && !bits.error) tileImg = decodePI1(bits.decoded); } catch (e) {}
+    try { if (xtra && !xtra.error) extraImg = decodePI1(xtra.decoded); } catch (e) {}
+    try { if (lvl && !lvl.error) paletteImg = decodePI1(lvl.decoded); } catch (e) {}
+  }
+  const scaleSel = h('select', null, ...[0.125, 0.25, 0.5, 1].map((s) => h('option', { value: s, selected: s === 0.25 ? '' : null }, `${Math.round(s * 100)}%`)));
+  const overlayChk = h('input', { type: 'checkbox' });
+  const mapArea = h('div');
+  main.appendChild(h('h3', null, 'Level render'));
+  main.appendChild(h('div', { class: 'controls' }, h('label', null, 'scale:', scaleSel), h('label', null, overlayChk, 'plane-B overlay (red=solid, green=climbable, blue=event)')));
+  main.appendChild(mapArea);
+
+  const objByType004fix = (t) => t; // types are used positionally, not offset-adjusted here
+  const worldNum = key ? key[0] : null;
+  const pobjEntry = worldNum ? getFile(`POBJECTS.00${worldNum}`) : null;
+  let pobj = null;
+  try { if (pobjEntry && !pobjEntry.error) pobj = parsePobjects(pobjEntry.decoded); } catch (e) {}
+  const palfilsEntry = key ? getFile(`PALFILS.0${key[1]}${key[0]}`) : null;
+  let hints = null;
+  try { if (palfilsEntry && !palfilsEntry.error) hints = parsePalfilsHints(palfilsEntry.decoded); } catch (e) {}
+
+  const CAT_COLOR = ['#5fd68a', '#ffd75a', '#ff5ad0', '#ff9a3d', '#ff6b6b', '#8890a0'];
+  const WEAPON_COLOR = '#5aa9ff';
+
+  function draw() {
+    clear(mapArea);
+    if (!tileImg || !paletteImg) {
+      mapArea.appendChild(h('p', { class: 'warn' }, 'Load the matching PBITS' + (key || '<key>') + '.PI1 and PLEVEL' + (key || '<key>') + '.PI1 to render tiles — showing plane A as a raw index heatmap instead.'));
+      const W = map.cols, H = map.rows;
+      const gray = new Uint8Array(16 * 4);
+      for (let i = 0; i < 16; i++) { gray[i*4]=gray[i*4+1]=gray[i*4+2]=Math.round(i*17); gray[i*4+3]=255; }
+      const idx = new Uint8Array(W * H);
+      for (let i = 0; i < W * H; i++) idx[i] = map.planeA[i] & 0xF;
+      mapArea.appendChild(h('div', { class: 'canvaswrap' }, scaledCanvas(idx, W, H, gray, 4)));
+      return;
+    }
+    const tiles = sliceTiles(tileImg);
+    const extraTiles = extraImg ? sliceTiles(extraImg) : null;
+    const W = map.cols * 32, H = map.rows * 16;
+    const idx = new Uint8Array(W * H);
+    for (let row = 0; row < map.rows; row++) {
+      for (let col = 0; col < map.cols; col++) {
+        const cellVal = map.planeA[row * map.cols + col];
+        const tileIdx = cellVal - 1;
+        let tile = null;
+        if (tileIdx >= 0 && tileIdx < 120) tile = tiles[tileIdx];
+        else if (extraTiles && tileIdx >= 120 && tileIdx < tileCount) tile = extraTiles[tileIdx - 120];
+        if (!tile) continue;
+        const ox = col * 32, oy = row * 16;
+        for (let y = 0; y < 16; y++) idx.set(tile.subarray(y * 32, y * 32 + 32), (oy + y) * W + ox);
+      }
+    }
+    const scale = Number(scaleSel.value);
+    const container = h('div', { class: 'canvaswrap', style: { position: 'relative', maxHeight: '70vh' } });
+    const canvas = scaledCanvas(idx, W, H, paletteImg.palette, scale);
+    container.appendChild(canvas);
+
+    if (overlayChk.checked) {
+      const ov = document.createElement('canvas');
+      ov.width = canvas.width; ov.height = canvas.height;
+      ov.style.position = 'absolute'; ov.style.left = '0'; ov.style.top = '0'; ov.style.pointerEvents = 'none';
+      const octx = ov.getContext('2d');
+      for (let row = 0; row < map.rows; row++) {
+        for (let col = 0; col < map.cols; col++) {
+          const v = map.planeB[row * map.cols + col];
+          if (!v) continue;
+          octx.fillStyle = v === 1 ? 'rgba(255,60,60,.35)' : v === 2 ? 'rgba(60,220,120,.35)' : 'rgba(60,140,255,.4)';
+          octx.fillRect(col * 32 * scale, row * 16 * scale, 32 * scale, 16 * scale);
+        }
+      }
+      container.appendChild(ov);
+    }
+
+    for (const o of map.objects) {
+      if (o.type & 0x8000) continue;
+      const isWeapon = o.type >= 0xC0;
+      const color = isWeapon ? WEAPON_COLOR : CAT_COLOR[(pobj && pobj[o.type] && pobj[o.type].category) || 0] || '#fff';
+      let title = isWeapon ? `weapon: ${WEAPON_NAMES[o.type - 0xC0] || o.type}` : (pobj && pobj[o.type] ? `${pobj[o.type].name || '(type ' + o.type + ')'} — ${pobj[o.type].desc || ''}` : `type ${o.type}`);
+      if (o.type === 69 && hints) {
+        const hit = hints.find((hh) => hh.key === o.x);
+        if (hit) title += `  ⚑ hint: "${hit.text}"`;
+      }
+      const m = h('div', {
+        class: 'marker',
+        style: { left: (o.x * scale) + 'px', top: (o.y * scale) + 'px', width: '6px', height: '6px', background: color },
+        title: `(${o.x},${o.y}) ${title}`,
+      });
+      container.appendChild(m);
+    }
+    mapArea.appendChild(container);
+    mapArea.appendChild(h('div', { class: 'legend' },
+      ...['potion','treasure','key','lever','hazard','unknown'].map((n, i) => h('span', null, h('span', { class: 'sw', style: { background: CAT_COLOR[i] } }), n)),
+      h('span', null, h('span', { class: 'sw', style: { background: WEAPON_COLOR } }), 'weapon pickup')));
+  }
+  scaleSel.onchange = draw; overlayChk.onchange = draw;
+  draw();
+
+  /* ── objects table ── */
+  main.appendChild(h('h3', null, 'Objects'));
+  const liveObjs = map.objects.map((o, i) => ({ ...o, i })).filter((o) => (o.type & 0x8000) === 0);
+  main.appendChild(table(
+    ['#', { label: 'x', num: true }, { label: 'y', num: true }, { label: 'type', num: true }, { label: 'sprite', num: true }, 'name', 'note'],
+    liveObjs.map((o) => {
+      const isWeapon = o.type >= 0xC0;
+      const name = isWeapon ? `weapon: ${WEAPON_NAMES[o.type - 0xC0] || '?'}` : (pobj && pobj[o.type] ? pobj[o.type].name : '—');
+      let note = '';
+      if (o.type === 69 && hints) { const hit = hints.find((hh) => hh.key === o.x); if (hit) note = `hint: "${hit.text}"`; }
+      return [o.i, o.x, o.y, o.type, objectSprite(o.type), name || '—', note];
+    })));
+
+  /* ── messages ── */
+  const msgs = map.messages.map((m, i) => [i, m]).filter(([, m]) => m);
+  if (msgs.length) {
+    main.appendChild(h('h3', null, `Messages (${msgs.length})`));
+    main.appendChild(table(['#', 'text'], msgs));
+  }
+
+  /* ── triggers ── */
+  const triggers = parseAllTriggers(map.bulk).filter(triggerIsLive);
+  main.appendChild(h('h3', null, `Triggers (${triggers.length} / 100 non-zero records)`));
+  main.appendChild(table(
+    ['#', { label: 'x', num: true }, { label: 'y', num: true }, 'cond0', 'cond1', 'cond2', 'action', { label: 'arg', num: true }, { label: 'msg#', num: true }],
+    triggers.map((t) => [
+      t.index, t.x, t.y,
+      t.condKind[0] || t.condArg[0] ? `${CONDITION_NAMES[t.condKind[0]] || t.condKind[0]} (arg ${t.condArg[0]})` : '—',
+      t.condKind[1] || t.condArg[1] ? `${CONDITION_NAMES[t.condKind[1]] || t.condKind[1]} (arg ${t.condArg[1]})` : '—',
+      t.condKind[2] || t.condArg[2] ? `${CONDITION_NAMES[t.condKind[2]] || t.condKind[2]} (arg ${t.condArg[2]})` : '—',
+      `${ACTION_NAMES[t.action & 0x7fff] || (t.action & 0x7fff)}${t.action & 0x8000 ? ' +consume' : ''}`,
+      t.actionArg, t.messageId,
+    ])));
+};
+
+/* ════════════════════════════════════════════════════════════════════════
+ * Wiring
+ * ════════════════════════════════════════════════════════════════════════ */
+document.getElementById('btnFolder').onclick = () => document.getElementById('inpFolder').click();
+document.getElementById('btnFiles').onclick = () => document.getElementById('inpFiles').click();
+document.getElementById('inpFolder').onchange = (e) => loadFileArray(e.target.files);
+document.getElementById('inpFiles').onchange = (e) => loadFileArray(e.target.files);
+document.getElementById('filter').oninput = (e) => { state.filter = e.target.value; rebuildSidebar(); };
+
+function wireDropzone(zone) {
+  if (!zone) return;
+  ['dragenter', 'dragover'].forEach((ev) => zone.addEventListener(ev, (e) => { e.preventDefault(); zone.classList.add('over'); }));
+  ['dragleave', 'drop'].forEach((ev) => zone.addEventListener(ev, (e) => { e.preventDefault(); zone.classList.remove('over'); }));
+  zone.addEventListener('drop', (e) => {
+    const items = e.dataTransfer.items;
+    if (items && items.length && items[0].webkitGetAsEntry) {
+      const out = [];
+      Promise.all(Array.from(items).map((it) => { const en = it.webkitGetAsEntry(); return en ? traverseEntry(en, out) : Promise.resolve(); }))
+        .then(() => loadFileArray(out));
+    } else {
+      loadFileArray(e.dataTransfer.files);
+    }
+  });
+}
+document.body.addEventListener('dragover', (e) => { if (!document.getElementById('dropzone')) e.preventDefault(); });
+document.body.addEventListener('drop', (e) => {
+  if (document.getElementById('dropzone')) return;
+  e.preventDefault();
+  const items = e.dataTransfer.items;
+  if (items && items.length && items[0].webkitGetAsEntry) {
+    const out = [];
+    Promise.all(Array.from(items).map((it) => { const en = it.webkitGetAsEntry(); return en ? traverseEntry(en, out) : Promise.resolve(); }))
+      .then(() => loadFileArray(out));
+  } else {
+    loadFileArray(e.dataTransfer.files);
+  }
+});
+
+showWelcome();
+</script>
+</body>
+</html>
