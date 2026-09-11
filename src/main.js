@@ -45,6 +45,7 @@ import { GodsRandom } from './game/random.js';
 import { Health, HEALTH_MAX, attackHero } from './game/combat.js';
 import { Nests } from './game/nest.js';
 import { EnemyShots } from './game/enemy-shots.js';
+import { Debris } from './game/debris.js';
 import { Arsenal, spawnableWeapons } from './game/hero-fire.js';
 import { stepHeroFrame, stepCreatureDamage } from './game/frame.js';
 import { DamageGrid, damageForTag } from './game/collision.js';
@@ -376,7 +377,7 @@ async function main() {
   let burst = new TreasureBurst(new GodsRandom(1));
   let opened = 0, lootLanded = 0, sbStamps = 0, lastBurstFx = null;
   let lastBlockFx = [];
-  let lastNestFx = [], lastShotsFx = null;
+  let lastNestFx = [], lastShotsFx = null, lastDebrisFx = [];
   /* ⚠️ DEV SEED, exactly like the weapon picker above. The original puts a
    * "chest key" in DS:0x17e only through CROUCH + FIRE (CS:0x6069), which
    * this port does not implement — so with a truthful empty inventory the
@@ -415,6 +416,12 @@ async function main() {
    * hatch animation reads (DS:0x36c). Not modelled elsewhere in this port
    * yet, so it is owned here. */
   let tock = 0;
+  /* DS:0x8b4c — a purely visual, non-interacting particle effect (see
+   * game/debris.js's header for the conflation this project made and
+   * corrected chasing it). Fully ported and unit-tested but never
+   * instantiated from this file before this pass — a shot the terrain
+   * stopped left no puff behind it. */
+  let debris = new Debris();
   const wireSpawn = () => {
     events.onSpawnB = (param) => {
       const d = level.groupsB[param];
@@ -516,6 +523,7 @@ async function main() {
       slotsA = new GroupSlots(); enemiesA = []; clampedA = 0; firedByA = 0;
       rng = new GodsRandom(1);
       nests = new Nests(level.world, rng); shots = new EnemyShots(); tock = 0;
+      debris = new Debris();
       health = new Health();
       /* A real level change is not a game restart, so CS:0x914c does NOT run
        * and the weapon slots survive — only their counts are re-pinned
@@ -631,7 +639,7 @@ async function main() {
         cats: level.cats, health, effects: { ...fx, starburst,
                                              hero: { x: player.x, y: player.y } },
         treasure: { values: level.objValues, inventory, purse, score, burst },
-        starburst, blocks,
+        starburst, blocks, debris,
         burst,
         /* CS:0x38D7 — first-fit over the 200-slot runtime array. `drawObjects`
          * already excludes the map's dead slots, so the headroom here is
@@ -671,6 +679,7 @@ async function main() {
             level.drawObjects.filter((o) => o !== s), level.cats, s);
         }
       }
+      lastDebrisFx = fr.debrisFx || [];
       if (fr.emitted) shotsFired++;
       for (const c of fr.consumed) {
         consumed++;
@@ -926,6 +935,17 @@ async function main() {
         else { outOfRange++; renderer.strokeRect(d.x, d.y, 8, 8, 9); }
       }
 
+      /* DEBRIS — CS:0x1F73/0x356E, the stationary puff a shot leaves behind
+       * when solid terrain stops it (CS:0xA816). Purely cosmetic: it cannot
+       * hurt anything and cannot touch the map, so it draws through the
+       * OTHER blitter (graphics export 2, not export 1) and is not stamped
+       * into the damage grid. Sprite ids 58-68 — see game/debris.js. */
+      for (const d of lastDebrisFx) {
+        const df = hero && hero.frames[d.sprite];
+        if (df) renderer.blitSprite(df, d.x, d.y);
+        else { outOfRange++; renderer.strokeRect(d.x, d.y, 4, 4, 8); }
+      }
+
       /* PROJECTILES. Drawn after the enemies and before the hero. The sprite
        * is the weapon's own pinned descriptor (+0x0c, or +0x1e when facing
        * selects the second one); the per-projectile animation frame (+0x04
@@ -969,7 +989,7 @@ async function main() {
         (unstamped ? ` · ${unstamped} unstamped object types!` : '') +
         ` · ${enemies.filter((e) => e.alive).length}/${enemies.length} enemies` +
         ` · ${enemiesA.filter((e) => e.alive).length}/${enemiesA.length} sysA` +
-        ` · ${nests.live} nests · ${shots.live} shots` +
+        ` · ${nests.live} nests · ${shots.live} shots · ${debris.live} debris` +
         ` · hp ${health.bar}/${health.target > HEALTH_MAX ? HEALTH_MAX : health.target}`        + (health.dead ? ' DEAD' : '') +
         ` · money ${purse.total} · score ${score.value}` +
         ` · lives ${fx.lives}` +

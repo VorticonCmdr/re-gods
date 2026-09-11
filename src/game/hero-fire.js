@@ -222,6 +222,7 @@ export class Arsenal {
    */
   step(cam, grid, planeB, world, planeA = null, blocks = null) {
     let moved = 0, culled = 0;
+    const hits = [];                              // this tick's terrain-stops
     for (const s of this.slots) {
       if (s.weapon < 0) continue;                // CS:0x9477 `cmp [di],0 / jns`
       const w = this.weapons[s.weapon];
@@ -233,8 +234,9 @@ export class Arsenal {
       this.stamped += r.stamped;
       this.hitTerrain += r.hitTerrain;
       this.brokeBlocks = (this.brokeBlocks || 0) + r.brokeBlocks;
+      hits.push(...r.hits);
     }
-    return { moved, culled };
+    return { moved, culled, hits };
   }
 
   /** Every live projectile, for the renderer. */

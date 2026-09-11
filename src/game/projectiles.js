@@ -350,6 +350,10 @@ export function stepProjectiles(area, cam, opts = {}) {
           pickupCount = 0 } = opts;
   let moved = 0, culled = 0, outOfRange = 0, stamped = 0, hitTerrain = 0;
   let brokeBlocks = 0;
+  /* CS:0xA816 — a shot stopped by terrain drops a stationary debris puff
+   * (game/debris.js), independent of whether the cell also broke a block.
+   * World coords: that's what `p.x`/`p.y` already are at the point it stops. */
+  const hits = [];
   for (let i = 0; i < MOVER_WALK; i++) {
     const p = area[i];
     if (!p || p.tag === 0) continue;               // CS:0x9c70
@@ -411,6 +415,7 @@ export function stepProjectiles(area, cam, opts = {}) {
         }
         p.tag = 0;                            // CS:0xA85B — consumed by the wall
         hitTerrain++;
+        hits.push({ x: p.x, y: p.y });        // CS:0xA816
         continue;
       }
     }
@@ -427,7 +432,7 @@ export function stepProjectiles(area, cam, opts = {}) {
       : grid.stamp2x2(sx, sy2, p.tag);
     if (ok) stamped++;
   }
-  return { moved, culled, outOfRange, stamped, hitTerrain, brokeBlocks };
+  return { moved, culled, outOfRange, stamped, hitTerrain, brokeBlocks, hits };
 }
 
 /* Still open here: the other five movers. 0xa058 (time bomb) is a gravity and

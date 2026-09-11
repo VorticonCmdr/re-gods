@@ -64,7 +64,7 @@ export function stepHeroFrame({ input, arsenal, grid, player, map, cam,
                                world = 1, objects = null, bar = 1,
                                cats = null, health = null, treasure = null,
                                burst = null, alloc = null, starburst = null,
-                               blocks = null }) {
+                               blocks = null, debris = null }) {
   arsenal.latchTick(input.fire);                                    // 019D
   grid.clear();                                                     // 01CC
   /* CS:0x0206 -> CS:0x1432, the object pass. Weapon pickup lives here, and it
@@ -84,15 +84,24 @@ export function stepHeroFrame({ input, arsenal, grid, player, map, cam,
   const blockFx = blocks ? blocks.step(map.planeA, map.planeB) : [];  // 01DF
   const projectiles = arsenal.step(cam, grid, map.planeB, world,
                                    map.planeA, blocks);               // 020F
+  /* CS:0xA816 — a shot the terrain just stopped drops a stationary debris
+   * puff at the point it stopped. Fires for ANY weapon whose `breaksTerrain`
+   * (+0x48) is set, whether or not the cell was also a destructible block —
+   * see game/debris.js. This module has no evidence for debris's own exact
+   * main-loop call site relative to the others (it "cannot hurt anything and
+   * cannot touch the map", CLAUDE.md), so it is stepped once per tick here,
+   * alongside the other purely-cosmetic particle systems. */
+  if (debris) for (const h of projectiles.hits) debris.spawn(h.x, h.y, 0, 0);
   /* CS:0x0212 — the starburst sits between the projectile step and the
    * player, so its particles stamp on the SAME tick they move, and (like a
    * projectile) a burst spawned by the player this tick does not stamp until
    * the next one. */
   const burstFx = starburst ? starburst.step(cam, grid) : null;     // 0212
+  const debrisFx = debris ? debris.step(cam) : [];
   player.tick(map, input, arsenal);                                 // 0254
   return { projectiles, emitted: player.emitted, picked: picked.taken,
            consumed: picked.consumed || [], treasures: picked.treasures || [],
-           loot, burstFx, blockFx };
+           loot, burstFx, blockFx, debrisFx };
 }
 
 /**
