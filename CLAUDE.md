@@ -3051,7 +3051,26 @@ states 18/19      CS:0x4B27 / 0x4B9C       -> jmp 0x612F, which reads the
 
 So **fire means three different things depending on the hero's state**: shoot while moving, throw a switch while standing, use an item while crouching. A port that lets a stationary hero shoot has invented a control scheme — and one that doesn't know this will "fix" the missing shot.
 
-⚠️ **CORRECTION — `CS:0x1045` is the LEVER toggle, not object pickup.** An earlier revision of this section (written one pass before the pickup path was traced) called it "the 200-record object-pickup walk", on the strength of the array walk and the `DS:0x2a4e` index alone. Reading the body through kills that: it keeps **only category 3** and ends in `xor byte [si+0x4],0x1`. Category 3 is levers/switches, and flipping bit 0 of the type is exactly the lever toggle this document records elsewhere (types 24/25 = lever off/on, 26/27 = switch off/on) — the two findings are the same mechanism seen from two directions. Four object types are special-cased out of the toggle (`cmp word [di],0x120 / 0x122 / 0x124 / 0xe8`, i.e. sprite ids 288/290/292/232) and instead set `DS:0x20e` and clear `DS:0x3a2`; `UNKNOWN_lever_special_types`.
+⚠️ **CORRECTION — `CS:0x1045` is the LEVER toggle, not object pickup.** An earlier revision of this section (written one pass before the pickup path was traced) called it "the 200-record object-pickup walk", on the strength of the array walk and the `DS:0x2a4e` index alone. Reading the body through kills that: it keeps **only category 3** and ends in `xor byte [si+0x4],0x1`. Category 3 is levers/switches, and flipping bit 0 of the type is exactly the lever toggle this document records elsewhere (types 24/25 = lever off/on, 26/27 = switch off/on) — the two findings are the same mechanism seen from two directions. Four object types are special-cased out of the toggle (`cmp word [di],0x120 / 0x122 / 0x124 / 0xe8`, i.e. sprite ids 288/290/292/232, object types 118/120/122/62) and instead set `DS:0x20e` and clear `DS:0x3a2`.
+
+**`UNKNOWN_lever_special_types` — CLOSED.** These four are still genuine category-3 lever/switch objects (confirmed by decompressing all four `POBJECTS.00{1-4}` and reading the actual records: type `{62,118,120,122}` — `{237,293,295,297}` under world 4's `+5` id drift — are category 3 in every world, but unlike the ordinary lever/switch pairs they carry **no name and no description** in any world). They aren't toggled instantly; touching one arms a **delayed, animated toggle**, consumed by the object-draw routine `FUN_1000_1d01`:
+
+```
+1D0E  cmp [0x3a2],0 / js 1d86         ; armed? (CS:0x10BA/0xBE set [0x20e]=the object, [0x3a2]=0 on touch)
+1D15  is THIS drawn object's type one of the 4 special ones?
+1D2D  si=[0x20e]                       ; the touched special-lever object
+1D31  does its screen position match the object CURRENTLY being drawn?  (so only that one object animates)
+1D46  si = 0xe01e + (world-1)*0xa      ; a per-world, 5-word animation-frame table
+1D5B  si += [0x3a2]*2 ; cx=[si]        ; sprite for this phase
+1D67  inc [0x3a2]
+1D6B  cmp [0x3a2],3 / jnz 1d7a
+1D72    si=[0x20e] ; xor [si+4],1      ; <-- THE ACTUAL STATE TOGGLE, at phase 3 of 5
+1D7A  cmp [0x3a2],5 / jnz 1d86
+1D81    [0x3a2] = 0xff                 ; done -> re-arm the entry gate for next time
+1D86  draw with the phase's sprite
+```
+
+So these four are **lever/switch variants with a visible multi-frame swing animation** rather than an instant flip — the underlying `xor [si+4],1` toggle is identical to the ordinary lever mechanism, just fired mid-animation instead of on contact. Read live (DOSBox) the four worlds' tables at `DS:0xe01e` are **`{410,411,289,411,410}` / `{329,330,233,330,329}` / `{412,413,291,413,412}` / `{414,415,293,415,414}`** — and the middle (phase-2) sprite in each is *exactly* that world's own special type's sprite id **+1** (`289=288+1`, `233=232+1`, `291=290+1`, `293=292+1`) — i.e. the swing animation's peak frame is drawn as the object's own *toggled* sprite, landing precisely on the tick the state actually flips. A clean, fully self-consistent, cross-world-verified mechanism: a dramatic animated lever, not a plain one.
 
 The distinction matters twice: **real pickup has no fire gate at all** (it happens on contact, `CS:0x177d`), and a port that binds pickup to the fire button makes half the map uncollectable while making levers operate by walking into them.
 
