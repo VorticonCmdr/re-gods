@@ -711,7 +711,20 @@ edfd  jmp 0xf02a                          ; NEGATIVE -> the death path
 ee00  call 0x3569                         ; alive -> draw
 ```
 
-The screen conversion at `0xede2` and the world conversion inside `0xff93` are a **round trip** — they exist because `[0x4]`/`[0x6]` are also the draw call's arguments, so a port may pass world coordinates directly. `UNKNOWN_creature_death_anim`: `0xf02a` is unread, so a port should stop drawing a dying creature rather than render it with the `frame = −1` the kill leaves behind.
+The screen conversion at `0xede2` and the world conversion inside `0xff93` are a **round trip** — they exist because `[0x4]`/`[0x6]` are also the draw call's arguments, so a port may pass world coordinates directly.
+
+### `UNKNOWN_creature_death_anim` — CLOSED: the death path draws through the SAME call as the alive path `[STATIC]`
+
+`CS:0xF02A` — reached only from `CS:0xEDFD` on a negative `[di+0x8]` — is two instructions:
+
+```
+f02a  call 0x1000:efe7      ; a small helper, read below
+f02d  jmp  0x1000:ee00      ; UNCONDITIONAL -> the SAME draw call the alive branch uses (-> CALL 0x3569)
+```
+
+So the earlier framing — *"`0xf02a` is unread, so a port should stop drawing a dying creature"* — is **wrong, and the opposite of what the bytes do**: a dying System-B entity is never skipped from the draw. It falls straight into the identical `CALL 0x3569` the live path takes, using whatever `[di+0x4]` ("frame", already documented as becoming the death-sequence counter post-death) currently holds, run through the ordinary `sprite = class_base + MODE_ANIM[mode] + frame` formula this document already has for `CS:0xf0ae`. A port that special-cases "stop drawing on death" diverges from the original, which relies on the death-sequence counter (not a skip) to produce the death animation's frames through the normal draw path.
+
+`CS:0xEFE7` itself (the helper called first) reads a byte at `[SI+1]`, halves it (`SHR 1`), adds 1, divides by 10 (`DIV BL, BL=0xa`), and packs the quotient/remainder into a nibble pair (`SHL AL,1 ×4` then `OR AL,BL`) — the same divide-by-10, pack-two-digits shape this document's own BCD score routine (`CS:0x1950`) uses. `[SI]` here is not the entity pointer `DI` (which stays reserved for the draw call) — `UNKNOWN_efe7_source` narrows to exactly what `SI` points at and what the packed byte feeds; plausibly a per-kill score/popup award (consistent with, but not full confirmation of, this document's existing `[WF]` note that "kills award score by the same path as contact kills").
 
 ⚠️ **Invulnerability makes the hero a battering ram.** `0xACCC`'s `jnz` skips **only** the `sub` at `0xACD3`; the `DS:0x34` test and the `bp = 0xFFFF` store at `0xACDB`/`0xACE2` sit after the branch rejoins. So while `[0x172]` is set the hero takes no damage *and still kills everything he touches*.
 
@@ -3592,7 +3605,34 @@ Muzzles are asymmetric too: right `(x + 0x18, y + 6)`, left `(x − 6, y + 6)`. 
 
 Entered when HP goes negative. Each tick draws `state + 0x6c` **twice**, at `(x−4, y−8)` and `0x18` lower, then `inc state`. Sprites 108–114 are `PALWAYS2#69..71` then `PALWAYS3#0..3` — the sequence **crosses an atlas boundary**, which only the cumulative descriptor numbering makes work.
 
-⚠️ **A creature killed MID-RISE does reset to 0.** `CS:0x88C6`/`0x88DB jmp 0x877e` means the emerge draw shares the live path's tail, so `CS:0x8784 mov word [si+4],0` applies to it too — otherwise the death handler would start negative and draw sprite `0x6c − 3`, three frames before the death cloud. `CS:0x8789` then calls `0x87EF` — the score award `[WF]`: `0x87EF → 0x8A27` spawns a **popup id `0x2D`** at `(x+4, y+0x18)` with Y-velocity `0xFFFA` (−6) via `CS:0xBF5F`, *conditionally* (skipped when `[0x1a0] ≥ 0`), then **unconditionally** `clc / call 0xC8B`, which enters the BCD score chain at `[0x3b6]` with `dl = 0x25` = **2500 points**. `UNKNOWN_bf5f_popup_id` — what popup id `0x2D` actually renders, and why `0xBF5F` rejects id `0x3D`, isn't established.
+⚠️ **A creature killed MID-RISE does reset to 0.** `CS:0x88C6`/`0x88DB jmp 0x877e` means the emerge draw shares the live path's tail, so `CS:0x8784 mov word [si+4],0` applies to it too — otherwise the death handler would start negative and draw sprite `0x6c − 3`, three frames before the death cloud. `CS:0x8789` then calls `0x87EF` — the score award `[WF]`: `0x87EF → 0x8A27` spawns a **popup id `0x2D`** at `(x+4, y+0x18)` with Y-velocity `0xFFFA` (−6) via `CS:0xBF5F`, *conditionally* (skipped when `[0x1a0] ≥ 0`), then **unconditionally** `clc / call 0xC8B`, which enters the BCD score chain at `[0x3b6]` with `dl = 0x25` = **2500 points**.
+
+### `UNKNOWN_bf5f_popup_id` — CLOSED: a general floating-item-icon popup, and id `0x3D` is deliberately special-cased to respawn a spike `[STATIC]`
+
+`CS:0xBF5F`–`0xBF7F` is the popup *spawner* (single-slot, `DS:0x1a0` holds the id or `0xFFFF` when free — `CS:0xBF80`'s own sibling entry is the per-tick *updater*, which floats the popup by its stored Y-velocity and, once `id ≥ 0xB` (11), fetches a sprite for it):
+
+```
+bf5f  cmp cx,0x3d / jz 0xbf59        ; id == 0x3D (61) -> DIVERT, see below
+bf64  cmp word[0x1a0],0 / js 0xbf6e  ; slot already busy?
+bf6b    jmp 0xc041                   ; BUSY -> forward straight into the respawn routine instead
+bf6e  [0x226]=AX / [0x228]=BX / [0x22a]=0xfffa(-6)   ; seed world position + Y-velocity -6
+bf7b  [0x1a0] = CX                   ; id becomes the "popup active" flag
+bf7f  ret
+
+bf80  cmp word[0x1a0],0 / js 0xbf7f  ; UPDATER: inactive -> nothing to do
+bf87..bf92  world -> screen, Y += velocity, CX := the stored id
+bf96  cmp cx,0xb / jl 0xc004         ; id < 11 -> a PLAIN NUMERIC popup (score-style, CS:0xc004, not chased further)
+bf9b  sub cx,0xb                     ; id >= 11 -> POBJECTS TYPE = id - 11
+bf9e  si = 0x2a4e + type*10          ; the runtime object-descriptor table, stride 10 — already documented elsewhere
+bfab  cx = word[si]                  ; descriptor +0 = sprite id (170+type)
+bfb9  cmp cx,0x117(279) / jz 0xbff1  ; two hardcoded special sprites get bespoke draw handling, not chased further
+bfbf  cmp cx,0x118(280) / ...
+      [otherwise: draw the fetched sprite floating up from the world position]
+```
+
+**The `id == 0x3D` divert is not a rejection — it's a deliberate second path.** `CS:0xBF59` (`and bx,0xfff0 / jmp 0xc041`) snaps the popup's Y to a 16-px tile boundary and jumps straight into `CS:0xC041` — this document's own already-documented **"steal-and-carry" respawn routine**, which allocates a fresh `DS:0x8314` object slot and drops a live object of type `(id − 11)` back into the world at the given position. `0x3D − 11 = 50`, and **`POBJECTS` type 50 is `"spike"`** (decompressed and read directly: `PWEAPONS`/`POBJECTS.001` record 50 → name `"spike"`, the one *named* category-4 object this document already flagged). So the world-2 nest's own death award (`popup id 0x2D`) and a spike hazard share this one entry point, but they take genuinely different branches: **a spike (id `0x3D`) is re-dropped into the world as a real, solid object instead of floating up as a collectible-style icon** — matching what a spike trap should do on reset (become a physical hazard again, not a score popup). The busy-slot fallback (`CS:0xBF6B`) reaches the identical respawn routine for the *same* reason: if a popup is already in flight, a second request is treated as "drop a real object" rather than losing the request.
+
+**Popup id `0x2D` (45) itself is the ordinary case** — `45 − 11 = 34`, and **`POBJECTS` type 34 is `"jewel"`** (same direct read; empty description). So the world-2 nest's death award floats a jewel-icon popup up from the kill point at `(x+4, y+0x18)`, falling under gravity (`Y += −6` per tick, uncapped in the bytes read here), while the BCD score chain separately and unconditionally credits the player 2500 points — the popup is purely a visual flourish layered on top of the score award, not the mechanism that grants it. `UNKNOWN_bf5f_special_sprites` — what sprites `0x117`(279)/`0x118`(280) get instead of the generic float, and which other popup ids reach them, is not traced past locating the branch.
 
 ⚠️ **From a LIVE state, death inherits it; it does not reset.** `CS:0x87DA` is `cmp ...,4 / jnz` — an *equality* test — and `CS:0x87E9` frees at ≥ 7:
 
@@ -3858,7 +3898,31 @@ What they actually do: search the object array for a **live, currently-on-screen
 
 Both systems eventually **drop** the carried item probabilistically (a per-tick 1-in-128 roll, gated by bits of the group descriptor's own `+0x4`/`+0x5` word — `0` = never carries this far, `2` = always keeps it, `1`/`3` = the roll applies) through one shared respawn routine, `CS:0xC041`, which allocates a fresh `DS:0x8314` object slot (`CS:0x38D7`, the same allocator this document already documents elsewhere) and writes the carried type back in as a new, live object at the *carrier's* current position — closing the loop: steal a placed pickup, carry it, and (usually) put a fresh copy back down somewhere else. `cx`'s discriminated encoding into `CS:0xC041` (weapon index `<0xB` recovered via `+0xC0`, ordinary type `≥0xB` recovered via `−0xB`) is exactly matched by both callers' own construction of it, closing what would otherwise have looked like an arbitrary bias constant.
 
-Open: `UNKNOWN_eeba_class_offsets` (System B's per-class attach-point byte table exists and is read but its contents are undecoded); `UNKNOWN_c041_176b_purpose` (`CS:0xC041` has a third, structurally different caller at `CS:0x176B`, not investigated); `UNKNOWN_marker_record_field4_gating_scope` (strong evidence, not full closure, that every category 0/1/2 pickup appends a marker record).
+### `UNKNOWN_eeba_class_offsets` — CLOSED: a per-class, per-world signed byte-pair offset table at `DS:0xdc00` `[STATIC]`
+
+`CS:0xEEBA` computes `si = [0x1fc] + cls*12` (System B's per-world class table, the same `+0x7`-indexed lookup `CS:0xf0ae`'s sprite formula uses), then:
+
+```
+eecd  cx = word[0x8] - word[si]      ; a caller-supplied value MINUS the class's own sprite base (word[si] = class_table[cls].spriteBase)
+eed3  cx <<= 1
+eed5  si = 0xdc00 + cx                ; table1 = DS:0xdc00, 2-byte stride, indexed by (carried-sprite − classSpriteBase)
+eeda  dl = [0x42] - 2 ; dh = 0        ; world (1..4) minus 2
+eee3  dx <<= 1 (x3) ; si += dx        ; += (world-2)*8
+eeeb  dx <<= 1 (x2) ; si += dx        ; += (world-2)*32   -> total += (world-2)*40
+eef1  dx = ax                          ; caller's world X
+eef3  al = signed_byte(si[0]) ; dx += ax     ; dX offset
+eef7  al = signed_byte(si[1]) ; bx += ax     ; dY offset
+eefd  si = [bp+2]                      ; restore the entity pointer
+ef00  ret
+```
+
+So the table is genuinely a **per-class, per-world signed `{dx, dy}` byte pair**, added to a caller-supplied world position (`AX`/`BX`) to produce the carried item's fixed draw offset — exactly the "rigidly-attached icon" behaviour this document's own *steal-and-carry* section already describes for System B, now with the table itself decoded rather than merely located. The index into it is **not** the class alone: it is `(carriedSpriteId − classSpriteBase)`, i.e. which specific carried item (by its sprite id's distance from the class's own base) picked among however many items that class's icon table holds, plus a `(world−2)*40` per-world block offset — 40 bytes = 20 `{dx,dy}` pairs reserved per world. `CX = word[0x8]` — the caller-supplied sprite id — comes from `DS:0x8`, a **shared per-tick scratch word** written by an unrelated animation-phase routine (`CS:0xBF4B`–`0xBF52`, an every-other-frame `[di+0xe]` 0..7 counter plus a fixed `0x20C` bias) that this pass also located but did not trace to a caller linking it specifically to the carried-item context; `UNKNOWN_ds_0008_writer_link` narrows the residual to exactly that connection.
+
+### `UNKNOWN_marker_record_field4_gating_scope` — CLOSED: every category 0/1/2 touch appends a marker, not just type 45 `[STATIC]`
+
+Reading the object-touch dispatcher (`CS:0x15F1`–`0x1652`, the same function this document already credits with the category-4 dispatch at `CS:0x161D`/`0x1CC6`) end to end: the category split at `CS:0x160D` (`cmp byte[di+4],3 / jl 0x162e`) sends **every category < 3 touch — potions (0), treasure (1), AND keys (2)** — through `0x162e` and straight into the marker-append body at `CS:0x1632` (`inc byte[0x398]`, clamp at 20). The type-45-specific branch (`cmp dx,0x2d / jnz 0x1652`) only gates the *extra* behaviour — resetting the marker cursor to the array base and forcing the global strategy override `DS:0x399` — not the append itself. So **any potion, treasure, or key the hero touches appends a marker record**, and only the `"attracts monsters"` potion additionally rewinds the cursor and forces every System-B enemy onto the marker-seek strategy. `CS:0xC041` (called two arms later, per the trigger case above) is reached from this same dispatcher for the *weapon* path; `UNKNOWN_c041_176b_purpose` — its third caller at `CS:0x176B` — was not investigated this pass.
+
+The marker record's own trailing bytes (beyond the `{x, y}` that `0xf7bb`'s consumer reads) were not located this pass — the write site past `CS:0x1652` continues into a `PUSH DI / PUSH DS` sequence consistent with the shared message-display call this document documents elsewhere, not an obvious marker-array store, so `UNKNOWN_marker_record`'s original question (what the record's other two bytes hold) stays open.
 
 ## `DS:0x8b4c` — debris, and it is inert `[PROVEN]`
 
