@@ -2281,7 +2281,38 @@ e426  [di+0x25] = 1                              ; FINE arrival flag — 8px, no
 e42a  ret
 ```
 
-**`[di+0x25]` is the flag stage 3 (`CS:0xe487`, `[si+0xf]`-gated attack/leap) reads to decide whether to fire its special action, and stage 5 reads it too (below) to decide whether to snap position outright.** So the closure this session already wrote for `FUN_1000_e4e2`/stage 3's caller behavior gets its missing precondition: the attack only arms once the entity is within 8px of its goal on BOTH axes, and only when `[di+0x19]` (a field not otherwise decoded here) is neither 0 nor 1. `UNKNOWN_sysA_field_0x19` — what modes/states set `[di+0x19]` to gate this is not traced past this read.
+**`[di+0x25]` is the flag stage 3 (`CS:0xe487`, `[si+0xf]`-gated attack/leap) reads to decide whether to fire its special action, and stage 5 reads it too (below) to decide whether to snap position outright.** So the closure this session already wrote for `FUN_1000_e4e2`/stage 3's caller behavior gets its missing precondition: the attack only arms once the entity is within 8px of its goal on BOTH axes, and only when `[di+0x19]` is neither 0 nor 1 — see the closure immediately below.
+
+### `UNKNOWN_sysA_field_0x19` — substantially CLOSED: a per-entity "reroll queue rank" stamp `[STATIC]`
+
+`[di+0x19]` has exactly **one writer** in the whole image, `CS:0xE72D`, inside stage 1's per-entity throttled-reroll gate (`FUN_1000_e6e4`, the strategy dispatcher this document already documents). Reading the gate in full:
+
+```
+e6f1  cmp byte[bp+0x12],0 / jz 0xe748        ; group-runtime "reroll slots used" counter == 0 -> nothing gates, skip
+e6f7  cl = [0x3c4] ; ax = 1<<cl               ; a per-tick GLOBAL bit position
+e700  cx = [bp+0x14] ; test ax,cx / jnz 0xe748  ; that bit already set in this group's "rolled" bitmask -> skip
+e707  cl = [si+0xa] ; call 0x3836 (random) ; and ax,0x7f
+e710  cmp ax,cx(weight) / jge 0xe748          ; the descriptor's own weight, same shape as the pathfinder-seed picker
+e714  al=[bp+0x12] ; ax = al*10               ; the group's reroll counter, scaled by 10
+e722  cmp bx,[bp+0x16] / jg 0xe748            ; over the group's own cap -> skip (the "per-group throttle" already documented)
+e727  inc byte[bp+0x12]                       ; ADVANCE the group's reroll counter
+e72a  al = [bp+0x12]
+e72d  [di+0x19] = al                          ; <-- STAMP this entity with the counter's NEW value
+e730..e73e                                     ; mark the per-tick global bit as consumed
+```
+
+So `[di+0x19]` is not a boolean gate at all — it is **the group-runtime reroll-throttle counter's value at the moment this specific entity's reroll request was granted**, i.e. a 1-based "my rank in this group's reroll queue this tick" stamp. It has **four** readers, and two of them treat the value ordinally rather than as a flag:
+
+- Stage 2 (`CS:0xE3FA`/`E400`, already documented) only distinguishes `0` from `1` from "anything else" to gate the fine-arrival check.
+- The pipeline dispatcher `CS:0xE001` (`CS:0xE039`) tests it against exactly `1`.
+- `FUN_1000_df62` (`CS:0xE289`) reads it, compares against `1`, and branches to `CALL 0x1000:ebb9` when true, else `DEC byte[bp+0x12]` — **undoing** the group counter's own advance, as if giving the slot back — immediately after this same function calls the popup spawner `CS:0xBF5F` with the entity's own carried-item fields (`[di+0x20]`/`[di+0x22]`, this document's already-documented System-A carried-item position) and a type-adjusted `CX`. Read together with this session's own `UNKNOWN_bf5f_popup_id` closure, this refines the already-documented "drop the carried item" mechanism: a normal drop goes through the popup spawner (so most dropped items become a floating icon, not a solid object), and **only the entity whose reroll rank is exactly 1 — the first granted this tick — proceeds to `CS:0xEBB9`**; every other entity that rolled this tick has its own throttle advance reversed.
+- `FUN_1000_ebe5` (`CS:0xEBEB`) reads `[di+0x19]` and compares it against **another group member's own `[si+0x19]`** (`si` sourced from `DS:0x294`, the already-documented "current group's entity base" shadow global), gated by rotating a bit out of the group's "rolled" bitmask per candidate — a genuine ordinal scan across the group, not a boolean test.
+
+So `[di+0x19]`'s real role is: **exactly one entity per group per tick — the one stamped `1`, i.e. first through the reroll gate — is privileged** by at least two of its four consumers, with a third (`ebe5`) running a fuller rank comparison across the whole group. `UNKNOWN_ebb9_reroll_effect` and `UNKNOWN_df62_full_flow` narrow the residual to exactly what the privileged entity's `CALL 0xEBB9` does, and to `FUN_1000_df62`'s complete control flow (only a linear disassembly window was read here, not a verified branch graph).
+
+### `UNKNOWN_sysA_ec12_zone_table` / `UNKNOWN_sysA_field_0x1a_consumer` — CLOSED negative: the zone code is write-only, dead `[STATIC, exhaustive]`
+
+A program-wide `search_instructions` sweep for any instruction touching displacement `+0x1a` on `DI` finds **exactly one hit in the whole image**: `CS:0xDEC4`, inside the materialise loop `FUN_1000_de7d`, the very write this document already documents (`[di+0x1a] = al`, the zone code `CS:0xec12` computes at spawn time). **No instruction anywhere reads it.** So the `CS:0xec12` zone-classification table at `DS:0xd9d0` and the code that stamps its result onto every freshly-spawned System-A entity are both real and wired correctly, but the *consumer* this document's own ranked item asked about does not exist — the field is dead, in the same authoring-pattern family as `POBJECTS +0x02` and the `.DAT` atlas's `word2`.
 
 **Stage 4 — `CS:0xe44d`, the speed clamp — is exactly the one-liner the ledger already had, confirmed to the byte:** `cap = sign_extend(descriptor[+0xb])`; clamp `[di+0x12]`/`[di+0x14]` independently to `[-cap, +cap]`. No surprises.
 
@@ -3787,9 +3818,45 @@ So **while this creature's own contact-test call is in flight, any starburst or 
 
 **Net correction to the starburst/aura damage claim below:** "10000 in normal play" is correct for the hero and for every other creature type, but **object type 96 (world 3, 6 shipped placements) is permanently capped at 50 damage from a starburst and is fully immune to the invulnerability aura**, by ordinary code, with no cutscene involved. A port that gives every creature the same starburst/aura damage number reproduces the wrong answer for this one enemy.
 
-`UNKNOWN_ce64_death_branch` (`CS:0x8076`, the hp<0 exit, and the `CS:0x803a` wander-diversion into `CALL 0x80b4`/`0xc8b`) is not traced past its entry here — this creature's own AI/score behaviour, as opposed to its `DS:0x34` interaction, remains open. `UNKNOWN_ce64_identity` — the game never names object type 96, so it has no in-project label yet.
+### `UNKNOWN_ce64_death_branch` — partly CLOSED: the death draw reuses the world-2 nest's own sprite convention `[STATIC]`
 
-Still open here: **`UNKNOWN_8014_brood`** — the brood walker `CS:0x894E` (and its own sprite table read at `SS:0x360A`); **`UNKNOWN_nest_identity`** — the game never names type 115, so "nest" is the port's label; **`UNKNOWN_cfcc_dormant_seed_observable`** (above); **`UNKNOWN_cfcc_pool_full_in_play`** — whether real play ever leaves ten alive, which is what the `jz` bug needs to bite; **`UNKNOWN_cfcc_1ca5_orphan`** — `CS:0x1CA5`–`0x1CC3` is a complete export-2 draw block with **zero** branch references and no fall-through path into it; **`UNKNOWN_cfcc_7f48_shared_tail`** — whether disarming `[cs:0x7f5c]` from the `0xcfcc` clear path is intended; **`UNKNOWN_cfcc_muzzle_asymmetry`** (above, *The live/emerge fire logic*); **`UNKNOWN_cfcc_spawner_cull_reason`** (below, *`UNKNOWN_nest_shot`*); **`UNKNOWN_bf5f_popup_id`** (above, *Death, and the brood*); **`UNKNOWN_ss432_indirect`** (above, *the object-array dispatch*).
+`CS:0x8076`–`0x8096` is the object-96 creature's death-frame draw, and it is a byte-for-byte structural match to the world-2 nest's own death handler (*Death, and the brood*, above — `"Each tick draws state + 0x6c twice"`):
+
+```
+8076  ax = [si] ; bx = [si+2]        ; world X/Y from the DS:0xce64 record
+807b  ax -= 4 ; bx -= 8               ; the SAME (−4,−8) offset the nest's death draw uses
+8081  bp = [si+6]                     ; the wander-state field, repurposed post-death — same pattern this
+8084  bp += 0x6c                      ;   document already documents for every other entity's death counter
+8087  ax -= [0xa] ; bx -= [0xc]       ; world -> screen
+808f  [0x4]=ax ; [0x6]=bx ; [0x8]=bp  ; the shared entity-blitter's draw-call arguments
+```
+
+So object 96's death cloud is drawn with **exactly the nest's own `sprite = state + 0x6c` formula**, off the same wander-state field this document already documents as the record's runtime state — the two creature types visually share one death-burst effect. Immediately before it, `CS:0x8068`–`0x8073` is a sibling arm with a different offset (`bx −= 0xa`) that calls `CS:0x80BB` instead of drawing directly — plausibly the *alive* draw, gated on hp by a comparison this pass's linear disassembly window didn't include (the true branch point wasn't located, so this is inferred from the arms' shapes, not proven). `UNKNOWN_ce64_identity` — the game never names object type 96, so it has no in-project label yet — and the creature's own attack/wander AI (`CS:0x803a` onward) remains untraced beyond this draw pair; the specific `CALL 0x80b4`/`0xc8b` citation from an earlier pass was not re-located at that exact address this session and should be treated as unverified until re-read.
+
+### `UNKNOWN_8014_brood` — CLOSED: the walker confirms the record layout and adds a hitbox and a sprite table `[STATIC]`
+
+`CS:0x894E` walks all 16 `DS:0x8014` slots (`CX=0x10`), and its own bytes settle several previously-open pieces at once:
+
+```
+894e  si = 0x8014 ; cx = 0x10
+895a  cmp word[si+4],0 / jns 0x8963 / jmp 0x8a07   ; +4 < 0 -> FREE slot, skip (confirms the existing "free when +4 negative" claim)
+8963  inc byte[0x3af]                               ; a live-count, reset to 0 at the top of every pass
+8967  cmp word[si+6],0 / jns 0x8970 / jmp 0x8a33    ; +6 < 0 -> a separate branch, not chased further
+8970  cmp word[si+0xc],0 / jz 0x8979 / jmp 0x8ab1   ; +0xc != 0 -> a THIRD branch, not chased further
+8979  cmp word[0x2fa],0 / jnz 0x8983 / call 0x8a6c  ; "freezes aliens" honoured, else CALL a movement routine
+8983  ax=[si] ; bx=[si+2] ; bp=[si+6]                ; world X/Y, and +6 loaded as the BP-in/BP-out "strength"
+898b  [0x1e2]=0x18(24) ; [0x1e4]=0x10(16)            ; a 24x16 HITBOX, distinct from the nest's own 24x24/8x8 pair
+8997  call 0x1000:a9e4                                ; the SHARED hero-contact-and-damage-grid-scan thunk
+899a  [si+6] = bp                                     ; strength written back — the familiar BP round-trip convention
+899d  dx = [si+4] ; dx <<= 1                          ; the lifetime/frame field, DOUBLED -> a WORD index
+89a2  di = 0x360a + dx                                ; SS:0x360A — the sprite table this residual asked about
+89a7  dx = word[ss:di]                                 ; the fetched sprite id
+89aa  cmp word[si+8],0 / js 0x89b3 / add dx,3          ; +8's SIGN selects a +3 sprite-id variant
+```
+
+So the brood record is `{ i16 worldX, i16 worldY, i16 frame(also the free/lifetime sentinel), i16 strength, +0x8 a sign-tested facing/variant flag, +0xc a second state gate not traced past this read, ... }`, each brood child takes hero-contact damage through the **same shared `CS:0xa9e4` thunk** every other creature uses (with its own 24×16 box), and its sprite is `SS:0x360A[frame]`, optionally `+3` when `[si+8]` is non-negative — the identical "table lookup, ±3 variant by a sign test" shape this document already documents elsewhere for other small creatures. `UNKNOWN_8014_field_0x6_branch` / `UNKNOWN_8014_field_0xc_branch` narrow the residual to the two untraced branch targets (`0x8A33`, `0x8AB1`).
+
+Still open here: **`UNKNOWN_nest_identity`** — the game never names type 115, so "nest" is the port's label; **`UNKNOWN_cfcc_dormant_seed_observable`** (above); **`UNKNOWN_cfcc_pool_full_in_play`** — whether real play ever leaves ten alive, which is what the `jz` bug needs to bite; **`UNKNOWN_cfcc_1ca5_orphan`** — `CS:0x1CA5`–`0x1CC3` is a complete export-2 draw block with **zero** branch references and no fall-through path into it; **`UNKNOWN_cfcc_7f48_shared_tail`** — whether disarming `[cs:0x7f5c]` from the `0xcfcc` clear path is intended; **`UNKNOWN_cfcc_muzzle_asymmetry`** (above, *The live/emerge fire logic*); **`UNKNOWN_cfcc_spawner_cull_reason`** (below, *`UNKNOWN_nest_shot`*); **`UNKNOWN_ss432_indirect`** (above, *the object-array dispatch*).
 
 **Two measurements worth keeping.** Swept over every camera position, at most **4** of `PLEV2A`'s nests and **5** of `PLEV2B`'s fit inside one activation box — so the ten slots are not a per-screen budget. They are a **cumulative** one: `CS:0x87E9` is the only `mov word [si],0xffff` in the whole `0x8611`–`0x894D` range, so **nothing frees a slot but death** — not scroll-off, not a timeout. The reachable failure is a player who leaves ten alive and then activates an eleventh, which is destroyed permanently.
 
@@ -3922,7 +3989,24 @@ So the table is genuinely a **per-class, per-world signed `{dx, dy}` byte pair**
 
 ### `UNKNOWN_marker_record_field4_gating_scope` — CLOSED: every category 0/1/2 touch appends a marker, not just type 45 `[STATIC]`
 
-Reading the object-touch dispatcher (`CS:0x15F1`–`0x1652`, the same function this document already credits with the category-4 dispatch at `CS:0x161D`/`0x1CC6`) end to end: the category split at `CS:0x160D` (`cmp byte[di+4],3 / jl 0x162e`) sends **every category < 3 touch — potions (0), treasure (1), AND keys (2)** — through `0x162e` and straight into the marker-append body at `CS:0x1632` (`inc byte[0x398]`, clamp at 20). The type-45-specific branch (`cmp dx,0x2d / jnz 0x1652`) only gates the *extra* behaviour — resetting the marker cursor to the array base and forcing the global strategy override `DS:0x399` — not the append itself. So **any potion, treasure, or key the hero touches appends a marker record**, and only the `"attracts monsters"` potion additionally rewinds the cursor and forces every System-B enemy onto the marker-seek strategy. `CS:0xC041` (called two arms later, per the trigger case above) is reached from this same dispatcher for the *weapon* path; `UNKNOWN_c041_176b_purpose` — its third caller at `CS:0x176B` — was not investigated this pass.
+Reading the object-touch dispatcher (`CS:0x15F1`–`0x1652`, the same function this document already credits with the category-4 dispatch at `CS:0x161D`/`0x1CC6`) end to end: the category split at `CS:0x160D` (`cmp byte[di+4],3 / jl 0x162e`) sends **every category < 3 touch — potions (0), treasure (1), AND keys (2)** — through `0x162e` and straight into the marker-append body at `CS:0x1632` (`inc byte[0x398]`, clamp at 20). The type-45-specific branch (`cmp dx,0x2d / jnz 0x1652`) only gates the *extra* behaviour — resetting the marker cursor to the array base and forcing the global strategy override `DS:0x399` — not the append itself. So **any potion, treasure, or key the hero touches appends a marker record**, and only the `"attracts monsters"` potion additionally rewinds the cursor and forces every System-B enemy onto the marker-seek strategy. `CS:0xC041` (called two arms later, per the trigger case above) is reached from this same dispatcher for the *weapon* path.
+
+### `UNKNOWN_c041_176b_purpose` — CLOSED: a generic "spawn N copies" bulk helper `[PROVEN]`
+
+`CS:0x1764`–`0x177A` is a small, reusable subroutine, not part of the pickup dispatcher itself — it sits between the already-documented chest-loot burst spawner (`CS:0x12CF`→`0x12EA`/`0x1756`, whose own tail ends at `CS:0x1763`) and the main pickup contact test (`CS:0x177D`), and `get_xrefs_to` confirms it is called from **two unrelated places**: three times in a row from `FUN_1000_16f9` (this document's own already-documented "routine reached only for sprite `0x118`" — `280 − 170 = 110`, and `POBJECTS` type 110 reads `"treasure chest"`, a *second*, differently-triggered chest-shaped object distinct from the category-1 chest mechanism) and once from `CS:0xCCC6` (not chased further). Its body:
+
+```
+1764  push ax,dx           ; save the base position/count
+1766  push ax,bx,cx,dx,bp   ; re-push the SAME four call args every iteration
+176b  call 0x1000:c041      ; the shared object-respawn allocator, already documented
+176e  pop bp,dx,cx,bx,ax
+1773  add ax,bp             ; accumulate the allocator's own return value into the running X
+1775  dec dx / jns 0x1766   ; loop DX+1 times
+1778  pop dx,ax
+177a  ret
+```
+
+So `CS:0x1764` is a **generic "spawn `DX+1` copies of object `CX` starting at `(AX,BX)`" loop** built directly on top of the already-documented single-object respawn routine, reused by at least the sprite-`0x118`/type-110 "treasure chest" object (called three times in `FUN_1000_16F9`, i.e. up to three separate burst counts) in addition to whatever `CS:0xCCC6` does. `UNKNOWN_16f9_burst_counts` — the three `DX` values `FUN_1000_16F9` passes, and what `CS:0xCCC6`'s own call is for — were not read this pass.
 
 The marker record's own trailing bytes (beyond the `{x, y}` that `0xf7bb`'s consumer reads) were not located this pass — the write site past `CS:0x1652` continues into a `PUSH DI / PUSH DS` sequence consistent with the shared message-display call this document documents elsewhere, not an obvious marker-array store, so `UNKNOWN_marker_record`'s original question (what the record's other two bytes hold) stays open.
 
