@@ -1560,7 +1560,30 @@ The load site sits immediately after the hiscores load routine (`FUN_1000_3445`,
 
 **`FUN_1000_3506` is not hiscores-specific — it has 8 callers across the binary**, found via `get_xrefs_to`: `FUN_1000_2a37` (the central `.MAP`/`PALFILS` level loader this document already credits with both those loads), `FUN_1000_266b`, `FUN_1000_30d4`, `FUN_1000_311c`, `FUN_1000_318f` and `FUN_1000_32c0` (the latter two already named in this document's own *game-over* sequence — `CS:0x0987 call 0x318f` / `CS:0x0990 call 0x32c0`), `FUN_1000_3445` (the hiscores loader), and `FUN_1000_648b`. So this is a general **"ensure the status-panel backdrop is decompressed and refresh it into video memory"** utility, invoked at level (re)load, on entering the high-score screen, on game over, and from several other sites — not something wired specifically to hiscores. This independently corroborates `backscr.pi1`'s already-inferred identity as the status panel's own backdrop image: it is refreshed at exactly the moments the status panel would need repainting.
 
-`FUN_1000_266b` (one of the 8 callers, read in full) is itself informative: it calls export 15 ("Clear page") first, then conditionally calls `FUN_1000_3506` only when `DS:0x387` is already set (skip-if-not-yet-loaded, since a fresh load is handled elsewhere), then `CS:0x2792` — this document's own already-documented `"GODS DISK ?"` swap-prompt digit patcher — then loads 16 words off the palette fade-staging buffer `DS:0x12` (also already documented, under the palette-fade closure) onto the stack. Consistent with a "clear the screen and show the disk-swap prompt" routine, not anything hiscores-specific either. `UNKNOWN_fun_3506_dispatch` — the branch past `CS:0x351F` (`cmp byte[0x38a],3`, then arithmetic on `DS:0x130`/`0x132`/`0x134`/`SS:0x414`) was not traced past this point.
+`FUN_1000_266b` (one of the 8 callers, read in full) is itself informative: it calls export 15 ("Clear page") first, then conditionally calls `FUN_1000_3506` only when `DS:0x387` is already set (skip-if-not-yet-loaded, since a fresh load is handled elsewhere), then `CS:0x2792` — this document's own already-documented `"GODS DISK ?"` swap-prompt digit patcher — then loads 16 words off the palette fade-staging buffer `DS:0x12` (also already documented, under the palette-fade closure) onto the stack. Consistent with a "clear the screen and show the disk-swap prompt" routine, not anything hiscores-specific either.
+
+### `UNKNOWN_fun_3506_dispatch` — CLOSED: a second one-shot latch loads the `smallfnt` atlas group `[STATIC]`
+
+The branch past `CS:0x351F` (`cmp byte[0x38a],3 / jz 0x3560` — skip if this second latch is already set) is a call into graphics **export 22**, the already-documented atlas-group loader (`CS:0x354F call 0x1000:2342`, and `FUN_1000_2342`'s own body — `CALLF [SS:0x52aa]` — is already on record as export index `(0x52aa−0x5252)/4 = 22`):
+
+```
+3526  ax = [0x134] - 0x1e00 ; ax >>= 3   ; -> [0x138]   (see below)
+3533  ss:[0x414] = 0xff
+3539  push [0x134] / push [0x132] / push [0x130]   ; three scratch words, unread here
+3545  push 0x43e                         ; a LITERAL address, i.e. an OUTPUT pointer
+3549  push 0xea75                        ; a LITERAL address — the worklist pointer
+354d  mov bp,sp
+354f  call 0x1000:2342                   ; graphics export 22 — load-atlas-group-by-name
+3552  add sp,0xa
+3555  mov word [0x43e],0
+355b  mov byte [0x38a],3                 ; latch set
+```
+
+`DS:0xea75` reads directly (via `read_memory`) as `"smallfnt\0\0hiscores.bin\0backscr.pi1\0objec…"` — so the pushed pointer lands on `"smallfnt"` immediately followed by a **double NUL** (the empty-string list terminator export 22's own documented format uses), i.e. a **one-entry worklist naming only the `smallfnt` group**. `"hiscores.bin"` and `"backscr.pi1"` sit later in the same string pool (Table 1 Block B) but are separate literals for separate call sites (the plain `AH=3Ch` hiscores file open and this section's own DCL loader call), not part of this worklist — Block B is a shared string pool, not one single variable-length list.
+
+So `FUN_1000_3506`, the first time it runs, loads the **small-font sprite atlas** on top of refreshing the status-panel backdrop — which makes sense for any of its 8 call sites (level load, hiscores screen, game over, disk-swap prompt): all of them need to render text over this backdrop, and the small font has to be resident before that can happen.
+
+`ax = ([0x134] − 0x1e00) >> 3` converts an absolute value into a **sprite-descriptor index** — `0x1e00` is this document's own already-documented sprite-descriptor arena base (`DS:0x0e`, set to `0x1e00` at `CS:0x294b`; also the weapon sprite-index base `di = 0x1e00 + val*8`), and `>> 3` divides by the 8-byte descriptor stride. So `DS:0x134` most plausibly holds an absolute descriptor address (out of export 22's own return, or a scratch the loader leaves behind) and `DS:0x138` ends up holding the `smallfnt` group's own **base descriptor index** — needed by any caller that must turn a font character into a sprite id. `UNKNOWN_export22_call_args` — the exact roles of `DS:0x130`/`0x132`/`0x134` as export 22's three pushed parameters, `SS:0x414`, and `DS:0x43e` were not traced past this call site.
 
 **The consumer.** Not found by the direct-operand searches this document's own ranked item implicitly invited (`[0x88]`/`[0x86]` dereferences, checked exhaustively across all 12 non-PKLITE-packed shipped executables with zero hits) — because nothing ever addresses it that way. `GAME.EXE` instead **preloads a register**. Five sites in the image reach `call 0x3596` with `si` freshly set to `0x86`:
 
