@@ -757,12 +757,23 @@ export class Player {
       const newY = this.y - CLIMB_STEP;
       if (climbableHere(map, this.x, newY)) {
         this.y = newY;
+      } else {
+        /* CS:0x58e7-0x58fa — when neither row around the new spot is still
+         * a ladder, the original REVERTS both the Y step AND the phase
+         * (`mov cl,[0x344]`, the value cached before this tick even ran) and
+         * stays in climb, frozen. There is no auto-exit at the top of a
+         * ladder; dismount (above) or jump-off is how you leave it.
+         *
+         * ⚠️ This is the bug the "still plays the climbing animation while
+         * stuck" report was about: the animation step below used to run
+         * UNCONDITIONALLY, so a hero wedged against a ceiling (or entering
+         * a ladder that's capped one row up) sat still while its arms kept
+         * cycling through the climb frames — motion with no matching
+         * displacement. Bailing out here, before the animation block, keeps
+         * a blocked tick a true no-op: no Y change, no phase change, same as
+         * the original's revert. */
+        return;
       }
-      /* CS:0x58e7-0x58fa — when neither row around the new spot is still a
-       * ladder, the original REVERTS the step and stays in climb, frozen,
-       * rather than landing or falling. There is no auto-exit at the top of
-       * a ladder; dismount (above) or jump-off is how you leave it. Do
-       * nothing here — `newY` is simply not applied. */
     } else {
       /* CS:0x5663 `add word [0x17c],0x6` — descending. */
       const newY = this.y + CLIMB_STEP;
@@ -788,7 +799,8 @@ export class Player {
      * climb-cycle animation, identical shape on both: 0..3, reversing at
      * each end, with the step sound at the two turn-arounds. This is what
      * was missing entirely — `phase` used to stay pinned at 0 for the whole
-     * climb, so the hero never appeared to move its limbs at all. */
+     * climb, so the hero never appeared to move its limbs at all. Only
+     * reached now when the step above actually applied. */
     if (this.ladderPingPong) {
       this.phase--;
       if (this.phase <= 0) { this.phase = 0; this.ladderPingPong = false; this.climbStep = true; }
