@@ -236,9 +236,15 @@ export class Arsenal {
       const m = muzzle({ x: heroX, y: heroY }, right,
                        { slot: a.slot, sel: this.altSelect, alt: null });
       const isAxe = handler === 14 || handler === 15;
-      const { entries, states } = isAxe
+      const { entries, states, facing } = isAxe
         ? spawnAxeVolley(s.st, handler, a.tag, m.x, m.y)
         : spawnVolley(s.st, handler, a.tag, m.x, m.y);
+      /* CS:0x98EA (right handlers) / CS:0x9935 (left) — the spawn handler
+       * ITSELF writes weapon +0x0e every time it fires, which is what lets
+       * CS:0x9d74 (stepMoverFrame) know which way to spin the weapon's
+       * shared animation frame, and what selects the +0x1e sprite2
+       * descriptor for the two weapons that have one. */
+      w.facing = facing;
       /* The handler writes consecutive 8-byte records from the sub-slot head,
        * so record k of group g is area[g*3 + k] and carries tag + k. The
        * magic axe ALSO seeds the matching companion state[g*3 + k]. */

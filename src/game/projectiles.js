@@ -401,6 +401,73 @@ export const TERRAIN_SFX = 0x1d;
 export { DESTRUCTIBLE_TILE } from './destructible.js';
 export const DESTRUCTIBLE_MIN_WORLD = 3;
 
+/* ── CS:0x9d74 — the common mover's OWN sprite-frame stepper `[PROVEN]` ───
+ *
+ * This is what makes a spinning weapon (the knife, throwing star, axe, mace —
+ * anything with a nonzero frameCount) visibly rotate, and it was the one
+ * piece of the common mover left unported: UNKNOWN_projectile_frame.
+ *
+ * ⚠️ IT RUNS ONCE PER CALL TO THE MOVER, NOT ONCE PER LIVE PROJECTILE. The
+ * nine-record walk (CS:0x9c70..0x9d6a) loops back on itself via `LOOP`; only
+ * once CX reaches 0 does execution fall through to this tail:
+ *
+ *   9D74  cx = [si+4]                 ; weapon.frame (the CURRENT value —
+ *                                      ; every live shot of this weapon drew
+ *                                      ; from this SAME shared field a moment
+ *                                      ; ago, in the per-record loop above)
+ *   9D77  cmp word[si+0xe],0 / js 9D89 ; facing < 0 (left) -> DECREMENT path
+ *   9D7D  inc cx
+ *   9D7E  cmp cx,[si+0x1c] / jle 9D85  ; <= frameCount -> keep
+ *   9D83  xor cx,cx                    ; else wrap to 0
+ *   9D85  [si+4] = cx / ret
+ *   9D89  dec cx
+ *   9D8A  jns 9D85                     ; >= 0 -> keep
+ *   9D8C  cx = [si+0x1c]               ; else wrap to frameCount
+ *
+ * So the weapon's frame free-runs 0..frameCount (inclusive), incrementing
+ * while the weapon last fired RIGHT and decrementing while it last fired
+ * LEFT (facing is written back by the spawn handler itself, CS:0x98EA /
+ * 0x9935 — see spawnVolley's `facing` return and Arsenal.emit in
+ * hero-fire.js). It advances EVERY TICK THE MOVER RUNS, whether or not any
+ * projectile of this weapon is currently live — there is no gate on it.
+ *
+ * It runs ONLY for the common mover (weapon +0x1A == 0): CS:0x9D74 sits
+ * inside THIS function's own body, reached solely by falling out of ITS
+ * loop. The fireball (CS:0x9d97) has its own, unrelated frame stepper
+ * (`CL = ([si+4] + [si+0xe]) & 3`, see FIREBALL_FRAMES) and the others are
+ * unread — a shared "step the frame" helper across movers would be wrong. */
+export function stepMoverFrame(w) {
+  if (w.facing < 0) {                          // CS:0x9d7b `js`
+    w.frame -= 1;                              // CS:0x9d89
+    if (w.frame < 0) w.frame = w.frameCount;   // CS:0x9d8a/0x9d8c
+  } else {
+    w.frame += 1;                              // CS:0x9d7d
+    if (w.frame > w.frameCount) w.frame = 0;   // CS:0x9d7e/0x9d81/0x9d83
+  }
+}
+
+/**
+ * CS:0x9CC9-0x9CE3 — the sprite a live common-mover projectile draws THIS
+ * tick, staged inside the same per-record loop that moves it (immediately
+ * before the draw-style dispatch), so every port render pass can reproduce
+ * it without re-deriving the branch:
+ *
+ *   9CC9  cmp word[si+0xe],0 / jns 9CDD      ; facing >= 0 (right) -> primary
+ *   9CCF  cmp word[si+0x1e],0 / jz 9CDD      ; facing < 0 but NO second
+ *                                             ; descriptor -> also primary
+ *   9CD5  dx = [si+0x1e] + [si+4]            ; facing < 0 AND sprite2 != 0
+ *   9CDD  dx = [si+4] + [si+0xc]             ; primary: sprite + frame
+ *
+ * Most weapons have no `sprite2` (PINNED_SPRITE2 is 0 for 9 of 11, knife
+ * included), so this collapses to `sprite + frame` regardless of facing —
+ * consistent with a rotating sprite sheet needing no mirrored half, unlike
+ * the two directional weapons (lightning bolt, spear) that DO carry one.
+ */
+export function projectileSprite(w) {
+  if (w.facing < 0 && w.sprite2) return w.sprite2 + w.frame;   // CS:0x9cd5
+  return w.sprite + w.frame;                                   // CS:0x9cdd
+}
+
 export function stepProjectiles(area, cam, opts = {}) {
   const { grid = null, weapon = null, planeB = null, world = 1,
           planeA = null, blocks = null, weaponIndex = -1,
@@ -489,6 +556,15 @@ export function stepProjectiles(area, cam, opts = {}) {
       : grid.stamp2x2(sx, sy2, p.tag);
     if (ok) stamped++;
   }
+  /* CS:0x9d74 — runs ONCE per call, unconditionally, after the nine-record
+   * walk above (see stepMoverFrame's own header). ⚠️ Gated on `weapon.mover
+   * === 0` rather than assumed: Arsenal.step() (hero-fire.js) currently
+   * routes every non-hunter, non-magic-axe slot through THIS function,
+   * including weapons whose real mover is the fireball's or the time bomb's
+   * own (neither is wired into Arsenal.step() yet) — calling this tail for
+   * one of those would advance a frame CS:0x9d74 never actually reaches for
+   * them in the original. */
+  if (weapon && weapon.mover === 0) stepMoverFrame(weapon);
   return { moved, culled, outOfRange, stamped, hitTerrain, brokeBlocks, hits };
 }
 

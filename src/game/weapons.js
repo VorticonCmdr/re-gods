@@ -114,7 +114,20 @@ export function parseWeapons(buf) {
       /* +0x04 is the weapon's CURRENT animation frame and +0x1c its frame
        * count: the mover's tail (CS:0x9d74) steps +0x04 up or down according
        * to +0x0e (facing) and wraps against +0x1c. +0x04 is reset to 0 on
-       * pickup (CS:0x910d), so it is runtime state, not file data. */
+       * pickup (CS:0x910d), so it is runtime state, not file data — but it
+       * is NOT one of the three pinned fields either, so a sublevel-'a' load
+       * overwrites it fresh from the newly loaded file (CS:0x366d loads the
+       * whole 0x50-byte record, and only +0x0c/+0x1e/+0x08 are saved and
+       * restored around that). This is what the file's own +0x04 bytes are:
+       * essentially arbitrary per world (measured 0..7 across all 44 shipped
+       * records), because nothing meaningful is ever encoded there — it is
+       * simply whatever frame the animation happened to be on when the
+       * record was last saved from within the level tool. `armWeapon`
+       * mutates this field on the SAME shared record CS:0x9d74 reads from
+       * (see stepMoverFrame in projectiles.js), matching the original's
+       * single DS:0xe2b6 table rather than this port's separate per-slot
+       * `count`/`base` runtime state. */
+      frame: be(o + 0x04),
       frameCount: be(o + 0x1c),
       /* +0x0e is the facing the emitter writes back (1 right, 0xFFFF left),
        * which is what selects between the +0x0c and +0x1e sprite descriptors.
@@ -242,6 +255,12 @@ export const tagFor = (slot, subslot) => 1 + slot * 9 + subslot * SLOT_TAG_STEP;
 
 /** Runtime state of one weapon: `count` is +0x08, `base` is +0x06 (Power). */
 export function armWeapon(w) {            // CS:0x9115 — a NEW pickup
+  /* CS:0x910d `mov word [di+0x4],0x0` — the ONE write to +0x04 outside the
+   * mover's own tail. It lands on `w` itself, not on the returned per-slot
+   * state, because +0x04 lives in the SAME shared weapon-table record as
+   * +0x06/+0x08 in the original (DS:0xe2b6 + idx*0x50) — this port only
+   * splits count/base out into per-slot state, not frame/facing. */
+  w.frame = 0;
   return { index: w.index, base: w.power, count: w.power };
 }
 

@@ -136,7 +136,7 @@ import { SLOT_STRIDE, PROJECTILE_SIZE, GROUP_STRIDE, GROUP_ENTRIES,
          BOMB_BOUNCE, BOMB_GRAVITY_CAP, stepTimeBomb,
          PROJECTILE_VELOCITY, setWeaponArc, resetWeaponArc,
          MOVER_WALK, CULL, stepProjectiles,
-         DECODED_MOVERS } from '../game/projectiles.js';
+         DECODED_MOVERS, stepMoverFrame, projectileSprite } from '../game/projectiles.js';
 
 export function makeChecker() {
   const results = [];
@@ -3256,6 +3256,105 @@ export async function checkWeaponsProjectiles(fetchRaw) {
     [...new Set(through)].sort((a, b) => a - b).join(',') === '4,6,7,8,9',
     'lightning bolt, spear, axe, hunter, magic axe have +0x48 == 0 and skip the ' +
     'terrain test entirely (CS:0xA7BD `jmp 0xa860`)');
+
+  /* ── CS:0x9d74 — the common mover's own sprite-frame stepper ─────────────
+   * UNKNOWN_projectile_frame is CLOSED: a spinning weapon (knife, throwing
+   * star, axe, mace — anything with a nonzero frameCount) now visibly
+   * rotates as it flies. Every fixture below is a fresh CLONE of `knife`,
+   * never `knife` itself: this file's own `sets`/`w1`/`all` fixtures are
+   * reused BY REFERENCE across hundreds of later checks, and `frame`/
+   * `facing` are exactly the two fields this feature mutates in place. */
+  check(`the knife's shipped frameCount is 7 — 8 sprite frames, a full spin`,
+    knife.frameCount === 7 && knife.sprite2 === 0,
+    `frameCount ${knife.frameCount}, sprite2 ${knife.sprite2} — no second ` +
+    'descriptor, so the knife rotates through ONE 8-frame strip regardless of ' +
+    'facing (CS:0x9CCF `cmp word[si+0x1e],0 / jz` falls through to the primary)');
+
+  const spinR = { ...knife, frame: 0, facing: +1 };
+  const seqR = [spinR.frame];
+  for (let t = 0; t < 9; t++) { stepMoverFrame(spinR); seqR.push(spinR.frame); }
+  check(`facing right, the frame counts 0..7 then wraps to 0`,
+    seqR.join(',') === '0,1,2,3,4,5,6,7,0,1',
+    `${seqR.join(',')} — CS:0x9d7d \`inc cx\`, CS:0x9d7e \`cmp cx,[si+0x1c] / jle\`, ` +
+    'CS:0x9d83 `xor cx,cx` on overflow');
+
+  const spinL = { ...knife, frame: 0, facing: -1 };
+  const seqL = [spinL.frame];
+  for (let t = 0; t < 9; t++) { stepMoverFrame(spinL); seqL.push(spinL.frame); }
+  check(`facing left, the frame counts DOWN and wraps to frameCount, not 0`,
+    seqL.join(',') === '0,7,6,5,4,3,2,1,0,7',
+    `${seqL.join(',')} — CS:0x9d89 \`dec cx\`, CS:0x9d8a \`jns\`, CS:0x9d8c ` +
+    '`cx = [si+0x1c]` on underflow. A port that wraps to 0 both ways spins the ' +
+    'weapon the wrong way on every left-facing throw');
+
+  check(`the drawn sprite is the pinned descriptor plus the current frame`,
+    projectileSprite({ ...knife, frame: 0, facing: +1 }) === knife.sprite
+    && projectileSprite({ ...knife, frame: 5, facing: +1 }) === knife.sprite + 5
+    && projectileSprite({ ...knife, frame: 5, facing: -1 }) === knife.sprite + 5,
+    'CS:0x9CDD `dx = [si+4] + [si+0xc]` — the knife has no sprite2, so facing ' +
+    'never changes which strip is used, only which way the shared frame is ' +
+    'walking through it');
+
+  /* Lightning bolt (index 4) is one of only two weapons with a sprite2 —
+   * facing < 0 is the ONLY branch that can ever reach it. */
+  const lbW = { ...all.find((x) => x.index === 4) };
+  check(`a weapon WITH a sprite2 uses it only when facing left`,
+    lbW.sprite2 !== 0
+    && projectileSprite({ ...lbW, frame: 2, facing: +1 }) === lbW.sprite + 2
+    && projectileSprite({ ...lbW, frame: 2, facing: -1 }) === lbW.sprite2 + 2,
+    `lightning bolt sprite ${lbW.sprite}, sprite2 ${lbW.sprite2} — CS:0x9CC9 ` +
+    '`jns` sends facing >= 0 straight to the primary descriptor');
+
+  check(`armWeapon resets the SHARED frame to 0, but leaves facing untouched`,
+    (() => {
+      const w = { ...knife, frame: 6, facing: -1 };
+      const st = armWeapon(w);
+      return w.frame === 0 && w.facing === -1 && st.count === w.power;
+    })(),
+    'CS:0x910d `mov word [di+4],0x0` is the ONLY write in the pickup path; ' +
+    'facing (+0x0e) is untouched, matching the original leaving whatever the ' +
+    "level's own file bytes (or the weapon's last fire) put there");
+
+  /* END TO END: fire a knife right, then step the arsenal and watch its
+   * OWN frame field advance — through Arsenal, not by hand-calling
+   * stepMoverFrame, so allocate/emit/step are all under test together. A
+   * private weapon set (deep-cloned records) keeps this from leaking into
+   * `sets`/`w1`, which dozens of later checks reuse by reference. */
+  const spinWeapons = sets[0].map((w) => ({ ...w }));
+  const spinArsenal = new Arsenal(spinWeapons);
+  spinArsenal.equip(0, 0);                              // knife, slot A
+  check(`equipping runs armWeapon, so the arsenal's own knife starts at frame 0`,
+    spinWeapons[0].frame === 0,
+    `frame ${spinWeapons[0].frame} right after equip() -> armWeapon()`);
+
+  const spinAlloc = spinArsenal.allocate();
+  spinArsenal.emit(spinAlloc, 100, 100, true);          // fire RIGHT
+  check(`firing right writes the weapon's facing back to +1`,
+    spinWeapons[0].facing === +1,
+    'CS:0x98EA `mov word [si+0xe],0x1`, ported as spawnVolley\'s `facing` ' +
+    'return and applied in Arsenal.emit');
+
+  const cam3 = { x: 0, y: 0 };
+  const framesSeen = [spinWeapons[0].frame];
+  for (let t = 0; t < 3; t++) {
+    spinArsenal.step(cam3, new DamageGrid(), null, 1);
+    framesSeen.push(spinWeapons[0].frame);
+  }
+  check(`END TO END: a fired knife's sprite frame advances every tick it flies`,
+    framesSeen.join(',') === '0,1,2,3',
+    `${framesSeen.join(',')} — Arsenal.step() -> stepProjectiles() -> ` +
+    'stepMoverFrame(), once per tick, even though nothing else about the ' +
+    'shot changed direction or speed');
+
+  const notCommon = { ...knife, mover: 1, frame: 0, facing: +1 };   // pretend fireball
+  stepProjectiles([{ tag: 0, x: 0, y: 0, dir: 0 }], cam3, { weapon: notCommon });
+  check(`a non-common-mover weapon's frame is left alone by stepProjectiles`,
+    notCommon.frame === 0,
+    'CS:0x9d74 lives inside CS:0x9c6d\'s own body — a weapon whose real mover ' +
+    'is the fireball\'s or the time bomb\'s never reaches it in the original. ' +
+    'Arsenal.step() currently routes those through THIS SAME function (neither ' +
+    'is wired to its own mover yet), so gating on `weapon.mover === 0` matters ' +
+    'now, not just eventually');
 
   results.push({
     name: 'UNKNOWN_destructible_tile', note: true, pass: true,

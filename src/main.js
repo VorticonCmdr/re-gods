@@ -32,7 +32,7 @@ import { parseObjectRecords, Score, Purse, TreasureBurst, INVENTORY_EMPTY,
 import { CONSUMABLES, WEAPON_ARCS, INVULN_TICKS_SPAWN } from './game/consumables.js';
 import { Starburst, SPRITE_BASE as SB_SPRITE } from './game/starburst.js';
 import { Destructibles } from './game/destructible.js';
-import { resetWeaponArc, setWeaponArc } from './game/projectiles.js';
+import { resetWeaponArc, setWeaponArc, projectileSprite } from './game/projectiles.js';
 import { parseGroupsB, parseGroupsA, GroupSlots, spriteForEntity, MAX_ENTITIES,
          CREATURE_DESCRIPTOR_BASE } from './game/spawn.js';
 import { EntityB, MODE, MODE_TABLE, groundBelow, isDying } from './game/entity.js';
@@ -1007,15 +1007,15 @@ async function main() {
         else { outOfRange++; renderer.strokeRect(d.x, d.y, 4, 4, 8); }
       }
 
-      /* PROJECTILES. Drawn after the enemies and before the hero. The sprite
-       * is the weapon's own pinned descriptor (+0x0c, or +0x1e when facing
-       * selects the second one); the per-projectile animation frame (+0x04
-       * against the +0x1c count) is runtime state this port does not yet step,
-       * so the base frame is drawn rather than a guessed one.
-       * UNKNOWN_projectile_frame. */
+      /* PROJECTILES. Drawn after the enemies and before the hero. CS:0x9CC9-
+       * 0x9CE3: sprite = the weapon's own pinned descriptor (+0x0c, or +0x1e
+       * when facing selects the second one) PLUS the weapon's shared current
+       * animation frame (+0x04, stepped once per tick by CS:0x9d74 — see
+       * stepMoverFrame in projectiles.js). This is what makes the knife (and
+       * every other nonzero-frameCount weapon) visibly rotate as it flies. */
       for (const p of arsenal.live()) {
         const sx = p.x - camX, sy = p.y - camY;
-        const pid = p.weapon.sprite;
+        const pid = projectileSprite(p.weapon);
         const pf = hero && hero.frames[pid];
         if (pf) renderer.blitSprite(pf, sx, sy);
         else { outOfRange++; renderer.strokeRect(sx, sy, 8, 8, 13); }

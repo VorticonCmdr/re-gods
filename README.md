@@ -526,8 +526,18 @@ details worth having:
 append unless a slot holds weapon 8, so the list the weapon homes on is empty on every
 frame the hero isn't carrying one.
 
-⚠️ **Still open in this subsystem:** what the destructible-tile queue does, the
-unproduced `0xFD` grid tag, and the per-projectile animation frame.
+⚠️ **Still open in this subsystem:** what the destructible-tile queue does and the
+unproduced `0xFD` grid tag.
+
+**The weapon's shared sprite-rotation frame is now stepped.** `UNKNOWN_projectile_frame`
+is closed — CS:0x9d74, the common mover's own tail (`CS:0x9c6d`), advances the weapon's
+*own* current frame (+0x04) once per tick, wrapping against its frame count (+0x1c) and
+stepping up or down depending on which way it last fired (+0x0e). It is not per-projectile:
+every live shot of a weapon (the knife, throwing star, axe, mace — anything with a nonzero
+frame count) draws the SAME shared frame, which is what visibly spins a thrown knife.
+Ported as `stepMoverFrame`/`projectileSprite` in `game/projectiles.js`, gated on
+`weapon.mover === 0` since `Arsenal.step()` currently routes weapons whose real mover is
+the fireball's or the time bomb's own through this same function.
 
 ### Arming the hero
 
