@@ -2371,7 +2371,46 @@ Those are exactly the three words trigger predicates COND3/COND4 test (`0x3ea8`/
 
 **The allocator does not spawn.** It records only the free sub-slot pointer in `DS:0x1bc`/`0x1be`/`0x1c0` and the tag in `DS:0x1c2`/`0x1c4`/`0x1c6`; `0x9734`/`0x97ce` (the **right/left spawners**) read those back. Eight player states are firing variants (5, 6, 20, 21, 22, 23, 24, 25).
 
-Still open: the death/respawn reset set. (The `0xaad1`–`0xab3f` routine formerly listed here as a "pixel-mask collision scan" is decoded — it is the damage-grid scanner, and it is not a pixel mask; see *Projectile collision*.)
+(The `0xaad1`–`0xab3f` routine formerly listed here as a "pixel-mask collision scan" is decoded — it is the damage-grid scanner, and it is not a pixel mask; see *Projectile collision*.)
+
+### The death/respawn reset set — CLOSED: two divergent paths, not one reset `[PROVEN]`
+
+`FUN_1000_09bb` (`CS:0x09BB`–`0x0AAF`, reached from the main loop's own death test at `CS:0x01C4`/`0x01C9` when the health bar goes negative) is **not itself "the reset"** — re-reading it in full shows it is the **death-animation tick driver**: it re-runs the ordinary per-tick projectile/hazard/entity calls (`CALL 0x9455`, `CALL 0xAD88`, `CALL 0xB1C2`/`0xB3CE`/`0xB4E7`/`0x1280`/`0x3CC7` — the identical block the main loop itself runs at `CS:0x0223`–`0x0239`, confirming these hazard walkers really do run continuously, dead or not), then drives a small state machine on **`DS:0x24c`** (a previously-undocumented step counter, 0..0x12) that seeds a **5-record death-burst particle array** at `DS:0xd76e` from a template at `DS:0xd752` (world position of death, screen-converted with a `+8` Y bias — `CS:0x0A3B`–`0x0A5E`), then applies simple position += velocity, velocity++ (gravity) physics to those 5 records and draws each via the shared entity blitter `CS:0x3569`, sprite `= 0x5b + [0x24c]` — the same `0x5b`-base sprite-id convention this document already documents for entity death frames, here reused for the *hero's own* death burst.
+
+**Once the animation counter reaches `0x12` (18 ticks ≈ 1.2 s at 15 Hz), it jumps to `CS:0x0930` — the real fork point:**
+
+```
+0930  [0x6c] = 0xff ; [0x6d] = 0xff     ; a display-dirty pair (new — not previously documented)
+093A  dec word [0x224]                   ; LIVES -= 1 — this document's own previously-flagged
+                                          ;   "not traced to this path" loose end; now traced exactly here
+093E  js 0x0943                          ; lives went negative -> GAME OVER (below)
+0940  jmp 0x0845                         ; lives remain -> RESPAWN (already extensively documented:
+                                          ;   FUN_1000_0845, health restore from [0x250], the
+                                          ;   14-entry arrival-zone table at SS:0x365a, camera
+                                          ;   re-init via FUN_1000_2189, state 4, [0x32]:=0)
+```
+
+**So the respawn-with-lives-remaining path was already comprehensively documented** (health/position/camera/invulnerability, all under *`UNKNOWN_camera_init`* and *`DS:0x8b4c`*'s reach into `FUN_1000_0845`) — nothing new needed there. **The genuinely undocumented half was GAME OVER** (`CS:0x0943` onward, lives negative):
+
+```
+0943  SS:[0x40a] = 0xc0                  ; a UI/display parameter
+094A  call 0x0929                        ; local helper, not chased further
+094D  callf [0x531e]                     ; sound driver export 10 (music-control range, ROL-only)
+0952  sfx 0x6413 (call 0x22ca)           ; play a sound effect
+095A  call 0x22d0                        ; a second sound-related call
+095D  cx=0x96(150) : { call 0x357f ; call 0x358d }   ; 150-iteration palette fade loop
+0968  ax=0x15e ; call 0x2516             ; unrelated to the file-loader's own DS:0x15e filename
+                                          ;   pointer — here it's a plain parameter, not chased further
+096E  [0x38d]=0 ; [0x33]=0               ; two flags cleared
+0978  callf [0x5326]  (ax=4)             ; sound driver export 12 (music-control range)
+0980  callf [0x530e]  (al=0x80)          ; sound driver export 6 (music-control range)
+0987  call 0x318f
+098A  call 0x359d  (ax=1)
+0990  call 0x32c0
+0993  jmp 0x2c82                         ; -> the ATTRACT-MODE DEMO CYCLER
+```
+
+**Game over does not reset hero/world state at all — it exits straight to the attract-mode cycler** (`FUN_1000_2c82`, this document's own already-documented 6-state title/high-score/demo loop). This matches this session's own live DOSBox observation: dying with no lives left dropped straight into the `TOP TEN GODS` high-score screen and on into demo playback, exactly this code path. **The actual "new game" reset — `world:=1`, money zeroed, weapon slots cleared, health/lives to their starting values — happens later and separately**, only once the player picks "BEGIN QUEST" from the menu again (`CS:0x0473`/`CS:0x8DD9` for health/lives/weapon-slot clear, `CS:0x0498`/`CS:0x8D80` for money/score/inventory, both already documented under *Weapon pickup* and *`UNKNOWN_key_pickup`*). So "the death/respawn reset set" was never one function to find — it is these two already-largely-documented forks, now both fully pinned.
 
 ### `UNKNOWN_projectile_record` — CLOSED: 8 bytes, not 24 `[PROVEN]`
 
@@ -4184,7 +4223,7 @@ So "the second muzzle position" framing was half right and half a red herring: `
 
 ⚠️ **Numbered contiguously from 1, and that is load-bearing, not cosmetic.** This list previously ran `3…15` and then `11`, with items 1 and 2 orphaned ~1,500 lines earlier. Markdown renumbers an ordered list sequentially from its first marker, so the typed numbers never rendered as typed — and because the paragraph above ran straight into the list with no blank line, CommonMark refused to open a list at all and the whole block rendered as one run-on paragraph with `3.`, `4.` … as literal text. **Keep the blank line above, and keep the numbering starting at 1.**
 
-1. **`UNKNOWN_hero_combat_details`** — mostly decoded; see *`UNKNOWN_hero_combat_details` — the fire-slot allocator `0x95ca`, decoded* above, which was a numbered item here until its body grew into a section. **Still open: the death/respawn reset set.**
+1. ~~`UNKNOWN_hero_combat_details`~~ — **CLOSED**. The fire-slot allocator was already decoded (see *`UNKNOWN_hero_combat_details` — the fire-slot allocator `0x95ca`, decoded* above). The death/respawn reset set is now closed too — see *The death/respawn reset set — CLOSED*, in the weapon-slot/projectile-record area: `FUN_1000_09bb` is the death-*animation* tick driver, not a reset, and forks at `CS:0x093A`'s `dec word[0x224]` into either respawn (`CS:0x0845`, already documented) or game-over (`CS:0x0943`, which exits straight to the attract-mode cycler with no state reset at all — the real "new game" reset happens later, when "BEGIN QUEST" is chosen again).
 2. ~~`UNKNOWN_asset_load_segments`~~ — **CLOSED `[STATIC]`**, see *the three overlay target segments* under *`GAME.EXE` memory layout*. Not BSS — all three are MZ-relocated constants; runtime targets are `0x40EC` (unpack.exe), `0x3DB3` (vga/ega.exe), `0x4031` (sound driver).
 3. ~~`UNKNOWN_TABLE_1FFD_0088`~~ — **CLOSED `[STATIC]`, re-verified with two prior errors fixed**, see *`UNKNOWN_TABLE_1FFD_0088` — CLOSED* under *Graphics: `VGA.EXE` is a mode 0Dh driver*. It is a 16-word (32-byte, not 30) copy of `PBACKSCR.PI1`'s palette at `DS:0x86`, but **byte-swapped into native x86 order** at build time (not big-endian like every other on-disk palette in this document — confirmed by an exact byte diff against the swap of the real `.PI1` bytes), fed via a preloaded `SI` into graphics export 9 (palette fade-in, 8 fixed passes not 16) from five call sites in `GAME.EXE`. A re-read of `VGA:0x1F6A` found its own `mov si,0x12` clobbers the caller's `si` before the `DS:0x35` branch, so the DAC push actually reads a separate working buffer `DS:0x12` (ratcheted toward `DS:0x86` inside export 9's own loop), not `DS:0x86` directly as the previous close claimed — which also closes both loose ends the previous pass left open (`UNKNOWN_export9_ax_param` = a retrace-wait speed knob; the `DS:0x35`-gated path is a DAC-write-method choice, not a second data source).
 4. ~~`UNKNOWN_palfils_0320`~~ — **CLOSED `[PROVEN]`**, see the section of that name under *`PALFILS` feeds the trigger system*. Structurally "event record −1," reached by an `arg=0`/`16384`/`32768`/`49152` aliasing bug in `COND5`/`COND6`/`ACT5`; a genuine wild-jump path for `ACT5`, provably never dispatched by any shipped `.MAP`+`PALFILS` pair.
