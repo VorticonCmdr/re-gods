@@ -2376,10 +2376,49 @@ dff9  [bp+0] = 0                                 ; ALL fully dead -> DEACTIVATE 
 
 So there are **two distinct thresholds, not one**: "dead + dying == total" is the trigger for a **one-shot popup/message**, read straight out of a previously-undocumented `PALFILS` field (`System-A group descriptor +0x10`, big-endian `u16`) — this is the mechanism behind "you cleared this group" style flavour text, fired the instant the last live entity starts dying rather than waiting for its death animation to finish, at the position cached from whichever entity most recently went through the death-draw path. "Dead == total" (strictly fully dead, not merely dying) is the **separate, stricter** condition that actually frees the group's runtime slot. A group that has just finished dying-but-not-yet-dead sits in a window where the message has fired but the slot is still occupied.
 
-Two further things fell out of reading this span that are worth recording but weren't chased to closure:
+### `UNKNOWN_sysA_0x16_refill` — CLOSED: a windup countdown, refilled by the attack and re-floored inside strategy 4 `[STATIC]`
 
-- **`CS:0xE001`'s very first act, previously unread, is `DEC word[di+0x16]`, floored at `1`** (`CS:0xE006`–`0xE00F`). This document's own System-A pipeline section already documents `[di+0x16]` as triple-duty (steering-step cap, attack-speed comparator, animation-cadence divisor) but described it as a roughly-static per-class value; it is in fact a **live countdown with a floor of 1**, ticking down once per pipeline call. `UNKNOWN_sysA_0x16_refill` — where (or whether) it is ever reset to a larger value is not traced.
-- **`CS:0xEB37`**, called unconditionally right after the live-count computation, is a *second*, independent weighted random-event roll using the SAME descriptor `+0xa` weight field stage 1's reroll gate reads, either acting on a specific pre-selected group member (`[bp+0x11]`, the already-documented "which member" index from the materialise-time draw) or running a fresh weighted-bucket pick when none was pre-selected. It is gated on the group's OWN reroll-throttle counter reading zero (i.e., only rolls on ticks where no reroll happened) and, on its own separate low-probability branch, increments a wrapping 0–127 counter at group-runtime `+0xe2` (yet another previously-undocumented field). `UNKNOWN_eb37_purpose` — what this side event actually does past the member-selection and the `+0xe2` counter was not read this pass.
+`CS:0xE001`'s very first act is `DEC word[di+0x16]`, floored at `1` (`CS:0xE006`–`0xE00F`). A program-wide sweep for every instruction touching `[DI+0x16]` finds **13 hits**, and they split cleanly by which entity system actually owns them — a real trap, since System A and System B's entity records both happen to have live data at this same displacement:
+
+| site | function | role |
+|---|---|---|
+| `E006`/`E009`/`E00F` | `FUN_1000_e001` (pipeline entry) | the generic per-tick decrement, floor `1` — already found |
+| `E1CB`/`E20F`/`E233` | `FUN_1000_e199` (sprite resolver) | reads only — the already-documented animation-cadence divisor |
+| `E379`/`E3B5` | `FUN_1000_e336` (stage 2) | reads only — the already-documented steering-step cap |
+| **`E496`** | `FUN_1000_e487` (**stage 3**) | **`MOV word[di+0x16], 0xA`** — the REFILL: this is the already-documented attack/leap windup arm ("`[di+0x16] := 0xa`, a 10-tick windup") — so the field's real shape is a 10-tick countdown that re-arms on every successful attack and decays back down to a resting value of 1 between attacks, not a static per-class constant |
+| `E7DB`/`E7E1` | `FUN_1000_e6e4` (**stage 1**, strategy-4/trail-follow handler) | `CMP word[di+0x16],2 / JGE / MOV word[di+0x16],2` — a **second, context-specific floor**: inside the trail-follow strategy specifically, the field is re-floored to `2` rather than `1` before use |
+| `EE1E` | `FUN_1000_ee00` | ⚠️ **NOT the same field** — `FUN_1000_ee00` is this document's own already-documented **System-B** draw dispatcher (`"ee00 call 0x3569 ; alive -> draw"`), whose entity record is a different, `0x18`-stride struct. This hit is System B's own unrelated field at the same displacement. |
+| `EFD2` | `FUN_1000_ef01` | ⚠️ Also **System B** — the already-documented steal-and-carry gate (`cmp byte[0x3cd],2`). Same caveat. |
+
+So System A's own `+0x16` has exactly three write sites (the generic decrement/floor, the stage-3 windup refill, and stage 1's trail-follow-specific re-floor), all already independently attributable to documented mechanisms — the field was never actually "static," and the earlier framing undersold it.
+
+### `UNKNOWN_eb37_purpose` — CLOSED: trail-follow LEADER ELECTION `[STATIC]`
+
+Continuing `CS:0xEB37`'s weighted-pick branch (`CS:0xEB7F`–`0xEBB5`) past where it was left:
+
+```
+eb7f  cl = dl                        ; the picked member index (weighted draw, or the pre-selected [bp+0x11])
+eb81  si = [0x294] + cl*0x28          ; the SELECTED entity's own record
+eb8e  cmp word[si+8],0 / jz/js 0xebb5 ; must be genuinely alive — else give up silently
+eb96  [si+0x19] = 1                   ; FORCE that entity's rank-1 stamp — the SAME field stage 1's organic reroll gate sets
+eb9a  [bp+0x12] = 1                   ; the group's reroll-throttle counter forced to "exactly one winner"
+eb9e  bx = 1 << cl ; [bp+0x14] = bx   ; the "rolled" bitmask forced to just that member's bit
+ebaa  [bp+0x16] = 0                   ; reset — the SAME field CS:0xE039 (below) increments
+ebaf  [bp+0xe0] = 0                   ; reset — the already-documented trail-follow circular-buffer cursor
+```
+
+And the pipeline's own tail, `CS:0xE039`, reveals the missing other half — it is the **direct consumer of the very fields `CS:0xEB37` just reset**:
+
+```
+e034  ax=[di] ; bx=[di+2]                      ; entity position, post-pipeline
+e039  cmp byte[di+0x19],1 / jnz 0xe06e          ; the SAME rank-1 test the death-draw code and EBB9-call already document
+e03f  inc word[bp+0x16] ; clamp at 0x64(100)    ; <-- the field EB37 zeroes
+e04d  cx = [bp+0xe0]                            ; <-- the OTHER field EB37 zeroes; feeds the trail-buffer cursor logic
+```
+
+So `CS:0xEB37` is the **election mechanism for strategy 4's trail-follow leader**: it picks one group member (by weighted random draw using the same descriptor `+0xa` weight field stage 1's reroll gate reads, or by the pre-selected `[bp+0x11]` member from the materialise-time draw), stamps it to rank 1, and resets both the "how long has this entity been leader" counter (`[bp+0x16]`, capped at 100 ticks) and the trail circular-buffer's write cursor (`[bp+0xe0]`) so the conga-line starts fresh behind the newly-elected leader. `CS:0xE039` is that leadership-duration timer's own per-tick incrementer, running for as long as the elected entity holds rank 1.
+
+**`[di+0x19]` therefore has two genuinely separate meanings layered on the same field**, both self-consistent with the bytes: (1) the organic, per-tick "reroll queue rank" this document's `UNKNOWN_sysA_field_0x19` closure already documents, which — at rank 1 — fires a synchronized whole-group strategy reset via `CS:0xEBB9` on that entity's own death; and (2) this election mechanism's "I am the trail-follow leader" flag, which a live rank-1 entity carries every tick it remains elected, driving the leadership-duration timer and (per this document's own existing strategy-4 note) the trail-buffer's per-member read offset. The two uses don't conflict operationally — a freshly-elected leader also happens to satisfy the death-path's "rank 1" test if it later dies — but they are two different subsystems reading the same byte for two different questions, and a port must reproduce both readings rather than picking one. `UNKNOWN_bp_0x11_source` — where the pre-selected `[bp+0x11]` member index (as opposed to a fresh weighted draw) gets set is not traced past its own already-documented origin at materialise time (`[bp+0x11] := the bit-`0x100`-gated random member draw`); whether `CS:0xEB37` is the only reader of it was not checked.
 
 ### `UNKNOWN_sysA_ec12_zone_table` / `UNKNOWN_sysA_field_0x1a_consumer` — CLOSED negative: the zone code is write-only, dead `[STATIC, exhaustive]`
 
