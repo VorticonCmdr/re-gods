@@ -3547,7 +3547,7 @@ CS:0x0291  call 0x8b56    ; the DS:0xcfcc falling hazard (cut)
 
 `CS:0x8661` (from `CS:0x69C0` and `CS:0x8E4F`, level init) disarms both gates, fills `DS:0x8014` with `0xFFFF` **in world 2 only**, then `mov si,0xcfcc / jmp 0x7f48` to clear the pool. ⚠️ That jump lands **inside a third pool's clear routine** — `CS:0x7F45` is `mov si,0xce64` falling into the same loop — and the shared tail `CS:0x7F55` disarms the `DS:0xce64` walker as a side effect. ~~`UNKNOWN_ce64_pool`~~ — **CLOSED**, see *`UNKNOWN_ce64_pool` — CLOSED* below.
 
-⚠️ **`DS:0x8014` is itself shared, by world.** `CS:0x7CBD` and `CS:0x7EB6` both gate on `cmp byte [0x42],1`, and `CS:0x7E62` uses those bytes to write **plane A** (`mov si,0x3004 / mov [si],bl`). The two tenants are mutually exclusive by world, which is exactly why nothing interlocks them and why the level-init clear is world-gated.
+⚠️ **`DS:0x8014` is itself shared, by world.** `CS:0x7CBD` gates on `cmp byte [0x42],1`; `CS:0x7EB6` is not a separate gate but one instruction *inside* the world-1 populator `FUN_1000_7e9b` (see the full closure just below), which performs the identical world-1 test as part of its own plane-A scan; and `CS:0x7E62` uses the populated records to write **plane A** (`mov si,0x3004 / mov [si],bl`). The two tenants are mutually exclusive by world, which is exactly why nothing interlocks them and why the level-init clear is world-gated.
 
 ### `UNKNOWN_8014_world1` — CLOSED: a hidden-statue "wakes up and attacks" mechanic, exclusive to world 1 sublevel B `[STATIC]`
 
