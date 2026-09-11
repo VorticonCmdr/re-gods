@@ -4282,7 +4282,27 @@ So object 96's death cloud is drawn with **exactly the nest's own `sprite = stat
 89aa  cmp word[si+8],0 / js 0x89b3 / add dx,3          ; +8's SIGN selects a +3 sprite-id variant
 ```
 
-So the brood record is `{ i16 worldX, i16 worldY, i16 frame(also the free/lifetime sentinel), i16 strength, +0x8 a sign-tested facing/variant flag, +0xc a second state gate not traced past this read, ... }`, each brood child takes hero-contact damage through the **same shared `CS:0xa9e4` thunk** every other creature uses (with its own 24×16 box), and its sprite is `SS:0x360A[frame]`, optionally `+3` when `[si+8]` is non-negative — the identical "table lookup, ±3 variant by a sign test" shape this document already documents elsewhere for other small creatures. `UNKNOWN_8014_field_0x6_branch` / `UNKNOWN_8014_field_0xc_branch` narrow the residual to the two untraced branch targets (`0x8A33`, `0x8AB1`).
+So the brood record is `{ i16 worldX, i16 worldY, i16 frame(also the free/lifetime sentinel), i16 strength, +0x8 X-velocity, +0xa Y-velocity, +0xc a "falling" sub-state flag, ... }`, each brood child takes hero-contact damage through the **same shared `CS:0xa9e4` thunk** every other creature uses (with its own 24×16 box), and its sprite is `SS:0x360A[frame]`, optionally `+3` when `[si+8]` is non-negative — the identical "table lookup, ±3 variant by a sign test" shape this document already documents elsewhere for other small creatures.
+
+**`UNKNOWN_8014_field_0x6_branch` / `UNKNOWN_8014_field_0xc_branch` — CLOSED: `+0x6` gates a death-burst draw, `+0xc` toggles between ground-bounce and ballistic-fall movement `[STATIC]`**
+
+`CS:0x8A33` (the `+0x6 < 0` arm) is a **death-burst draw**, structurally the same shape this document already documents for the world-2 nest and the hero's own death burst:
+
+```
+8a33  ax=[si] ; bx=[si+2] ; dx=[si+4]        ; world X/Y, and the frame counter
+8a3b  ax -= [0xa] ; bx -= [0xc]               ; -> screen
+8a43  ax -= 4 ; bx -= 0x11 ; dx += 0x6c        ; the standard 0x6c-base death-cloud sprite offset
+8a4d  [0x4]=ax ; [0x6]=bx ; [0x8]=dx ; call 0x3569   ; draw
+8a5c  inc word[si+4] / cmp 7 / jl 0x8a07       ; frame++, capped at 7 -> exactly like the nest's own death timer
+8a65  [si+4] = 0xffff                          ; done -> FREE the slot (this document's own already-documented sentinel)
+```
+
+`CS:0x8A6C` and `CS:0x8AB1` are the two **movement** variants selected by `+0xc`, both sharing the plane-B pointer helper `CS:0x8A93` (the already-established floored `0x5004 + (x&~0x1f)>>5 + (y&~0xf)<<3` formula):
+
+- **`+0xc == 0` — ground bounce, `CS:0x8A6C`**: `world X += [si+8]` (a bare linear X-velocity, no accel/cap), then probes the plane-B cell at the new position (mirrored, `+0x18`/none depending on the velocity's sign — the muzzle-style facing offset this document sees everywhere). If either the probed cell or the one 128 bytes below it (`[di+0x80]`, one tile row down) reads solid, `NEG word[si+8]` — a plain **wall bounce**, reflecting the velocity rather than stopping it.
+- **`+0xc != 0` — ballistic fall, `CS:0x8AB1`**: `world X += [si+8]`, `world Y += [si+0xa]`, then `[si+0xa]` (Y-velocity) is incremented and **capped at 8** (`inc / cmp 8 / jle / dec` — a **seventh** distinct gravity rule in this document's own running collection, alongside the hero's `4+v`/cap 10, System-B's `v` then `++`/cap 16, the time bomb's stepped `++`/cap 4, the magic axe's `+=2`/cap 8, the starburst's every-8th-frame `++`, and the chest loot's `++`/cap 4). It then probes a point `(+0xc, +0xf)` past the new position: if the cell one row **above** that point is solid, or if the cell itself is **not** solid, the child keeps falling (`jmp 0x8983`, the shared continuation); only when the probed cell **itself** is solid does it land — `Y` snaps to the tile row below (`and 0xfff0 / inc`, the standard tile-row-plus-one snap this document sees on several other landings) and both `+0xc` (falling flag) and `+0xa` (Y-velocity) are cleared, returning the child to the ordinary ground-bounce movement on the next tick.
+
+So `+0x8`'s earlier-documented role as "a sign-tested facing/variant flag" for the sprite table (`CS:0x89AA`) and its role here as the **X-velocity** are the same field, not two different ones: a brood child moving left naturally reads a negative `[si+8]`, and the sprite table's `+3` variant is exactly the left-facing frame — the sign test is a facing readout of the velocity itself, the same pattern this document documents for every other entity in the game.
 
 Still open here: **`UNKNOWN_nest_identity`** — the game never names type 115, so "nest" is the port's label; **`UNKNOWN_cfcc_dormant_seed_observable`** (above); **`UNKNOWN_cfcc_pool_full_in_play`** — whether real play ever leaves ten alive, which is what the `jz` bug needs to bite; **`UNKNOWN_cfcc_1ca5_orphan`** — `CS:0x1CA5`–`0x1CC3` is a complete export-2 draw block with **zero** branch references and no fall-through path into it; **`UNKNOWN_cfcc_7f48_shared_tail`** — whether disarming `[cs:0x7f5c]` from the `0xcfcc` clear path is intended; **`UNKNOWN_cfcc_muzzle_asymmetry`** (above, *The live/emerge fire logic*); **`UNKNOWN_cfcc_spawner_cull_reason`** (below, *`UNKNOWN_nest_shot`*); **`UNKNOWN_ss432_indirect`** (above, *the object-array dispatch*).
 
