@@ -3824,6 +3824,38 @@ export async function checkWeaponsProjectiles(fetchRaw) {
       `increment fires a tick early and loses the dip entirely`);
   }
 
+  /* ── landing must SNAP Y and stay consistent with the ground check ──────
+   * (the reported bug: "when falling down the characters often get into an
+   * endless loop flickering between idle and falling"). CS:0x4C34/0x4D39
+   * `and word [0x17c],0xfff0` snaps Y to the tile row on landing — the SAME
+   * row `solidThreeBelow` (CS:0x4BEB/0x4CED) just tested. An earlier version
+   * of this port checked landing one pixel ahead of a per-pixel scan and
+   * left Y unsnapped, so whenever the settled Y fell on a non-multiple-of-16
+   * row, the very next tick's identical 3-rows-below test — now run from
+   * ST.GROUND — read a DIFFERENT map row than the one that had just reported
+   * solid ground, re-entering FALL for one pixel and landing again: forever. */
+  {
+    const m = flatMap();                          // floor at row 12 (y=192)
+    const a = new Arsenal(w1); a.equip(0, 0);
+    const p = new Player(2 * 32, 3 * 16);          // well above the floor
+    let landedTick = -1, flickered = false;
+    for (let i = 0; i < 40; i++) {
+      p.tick(m, IN(), a);
+      if (landedTick < 0 && p.state === ST.GROUND) landedTick = i;
+      else if (landedTick >= 0 && p.state === ST.FALL) flickered = true;
+    }
+    check(`landing snaps Y to a tile row (CS:0x4C34/0x4D39 ` +
+          `\`and [0x17c],0xfff0\`)`,
+      landedTick >= 0 && p.y % 16 === 0,
+      `landed on tick ${landedTick} at y=${p.y}`);
+    check(`a grounded hero never flickers back into FALL with no input held`,
+      landedTick >= 0 && !flickered,
+      'an unsnapped landing Y can put the ground check\'s 3-rows-below probe ' +
+      'one map row away from the row the landing check itself used, so the ' +
+      'hero immediately falls, drops a pixel, and lands again — the reported ' +
+      'idle/fall flicker');
+  }
+
   /* ── walk-fire halts the hero, and resumes mid-cycle ──────────────────── */
   {
     const { a, p, m } = armed();

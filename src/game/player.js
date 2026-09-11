@@ -514,38 +514,52 @@ export class Player {
   }
 
   _fall(map, input, fire) {
-    /* Steerable, unlike the rise — but on a budget of 3 steps (12 px). */
+    /* CS:0x4DD5 (state 11) / CS:0x4D6B (state 12) — the fall step moves Y
+     * FIRST: dY = 4 + fallV (gravity already applied), THEN air-steering may
+     * move X (CS:0x48D4, budget of 3 steps of 4 px), and ONLY THEN is
+     * landing tested — at the resulting, steered position — via the SAME
+     * `solidThreeBelow` 3-rows-below probe the ground state uses. Landing
+     * SNAPS Y to the tile row (`AND [0x17c],0xFFF0`, CS:0x4C34 / 0x4D39) —
+     * the very row the test itself just used.
+     *
+     * ⚠️ An earlier version of this port checked landing ONE PIXEL AHEAD via
+     * a per-pixel scan and left Y unsnapped on touchdown — not how the
+     * original works (it moves Y in one lump sum, exactly like the fire-fall
+     * overlay a few lines below already does). Whenever the settled Y landed
+     * on a non-multiple-of-16 row, the very next tick's identical
+     * `solidThreeBelow` test — now run from ST.GROUND on the unsnapped Y —
+     * read a DIFFERENT map row than the one that had just reported solid
+     * ground underfoot, so the hero immediately re-entered FALL, dropped a
+     * pixel, and landed again: the reported idle/fall flicker. Snapping Y on
+     * landing, as CS:0x4C34/0x4D39 do, makes the landing check and every
+     * later ground check agree by construction. */
+    if (this.fallV < FALL_VMAX) this.fallV += GRAVITY_STEP;
+    this.y += FALL_BASE + this.fallV;        // 5..14 px/tick, one lump sum
+    this.fallDamage = (this.fallDamage || 0) + 1;      // DS:0x176
     if (this.airSteps < AIR_STEPS_MAX) {
       if (input.left)  { this._walk(map, -1); this.airSteps++; }
       else if (input.right) { this._walk(map, +1); this.airSteps++; }
     }
-    if (this.fallV < FALL_VMAX) this.fallV += GRAVITY_STEP;
-    const dy = FALL_BASE + this.fallV;       // 5..14 px/tick
     this.stateIndex = this.facing < 0 ? S.FALL_L : S.FALL_R;
     this.phase = 0;
-    let ny = this.y;
-    for (let step = 0; step < dy; step++) {
-      if (solidThreeBelow(map, this.x, ny + 1)) {
-        this.y = ny;
-        this.state = ST.GROUND;
-        this.fallV = 0;
-        this.airSteps = 0;
-        /* Landing is its own state pair in the original (16 right / 17 left,
-         * which bleed the fall-damage accumulator off at 4 per tick) but the
-         * transition into and out of them is not ported, so the port goes
-         * straight to idle rather than showing a landing frame it cannot time
-         * correctly. UNKNOWN_landing_duration. */
-        this.stateIndex = S.IDLE;
-        this.phase = 0;
-        return;
-      }
-      ny++;
+    if (solidThreeBelow(map, this.x, this.y)) {   // CS:0x4BEB / 0x4CED
+      this.y &= 0xfff0;                            // CS:0x4C34 / 0x4D39
+      this.state = ST.GROUND;
+      this.fallV = 0;
+      this.airSteps = 0;
+      /* Landing is its own state pair in the original (16 right / 17 left,
+       * which bleed the fall-damage accumulator off at 4 per tick) but the
+       * transition into and out of them is not ported, so the port goes
+       * straight to idle rather than showing a landing frame it cannot time
+       * correctly. UNKNOWN_landing_duration. */
+      this.stateIndex = S.IDLE;
+      this.phase = 0;
+      return;
     }
-    this.y = ny;
     /* CS:0x4D06 (state 12) / CS:0x4C04 (state 11) — the fire test sits AFTER
-     * the fall physics and after the landing checks, so a tick that lands
-     * never fires. Read straight off state 12: the `add [0x17c],4`, the
-     * gravity call and `inc [0x176]` all precede it. */
+     * the fall physics and the landing check, so a tick that lands never
+     * fires. Read straight off state 12: the `add [0x17c],4`, the gravity
+     * call and `inc [0x176]` all precede it. */
     this._tryFire(this.facing < 0 ? 23 : 22, input, fire);
   }
 
