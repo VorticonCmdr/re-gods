@@ -3419,15 +3419,26 @@ Open: `UNKNOWN_eeba_class_offsets` (System B's per-class attach-point byte table
 
 ⚠️ **The sprite word IS the lifetime**: seeded `0x3A`, drawn raw, incremented, freed at `0x45`. The draw precedes the increment, so ids `0x3A`..`0x44` are all drawn — **eleven ticks**. There is **no cull** of any kind.
 
-**Three producers**, differing only in what the *caller* passes — all three store **world** coordinates, pinned by the consumer subtracting the scroll at `0x1FA9`:
+**Three producer shapes**, differing only in what the *caller* passes — all three store **world** coordinates, pinned by the consumer subtracting the scroll at `0x1FA9`:
 
 | entry | input | velocity | callers |
 |---|---|---|---|
 | `0xA00D` | world | the projectile's `dir` word, **hi → vx, lo → vy** | 1 (the hunter's no-target arm) |
-| `0xA633` | screen, + scroll added inside | `cx`/`dx` | **11** |
+| `0xA633` | screen, + scroll added inside | `cx`/`dx` | **5** — see below |
 | `0xA81A` | screen, + scroll added inside | **zero** — a stationary impact puff | 0 (fall-through from `0xA810`) |
 
 `0xA00D`'s hi/lo split is a second, independent routine agreeing with the hunter mover's reversed packing at `0x9F41`. `UNKNOWN_debris_identity` — "debris" is a label; the bytes prove only an 11-frame inert visual effect. `UNKNOWN_8b4c_indirect_write` — the "read-only velocity" and five-site census rest on immediate scans, blind to a parked pointer.
+
+⚠️ **Correction — `0xA633`'s caller count was wrong, and it stood uncorrected for two sessions.** "ELEVEN callers" was never paired with an address list anywhere in this document — a genuine gap the project's own evidence discipline exists to catch, caught only when the `gods-web` port went to wire the remaining producers and the named callers ("block-breaking, the familiar's death, the starburst chain") turned out not to be real. Traced fresh in Ghidra with two independent methods agreeing (`get_xrefs_to` and `search_instructions` on the exact operand `a633`, both against `GAME.EXE`, `instructions_scanned: 14010`): **exactly five** direct near-`CALL`s to `1000:a633`.
+
+| site | in | what |
+|---|---|---|
+| `CS:0x4561` | `FUN_1000_4501` | the enemy-shot hero-hit puff, already documented above under *"The hero hit, CS:0x4501"* |
+| `CS:0xA7A1` | the magic axe's own mover, `0x9f38`/`0xa678` | fires on the tick the axe's **lifetime** expires (`0xA737 dec word [si+4] / js 0xa799`, already documented under *Mover 5*), carrying the axe's **own current velocity** (`cx=[si]`, `dx=[si+2]`, the SAME 6-byte `{vx,vy,lifetime}` record) rather than a stationary puff — a moving spark, then the projectile record is cleared (`mov word [di],0`) |
+| `CS:0xAC4C` | inside the shared contact/damage routine `CS:0xac59` | on the branch where a hit lands and the **target survives** — reached via `0xab90`/`0xab96`, i.e. from *inside* the difficulty-scalar bracket this document already documents at `CS:0xab56`-`0xab98` (`abda: mov [0x1ec],bp` stores the survivor's new HP; `bx`=reported damage; `ac00`-`ac4c` rolls two `0x3836` draws jittered by `DS:0x1e6`/`0x1e8`, the box width/height, and calls `0xa633` with `cx=dx=0` — a **stationary hit-spark** at a random point inside the target's own hitbox). The **death** branch (`bp` forced to `0xFFFF`, reached via `CS:0xa9ec jmp 0xabc0`) does **not** go through here — `abc0`-`abd8` is sound-only, `sfx` then `RET`, matching this document's own existing note for that jump |
+| `CS:0xDBBB` `CS:0xDC2F` | a **previously undocumented** pool | see below |
+
+**A sixth system, not previously documented: `DS:0xd2be`, 20 slots × 22 bytes, free when the leading word `!= 0xFFFF`.** Found chasing the last two `0xa633` callers. Per-record body (`FUN_1000_db4e`, entered at `0xdb4e`): a hero-hit box test byte-identical in shape to `CS:0x4501` (`crouch → raise the Y top by 0x18`, inclusive compares, `DS:0x172` invulnerability gate), a flat **`sub word [0x192],2`** on a hit, `mov word [bp+0],0xffff` to consume the record, then `call 0xa633` with `cx=dx=0` (`CS:0xDBBB`) for its own stationary puff. The routine has two callers, `FUN_1000_b1c2` (`CS:0xb236`) and `FUN_1000_dc37` (`CS:0xdc2f`, a DIRECT second call to `0xa633` right before it, plus `CS:0xdcc8` calling into `db4e`). `FUN_1000_dc37` walks the SAME 20×22 pool from its own base `0xd2be`, converts each active record's position (offset `+0x12` copied to `DS:0x1f0`, then `call 0x7a0b`) to a plane-B tile via the standard `(x>>5)+(y>>4)*128` addressing, skips solid cells, culls off-screen (`x<0x13c, y<0xbc` — a screen roughly matching the 320×188 playfield), computes a sprite as **`0x4b + (DS:0x36c & 1)`** — i.e. **75 or 76**, keyed off the *same* every-other-frame toggle the world-2 nest's hatch animation reads (`DS:0x36c`, `CS:0x0172 not`) — then draws through export 2, same as debris. `UNKNOWN_d2be_pool`: what this is (a second shot-like hazard? something else entirely?), its full record layout beyond the leading tag word and `+0x12`, and the `CS:0x7a0b` call it makes per record, are none of them traced past this. Not investigated further this pass — flagged rather than guessed at, consistent with this project's own rule.
 
 ## The starburst — `UNKNOWN_starburst` CLOSED `[PROVEN]`
 
@@ -3820,6 +3831,7 @@ Two more weapon fields fell out of this: **`+0x02` is a draw-style index** into 
 12. **`UNKNOWN_chest_key_surplus`** — six `"chest key"` type 23 ship for a chest (type 16) that ships nowhere. Data question, not a code one.
 13. **`UNKNOWN_pobjects_field2`** — the 48-byte record's `+0x02`, copied verbatim into the runtime descriptor and 0 in all 528 records.
 14. Remaining small gaps: `UNKNOWN_playfield_height`; `UNKNOWN_unpack_ax_param`; `UNKNOWN_map_header_word` / `UNKNOWN_map_header_table`; `UNKNOWN_x_parity_at_spawn`; `UNKNOWN_act_dx_source`; `UNKNOWN_projectile_handlers` (table entries 2/3, 6/7, 8/9, 10/11, 14/15); `UNKNOWN_projectile_area_upper`; `UNKNOWN_alt_emitter` (`DS:0x16a`/`0x16c`, selected by `DS:0x33d`); `POBJECTS` category codes `4`/`5`. Folded in from a continuation line that was stranded 1,480 lines from its own list marker: `UNKNOWN_ladder_anim_phase`; `UNKNOWN_camera_alt_path` (`DS:0x32`); `UNKNOWN_camera_init`. (`UNKNOWN_jump_anim_phase`, `UNKNOWN_state_4`, `UNKNOWN_state_18`/`19` and `UNKNOWN_climb_down_rate` travelled on that same stranded line and are **closed** — see *The jump animation phase*, *States 4, 7, 18 and 19*, and *The ladder controls*.)
+15. **`UNKNOWN_d2be_pool`** — a previously undocumented 20-slot × 22-byte pool at `DS:0xd2be`, found chasing two of `CS:0xA633`'s (debris) five callers — see *Three producer shapes* under *`DS:0x8b4c` — debris*. Its own hero-hit test, flat 2-damage subtract and debris puff are decoded; its record layout beyond the leading tag word and `+0x12`, and what `CS:0x7a0b` (called once per active record from its walker `FUN_1000_dc37`) does, are not. What kind of hazard this is — a second shot type, something else — is unestablished.
 
 ⚠️ `UNKNOWN_openlist_field4` was listed here *and* in the resolved list below. It is **closed** — the resolved entry is correct.
 
