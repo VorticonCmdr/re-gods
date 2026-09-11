@@ -802,6 +802,10 @@ async function main() {
         grid, cam: { x: cam.snapX, y: cam.snapY },
         hero: { x: player.x, y: player.y, state: player.stateIndex },
         health, decodeTag, difficulty, arsenal,
+        /* CS:0xAC4C — a weapon hit that damages a creature WITHOUT killing it
+         * drops a stationary debris spark inside its own hitbox. Closes the
+         * last of the five CS:0xA633 callers this port's debris pass tracked. */
+        rng: () => rng.next(), debris,
         /* DS:0x172 — CS:0xACCC's `jnz` skips only the health subtraction, so
          * while this is set the hero takes no damage AND STILL KILLS what he
          * touches. Both the shield potion and spawn protection feed it. */

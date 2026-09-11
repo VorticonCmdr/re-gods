@@ -39,7 +39,7 @@ import { VERDICT, REACHABLE_VERDICTS, VERDICT_NONE, verdictAction, applyVerdict,
 import { runSearch } from '../game/pathfind-producers.js';
 import { Health, HEALTH_MAX, damageFor, attackHero, creatureTouchesHero,
          difficultyScale, DIFFICULTY_MULTIPLIERS, difficultyForgiven,
-         DIFFICULTY_PROGRESSION, creatureScansGrid,
+         DIFFICULTY_PROGRESSION, creatureScansGrid, hitSparkAxis,
          CREATURE_CONTACT_BOX } from '../game/combat.js';
 import { Arsenal, spawnableWeapons, FIRE_CAPABLE_STATES, LEVER_STATES,
          INVENTORY_STATES } from '../game/hero-fire.js';
@@ -3656,6 +3656,45 @@ export async function checkWeaponsProjectiles(fetchRaw) {
       'path, so the condition is <= 0; CS:0xABA7 `mov bp,0xffff` then forces ' +
       'the sign the caller tests. Writing `< 0` leaves a creature alive on ' +
       'exactly zero and it takes one more hit than it should');
+  }
+
+  {
+    /* CS:0xABEE-0xAC3D, the "hit landed, target survived" debris spark's
+     * jittered position — one axis at a time, each its own random draw. */
+    check(`hitSparkAxis: magnitude from the LOW bits, direction from the SIGN bit`,
+      hitSparkAxis(100, 32, 0x0005) === 100 + 16 + 5 - 8       // positive draw -> add
+      && hitSparkAxis(100, 32, 0x8005) === 100 + 16 - 5 - 8    // sign bit set -> subtract
+      && hitSparkAxis(100, 10, 0x0003) === 100 + 5 + 3 - 8,    // size<16 -> mask still rounds to 16-1
+      'CS:0xABF6/0xAC1C `and cx,0xfff0 / jnz / mov cx,0x10` rounds the box ' +
+      'size DOWN to 16 for the mask (16 itself when that rounds to 0), then ' +
+      'CS:0xAC08/0xAC2E tests the SIGN of the SAME random word the magnitude ' +
+      'comes from — one draw does double duty, not two independent ones');
+
+    /* End to end: a hit that damages but does NOT kill drops exactly one
+     * spark, inside the creature's own box; a miss or a kill drops none. */
+    const grid2 = new DamageGrid();
+    const cam2 = { x: 0, y: 0 };
+    const debris2 = new Debris();
+    const survivor = { x: 200, y: 200, state: 50 };
+    grid2.stamp2x2(survivor.x, survivor.y, 1);
+    const rHit = creatureScansGrid(survivor, grid2, cam2,
+      () => ({ damage: 5, weapon: 0 }), 0, undefined, null,
+      { rng: () => 0x0001, debris: debris2 });
+    check(`a hit that damages but does NOT kill drops exactly one debris spark`,
+      rHit.killed === false && survivor.state === 45 && debris2.live === 1,
+      'CS:0xABDE `or bx,bx / jz` only skips the spark when the applied damage ' +
+      'is exactly 0; any nonzero, non-lethal hit reaches CS:0xAC4C');
+
+    const killer = { x: 200, y: 200, state: 3 };
+    grid2.stamp2x2(killer.x, killer.y, 1);
+    const rKill = creatureScansGrid(killer, grid2, cam2,
+      () => ({ damage: 5, weapon: 0 }), 0, undefined, null,
+      { rng: () => 0x0001, debris: debris2 });
+    check(`a hit that KILLS drops no extra spark — that path never reaches CS:0xAC4C`,
+      rKill.killed === true && debris2.live === 1,   // still just the one from above
+      'the death branch (CS:0xAB88 `js`/`jz`) forces bp negative and returns ' +
+      'without ever falling into the CS:0xABDA/0xAC4C tail — a live count ' +
+      'that stayed at 1 across this second, lethal hit proves it');
   }
 
   /* ── end to end: press -> ... -> a creature loses HP ──────────────────── */

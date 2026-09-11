@@ -384,8 +384,58 @@ export const CONTACT_SHORT_CIRCUITS_SCAN = true;
  * @param {number} scalar        DS:0x365
  * @returns {{hit:boolean, tag:number, damage:number, killed:boolean}}
  */
+/**
+ * CS:0xABEE-0xAC3D — one axis of the "hit landed, target survived" debris
+ * spark's jittered position. Called once per axis (X against the box WIDTH,
+ * Y against the HEIGHT), each with its OWN draw from the shared random
+ * table, so the two axes jitter independently.
+ *
+ *   ABEE  cx = width  ; sar cx,1            ; half the box
+ *   ABF4  ax = center + cx                  ; the box's own centre
+ *   ABF6  cx &= 0xfff0 / jnz / mov cx,0x10   ; round DOWN to 16 (16 if that's 0)
+ *   ABFE  dec cx                            ; cx = the jitter MASK
+ *   AC00  call 0x3836                       ; one random draw, dx = ax = it
+ *   AC08  js  (SIGN of the FULL draw picks +/-)
+ *   AC0A  dx &= cx / ax +=/-= dx            ; magnitude = draw & mask
+ *   AC3A  ax -= 8                           ; the same -8 on both axes
+ *
+ * @param {number} center  entity.x or entity.y (WORLD)
+ * @param {number} size    the box's w or h
+ * @param {number} draw    one raw 0..0xFFFF word from CS:0x3836 (GodsRandom#next)
+ */
+export function hitSparkAxis(center, size, draw) {
+  let mask = size & ~0xf;                 // ABF6/AC1C
+  if (mask === 0) mask = 0x10;            // ABFB/AC21
+  mask -= 1;                              // ABFE/AC24 — dec cx
+  const negative = (draw & 0x8000) !== 0; // AC08/AC2E `or ax,ax / js` — SIGN of the draw
+  const mag = draw & mask;                // AC0A/AC30 — `and dx,cx`
+  return center + (size >> 1) + (negative ? -mag : mag) - 8;   // AC3A/AC3D
+}
+
+/**
+ * CS:0xa9ef-0xab96 — the creature's half of the frame: scan the damage grid
+ * over its own box and take whatever tag it finds.
+ *
+ * `entity.state` is the +0x08 word the original passes in and out through BP
+ * (CS:0xFFA2 loads it, CS:0xFFB4 writes it back), which is why one word is
+ * both "HP" and "am I dying" — a negative value IS the death signal, and the
+ * caller starts the death frames on it.
+ *
+ * @param {{x,y,state}} entity   WORLD coordinates
+ * @param {DamageGrid} grid
+ * @param {{x,y}} cam            the scroll origin DS:0x0a / DS:0x0c
+ * @param {Function} decode      collision.js damageForTag, pre-bound to the
+ *                               slot weapons and their runtime state
+ * @param {number} scalar        DS:0x365
+ * @param {object} opts          { rng: ()=>number (CS:0x3836), debris }.
+ *   `rng`/`debris` are only touched on a hit that deals damage and the
+ *   target SURVIVES — CS:0xABDA-0xAC4C, the "hit spark" this document's
+ *   own debris pass (CS:0xAC4C) left blocked pending this exact model.
+ * @returns {{hit:boolean, tag:number, damage:number, killed:boolean}}
+ */
 export function creatureScansGrid(entity, grid, cam, decode, scalar = 0,
-                                  box = CREATURE_CONTACT_BOX, targets = null) {
+                                  box = CREATURE_CONTACT_BOX, targets = null,
+                                  opts = {}) {
   const sx = entity.x - cam.x, sy = entity.y - cam.y;   // CS:0xAA01
   /* CS:0xAA86-0xAAA9 — the hunter's TARGET LIST is appended here, inside the
    * damage scan, and it is GATED. `cmp byte [0x343],0 / js` skips the append
@@ -409,5 +459,13 @@ export function creatureScansGrid(entity, grid, cam, decode, scalar = 0,
   /* CS:0xAB88 `js` / `jz` — BOTH reach the death path, so the test is <= 0. */
   const killed = entity.state <= 0;
   if (killed) entity.state = -1;                        // the caller reads its SIGN
+  else if (opts.rng && opts.debris) {                    // CS:0xABDE `or bx,bx / jz` — bx=applied, skip if 0
+    /* CS:0xABE5/0xABE9 read the entity's WORLD x/y straight off the stack
+     * (pushed before the screen conversion at CS:0xA9FD), so this works
+     * directly in world space — no screen round-trip needed. */
+    const jx = hitSparkAxis(entity.x, box.w, opts.rng());
+    const jy = hitSparkAxis(entity.y, box.h, opts.rng());
+    opts.debris.spawn(jx, jy, 0, 0);                     // CS:0xAC40/0xAC4C — stationary
+  }
   return { hit: true, tag, damage: applied, killed, weapon: d.weapon };
 }

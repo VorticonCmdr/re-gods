@@ -112,11 +112,15 @@ export function stepHeroFrame({ input, arsenal, grid, player, map, cam,
  * creature that just hit the hero to CS:0xabc0, past the grid entirely. So one
  * creature cannot both hurt the hero and die to a projectile on the same tick.
  *
+ * @param {?Function} rng     CS:0x3836 (GodsRandom#next) — only consumed when
+ *   a hit lands and the target SURVIVES it, for the hit-spark jitter.
+ * @param {?object} debris    the DS:0x8b4c owner — CS:0xAC4C's spark.
  * @returns {{touched:number, killed:number}}
  */
 export function stepCreatureDamage(enemies, { grid, cam, hero, health,
                                               decodeTag, difficulty = 0,
-                                              arsenal = null }) {
+                                              arsenal = null, rng = null,
+                                              debris = null }) {
   /* CS:0x9124-0x9146 — the hunter target list is built only while the hero
    * carries the hunter (weapon 8). CS:0x021E resets its count to 0xFF every
    * frame, so it is rebuilt from scratch each tick by the scan below. */
@@ -129,7 +133,7 @@ export function stepCreatureDamage(enemies, { grid, cam, hero, health,
     const c = creatureTouchesHero(e, hero, health);
     if (c.strengthOut < 0) { touched++; continue; }     // CS:0xa9ec — contact won
     const s = creatureScansGrid(e, grid, cam, decodeTag, difficulty,
-                                undefined, targets);
+                                undefined, targets, { rng, debris });
     if (s.killed) { killed++; e.frame = -1; e.delay = 0; }
   }
   if (arsenal) arsenal.targets = targets || [];
