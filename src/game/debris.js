@@ -64,17 +64,49 @@ export const LIFETIME_TICKS = SPRITE_LAST - SPRITE_FIRST + 1;   // 11
  *              splits its `dir` word HIGH byte -> vx, LOW byte -> vy
  *              (CS:0xA039 / CS:0xA042) — a second routine independently
  *              agreeing with the hunter's reversed packing at CS:0x9F41.
- *   CS:0xA633  the general one, ELEVEN callers. Takes SCREEN x/y in ax/bx and
- *              velocity in cx/dx, and adds the scroll itself (CS:0xA658).
+ *   CS:0xA633  the general one. Takes SCREEN x/y in ax/bx and velocity in
+ *              cx/dx, and adds the scroll itself (CS:0xA658).
  *   CS:0xA81A  the projectile terrain-stop path, reached only by falling out
  *              of CS:0xA810 — no `call` targets it. Takes SCREEN coords and
  *              sets BOTH velocities to ZERO (CS:0xA846 `xor cx,cx`): a
  *              stationary impact puff, not a spray.
  *
- * ⚠️ ALL THREE STORE WORLD COORDINATES; only the caller's convention differs.
- * Pinned by the consumer, which subtracts the scroll before drawing
- * (CS:0x1FA9 / CS:0x1FAD). A port that stores screen coords has debris that
- * slides with the camera.
+ * ⚠️ CORRECTION — "ELEVEN callers" for CS:0xA633 was WRONG, and it stood
+ * uncorrected across two sessions. Traced fresh with Ghidra (`get_xrefs_to`
+ * AND `search_instructions` on the exact operand, agreeing): there are
+ * exactly FIVE direct near-CALLs to 0x1000:a633 in GAME.EXE —
+ *
+ *   CS:0x4561  FUN_1000_4501, the enemy-shot hero-hit puff (documented above
+ *              at "The hero hit, CS:0x4501" in game/enemy-shots.js)
+ *   CS:0xA7A1  the magic axe's own mover (CS:0xa678/0x9f38), on the tick its
+ *              LIFETIME expires (`dec word [si+4] / js`) — it drops a MOVING
+ *              spark carrying its own current velocity, not a stationary
+ *              puff, and despawns. Unreached in this port: the magic axe is
+ *              not one of the five spawnable weapons.
+ *   CS:0xAC4C  inside the SHARED contact/damage routine CS:0xac59, on the
+ *              branch where a hit lands and the target SURVIVES (reached via
+ *              CS:0xab90/0xab96, the difficulty-scalar bracket CLAUDE.md
+ *              documents at CS:0xab56-0xab98) — a "hit spark" at a jittered
+ *              point in the target's own hitbox, using DS:0x1e6/0x1e8 (width/
+ *              height) for the jitter range. Unreached in this port: `Health`
+ *              /`attackHero()` treat every contact hit as an instant kill and
+ *              don't yet model the scalar-adjusted survive-a-hit case.
+ *   CS:0xDBBB  CS:0xDC2F  both inside a PREVIOUSLY UNDOCUMENTED 20-slot,
+ *              22-byte pool at DS:0xd2be (free when `!=0xFFFF`; a per-record
+ *              hero-hit-box test — CROUCH_STATES-gated, DAMAGE=2, same shape
+ *              as CS:0x4501 — then its own debris puff, then a draw at sprite
+ *              `0x4b + (DS:0x36c & 1)`, i.e. 75/76, keyed off the SAME
+ *              every-other-frame toggle the world-2 nest's hatch animation
+ *              reads). Reached from FUN_1000_b1c2 (CS:0xb236) and
+ *              FUN_1000_dc37 (CS:0xdc2f direct, CS:0xdcc8 via a shared call).
+ *              `UNKNOWN_d2be_pool` — an entire unported subsystem (a second
+ *              shot-like hazard?), not a wiring gap. Not investigated past
+ *              confirming its shape and both callers.
+ *
+ * ⚠️ ALL THREE (of the ORIGINAL three producer KINDS — A00D/A633/A81A) STORE
+ * WORLD COORDINATES; only the caller's convention differs. Pinned by the
+ * consumer, which subtracts the scroll before drawing (CS:0x1FA9 / CS:0x1FAD).
+ * A port that stores screen coords has debris that slides with the camera.
  */
 export const PRODUCERS = Object.freeze([
   { at: 0xa00d, input: 'world', vel: 'projectile dir word, hi->vx lo->vy', callers: 1 },

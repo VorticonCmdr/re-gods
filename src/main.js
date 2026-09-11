@@ -813,10 +813,22 @@ async function main() {
        * enemy shot CAN hit on the very tick it is fired. A second, separate
        * damage path from the hero's own (CS:0x4501, not the grid) — see
        * enemy-shots.js's header for the three ways it differs. */
+      /* CS:0x4561 — an enemy shot that hits the hero drops a stationary
+       * debris puff too, through the SAME shared array as the projectile
+       * terrain-stop puff (game/debris.js). The `debris` parameter existed
+       * and was documented in this module before this pass; the caller
+       * never passed the instance, AND never passed a health adapter this
+       * module's own signature needs (`{invulnerable, hurt}` — the `Health`
+       * class this file otherwise uses exposes `.damage()`/`fx.invuln`, not
+       * that shape). Neither half of CS:0x4501 had ever actually run: no
+       * live enemy shot had reached `hitsHero()` in this environment before
+       * now, so the mismatch was silent. */
       lastShotsFx = shots.step(
         { x: cam.snapX, y: cam.snapY },
         { x: player.x, y: player.y, state: player.stateIndex },
-        level.map.planeB, health, null);
+        level.map.planeB,
+        { invulnerable: fx.invuln > 0, hurt: (n) => health.damage(n) },
+        debris);
       /* CS:0x02c6 — the bar chases the target one unit per frame, and the
        * death test reads the BAR, so a fatal hit leaves a rescue window. */
       /* CS:0x0186 `dec word [0x2fa]` floored at CS:0x018C, CS:0xA99B
