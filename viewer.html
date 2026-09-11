@@ -119,6 +119,17 @@
   a.dl { color: var(--accent); text-decoration: none; }
   a.dl:hover { text-decoration: underline; }
   audio { width: 320px; }
+#playerbar {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 50;
+  display: flex; align-items: center; gap: .8rem; padding: .5rem 1rem;
+  background: var(--panel2); border-top: 1px solid var(--border);
+  font-size: 12px; box-shadow: 0 -2px 12px rgba(0,0,0,.4);
+}
+#playerbar .name { font-family: var(--mono); color: var(--accent2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 30vw; }
+#playerbar .bar { flex: 1; height: 6px; background: #0e1013; border-radius: 4px; overflow: hidden; border: 1px solid var(--border); }
+#playerbar .bar .fill { height: 100%; width: 0%; background: var(--accent); }
+#playerbar .time { color: var(--dim); font-family: var(--mono); white-space: nowrap; }
+button.playbtn { color: var(--ok); border-color: #2c5b3c; }
 </style>
 </head>
 <body>
@@ -140,6 +151,13 @@
     <div id="catlist"></div>
   </aside>
   <main id="main"></main>
+</div>
+
+<div id="playerbar" hidden>
+  <button id="playerStop">■ stop</button>
+  <span class="name" id="playerName"></span>
+  <div class="bar"><div class="fill" id="playerFill"></div></div>
+  <span class="time" id="playerTime">0:00 / 0:00</span>
 </div>
 
 <script>
@@ -1106,6 +1124,158 @@ RENDERERS.bezier = (main, entry) => {
     `got q0[100]=${tabs[0][100]}, q1[100]=${tabs[1][100]}.`));
 };
 
+/* ════════════════════════════════════════════════════════════════════════
+ * Standard MIDI File parser + a small WebAudio synth, for in-browser preview
+ * of the SMF blobs extracted from .MUS/.RL. GODS's own OPL instrument dumps
+ * ride inside FF 7F sequencer-specific meta events — harmless to skip, since
+ * (per CLAUDE.md) even a generic GM player renders these as plain piano with
+ * no OPL patches loaded. This is a generic player in exactly that sense: one
+ * oscillator-per-note voice, not an OPL2 emulation.
+ * ════════════════════════════════════════════════════════════════════════ */
+function readVLQ(bytes, pos) {
+  let value = 0, b;
+  do { b = bytes[pos++]; value = (value << 7) | (b & 0x7f); } while (b & 0x80);
+  return { value, pos };
+}
+function parseSMFTrack(bytes) {
+  let pos = 0, tick = 0, runningStatus = 0;
+  const events = [];
+  while (pos < bytes.length) {
+    const dt = readVLQ(bytes, pos); pos = dt.pos; tick += dt.value;
+    let status = bytes[pos];
+    if (status < 0x80) { status = runningStatus; } else { pos++; runningStatus = status; }
+    if (status === 0xFF) {
+      const metaType = bytes[pos++];
+      const len = readVLQ(bytes, pos); pos = len.pos;
+      const data = bytes.subarray(pos, pos + len.value); pos += len.value;
+      if (metaType === 0x51 && data.length === 3) events.push({ tick, type: 'tempo', usPerQuarter: (data[0] << 16) | (data[1] << 8) | data[2] });
+      else if (metaType === 0x2F) events.push({ tick, type: 'end' });
+    } else if (status === 0xF0 || status === 0xF7) {
+      const len = readVLQ(bytes, pos); pos = len.pos + len.value;
+    } else {
+      const kind = status & 0xF0, channel = status & 0x0F;
+      if (kind === 0xC0 || kind === 0xD0) { events.push({ tick, type: kind === 0xC0 ? 'program' : 'pressure', channel, data1: bytes[pos++] }); }
+      else {
+        const d1 = bytes[pos++], d2 = bytes[pos++];
+        if (kind === 0x90) events.push({ tick, type: d2 === 0 ? 'off' : 'on', channel, note: d1, velocity: d2 });
+        else if (kind === 0x80) events.push({ tick, type: 'off', channel, note: d1, velocity: d2 });
+        else events.push({ tick, type: 'other', channel, data1: d1, data2: d2 });
+      }
+    }
+  }
+  return events;
+}
+function parseSMF(bytes) {
+  const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  if (!(bytes[0] === 0x4D && bytes[1] === 0x54 && bytes[2] === 0x68 && bytes[3] === 0x64)) throw new Error('not an SMF (no MThd)');
+  const headerLen = dv.getUint32(4, false);
+  const format = dv.getUint16(8, false), ntrks = dv.getUint16(10, false), division = dv.getUint16(12, false);
+  let pos = 8 + headerLen;
+  const tracks = [];
+  for (let t = 0; t < ntrks; t++) {
+    if (!(bytes[pos] === 0x4D && bytes[pos+1] === 0x54 && bytes[pos+2] === 0x72 && bytes[pos+3] === 0x6B)) throw new Error(`expected MTrk at track ${t}`);
+    pos += 4;
+    const len = dv.getUint32(pos, false); pos += 4;
+    tracks.push(parseSMFTrack(bytes.subarray(pos, pos + len)));
+    pos += len;
+  }
+  return { format, ntrks, division, tracks };
+}
+function buildTempoMap(events, division) {
+  const tempos = events.filter((e) => e.type === 'tempo').sort((a, b) => a.tick - b.tick);
+  const segs = [{ tick: 0, sec: 0, us: 500000 }];
+  let curTick = 0, curSec = 0, curUs = 500000;
+  for (const te of tempos) {
+    if (te.tick === 0) { curUs = te.usPerQuarter; segs[0].us = curUs; continue; }
+    curSec += (te.tick - curTick) * curUs / 1e6 / division;
+    curTick = te.tick; curUs = te.usPerQuarter;
+    segs.push({ tick: curTick, sec: curSec, us: curUs });
+  }
+  return (tick) => {
+    let seg = segs[0];
+    for (const s of segs) { if (s.tick <= tick) seg = s; else break; }
+    return seg.sec + (tick - seg.tick) * seg.us / 1e6 / division;
+  };
+}
+function waveForProgram(program) {
+  if (program >= 32 && program <= 39) return 'square';    // bass
+  if (program >= 24 && program <= 31) return 'sawtooth';  // guitar
+  if (program >= 40 && program <= 55) return 'sine';      // strings / ensemble
+  return 'triangle';                                       // default (piano-ish)
+}
+/** Schedule an SMF for playback. Returns {ctx, stop(), duration} in seconds. */
+function playSMF(smf) {
+  const ctx = new (window.AudioContext || window.webkitAudioContext)();
+  const events = [];
+  smf.tracks.forEach((trk, ti) => trk.forEach((e) => events.push(e)));
+  events.sort((a, b) => a.tick - b.tick);
+  const tickToSec = buildTempoMap(events, smf.division || 96);
+  const master = ctx.createGain(); master.gain.value = 0.22; master.connect(ctx.destination);
+  const startAt = ctx.currentTime + 0.08;
+  const active = new Map();
+  const nodes = [];
+  const program = {};
+  let lastTick = 0;
+  for (const e of events) {
+    lastTick = Math.max(lastTick, e.tick);
+    const t = startAt + tickToSec(e.tick);
+    if (e.type === 'program') { program[e.channel] = e.data1; continue; }
+    if (e.type === 'on') {
+      const freq = 440 * Math.pow(2, (e.note - 69) / 12);
+      const osc = ctx.createOscillator();
+      osc.type = e.channel === 9 ? 'square' : waveForProgram(program[e.channel] || 0);
+      osc.frequency.value = freq;
+      const g = ctx.createGain();
+      const peak = (Math.max(1, e.velocity) / 127) * 0.3;
+      g.gain.setValueAtTime(0, t);
+      g.gain.linearRampToValueAtTime(peak, t + 0.008);
+      osc.connect(g); g.connect(master); osc.start(t);
+      const key = e.channel + ':' + e.note;
+      const prev = active.get(key);
+      if (prev) { prev.g.gain.setTargetAtTime(0, t, 0.02); prev.osc.stop(t + 0.05); }
+      active.set(key, { osc, g });
+      nodes.push(osc);
+    } else if (e.type === 'off') {
+      const key = e.channel + ':' + e.note;
+      const a = active.get(key);
+      if (a) { a.g.gain.setTargetAtTime(0, t, 0.06); a.osc.stop(t + 0.3); active.delete(key); nodes.push(a.osc); }
+    }
+  }
+  for (const a of active.values()) { a.g.gain.setTargetAtTime(0, startAt + tickToSec(lastTick), 0.06); a.osc.stop(startAt + tickToSec(lastTick) + 0.3); }
+  const duration = tickToSec(lastTick) + 0.4;
+  return {
+    ctx, duration,
+    stop() { nodes.forEach((o) => { try { o.stop(); } catch (e) {} }); try { ctx.close(); } catch (e) {} },
+  };
+}
+
+/* ── the persistent player bar, shown regardless of which file is selected ── */
+function stopPlayback() {
+  if (state.player) { state.player.stop(); cancelAnimationFrame(state.player.raf); state.player = null; }
+  document.getElementById('playerbar').hidden = true;
+}
+function fmtTime(s) { s = Math.max(0, s); return Math.floor(s / 60) + ':' + String(Math.floor(s % 60)).padStart(2, '0'); }
+function startPlayback(name, smfBytes) {
+  stopPlayback();
+  let smf;
+  try { smf = parseSMF(smfBytes); } catch (e) { alert('Could not parse this blob as an SMF: ' + e.message); return; }
+  const p = playSMF(smf);
+  const bar = document.getElementById('playerbar'), fill = document.getElementById('playerFill'),
+        timeEl = document.getElementById('playerTime'), nameEl = document.getElementById('playerName');
+  nameEl.textContent = name;
+  bar.hidden = false;
+  const tick = () => {
+    const elapsed = p.ctx.currentTime;
+    const pct = Math.min(100, (elapsed / p.duration) * 100);
+    fill.style.width = pct + '%';
+    timeEl.textContent = `${fmtTime(elapsed)} / ${fmtTime(p.duration)}`;
+    if (elapsed >= p.duration + 0.05) { stopPlayback(); return; }
+    state.player.raf = requestAnimationFrame(tick);
+  };
+  state.player = { stop: p.stop, raf: requestAnimationFrame(tick) };
+}
+document.getElementById('playerStop').onclick = stopPlayback;
+
 RENDERERS.music = (main, entry) => {
   const c = parseMusicContainer(entry.decoded);
   main.appendChild(h('p', { class: 'small' }, `${c.count} blobs.`));
@@ -1115,10 +1285,13 @@ RENDERERS.music = (main, entry) => {
       b.index, '0x' + b.start.toString(16), b.length, b.isSMF ? 'Standard MIDI File' : 'non-SMF ("type 2")',
       b.smf ? `format ${b.smf.format}, ${b.smf.ntrks} track(s), division ${b.smf.division}` : '—',
       b.isSMF
-        ? h('a', { class: 'dl', href: '#', onclick: (ev) => { ev.preventDefault(); download(`${entry.name}.blob${b.index}.mid`, new Blob([b.data], { type: 'audio/midi' })); } }, 'download .mid')
+        ? h('span', { style: { display: 'flex', gap: '.6em' } },
+            h('button', { class: 'playbtn', onclick: () => startPlayback(`${entry.name} — blob ${b.index}`, b.data) }, '▶ play'),
+            h('a', { class: 'dl', href: '#', onclick: (ev) => { ev.preventDefault(); download(`${entry.name}.blob${b.index}.mid`, new Blob([b.data], { type: 'audio/midi' })); } }, 'download .mid'))
         : h('a', { class: 'dl', href: '#', onclick: (ev) => { ev.preventDefault(); downloadBytes(b.data, `${entry.name}.blob${b.index}.bin`); } }, 'download raw'),
     ])));
   main.appendChild(h('p', { class: 'small' }, 'Non-SMF blobs carry a 512-byte reserved region and a 9×19-byte per-OPL-channel table; the event stream past that is still UNKNOWN per the ledger — shown as hex below on selection.'));
+  main.appendChild(h('p', { class: 'small' }, 'Playback is a generic one-oscillator-per-note synth, not an OPL2/MT-32 emulation — the same "plain piano, no instrument patches" fidelity CLAUDE.md notes for these files in any generic GM player.'));
 };
 
 RENDERERS.pat = (main, entry) => {
