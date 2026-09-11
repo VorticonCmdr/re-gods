@@ -45,6 +45,7 @@ import { GodsRandom } from './game/random.js';
 import { Health, HEALTH_MAX, attackHero } from './game/combat.js';
 import { Nests } from './game/nest.js';
 import { EnemyShots } from './game/enemy-shots.js';
+import { LineHazards } from './game/line-hazard.js';
 import { Debris } from './game/debris.js';
 import { Arsenal, spawnableWeapons } from './game/hero-fire.js';
 import { stepHeroFrame, stepCreatureDamage } from './game/frame.js';
@@ -377,7 +378,7 @@ async function main() {
   let burst = new TreasureBurst(new GodsRandom(1));
   let opened = 0, lootLanded = 0, sbStamps = 0, lastBurstFx = null;
   let lastBlockFx = [];
-  let lastNestFx = [], lastShotsFx = null, lastDebrisFx = [];
+  let lastNestFx = [], lastShotsFx = null, lastDebrisFx = [], lastLineHazardFx = null;
   /* ⚠️ DEV SEED, exactly like the weapon picker above. The original puts a
    * "chest key" in DS:0x17e only through CROUCH + FIRE (CS:0x6069), which
    * this port does not implement — so with a truthful empty inventory the
@@ -412,6 +413,18 @@ async function main() {
    * for System A's stage 6. */
   let nests = new Nests(level.world, rng);
   let shots = new EnemyShots();
+  /* DS:0xd2be — the Bresenham line-hazard pool (game/line-hazard.js).
+   * CS:0xE659's `attackBits` divert to CS:0xE5E4 is wired for SYSTEM A
+   * (entity-a.js's `stageFacingAndFire` returns a `{hazard:true,...}`
+   * descriptor instead of a muzzle when attackBits != 0; see below).
+   * ⚠️ SYSTEM B HAS NO FIRE LOGIC AT ALL IN THIS PORT — CS:0xE659 is shared
+   * by both entity systems, but this project has never ported System B's own
+   * per-frame driver call into it (a pre-existing gap, not introduced here;
+   * 59 of the 71 live descriptors CLAUDE.md's stage-6 census counts belong
+   * to System B). So System-B entities neither fire ordinary shots nor throw
+   * line hazards yet. */
+  let lineHazards = new LineHazards();
+  let firedHazardsByA = 0;
   /* CS:0x0172 `not byte [0x36c]` — the every-other-frame toggle the nest's
    * hatch animation reads (DS:0x36c). Not modelled elsewhere in this port
    * yet, so it is owned here. */
@@ -521,8 +534,10 @@ async function main() {
       events = new EventRunner(level.map, level.palfils);
       slots = new GroupSlots(); enemies = []; clamped = 0;
       slotsA = new GroupSlots(); enemiesA = []; clampedA = 0; firedByA = 0;
+      firedHazardsByA = 0;
       rng = new GodsRandom(1);
       nests = new Nests(level.world, rng); shots = new EnemyShots(); tock = 0;
+      lineHazards = new LineHazards();
       debris = new Debris();
       health = new Health();
       /* A real level change is not a game restart, so CS:0x914c does NOT run
@@ -787,7 +802,17 @@ async function main() {
         const muzzle = e.tick(
           { x: player.x, y: player.y }, e.desc,
           () => rng.next(), fx.freeze > 0);
-        if (muzzle) {
+        if (muzzle && muzzle.hazard) {
+          /* CS:0xE5E4 — attackBits 1 throws at a jittered point near the
+           * hero; 2 or 3 throw at the hero's exact position, muzzle +0x10 X. */
+          firedHazardsByA++;
+          if (muzzle.attackBits === 1) {
+            lineHazards.spawnJittered(muzzle.x, muzzle.y, player.x, player.y,
+                                       muzzle.n, () => rng.next());
+          } else {
+            lineHazards.spawnAtHero(muzzle.x, muzzle.y, player.x, player.y, muzzle.n);
+          }
+        } else if (muzzle) {
           firedByA++;
           shots.fire(muzzle.x, muzzle.y, muzzle.dir, { x: cam.snapX, y: cam.snapY });
         }
@@ -833,6 +858,17 @@ async function main() {
         level.map.planeB,
         { invulnerable: fx.invuln > 0, hurt: (n) => health.damage(n) },
         debris);
+      /* CS:0x02BD — DS:0xd2be's own pool, right after the enemy shots and
+       * before the health-bar chase (game/frame.js's FRAME_ORDER). Nothing
+       * spawns into it yet (see the `lineHazards` declaration above), so this
+       * call only ever drains an empty pool today — wiring the spawn side is
+       * future work, not this pass. */
+      lastLineHazardFx = lineHazards.step(
+        { x: cam.snapX, y: cam.snapY },
+        { x: player.x, y: player.y, state: player.stateIndex },
+        level.map.planeB,
+        { invulnerable: fx.invuln > 0, hurt: (n) => health.damage(n) },
+        debris, tock);
       /* CS:0x02c6 — the bar chases the target one unit per frame, and the
        * death test reads the BAR, so a fatal hit leaves a rescue window. */
       /* CS:0x0186 `dec word [0x2fa]` floored at CS:0x018C, CS:0xA99B
@@ -951,6 +987,15 @@ async function main() {
         else { outOfRange++; renderer.strokeRect(d.x, d.y, 8, 8, 9); }
       }
 
+      /* THE LINE-HAZARD POOL — CS:0xdc37/0xdb4e, sprites 75/76. See
+       * game/line-hazard.js; nothing spawns into it yet (above), so this
+       * loop is currently always empty in the running build. */
+      if (lastLineHazardFx) for (const d of lastLineHazardFx) {
+        const lf = hero && hero.frames[d.sprite];
+        if (lf) renderer.blitSprite(lf, d.x, d.y);
+        else { outOfRange++; renderer.strokeRect(d.x, d.y, 8, 8, 11); }
+      }
+
       /* DEBRIS — CS:0x1F73/0x356E, the stationary puff a shot leaves behind
        * when solid terrain stops it (CS:0xA816). Purely cosmetic: it cannot
        * hurt anything and cannot touch the map, so it draws through the
@@ -1005,7 +1050,7 @@ async function main() {
         (unstamped ? ` · ${unstamped} unstamped object types!` : '') +
         ` · ${enemies.filter((e) => e.alive).length}/${enemies.length} enemies` +
         ` · ${enemiesA.filter((e) => e.alive).length}/${enemiesA.length} sysA` +
-        ` · ${nests.live} nests · ${shots.live} shots · ${debris.live} debris` +
+        ` · ${nests.live} nests · ${shots.live} shots · ${lineHazards.live} hazards · ${debris.live} debris` +
         ` · hp ${health.bar}/${health.target > HEALTH_MAX ? HEALTH_MAX : health.target}`        + (health.dead ? ' DEAD' : '') +
         ` · money ${purse.total} · score ${score.value}` +
         ` · lives ${fx.lives}` +

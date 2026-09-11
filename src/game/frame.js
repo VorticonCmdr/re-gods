@@ -37,8 +37,13 @@ export const FRAME_ORDER = [
   { at: 0x0254, what: 'the player state machine — the EMIT happens here' },
   { at: 0x0285, what: 'entities: contact, then the grid scan' },
   { at: 0x02ba, what: 'ENEMY shots move, hit and stamp nothing' },
+  { at: 0x02bd, what: 'the DS:0xd2be line-hazard pool moves, hits and draws' },
   { at: 0x02c6, what: 'the health bar chases the target' },
 ];
+
+/** CS:0x02BD, right after the enemy-shot step and before the health-bar
+ *  chase — see game/line-hazard.js. */
+export const LINE_HAZARDS_AT = 0x02bd;
 
 /* ⚠️ THE TWO PROJECTILE SYSTEMS SIT ON OPPOSITE SIDES OF THE PLAYER.
  * The hero's shots step at CS:0x020F, BEFORE the state machine emits at

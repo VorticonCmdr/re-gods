@@ -76,6 +76,12 @@ import { EnemyShots, hitsHero, isCrouching,
          HERO_BOX, HOT_POINT, SPRITE_RIGHT, SPRITE_LEFT, SPRITE_FADE_BASE,
          DESPAWN_RIGHT_X, DESPAWN_LEFT_X, TERRAIN_Y_BIAS, TERRAIN_STRADDLE,
          FADE_FREE_AT, STOP_STATE_RIGHT, STOP_STATE_LEFT } from '../game/enemy-shots.js';
+import { LineHazards, jitterTarget, isCrouching as lhIsCrouching,
+         SLOTS as LH_SLOTS, HERO_HOT_POINT, HERO_BOX as LH_HERO_BOX,
+         CROUCH_RAISE as LH_CROUCH_RAISE, DAMAGE as LH_DAMAGE,
+         PROBE_BIAS, WALL_DEBRIS_BIAS, HERO_HIT_DEBRIS_BIAS,
+         CULL as LH_CULL, SPRITE_BASE as LH_SPRITE_BASE, MUZZLE_X_OFFSET,
+         TARGET_JITTER_MASK, TARGET_JITTER_BIAS } from '../game/line-hazard.js';
 import { HERO_SHOTS_AT, ENEMY_SHOTS_AT } from '../game/frame.js';
 import { Nests, aimAt, broodCount, signed16,
          OBJECT_TYPE as NEST_TYPE, OBJECT_SPRITE as NEST_OBJ_SPRITE,
@@ -910,6 +916,260 @@ export async function checkDescriptorAnchors(fetchRaw) {
         `both systems one ordering is wrong for one of them either way`);
     }
 
+    /* ══ DS:0xd2be — THE LINE-HAZARD POOL, AND IT IS A RAY NOT A SEGMENT ═══ */
+    {
+      const cam = { x: 0, y: 0 };
+      const farHero = { x: 9999, y: 9999, state: 0 };
+      const zeroPlaneB = () => new Uint8Array(128 * 64);
+
+      check(`the line-hazard record layout and constants match the bytes`,
+        LH_SLOTS === 20 && HERO_HOT_POINT.dx === 6 && HERO_HOT_POINT.dy === 4
+          && LH_HERO_BOX.w === 0x20 && LH_HERO_BOX.h === 0x30
+          && LH_CROUCH_RAISE === 0x18 && LH_DAMAGE === 2
+          && PROBE_BIAS === 3 && WALL_DEBRIS_BIAS === 3 && HERO_HIT_DEBRIS_BIAS === 2
+          && LH_CULL.xMax === 0x13c && LH_CULL.yMax === 0xbc
+          && LH_SPRITE_BASE === 0x4b && MUZZLE_X_OFFSET === 0x10,
+        `CS:0xdbd4 \`mov bp,0x13\` (20 slots), CS:0xdb51/0xdb56 (hot point ` +
+        `+6,+4), CS:0xdb87/0xdb92 (32x48 box), CS:0xdb76 (crouch +0x18, the ` +
+        `enemy-shot value, not combat.js's +0x14), CS:0xdba0 (flat -2), ` +
+        `CS:0xdc68/0xdc6b (+3 probe bias, a FIFTH pixel-to-cell rule), ` +
+        `CS:0xdc1b/0xdc1e (-3 debris) and CS:0xdbb2/0xdbb5 (-2 debris, a ` +
+        `DIFFERENT constant), CS:0xdca2/0xdca7 (cull 0x13c x 0xbc), ` +
+        `CS:0xdcb6 (sprite base 0x4b=75), CS:0xe5fe/0xe649 (+0x10 muzzle, a ` +
+        `THIRD offset in this game)`);
+
+      /* ── Pure Bresenham math, hand-verified against the actual trace ──── */
+      {
+        const hzX = new LineHazards();
+        /* source (0,0) -> target (100,10): dx=100 dy=10, X-MAJOR. `spawn`
+         * itself burns the first `n` steps (CS:0xdce1's own immediate pass),
+         * so one spawn(n=10) already IS "10 steps". Hand-traced: err starts
+         * at dx>>1=50, and crosses zero on step 6 (0-indexed step 5), giving
+         * exactly one y-increment inside 10 steps. */
+        const sx1 = hzX.spawn(0, 0, 100, 10, 10);
+        check(`x-major Bresenham: 10 steps of a dx=100,dy=10 line lands at (10,1)`,
+          sx1.line.x === 10 && sx1.line.y === 1 && sx1.line.xMajor === true
+            && sx1.line.err === 50,
+          `err seeded to dx>>1=50 (CS:0xdd02), decremented by dy=10 each of ` +
+          `10 steps, correcting by +dx and y+=1 exactly once (on step 6) — ` +
+          `matching a 1-in-10 slope over 10 x-steps`);
+
+        const hzY = new LineHazards();
+        /* the mirror: source (0,0) -> target (10,100), Y-MAJOR. */
+        const sy1 = hzY.spawn(0, 0, 10, 100, 10);
+        check(`y-major Bresenham: 10 steps of a dx=10,dy=100 line lands at (1,10)`,
+          sy1.line.x === 1 && sy1.line.y === 10 && sy1.line.xMajor === false
+            && sy1.line.err === 50,
+          `the same trace with the axes swapped — CS:0xdd41 seeds err to ` +
+          `dy>>1=50 and CS:0xdd43 steps y UNCONDITIONALLY before the ` +
+          `conditional x correction, the opposite instruction order from the ` +
+          `x-major loop, though the net per-step effect is identical`);
+
+        /* leftward, to exercise the OTHER two of the four resume constants
+         * (CS:0xdd95/CS:0xddd3), which mirror by DECREMENTING the major axis
+         * rather than incrementing it. */
+        const hzL = new LineHazards();
+        const sl1 = hzL.spawn(100, 0, 0, 10, 10);
+        check(`leftward x-major mirrors by DECREMENTING x, not by negating the trace`,
+          sl1.line.x === 90 && sl1.line.y === 1 && sl1.line.sx === -1,
+          `source (100,0) -> target (0,10): CS:0xdd78's branch computes the ` +
+          `same dx/dy magnitudes and err arithmetic, just with sx=-1`);
+      }
+
+      /* ── THE central finding: a RAY, not a segment ─────────────────────
+       * The seed's own four loop bodies (CS:0xdd04/dd43/dd95/ddd3) have NO
+       * destination check — only CS:0x7a0b's own copies do, and CS:0x7a0b's
+       * `JMP DI` always lands back in the SEED's copy (which keeps re-writing
+       * the SAME resume constant), so that check never runs. A port that
+       * stops the fragment at the target is wrong. */
+      {
+        const hz = new LineHazards();
+        /* target is only 5 px away in X; a segment model would arrive within
+         * the FIRST spawn() call (n=3) and never move again. */
+        const s = hz.spawn(0, 0, 5, 0, 3);
+        const afterSpawnX = s.line.x;
+        hz.step(cam, farHero, zeroPlaneB(), null, null, 0);
+        const afterOneStepX = s.line.x;
+        hz.step(cam, farHero, zeroPlaneB(), null, null, 0);
+        check(`the fragment FLIES PAST its own target instead of stopping there`,
+          afterSpawnX === 3 && afterOneStepX === 6 && s.line.x === 9
+            && s.active && afterOneStepX > 5,
+          `target x was 5; after spawn x=${afterSpawnX}, after one tick ` +
+          `x=${afterOneStepX} (already past it), after two x=${s.line.x} — ` +
+          `still flying and still active. A segment-stopping implementation ` +
+          `would have frozen at x=5 on the very first call`);
+      }
+
+      /* ── Solid terrain: consume + a STATIONARY debris puff at world -3 ── */
+      {
+        const hz = new LineHazards();
+        const debrisCalls = [];
+        const fakeDebris = { spawn: (...a) => debrisCalls.push(a) };
+        const planeB = zeroPlaneB();
+        planeB[0 * 128 + 2] = 1;          // solid at col 2, row 0
+        /* source (0,0) -> target (1000,0), pure horizontal so dy=0 keeps the
+         * probe on row 0 always. n=32 per call; spawn's own pass lands at
+         * x=32 (col 1, not solid yet); the first step() call lands at x=64,
+         * whose probe col floor((64+3)/32)=2 IS solid. */
+        const s = hz.spawn(0, 0, 1000, 0, 32);
+        check(`spawn's own immediate pass leaves it short of the wall`, s.line.x === 32);
+        hz.step(cam, farHero, planeB, null, fakeDebris, 0);
+        check(`solid terrain consumes the fragment and drops a puff at world -${WALL_DEBRIS_BIAS}`,
+          !s.active && hz.wallHits === 1 && debrisCalls.length === 1
+            && debrisCalls[0][0] === 64 - WALL_DEBRIS_BIAS
+            && debrisCalls[0][1] === 0 - WALL_DEBRIS_BIAS
+            && debrisCalls[0][2] === 0 && debrisCalls[0][3] === 0,
+          `at the moment of the hit x=64,y=0 (col ${Math.floor((64+PROBE_BIAS)/32)}, ` +
+          `row 0); the puff lands at world (${debrisCalls[0]?.[0]}, ` +
+          `${debrisCalls[0]?.[1]}) — CS:0xdc1b/0xdc1e's OWN -3 constant, not ` +
+          `"undo the +3 probe bias" (it happens to be the same number, but ` +
+          `it is a separate instruction in the bytes)`);
+      }
+
+      /* ── Off-screen cull: consume WITHOUT debris ────────────────────── */
+      {
+        const hz = new LineHazards();
+        const debrisCalls = [];
+        const fakeDebris = { spawn: (...a) => debrisCalls.push(a) };
+        /* source (280,50) -> target (1000,50): spawn's own n=50 pass lands at
+         * x=330 (already past CULL.xMax=0x13c=316, but spawn() itself never
+         * checks — only step() does), and the FIRST step() call advances by
+         * another 50 (to x=380) BEFORE running its checks, same as every
+         * step() call. Either position is past the cull bound, so this only
+         * needs one call. */
+        const s = hz.spawn(280, 50, 1000, 50, 50);
+        hz.step(cam, farHero, zeroPlaneB(), null, fakeDebris, 0);
+        check(`the off-screen cull consumes with NO debris puff`,
+          !s.active && hz.culled === 1 && debrisCalls.length === 0,
+          `x=${s.line.x} >= CULL.xMax=${LH_CULL.xMax} — CS:0xdcdb writes the free ` +
+          `marker and jumps straight to the next record, skipping the debris ` +
+          `call the wall-hit path makes`);
+      }
+
+      /* ── Hero hit: consume, flat -2 damage, a puff at world -2 ─────────
+       * ⚠️ -2 here against -3 for the wall hit — a THIRD distinct debris-jitter
+       * constant next to the two already documented in debris.js. */
+      {
+        const hz = new LineHazards();
+        const hero = { x: 100, y: 100, state: 0 };   // not crouching
+        let hurt = 0;
+        const health = { invulnerable: false, hurt: (n) => { hurt += n; } };
+        const debrisCalls = [];
+        const fakeDebris = { spawn: (...a) => debrisCalls.push(a) };
+        /* source (0,100) -> target (1000,100), horizontal at hero's own Y.
+         * n=10 per call; spawn lands x=10, then nine more step() calls add
+         * 10 each, landing exactly x=100 — hot point (106,104), inside the
+         * hero's box [100,132]x[100,148]. */
+        const s = hz.spawn(0, 100, 1000, 100, 10);
+        for (let i = 0; i < 9 && s.active; i++) {
+          hz.step(cam, hero, zeroPlaneB(), health, fakeDebris, 0);
+        }
+        check(`a hero hit is consumed, costs a FLAT ${LH_DAMAGE} off the target, and drops a puff at world -${HERO_HIT_DEBRIS_BIAS}`,
+          !s.active && hurt === LH_DAMAGE && hz.heroHits === 1
+            && debrisCalls.length === 1
+            && debrisCalls[0][0] === 100 - HERO_HIT_DEBRIS_BIAS
+            && debrisCalls[0][1] === 100 - HERO_HIT_DEBRIS_BIAS,
+          `hit at world (100,100): CS:0xdba0 \`sub word [0x192],2\` (the ` +
+          `TARGET, so the bar chases down afterwards like every other ` +
+          `source), then CS:0xdbbb's own -${HERO_HIT_DEBRIS_BIAS} puff — a ` +
+          `THIRD distinct debris-jitter constant next to the wall hit's -` +
+          `${WALL_DEBRIS_BIAS} and debris.js's own two`);
+      }
+
+      /* ── Invulnerability: PASS THROUGH, exactly like enemy-shots.js ──── */
+      {
+        const hz = new LineHazards();
+        const hero = { x: 100, y: 100, state: 0 };
+        let hurt = 0;
+        const health = { invulnerable: true, hurt: (n) => { hurt += n; } };
+        const debrisCalls = [];
+        const fakeDebris = { spawn: (...a) => debrisCalls.push(a) };
+        const s = hz.spawn(0, 100, 1000, 100, 10);
+        for (let i = 0; i < 9 && s.active; i++) {
+          hz.step(cam, hero, zeroPlaneB(), health, fakeDebris, 0);
+        }
+        check(`while invulnerable the fragment PASSES THROUGH — not consumed, no damage, no debris`,
+          s.active && hurt === 0 && hz.heroHits === 0 && hz.passedThrough >= 1
+            && debrisCalls.length === 0,
+          `CS:0xdb99/0xdb9e's \`jnz\` skips the consume, the \`sub\` AND the ` +
+          `debris call, exactly mirroring enemy-shots.js's CS:0x4547 — the ` +
+          `opposite of the CONTACT path, where invulnerability still kills ` +
+          `the attacker`);
+      }
+
+      /* ── N <= 0 is refused, defensively (never observed in shipped data,
+       * see the module header's census — but nothing here should be able to
+       * hang a browser tab on an input this project hasn't checked) ────── */
+      {
+        const hz = new LineHazards();
+        const r0 = hz.spawn(0, 0, 10, 10, 0);
+        const rNeg = hz.spawn(0, 0, 10, 10, -5);
+        check(`n<=0 is refused rather than looping`,
+          r0 === null && rNeg === null && hz.live === 0,
+          `a shipped census of all 89 reachable descriptors (attackBits!=0, ` +
+          `fire-rate nibble!=0) found n only ever 2,3,4,5,6,8,10 — never 0 or ` +
+          `1 — but CS:0xdce1's own loop wraps 0-1 to 0xFFFF with no guard on ` +
+          `the high nibble (unlike the low nibble's CS:0xe666 \`jz\`), so this ` +
+          `port refuses defensively rather than trusting data it hasn't seen`);
+      }
+
+      /* ── Pool exhaustion: silent refusal, matching every other first-fit
+       * pool in this game ────────────────────────────────────────────── */
+      {
+        const hz = new LineHazards();
+        let ok = 0;
+        for (let i = 0; i < LH_SLOTS; i++) if (hz.spawn(i, 0, i + 1, 0, 1)) ok++;
+        const overflow = hz.spawn(0, 0, 1, 0, 1);
+        check(`the 21st spawn is refused once all ${LH_SLOTS} slots are busy`,
+          ok === LH_SLOTS && overflow === null && hz.refused === 1 && hz.live === LH_SLOTS,
+          `CS:0xdbe7 — first-fit over 20 slots, and a spawn that finds none ` +
+          `free returns without allocating, silently, the same convention as ` +
+          `this game's other pools`);
+      }
+
+      /* ── The two CS:0xE5E4 spawn variants, by their SOURCE/TARGET shape ── */
+      {
+        const hz1 = new LineHazards();
+        const atHero = hz1.spawnAtHero(50, 60, 200, 210, 1);
+        check(`spawnAtHero: source = entity +0x${MUZZLE_X_OFFSET.toString(16)} X, target = hero EXACTLY +8,+6`,
+          atHero.line.dx === Math.abs((200 + 8) - (50 + MUZZLE_X_OFFSET))
+            && atHero.line.dy === Math.abs((210 + 6) - 60)
+            && atHero.line.sx === 1 && atHero.line.sy === 1,
+          `CS:0xe5fe/0xe649: muzzle X = entityX+0x${MUZZLE_X_OFFSET.toString(16)}, ` +
+          `no Y offset; target is the hero's position with no jitter at all`);
+
+        const hz2 = new LineHazards();
+        const zeroJitter = () => TARGET_JITTER_BIAS;   // (0x1f & 0x3f) - 0x1f == 0
+        const jittered = hz2.spawnJittered(50, 60, 200, 210, 1, zeroJitter);
+        check(`spawnJittered: source = entity EXACTLY (no muzzle), target = hero +8,+6 +jitter`,
+          jittered.line.dx === Math.abs((200 + 8) - 50)
+            && jittered.line.dy === Math.abs((210 + 6) - 60)
+            && TARGET_JITTER_MASK === 0x3f && TARGET_JITTER_BIAS === 0x1f,
+          `CS:0xe5e9: no muzzle offset applied to the source at all — the one ` +
+          `structural difference from spawnAtHero, next to the jitter itself. ` +
+          `With a fixed RNG returning exactly the bias value the jitter is ` +
+          `zero (${TARGET_JITTER_MASK.toString(16)} & ${TARGET_JITTER_MASK.toString(16)} - ` +
+          `${TARGET_JITTER_BIAS.toString(16)} = 0), isolating the offset math`);
+
+        check(`jitterTarget's own range is asymmetric: [-${TARGET_JITTER_BIAS}, +${TARGET_JITTER_MASK - TARGET_JITTER_BIAS}]`,
+          (() => {
+            let seq = [0, 0x3f];   // min and max raw draws
+            let i = 0;
+            const j = jitterTarget(() => seq[i++ % seq.length]);
+            return j.dx === -TARGET_JITTER_BIAS && j.dy === (TARGET_JITTER_MASK - TARGET_JITTER_BIAS);
+          })(),
+          `CS:0xe631-0xe634: \`(rand() & 0x3f) - 0x1f\` ranges over ` +
+          `[-31, +32], not a symmetric +/-31 — 0x3f - 0x1f = 0x20 = 32`);
+      }
+
+      check(`isCrouching agrees with enemy-shots.js's own version (same states, different raise magnitude)`,
+        lhIsCrouching(0x12) && lhIsCrouching(0x13) && !lhIsCrouching(0x11) && !lhIsCrouching(0x14),
+        `CS:0xdb68-0xdb74 is the SAME \`cmp byte [0x377],0x12/0x13\` range test ` +
+        `as CS:0x4516, just raising by the same 0x18 rather than a different ` +
+        `magnitude — so the two modules' isCrouching functions agree even ` +
+        `though they are separately defined`);
+    }
+
     results.push({
       name: 'what is still open around this creature', note: true, pass: true,
       detail: 'UNKNOWN_nest_shot — CS:0x2039 and CS:0x1FE7, what the creature ' +
@@ -1315,20 +1575,39 @@ export function checkEntityA() {
     e4.x === 47 && e4.y === 53);
 
   /* Stage 6: no fire capability (fireByte 0), no reload nibble, zero
-   * velocity, and the reload-not-elapsed case must all refuse to fire. */
+   * velocity, and the reload-not-elapsed case must all refuse to fire.
+   * `desc.flags` bits [5:4] carry attackBits — 0 here means "ordinary fire". */
   const f0 = new EntityA({ x: 0, y: 0 });
-  check(`fireByte 0 never arms`, stageFacingAndFire(f0, 0x00) === null);
+  check(`fireByte 0 never arms`, stageFacingAndFire(f0, { fireByte: 0x00, flags: 0 }) === null);
   const f1 = new EntityA({ x: 0, y: 0 }); f1.vx = 0;
   check(`zero own velocity means no fire, even with a live fireByte`,
-    stageFacingAndFire(f1, 0x31) === null);
+    stageFacingAndFire(f1, { fireByte: 0x31, flags: 0 }) === null);
   const f2 = new EntityA({ x: 0, y: 0 }); f2.vx = 4;
-  const shot = stageFacingAndFire(f2, 0x31);   // hi nibble 3, lo nibble 1
+  const shot = stageFacingAndFire(f2, { fireByte: 0x31, flags: 0 });   // hi nibble 3, lo nibble 1
   check(`facing right (vx>0) fires from x+32, dir = +hiNibble`,
     shot && shot.x === f2.x + 0x20 && shot.dir === 3, JSON.stringify(shot));
   const f3 = new EntityA({ x: 0, y: 0 }); f3.vx = -4;
-  const shotL = stageFacingAndFire(f3, 0x31);
+  const shotL = stageFacingAndFire(f3, { fireByte: 0x31, flags: 0 });
   check(`facing left (vx<0) fires from x-8, dir = -hiNibble`,
     shotL && shotL.x === f3.x - 8 && shotL.dir === -3, JSON.stringify(shotL));
+
+  /* CS:0xE5E4 — attackBits != 0 diverts to the line-hazard pool, and does
+   * NOT test vx (CS:0xe6a5's zero-velocity gate sits inside the attackBits
+   * == 0 branch only). desc.flags bits [5:4] carry attackBits; fireByte's
+   * hi nibble becomes `n`, not a shot direction, in this branch. */
+  const f4 = new EntityA({ x: 10, y: 20 });   // vx left at 0 — must NOT block the divert
+  const hazard1 = stageFacingAndFire(f4, { fireByte: 0x61, flags: 0x10 });  // (0x10>>4)&3 = 1
+  check(`attackBits!=0 diverts to a hazard spawn even at zero velocity`,
+    hazard1 && hazard1.hazard === true && hazard1.attackBits === 1,
+    JSON.stringify(hazard1));
+  check(`the hazard spawn carries n = the fireByte's hi nibble`,
+    hazard1 && hazard1.n === 6, JSON.stringify(hazard1));
+  check(`the hazard spawn's x/y are the entity's own position, unmuzzled`,
+    hazard1 && hazard1.x === 10 && hazard1.y === 20, JSON.stringify(hazard1));
+  const f5 = new EntityA({ x: 0, y: 0 });
+  const hazard2 = stageFacingAndFire(f5, { fireByte: 0x21, flags: 0x20 }); // (0x20>>4)&3 = 2
+  check(`attackBits==2 also diverts (only 0 fires an ordinary shot)`,
+    hazard2 && hazard2.hazard === true && hazard2.attackBits === 2, JSON.stringify(hazard2));
 
   /* CS:0xe748 — the low nibble wins with probability (weight+1)/128. Extreme
    * weights should never/always swap, matching the doc's own closed-form

@@ -171,22 +171,40 @@ export function stageApply(e, frozen) {
 
 /**
  * CS:0xe659 — facing, and (if armed) fire through the shared enemy-shot
- * emitters (CS:0x1fe7 / CS:0x2039, see enemy-shots.js). Returns a muzzle
- * descriptor when a shot should be emitted, or null.
+ * emitters (CS:0x1fe7 / CS:0x2039, see enemy-shots.js) OR divert to the
+ * DS:0xd2be line-hazard pool (CS:0xE5E4, see line-hazard.js). Returns a
+ * muzzle descriptor when a shot should be emitted, a hazard-spawn descriptor
+ * when a fragment should be, or null.
  *   fireByte = descriptor +0x6: low nibble = reload-rate value, 0 = can't
- *              fire at all; high nibble = the direction/config value stored
- *              into DS:0x206 (negated when facing left).
- * A System-A entity fires only while its OWN velocity is nonzero — an
- * entity that has arrived and decayed to a stop goes silent, matching
- * `cmp word [di+0x12],0 / jz` exactly.
+ *              fire at all; high nibble = EITHER the shot direction/config
+ *              value stored into DS:0x206 (ordinary fire, negated when
+ *              facing left) OR the line-hazard step count `n` (the divert) —
+ *              the SAME field, read two different ways depending on
+ *              `attackBits`.
+ *   flags = descriptor +0x4 (big-endian word). Bits [5:4] are `attackBits`
+ *           (CS:0xe67d `cx=(cx>>4)&3`): 0 fires an ordinary shot; 1, 2 or 3
+ *           divert to the line-hazard pool instead (CS:0xe68d `jz e692 /
+ *           jmp e5e4`) — checked BEFORE the reload/velocity gates below that
+ *           only apply to the ordinary-fire branch.
+ * ⚠️ The divert does NOT test `e.vx` — CS:0xe6a5's "silent once stopped"
+ * check sits INSIDE the attackBits==0 branch (CS:0xe692 onward), never
+ * reached when attackBits != 0. A hazard-throwing entity keeps throwing even
+ * after it has arrived and its own velocity has decayed to zero.
  */
-export function stageFacingAndFire(e, fireByte) {
+export function stageFacingAndFire(e, desc) {
+  const fireByte = desc.fireByte;
   const loNibble = fireByte & 0xf;
   if (fireByte === 0 || loNibble === 0) return null;
 
   e.reloadTimer--;
   if (e.reloadTimer > 0) return null;
   e.reloadTimer = (0x10 - loNibble) << 2;         // CS:0xe670-e67a
+
+  const attackBits = (desc.flags >> 4) & 3;        // CS:0xe67d
+  if (attackBits !== 0) {
+    const n = (fireByte >> 4) & 0xf;               // CS:0xe5f5/0xe61c — hi nibble
+    return { hazard: true, attackBits, n, x: e.x, y: e.y };
+  }
 
   if (e.vx === 0) return null;                     // CS:0xe6a5 `jz`
 
@@ -316,11 +334,13 @@ export class EntityA {
   /**
    * One 15 Hz tick.
    * @param {{x:number,y:number}} hero  world position, per stage-1 chase (e7ca adds +8 to Y)
-   * @param {{stepCap:number, speedCap:number, fireByte:number, seedPair:number,
-   *          seedWeight:number}} desc  the group descriptor fields this stage needs
+   * @param {{stepCap:number, speedCap:number, fireByte:number, flags:number,
+   *          seedPair:number, seedWeight:number}} desc  the group descriptor
+   *   fields this stage needs — `flags` only for the attackBits divert
    * @param {() => number} draw  the shared random-table reader, DS:0x3836
    * @param {boolean} frozen  DS:0x2fa, "freezes aliens"
-   * @returns {?{x:number,y:number,dir:number}} a muzzle to fire from, or null
+   * @returns {?({x:number,y:number,dir:number}|{hazard:true,attackBits:number,n:number,x:number,y:number})}
+   *   a muzzle to fire from, a line-hazard spawn request, or null
    */
   tick(hero, desc, draw, frozen = false) {
     /* Pre-life FSM — see UNKNOWN_sysA_prelife_driver in the file header. */
@@ -356,7 +376,7 @@ export class EntityA {
     /* Stage 5. */
     stageApply(this, frozen);
     /* Stage 6. */
-    return stageFacingAndFire(this, desc.fireByte);
+    return stageFacingAndFire(this, desc);
   }
 }
 
