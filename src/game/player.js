@@ -78,6 +78,7 @@ export const S = {
   JUMP_L: 8, JUMP_R: 9,
   FALL_L: 11, FALL_R: 12,
   CLIMB: 14,
+  ARRIVAL: 4,   // CS:0x1022 — one of state 4's three named entrants
   IDLE: 26,
 };
 
@@ -218,6 +219,34 @@ export class Player {
     /* What the sprite selector should use. Equal to `phase` everywhere except
      * walk+fire, which renders through the DS:0xd950 recoil table while
      * persisting the raw counter (CS:0x5D6B stores, then CS:0x5D75 remaps). */
+    this.renderPhase = 0;
+  }
+
+  /**
+   * CS:0x0FF2-0x1022 — a teleport zone (or the teleport stone) firing.
+   * Snaps world position, clears the fire/ladder/jump/fall state exactly as
+   * the original's own write set does (`[0x36b]:=0`, `[0x377]:=4`), and
+   * leaves the hero in state 4 — the "spawn / arrival idle pose" this
+   * project already identified at its two other entrants (level start,
+   * respawn). State 4's own handler is not separately ported (see the scope
+   * note at the top of this file), so this sets the internal `ST.GROUND`
+   * bucket the same way landing does: the original's state 4 body itself
+   * "reads LEFT/RIGHT only... otherwise falling into state 15's ground
+   * check" (states.js), so grounded is the nearest real approximation for
+   * the tick after arrival, not an invented one.
+   * @param {number} x  world X, already CS:0x0FF2's `col*32 + 16`
+   * @param {number} y  world Y, already CS:0x0FEE's `row*16`
+   */
+  teleportTo(x, y) {
+    this.x = x | 0;
+    this.y = y | 0;
+    this.state = ST.GROUND;
+    this.fallV = 0; this.airSteps = 0; this.jumpCursor = 0;
+    this.doubleJump = false; this.fromLadder = false;
+    this.fireState = -1; this.pendingAlloc = null; this.emitted = null;
+    this.ladderFacing = 0; this.flag356 = false;
+    this.stateIndex = S.ARRIVAL;         // CS:0x1022
+    this.phase = 0;                       // CS:0x1018 `[0x36b] := 0`
     this.renderPhase = 0;
   }
 

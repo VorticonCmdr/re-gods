@@ -103,9 +103,27 @@ re-keying the ACT5 consume onto the trigger index instead of the event record,
 which cannot differ because 0 of 727 selector-3 triggers is named by more than
 one record. The suite asserts that equivalence rather than claiming a kill.
 
-What is wired but still inert: the zone array is written and nothing reads it, so
-ACT4 records an exit that cannot be walked through and ACT3 a teleport that does
-not teleport (`CS:0x0324`/`CS:0x0FDF` are the consumers, both unported).
+**The zone array is now read too** (`src/game/zones.js`, wired into `main.js`'s
+tick loop and covered by `checkZones` — 17 assertions, including a real-data
+pass over all 8 shipped maps' own ACT3/ACT4 records). `CS:0x4A6D` (the
+hero-vs-zone scan) and `CS:0x0FDF-0x1042` (the teleport execution) are ported
+at the byte level: standing in a teleport zone's box moves the hero to the
+packed destination and re-enters state 4, the same "spawn / arrival idle"
+pose this project already names at level start and respawn.
+
+A level-exit zone (ACT4) resolves a real destination record — decoded
+directly from `DS:0xe6ea`/`0xe796`/`0xe7fe`/`0xe8a8`, four `{param, param2,
+text}` records reading `"LEVEL  ONE"`, `"LEVEL  TWO"`, `"LEVEL  THREE"` and
+`"GAME"` — but the original's own rule for which of the 8 shipped `.MAP`
+files loads next (`CS:0x0FAC`'s hand-off through `DS:0x178`/`0x36a` into
+`FUN_1000_8c34`, the level-load master routine) was not traced far enough to
+port. **This is an honest placeholder, not a proven mechanism**: the build
+advances to the next level in the fixed `1A→1B→2A→…→4B→1A` cycle and shows
+the recovered destination text, which is enough to make multi-level play
+possible without overclaiming precision this pass does not have.
+`UNKNOWN_zone_scan_caller` (CS:0x4A6D's own caller in the original is not
+located — it sits in the player-state-machine's un-Ghidra'd gap) and
+`UNKNOWN_level_exit_destination` both stand.
 
 ## The hero
 
@@ -754,7 +772,9 @@ clears it. One frame = 4 PIT ticks = 15.000 Hz.
 Done: asset pipeline, level rendering (both tile sheets, 1-based plane A), the ported
 camera (dead zone `(80, 208)` open on the left, proportional vertical catch-up, the
 world-3 scripted nudge), 15 Hz clock, trigger engine, hero kinematics and hero
-sprites.
+sprites, teleport zones (real destination unpack, no reload needed) and level-exit
+zones (real destination text, placeholder level sequencing — see the trigger
+section above).
 
 Deliberately not done, with the reason:
 

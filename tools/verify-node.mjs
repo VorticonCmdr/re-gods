@@ -200,6 +200,13 @@ for (const r of await checkTriggerActions(fetchRaw)) {
   console.log(line(r));
 }
 
+console.log('\n  zones — the read side of ACT3/ACT4 (CS:0x4A6D, CS:0x0FAC-0x1042):');
+const { checkZones } = await import('../src/verify/checks.js');
+for (const r of await checkZones(fetchRaw)) {
+  if (!r.pass && !r.note) bad++;
+  console.log(line(r));
+}
+
 /* --- camera: dead zone and clamps, from CS:0x5ea4-0x5f76 ----------------- */
 const { Camera, CAM_X_MAX, CAM_Y_MAX } = await import('../src/game/camera.js');
 const lvl = { world: 1, sublevel: 0 };

@@ -9,6 +9,8 @@
 import { dclDecompress } from '../formats/dcl.js';
 import { DOOR_TILES, ZONE_TELEPORT, ZONE_EXIT, makeGates, makeActionContext,
          runAction, fireTrigger } from '../game/trigger-actions.js';
+import { scanZones, unpackTeleportDest, resolveExitDestination,
+         EXIT_DESTINATIONS } from '../game/zones.js';
 import { consumesKey } from '../game/trigger.js';
 import { PI1_SIZE, decodePI1, TILE_COUNT } from '../formats/pi1.js';
 import { BULK_SIZE, parseMap } from '../formats/map.js';
@@ -5444,15 +5446,147 @@ export async function checkTriggerActions(fetchRaw) {
     note: true, pass: true,
     detail: 'All 15 verbs execute. Doors open and close, trap doors move, ' +
       'zones are created, objects and weapon pickups spawn, category-4 ' +
-      'objects are killed, the timer resets and weapon slots clear. What is ' +
-      'wired but INERT: the zone array is written and nothing reads it yet, ' +
-      'so ACT4 records a level exit that cannot be walked through and ACT3 a ' +
-      'teleport that does not teleport — CS:0x0324 and CS:0x0FDF are the ' +
-      'consumers, both unported. ACT0/ACT1 spawn through allocObject, which ' +
+      'objects are killed, the timer resets and weapon slots clear. The zone ' +
+      'array is now READ too (see checkZones / game/zones.js): CS:0x0324 and ' +
+      'CS:0x0FDF-0x1042 are ported, so a teleport zone actually teleports. A ' +
+      'level-exit zone advances to the next of the 8 shipped levels, which ' +
+      'is an HONEST PLACEHOLDER — the original’s true world/sublevel-' +
+      'advance rule (FUN_1000_8c34) is not traced. ACT0/ACT1 spawn through allocObject, which ' +
       'appends rather than re-ranking, so a runtime object draws on top of ' +
       'the weapon pickups where export 32 puts treasure behind. The kill ' +
       'list at DS:0x8c3c is filled and never drawn (CS:0x3cc7 is its walker). ' +
       'And the shop summon DS:0x361 is recorded, not honoured.',
+  });
+
+  return results;
+}
+
+/**
+ * checkZones — the read side of ACT3/ACT4's zone array: CS:0x4A6D (the
+ * hero-vs-zone scan), CS:0x0FDF-0x1042 (teleport execution) and
+ * CS:0x0FAC-0x0FDC (the level-exit destination lookup). See game/zones.js
+ * for the full byte-level citations.
+ */
+export async function checkZones(fetchRaw) {
+  const { results, check } = makeChecker();
+  const T = (over = {}) => ({ index: 0, condKind: [0,0,0], condArg: [0,0,0],
+    x: 0, y: 0, action: 0, actionArg: 0, messageId: 0, reserved: 0, ...over });
+
+  /* --- the box test, CS:0x4A74-0x4AA3, at its exact boundaries ---------- */
+  const oneZone = (kind, x, y, arg = 0) => [
+    { x, y, kind, arg }, { x: 0, y: 0, kind: -1, arg: 0 },
+  ];
+  const hit = (zones, hx, hy) => scanZones(zones, hx, hy) !== null;
+
+  check('a hero exactly on a zone hits it',
+    hit(oneZone(ZONE_TELEPORT, 200, 100), 200, 100));
+  check('the X box is +/-16 INCLUSIVE — 16 px away still hits',
+    hit(oneZone(ZONE_TELEPORT, 200, 100), 184, 100) &&
+    hit(oneZone(ZONE_TELEPORT, 200, 100), 216, 100));
+  check('17 px away in X misses on both sides',
+    !hit(oneZone(ZONE_TELEPORT, 200, 100), 183, 100) &&
+    !hit(oneZone(ZONE_TELEPORT, 200, 100), 217, 100));
+  check('the Y box is +/-8 INCLUSIVE — 8 px away still hits',
+    hit(oneZone(ZONE_TELEPORT, 200, 100), 200, 92) &&
+    hit(oneZone(ZONE_TELEPORT, 200, 100), 200, 108));
+  check('9 px away in Y misses on both sides',
+    !hit(oneZone(ZONE_TELEPORT, 200, 100), 200, 91) &&
+    !hit(oneZone(ZONE_TELEPORT, 200, 100), 200, 109));
+  check('a FREE slot (kind < 0) never matches, even standing on its coords',
+    !hit([{ x: 200, y: 100, kind: -1, arg: 0 }], 200, 100));
+  check('scanZones returns the FIRST matching slot, not the last',
+    scanZones([
+      { x: 200, y: 100, kind: ZONE_TELEPORT, arg: 11 },
+      { x: 200, y: 100, kind: ZONE_EXIT, arg: 22 },
+    ], 200, 100).arg === 11,
+    'CS:0x4AC4 RETs on the first hit — it does not keep scanning for a better one');
+
+  /* --- CS:0x0FDF-0x0FF2: the destination unpack ------------------------- */
+  const d1 = unpackTeleportDest((5 << 8) | 3);   // col 5, row 3
+  check('unpackTeleportDest: col*32+16, row*16 (no Y bias)',
+    d1.x === 5 * 32 + 16 && d1.y === 3 * 16, `got (${d1.x}, ${d1.y})`);
+  const d0 = unpackTeleportDest(0);
+  check('unpackTeleportDest(0) is the (16, 0) tile-centre origin, not (0,0)',
+    d0.x === 16 && d0.y === 0, `got (${d0.x}, ${d0.y})`);
+
+  /* --- CS:0x0FB8-0x0FD4: the level-exit destination table --------------- */
+  check('resolveExitDestination: arg 2..5 all resolve (4 destinations)',
+    [2, 3, 4, 5].every((a) => resolveExitDestination(a) !== null));
+  check('resolveExitDestination(1) is null — CS:0x0FBE bails below arg 2',
+    resolveExitDestination(1) === null);
+  check('resolveExitDestination(6) is null — CS:0x0FC6 bails at arg 2+4',
+    resolveExitDestination(6) === null);
+  check('arg 2 -> "LEVEL  ONE"; arg 5 -> "GAME" with a 10x larger param2',
+    resolveExitDestination(2).text.trim() === 'LEVEL  ONE' &&
+    resolveExitDestination(5).text.trim() === 'GAME' &&
+    resolveExitDestination(5).param2 === EXIT_DESTINATIONS[0].param2 * 10,
+    JSON.stringify(EXIT_DESTINATIONS.map((d) => d.text.trim())));
+
+  /* --- end to end: ACT3 -> makeZone -> scanZones -> unpack, one pass ---- */
+  const ctxT = makeActionContext();
+  runAction(T({ action: 3, x: 0x200, y: 0x100, actionArg: (5 << 8) | 3 }), ctxT);
+  const foundT = scanZones(ctxT.zones, ctxT.zones[0].x, ctxT.zones[0].y);
+  check('a zone ACT3 just created is found by scanZones at its OWN (x,y)',
+    !!foundT && foundT.kind === ZONE_TELEPORT);
+  const destT = foundT && unpackTeleportDest(foundT.arg);
+  check('...and unpacks to the (176, 48) tile the trigger asked for',
+    !!destT && destT.x === 176 && destT.y === 48, JSON.stringify(destT));
+
+  const ctxE = makeActionContext();
+  runAction(T({ action: 4, x: 0x200, y: 0x100, actionArg: 3 }), ctxE);
+  const foundE = scanZones(ctxE.zones, ctxE.zones[0].x, ctxE.zones[0].y);
+  const destE = foundE && resolveExitDestination(foundE.arg);
+  check('an ACT4 zone with arg 3 resolves to "LEVEL  TWO"',
+    !!destE && destE.text.trim() === 'LEVEL  TWO', JSON.stringify(destE));
+
+  /* --- against real shipped data: every zone a real level's own triggers
+   * create is one scanZones can find at the coordinates makeZone gave it --- */
+  const keys = ['1A','1B','2A','2B','3A','3B','4A','4B'];
+  let zonesSeen = 0, zonesFound = 0;
+  for (const k of keys) {
+    const map = parseMap(dclDecompress(await fetchRaw(`game/PLEV${k}.MAP`)).data);
+    const ctx = makeActionContext({ planeA: map.planeA, planeB: map.planeB });
+    for (let i = 0; i < TRIG_COUNT; i++) {
+      const t = parseAllTriggers(map.bulk)[i];
+      if (!isLive(t)) continue;
+      const v = verbOf(t);
+      if (v !== 3 && v !== 4) continue;
+      runAction(t, ctx);
+    }
+    for (const z of ctx.zones) {
+      if (z.kind < 0) continue;
+      zonesSeen++;
+      if (scanZones(ctx.zones, z.x, z.y)) zonesFound++;
+    }
+  }
+  check(`every zone the 8 shipped maps' own ACT3/ACT4 triggers create is ` +
+    `scan-findable at its own coordinates`,
+    zonesSeen > 0 && zonesFound === zonesSeen, `${zonesFound}/${zonesSeen}`);
+
+  /* --- CS:0x1018/0x1022: what a teleport does to the hero's own state --- */
+  const p = new Player(999, 999);
+  p.stateIndex = 7; p.phase = 5; p.fireState = 20; p.fallV = 8;
+  p.teleportTo(176, 48);
+  check('teleportTo snaps position and re-enters state 4 with phase 0',
+    p.x === 176 && p.y === 48 && p.stateIndex === PS.ARRIVAL && p.phase === 0 &&
+    p.fireState === -1 && p.fallV === 0,
+    `x=${p.x} y=${p.y} state=${p.stateIndex} phase=${p.phase} fire=${p.fireState}`);
+
+  results.push({
+    name: 'what the zone read-side now does, and what is still a placeholder',
+    note: true, pass: true,
+    detail: 'A teleport zone moves the hero to the packed destination and ' +
+      're-enters state 4, matching CS:0x0FDF-0x1042 at the byte level. A ' +
+      'level-exit zone with arg 2..5 resolves a real destination TEXT ' +
+      'record (CS:0x0FB8-0x0FD4) but then advances to the next of the 8 ' +
+      'shipped levels in a fixed cycle — an HONEST PLACEHOLDER, not the ' +
+      'original’s own rule, which lives in FUN_1000_8c34 and was not ' +
+      'traced past confirming it re-derives the same destination table from ' +
+      'the CURRENT world rather than the zone’s arg. Also not ' +
+      'reproduced: the familiar reposition (CS:0x0FFC, no Familiar entity ' +
+      'exists in this port yet) and the three untraced CALLs at CS:0x100F-' +
+      '0x1015. UNKNOWN_zone_scan_caller and UNKNOWN_level_exit_destination ' +
+      'both stand.',
   });
 
   return results;

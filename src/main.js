@@ -16,7 +16,8 @@ import { Renderer } from './render/renderer.js';
 import { Player, ST } from './game/player.js';
 import { runAllChecks, checkDescriptorAnchors, checkHeroSprites,
          checkSelectorsAndObjects, checkSpawn, checkEntityB,
-         checkWeaponsProjectiles, checkTriggerActions } from './verify/checks.js';
+         checkWeaponsProjectiles, checkTriggerActions,
+         checkZones } from './verify/checks.js';
 import { EventRunner, parsePalfils, palfilsNameFor } from './game/events.js';
 import { makeActionContext, makeGates, DOOR_TILES,
          ACTION_NAMES } from './game/trigger-actions.js';
@@ -46,6 +47,8 @@ import { stepHeroFrame, stepCreatureDamage } from './game/frame.js';
 import { DamageGrid, damageForTag } from './game/collision.js';
 import { parseWeapons } from './game/weapons.js';
 import { pickUpWeapon } from './game/pickup.js';
+import { scanZones, unpackTeleportDest, resolveExitDestination,
+         ZONE_TELEPORT, ZONE_EXIT } from './game/zones.js';
 
 const LEVELS = ['1A','1B','2A','2B','3A','3B','4A','4B'];
 
@@ -254,7 +257,7 @@ async function main() {
       checkDescriptorAnchors(fetchRaw), checkHeroSprites(fetchRaw),
       checkSelectorsAndObjects(fetchRaw), checkSpawn(fetchRaw),
       Promise.resolve(checkEntityB()), checkWeaponsProjectiles(fetchRaw),
-    checkTriggerActions(fetchRaw),
+    checkTriggerActions(fetchRaw), checkZones(fetchRaw),
     ]) results.push(...await g);
     renderChecks(results);
     const mh = $('messages');
@@ -435,44 +438,67 @@ async function main() {
    * beside its siblings, which is where the other counters already lived. */
   let outOfRange = 0, unstamped = 0, dying = 0;
 
-  sel.addEventListener('change', async () => {
-    level = await loadLevel(sel.value);
-    try { hero = await loadSprites(level.world); }
-    catch (e) { console.error('sprites failed to load', e); }
-    spawn = findSpawn(level.map);
-    player = new Player(spawn.x, spawn.y);
-    events = new EventRunner(level.map, level.palfils);
-    slots = new GroupSlots(); enemies = []; clamped = 0; rng = new GodsRandom(1);
-    health = new Health();
-    /* A real level change is not a game restart, so CS:0x914c does NOT run and
-     * the weapon slots survive — only their counts are re-pinned (CS:0x35e9).
-     * The dev selector re-arms below, so equipping is re-applied rather than
-     * carried; `reloadWorld` is what keeps the per-world Power swap honest. */
-    arsenal = new Arsenal(level.weapons);
-    events.actionCtx = buildActionCtx(level, inventory, arsenal);
-    equipFromUI();
-    grid.clear();
-    shotsFired = 0; creaturesShot = 0; picked = 0; consumed = 0; banked = 0;
-    /* A level change is not a restart: money, score and the inventory all
-     * carry (only CS:0x0487/0x8D91/0x0498/0x8D80 clear them). The burst does
-     * not — its ten records live in a fixed array that the next chest
-     * overwrites wholesale anyway (CS:0x12EA never looks for free slots). */
-    burst = new TreasureBurst(new GodsRandom(1)); opened = 0; lootLanded = 0;
-    starburst = new Starburst(new GodsRandom(2));
-    /* CS:0x69B1/0x8E40 restore every broken block, then clear the queue. */
-    if (blocks) blocks.restoreAll(level.map.planeA, level.map.planeB);
-    blocks = new Destructibles(level.world);
-    /* A level change is not a restart, so lives carry; the timers do not
-     * (the level-start block re-grants the short spawn invulnerability). */
-    fx = { ...fx, invuln: INVULN_TICKS_SPAWN, freeze: 0, giantJump: 0,
-           arc: 0, shop: false, stateMachineSuspended: false };
-    resetWeaponArc();
-    wireSpawn();
-    cam = camInit(spawn);
-    levelInfo = { world: +sel.value[0], sublevel: sel.value[1] === 'A' ? 0 : 1 };
-    outOfRange = 0; unstamped = 0;
-    $('event').textContent = '–';
-  });
+  /* The 8 shipped levels, in the only order this project can currently
+   * justify — see the "level exit" note in game/zones.js: the original's
+   * true world/sublevel-advance rule (CS:0x0FAC's DS:0x178/0x36a hand-off
+   * into FUN_1000_8c34) is not traced past confirming the destination TEXT
+   * table exists. This wraps 4B -> 1A. `UNKNOWN_level_exit_destination`. */
+  const nextLevelKey = (key) => LEVELS[(LEVELS.indexOf(key) + 1) % LEVELS.length];
+
+  /* True while `switchLevel` is mid-flight — the tick loop pauses rather
+   * than scanning zones or stepping physics against a level that is only
+   * half-loaded. There is no original-engine equivalent to cite here; DOS
+   * just blocked on the synchronous file reads this port awaits instead. */
+  let transitioning = false;
+
+  async function switchLevel(key) {
+    transitioning = true;
+    try {
+      sel.value = key;
+      level = await loadLevel(key);
+      try { hero = await loadSprites(level.world); }
+      catch (e) { console.error('sprites failed to load', e); }
+      spawn = findSpawn(level.map);
+      player = new Player(spawn.x, spawn.y);
+      events = new EventRunner(level.map, level.palfils);
+      slots = new GroupSlots(); enemies = []; clamped = 0; rng = new GodsRandom(1);
+      health = new Health();
+      /* A real level change is not a game restart, so CS:0x914c does NOT run
+       * and the weapon slots survive — only their counts are re-pinned
+       * (CS:0x35e9). The dev selector re-arms below, so equipping is
+       * re-applied rather than carried; `reloadWorld` is what keeps the
+       * per-world Power swap honest. */
+      arsenal = new Arsenal(level.weapons);
+      events.actionCtx = buildActionCtx(level, inventory, arsenal);
+      equipFromUI();
+      grid.clear();
+      shotsFired = 0; creaturesShot = 0; picked = 0; consumed = 0; banked = 0;
+      /* A level change is not a restart: money, score and the inventory all
+       * carry (only CS:0x0487/0x8D91/0x0498/0x8D80 clear them). The burst
+       * does not — its ten records live in a fixed array that the next
+       * chest overwrites wholesale anyway (CS:0x12EA never looks for free
+       * slots). */
+      burst = new TreasureBurst(new GodsRandom(1)); opened = 0; lootLanded = 0;
+      starburst = new Starburst(new GodsRandom(2));
+      /* CS:0x69B1/0x8E40 restore every broken block, then clear the queue. */
+      if (blocks) blocks.restoreAll(level.map.planeA, level.map.planeB);
+      blocks = new Destructibles(level.world);
+      /* A level change is not a restart, so lives carry; the timers do not
+       * (the level-start block re-grants the short spawn invulnerability). */
+      fx = { ...fx, invuln: INVULN_TICKS_SPAWN, freeze: 0, giantJump: 0,
+             arc: 0, shop: false, stateMachineSuspended: false };
+      resetWeaponArc();
+      wireSpawn();
+      cam = camInit(spawn);
+      levelInfo = { world: +key[0], sublevel: key[1] === 'A' ? 0 : 1 };
+      outOfRange = 0; unstamped = 0;
+      $('event').textContent = '–';
+    } finally {
+      transitioning = false;
+    }
+  }
+
+  sel.addEventListener('change', () => { switchLevel(sel.value); });
 
   const input = { left: false, right: false, up: false, down: false, fire: false };
   const KEYMAP = {
@@ -517,6 +543,7 @@ async function main() {
 
   const clock = new Clock(
     () => {
+      if (transitioning) return;    // a level load is in flight — hold the frame
       /* Per-tick order is the original's: snapshot the scroll origin, run the
        * state machine, probe plane B, then update the camera (CS:0x023f ->
        * 0x4993 -> 0x5ea0 -> 0x5ea4). Everything drawn this frame uses the
@@ -617,6 +644,30 @@ async function main() {
       /* CS:0x4189's dead `js` is reachable in shipped data — 5 of 48 ACT8
        * records. Report it rather than diverging quietly. */
       while (diverged.length) console.warn('[trigger]', diverged.shift());
+
+      /* CS:0x4A6D — the hero-vs-zone scan; see game/zones.js for the full
+       * citation, including the honest gap (its own caller in the original
+       * is not located). Zones only exist once ACT3/ACT4 has fired one, so
+       * this is a no-op on every level until then, exactly as shipped. */
+      const zoneHit = scanZones(events.actionCtx.zones, player.x, player.y);
+      if (zoneHit && zoneHit.kind === ZONE_TELEPORT) {
+        const dest = unpackTeleportDest(zoneHit.arg);
+        player.teleportTo(dest.x, dest.y);
+        /* ⚠️ The camera is NOT re-centred here. CS:0x0FDF-0x1042 writes only
+         * [0x17a]/[0x17c] (hero position) and never touches [0xa]/[0xc] (the
+         * scroll origin this project's own camera.js already ports) — so a
+         * teleport in the original is a hard cut for the hero but the camera
+         * pans to catch up through its ordinary dead-zone logic, which the
+         * unconditional `cam.update()` below already drives every tick. */
+        $('event').textContent = `teleport zone -> (${dest.x}, ${dest.y})`;
+      } else if (zoneHit && zoneHit.kind === ZONE_EXIT && !transitioning) {
+        const dest = resolveExitDestination(zoneHit.arg);
+        $('event').textContent = dest
+          ? `level exit -> "${dest.text.trim()}"`
+          : `level exit — arg ${zoneHit.arg} out of range, inert (CS:0x0FC8)`;
+        if (dest) switchLevel(nextLevelKey(sel.value));   // fire-and-forget
+      }
+
       runSpawns();
       /* THE HUNT. CS:0xf11f/0xf1e5 run the pathfinder only from the two walk
        * modes, only on a tile crossing, and only when standing on ground —
