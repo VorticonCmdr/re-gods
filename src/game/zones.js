@@ -54,10 +54,24 @@
  *     0FFC  if [0x168] >= 0 (a familiar is alive): reposition it too, Y-0x28
  *           (this port has no Familiar entity yet — see hero-fire.js's own
  *           note on `UNKNOWN_DS_0168` — so that half is not reproduced here)
- *     100F/1012/1015  three CALLs not traced this pass (0x2189, 0xde6f,
- *           0x1196) — 0xde6f is already identified elsewhere in this project
- *           as the destructible-block restore, so at least one of the three
- *           is "put broken blocks back"; the other two are UNKNOWN
+ *     100F  CALL FUN_1000_2189 — the level-load/respawn camera-init routine
+ *           (Gods/CLAUDE.md's `UNKNOWN_camera_init`, now CLOSED): camera =
+ *           clamp(dest - (0x90,0x48)) against the same world-edge bounds the
+ *           per-tick pan uses. So a teleport is a hard camera cut too, not a
+ *           dead-zone catch-up — see main.js, now ported as cameraForSpawn().
+ *     1012  CALL FUN_1000_de6f — `rep stosb` 0x8e8 (2280) bytes at SS:0x3768,
+ *           i.e. the System-A entity group-RUNTIME array clear (10 slots x
+ *           0xe4), not "the destructible-block restore" as an earlier
+ *           revision of this comment guessed (that guess is wrong: de6f
+ *           never touches plane A/B or the DS:0xd0c6 damage queue). A
+ *           teleport wipes every active System-A creature group's runtime
+ *           state; this port does not reproduce that yet — a disclosed gap.
+ *     1015  CALL FUN_1000_1196, falling into the already-documented CS:0x11D3
+ *           object-activation-box recompute (`UNKNOWN_object_flag6 — CLOSED`)
+ *           — already faithfully reproduced every tick by this port's own
+ *           `activateObjects(level.drawObjects, activationBox(...))` call, so
+ *           nothing extra is needed here: the very next tick recomputes it
+ *           against the freshly-teleported camera regardless.
  *     1018  [0x36b] = 0             ; animation phase reset
  *     101D  [0x370] = 0             ; pending flag cleared
  *     1022  [0x377] = 4             ; STATE 4 — already documented in this

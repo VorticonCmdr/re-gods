@@ -784,10 +784,14 @@ clears it. One frame = 4 PIT ticks = 15.000 Hz.
 
 Done: asset pipeline, level rendering (both tile sheets, 1-based plane A), the ported
 camera (dead zone `(80, 208)` open on the left, proportional vertical catch-up, the
-world-3 scripted nudge), 15 Hz clock, trigger engine, hero kinematics and hero
-sprites, teleport zones (real destination unpack, no reload needed) and level-exit
-zones (real destination text, placeholder level sequencing — see the trigger
-section above).
+world-3 scripted nudge, **and now the level-load/respawn/teleport init**, `CS:0x2189` —
+`camera = clamp(spawnPos - (0x90,0x48))` against the same world-edge bounds the per-tick
+pan uses, exported as `cameraForSpawn()`), the hero's own per-world spawn point (`DS:0x15a`
+via the hardcoded 4-world table at `DS:0xe8ca`, not derived from `.MAP`/`PALFILS` data —
+`main.js`'s `SPAWN_TABLE`), 15 Hz clock, trigger engine, hero kinematics and hero
+sprites, teleport zones (real destination unpack, camera re-centred to match, no reload
+needed) and level-exit zones (real destination text, placeholder level sequencing — see
+the trigger section above).
 
 Deliberately not done, with the reason:
 

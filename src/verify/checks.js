@@ -6383,9 +6383,14 @@ export async function checkZones(fetchRaw) {
       'traced past confirming it re-derives the same destination table from ' +
       'the CURRENT world rather than the zone’s arg. Also not ' +
       'reproduced: the familiar reposition (CS:0x0FFC, no Familiar entity ' +
-      'exists in this port yet) and the three untraced CALLs at CS:0x100F-' +
-      '0x1015. UNKNOWN_zone_scan_caller and UNKNOWN_level_exit_destination ' +
-      'both stand.',
+      'exists in this port yet). The three CALLs at CS:0x100F-0x1015 are now ' +
+      'traced (see game/zones.js): 0x100F is the level-load/respawn camera ' +
+      'init (Gods/CLAUDE.md UNKNOWN_camera_init, now CLOSED and ported as ' +
+      'cameraForSpawn — a teleport IS a hard camera cut), 0x1012 clears the ' +
+      'System-A entity group-runtime array (not "the destructible-block ' +
+      'restore" as this note previously guessed — not yet reproduced), and ' +
+      '0x1015 is the already-ported per-tick object-activation-box pass. ' +
+      'UNKNOWN_zone_scan_caller and UNKNOWN_level_exit_destination both stand.',
   });
 
   return results;

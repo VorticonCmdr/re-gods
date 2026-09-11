@@ -41,8 +41,25 @@
  *
  *   UNKNOWN_camera_alt_path — 5EB3 `cmp byte [0x32],0 / jz 0x5ec0`. Everything
  *   above is the [0x32] == 0 branch. The other branch calls 0x5e22 and jumps
- *   straight to sprite selection, skipping the camera entirely. What sets
- *   [0x32] is not established, so that path is not modelled.
+ *   straight to sprite selection, skipping the camera entirely. [0x32] is a
+ *   scripted pan-to-target mode, installed by trigger ACTION selector 11 for
+ *   per-world cutscenes and reset on every spawn/respawn — not modelled here
+ *   since it never fires on shipped-level normal play outside those cutscenes.
+ *
+ * LEVEL-LOAD / RESPAWN / TELEPORT INIT — FUN_1000_2189, CS:0x2189-0x21C1.
+ *   Reached, unconditionally or near enough, from three real gameplay sites:
+ *   fresh level load (CS:0x8CA7), respawn with lives remaining (CS:0x08D3,
+ *   skipped only while [0x32]'s scripted pan above is in control), and
+ *   teleport-stone arrival (CS:0x100F).
+ *
+ *     2189  ax -= 0x90 ; bx -= 0x48        ; spawn point -> camera offset
+ *     218F  clamp ax to CAM_X_MIN..CAM_X_MAX  (same bounds as the pan above)
+ *     2196  clamp bx to CAM_Y_MIN..CAM_Y_MAX
+ *     21AE  [0xa] = ax ; [0xc] = bx
+ *
+ *   The (0x90, 0x48) offset is not arbitrary: it puts the spawn point at
+ *   screen (144, 72), inside the dead zone on BOTH axes (X in (80,208), Y in
+ *   [32,80]), so the very first frame after a reset needs no catch-up pan.
  */
 
 export const CAM_X_MIN = 0;
@@ -55,15 +72,27 @@ export const DEAD_TOP    = 0x20;    // scroll up when screenY < 32
 export const DEAD_BOTTOM = 0x50;    // scroll down when screenY > 80
 export const PAN_STEP = 4;
 
+// CS:0x2189/0x218C — the level-load/respawn/teleport init offset.
+export const CAM_INIT_OFFSET_X = 0x90;   // 144
+export const CAM_INIT_OFFSET_Y = 0x48;   // 72
+
+/** CS:0x2189-0x21C1 (FUN_1000_2189): camera origin for a fresh spawn/arrival
+ * point, clamped to the same world-edge bounds the per-tick pan uses. */
+export function cameraForSpawn(x, y) {
+  return new Camera(x - CAM_INIT_OFFSET_X, y - CAM_INIT_OFFSET_Y);
+}
+
 /** Arithmetic right shift by 1 — the original uses SAR, not a divide. */
 const sar1 = (v) => v >> 1;
 
 export class Camera {
   constructor(x = 0, y = 0) {
-    /* UNKNOWN_camera_init — what the original writes into [0xa]/[0xc] at level
-     * load has not been traced. The pan code clamps only when it pans, so an
-     * out-of-range starting value would simply persist inside the dead zone;
-     * the port clamps up front so it can never render outside the world. */
+    /* This clamp is exactly CS:0x218F-0x21AB (FUN_1000_2189)'s own floor/
+     * ceiling — see cameraForSpawn() above, the proven level-load/respawn/
+     * teleport init path. The plain constructor still clamps unconditionally
+     * so any other caller (a hand-picked debug position, say) can't render
+     * outside the world either — the original's pan code only clamps when it
+     * pans, so an out-of-range value would otherwise persist. */
     x = Math.max(CAM_X_MIN, Math.min(CAM_X_MAX, x | 0));
     y = Math.max(CAM_Y_MIN, Math.min(CAM_Y_MAX, y | 0));
     this.x = x; this.y = y;            // DS:0x0a / DS:0x0c

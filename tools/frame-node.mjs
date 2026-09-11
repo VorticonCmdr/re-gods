@@ -19,7 +19,7 @@ const out   = process.argv[4] || `/tmp/gods_frame_${key}.ppm`;
 
 const { dclDecompress } = await import('../src/formats/dcl.js');
 const { decodePI1, sliceTiles, TILE_W, TILE_H, SCREEN_W, SCREEN_H } = await import('../src/formats/pi1.js');
-const { parseMap, MAP_COLS, MAP_ROWS, TILE_COUNTS, CELL_SOLID } = await import('../src/formats/map.js');
+const { parseMap, MAP_COLS, MAP_ROWS, TILE_COUNTS } = await import('../src/formats/map.js');
 const { parseAtlas, cutFrame } = await import('../src/formats/atlas.js');
 const { buildDescriptorMap, GROUP_STEMS } = await import('../src/formats/descriptors.js');
 const { spriteForType, parseObjectCategories, sortForDraw, isDeadType } = await import('../src/game/objects.js');
@@ -29,7 +29,7 @@ const { parseGroupsB, GroupSlots, spriteForEntity, MAX_ENTITIES,
 const { EntityB, MODE_TABLE, groundBelow } = await import('../src/game/entity.js');
 const { parsePalfils, palfilsNameFor } = await import('../src/game/events.js');
 const { Player } = await import('../src/game/player.js');
-const { Camera } = await import('../src/game/camera.js');
+const { cameraForSpawn } = await import('../src/game/camera.js');
 
 const raw = (n) => {
   const p = join(PUB, 'game', n);
@@ -62,16 +62,16 @@ const heroFrame = (id) => {
   return { ...f, pixels: cutFrame(images[d.stem], f) };
 };
 
-/* Same spawn rule as main.js: first cell with solid ground three rows below. */
-let spawn = { x: 64, y: 64 };
-outer: for (let col = 1; col < MAP_COLS - 1; col++) {
-  for (let row = 0; row < MAP_ROWS - 4; row++) {
-    if (map.planeB[row * MAP_COLS + col] === 0 &&
-        map.planeB[(row + 3) * MAP_COLS + col] === CELL_SOLID) {
-      spawn = { x: col * 32, y: row * 16 }; break outer;
-    }
-  }
-}
+/* Same table as main.js's SPAWN_TABLE: GAME.EXE's hardcoded per-world spawn
+ * point, DS:0xe8ca, read directly off the image (FUN_1000_2a37,
+ * CS:0x2AB5-0x2ACC) — not derived from the .MAP or PALFILS data. */
+const SPAWN_TABLE = {
+  1: { x: 64,   y: 944 },
+  2: { x: 3888, y: 112 },
+  3: { x: 64,   y: 48  },
+  4: { x: 384,  y: 496 },
+};
+let spawn = SPAWN_TABLE[world] || { x: 64, y: 64 };
 
 /* Spawn the FIRST live enemy group of this level through the real recipe, and
  * put the hero and camera beside it so the frame shows something. */
@@ -93,7 +93,7 @@ if (firstLive) {
   spawn = { x: ex - 64, y: ey };
 }
 const p = new Player(spawn.x, spawn.y);
-const cam = new Camera(spawn.x - 100, spawn.y - 60);
+const cam = cameraForSpawn(spawn.x, spawn.y);
 const input = { left: false, right: true, up: false, down: false, fire: false };
 const lvl = { world: +key[0], sublevel: key[1] === 'A' ? 0 : 1 };
 for (let i = 0; i < ticks; i++) {

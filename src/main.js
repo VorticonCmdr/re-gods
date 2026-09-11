@@ -9,7 +9,7 @@
 
 import { dclDecompress } from './formats/dcl.js';
 import { decodePI1, sliceTiles, SCREEN_W, SCREEN_H } from './formats/pi1.js';
-import { parseMap, MAP_COLS, MAP_ROWS, CELL_SOLID, TILE_COUNTS } from './formats/map.js';
+import { parseMap, TILE_COUNTS } from './formats/map.js';
 import { parseAtlas, cutAll } from './formats/atlas.js';
 import { Clock, LOGIC_HZ } from './engine/clock.js';
 import { Renderer } from './render/renderer.js';
@@ -21,7 +21,7 @@ import { runAllChecks, checkDescriptorAnchors, checkHeroSprites,
 import { EventRunner, parsePalfils, palfilsNameFor } from './game/events.js';
 import { makeActionContext, makeGates, DOOR_TILES,
          ACTION_NAMES } from './game/trigger-actions.js';
-import { Camera } from './game/camera.js';
+import { cameraForSpawn } from './game/camera.js';
 import { spriteFor, STATE_INFO, UNMODELLED_PHASE_STATES } from './game/states.js';
 import { buildDescriptorMap, GROUP_STEMS, HERO_DESCRIPTOR_MAX } from './formats/descriptors.js';
 import { spriteForType, parseObjectCategories, sortForDraw, isDeadType,
@@ -56,6 +56,23 @@ import { scanZones, unpackTeleportDest, resolveExitDestination,
          ZONE_TELEPORT, ZONE_EXIT } from './game/zones.js';
 
 const LEVELS = ['1A','1B','2A','2B','3A','3B','4A','4B'];
+
+/* The hero's spawn point on a fresh level load, GAME.EXE's DS:0x15a/0x15c.
+ * NOT derived from the .MAP or PALFILS data at all — it is a hardcoded
+ * per-world table at DS:0xe8ca (4 records of {u16 x, u16 y}), read directly
+ * off the image and indexed by world (FUN_1000_2a37, CS:0x2AB5-0x2ACC). All
+ * four points land inside the 4096x1024 world bounds, which is itself a
+ * check on the read. */
+const SPAWN_TABLE = {
+  1: { x: 64,   y: 944 },
+  2: { x: 3888, y: 112 },
+  3: { x: 64,   y: 48  },
+  4: { x: 384,  y: 496 },
+};
+
+function levelSpawn(world) {
+  return SPAWN_TABLE[world] || { x: 64, y: 64 };
+}
 
 /* Read out of the PWEAPONS records' own text at the 80-byte stride. Taking
  * this order from memory instead put fireball and lightning bolt in each
@@ -173,23 +190,6 @@ async function loadSprites(world) {
   return { frames, ranges, palette: images.PALWAYS1.palette, total: map.length };
 }
 
-/* Spawn: pick a standing position from the map itself rather than inventing
- * one. GAME.EXE spawns from DS:0x15a (level-load state we have not read), so
- * this is a PORT-ONLY choice and is flagged as such: we scan for the first
- * cell with solid ground beneath it. */
-function findSpawn(map) {
-  for (let col = 1; col < MAP_COLS - 1; col++) {
-    for (let row = 0; row < MAP_ROWS - 4; row++) {
-      const here  = map.planeB[row * MAP_COLS + col];
-      const below = map.planeB[(row + 3) * MAP_COLS + col];
-      if (here === 0 && below === CELL_SOLID) {
-        return { x: col * 32, y: row * 16 };
-      }
-    }
-  }
-  return { x: 64, y: 64 };
-}
-
 /* Draw a whole atlas into a canvas as a labelled grid, so the decoded frames
  * are inspectable rather than merely asserted to be correct. */
 async function renderAtlas(name, canvas) {
@@ -292,7 +292,7 @@ async function main() {
     hero = await loadSprites(level.world);
   } catch (e) { console.error('sprites failed to load', e); }
 
-  let spawn = findSpawn(level.map);
+  let spawn = levelSpawn(level.world);
   let player = new Player(spawn.x, spawn.y);
   /* THE ACTION CONTEXT — what makes a fired trigger actually do something.
    * planeA/planeB are the live map arrays (subarray views into the bulk), so a
@@ -495,12 +495,9 @@ async function main() {
       slot.state = 1;
     }
   };
-  /* Start the camera with the hero inside both dead zones, or he sits at
-   * screen (0,0) and the view slides for ~25 ticks on every level load.
-   * UNKNOWN_camera_init — what the original writes into [0xa]/[0xc] at level
-   * load has not been traced; this matches tools/frame-node.mjs so the browser
-   * and the headless renderer agree about the same tick. */
-  const camInit = (s) => new Camera(s.x - 100, s.y - 60);
+  /* CS:0x2189-0x21C1 (FUN_1000_2189): camera = clamp(spawn - (0x90,0x48)).
+   * Proven, not guessed — see cameraForSpawn()'s own header in camera.js. */
+  const camInit = (s) => cameraForSpawn(s.x, s.y);
   let cam = camInit(spawn);
   let levelInfo = { world: +LEVELS[0][0], sublevel: LEVELS[0][1] === 'A' ? 0 : 1 };
   /* `dying` is counted in the RENDER callback and was previously declared with
@@ -529,7 +526,7 @@ async function main() {
       level = await loadLevel(key);
       try { hero = await loadSprites(level.world); }
       catch (e) { console.error('sprites failed to load', e); }
-      spawn = findSpawn(level.map);
+      spawn = levelSpawn(level.world);
       player = new Player(spawn.x, spawn.y);
       events = new EventRunner(level.map, level.palfils);
       slots = new GroupSlots(); enemies = []; clamped = 0;
@@ -742,12 +739,17 @@ async function main() {
       if (zoneHit && zoneHit.kind === ZONE_TELEPORT) {
         const dest = unpackTeleportDest(zoneHit.arg);
         player.teleportTo(dest.x, dest.y);
-        /* ⚠️ The camera is NOT re-centred here. CS:0x0FDF-0x1042 writes only
-         * [0x17a]/[0x17c] (hero position) and never touches [0xa]/[0xc] (the
-         * scroll origin this project's own camera.js already ports) — so a
-         * teleport in the original is a hard cut for the hero but the camera
-         * pans to catch up through its ordinary dead-zone logic, which the
-         * unconditional `cam.update()` below already drives every tick. */
+        /* CORRECTION to an earlier revision of this comment, which claimed
+         * the camera is NOT re-centred on teleport. CS:0x100F, inside
+         * FUN_1000_0fac's teleport-execution tail, is CALL FUN_1000_2189 —
+         * the same level-load/respawn camera-init routine camera.js's
+         * cameraForSpawn() now ports — called unconditionally, right after
+         * [0x17a]/[0x17c] are snapped to the destination. So a teleport in
+         * the original IS a hard cut for the camera too, not a dead-zone
+         * catch-up. See game/zones.js's own header for the two sibling
+         * calls at CS:0x1012/0x1015 (destructible-block restore; the third
+         * still untraced). */
+        cam = cameraForSpawn(dest.x, dest.y);
         $('event').textContent = `teleport zone -> (${dest.x}, ${dest.y})`;
       } else if (zoneHit && zoneHit.kind === ZONE_EXIT && !transitioning) {
         const dest = resolveExitDestination(zoneHit.arg);
