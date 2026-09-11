@@ -1533,6 +1533,35 @@ Three structural findings worth carrying into a port:
 
 `PBACKSCR.PI1` is not an orphan: it is the `"backscr.pi1"` stem this document's own Table 1 Block B already resolves to `GAME.EXE` (distinct from `INTROV.EXE`'s own `PSTBACK.PI1` status background). So the table is a compiled-in duplicate of a real, GAME.EXE-owned asset's palette — not a floating constant with no shipped counterpart.
 
+### `UNKNOWN_backscr_pi1_loader` — CLOSED: the status panel's own backdrop, and a shared refresh utility called from 8 sites `[STATIC]`
+
+The load site sits immediately after the hiscores load routine (`FUN_1000_3445`, `CS:0x3445`–`0x34D4`) and was noted but not chased in an earlier pass. It is `FUN_1000_34d5` (`CS:0x34D5`–`0x3505`), its own properly-boundaried Ghidra function, not a mislabeled continuation:
+
+```
+34d5  cmp byte [0x387],0x0 / jnz 0x3505   ; one-shot latch — already loaded, skip
+34dc  push es
+34dd  mov ax,0x351b / mov es,ax            ; destination segment for the RAW decompress
+34e2  xor bx,bx
+34e4  mov dx,0xea8c                        ; "backscr.pi1" — read directly off DS:0xea8c
+34e7  mov cx,0x7d22                        ; 32034 decimal — the exact DEGAS .PI1 size
+34ea  call 0x1000:257e                     ; the shared DCL asset loader
+34ed  push ds / push es / pop ds           ; DS := 0x351b (the just-decompressed image)
+34f0  mov di,0x0
+34f3  mov si,0x22                          ; skip the 2-byte res word + 32-byte palette
+34f6  mov ax,0xa44c / mov es,ax            ; ES := 0xa44c, the conversion destination
+34fb  call 0x1000:3573                     ; -> graphics EXPORT 3 (ST DEGAS -> VGA planar)
+34fe  pop ds / pop es
+3500  mov byte [0x387],0x1                 ; latch set
+```
+
+`0xea8c` reads `"backscr.pi1\0"` directly (confirmed by `read_memory`), and `0x7d22` = 32034 is this document's own already-established exact DEGAS `.PI1` decompressed size — an independent confirmation of the format claim from a fresh call site. `CS:0x3573` is `mov bp,0x525e / callf [bp+0]`, and `(0x525e − 0x5252)/4 = 3` — graphics **export 3**, the already-documented "ST DEGAS planar → EGA planar converter", called with `SI=0x22` (past the resolution word and 32-byte palette, exactly the bitmap offset this document's atlas-loader math already uses) and `DI=0` into `ES=0xa44c`.
+
+**`FUN_1000_34d5`'s only caller is `FUN_1000_3506`**, which does a *second* driver call right after: `CS:0x351A → CS:0x357A` (`mov bp,0x5262` then fall into the shared `callf [bp+0]` thunk) — `(0x5262−0x5252)/4 = 4`, graphics **export 4**, "whole-page VRAM→VRAM latch copy (8800 B)" — with `DS := 0xa44c` (the buffer export 3 just filled) and `ES := [original DS:0]` (a segment word read out of the caller's own data segment before it was repointed), `SI=DI=0`. So the full sequence is: decompress `backscr.pi1` once (latched), convert its DEGAS planar bitmap to VGA/EGA planar format once, then copy that converted page into an active video/backdrop segment **every time `FUN_1000_3506` runs** — the conversion is one-shot, the VRAM copy is not.
+
+**`FUN_1000_3506` is not hiscores-specific — it has 8 callers across the binary**, found via `get_xrefs_to`: `FUN_1000_2a37` (the central `.MAP`/`PALFILS` level loader this document already credits with both those loads), `FUN_1000_266b`, `FUN_1000_30d4`, `FUN_1000_311c`, `FUN_1000_318f` and `FUN_1000_32c0` (the latter two already named in this document's own *game-over* sequence — `CS:0x0987 call 0x318f` / `CS:0x0990 call 0x32c0`), `FUN_1000_3445` (the hiscores loader), and `FUN_1000_648b`. So this is a general **"ensure the status-panel backdrop is decompressed and refresh it into video memory"** utility, invoked at level (re)load, on entering the high-score screen, on game over, and from several other sites — not something wired specifically to hiscores. This independently corroborates `backscr.pi1`'s already-inferred identity as the status panel's own backdrop image: it is refreshed at exactly the moments the status panel would need repainting.
+
+`FUN_1000_266b` (one of the 8 callers, read in full) is itself informative: it calls export 15 ("Clear page") first, then conditionally calls `FUN_1000_3506` only when `DS:0x387` is already set (skip-if-not-yet-loaded, since a fresh load is handled elsewhere), then `CS:0x2792` — this document's own already-documented `"GODS DISK ?"` swap-prompt digit patcher — then loads 16 words off the palette fade-staging buffer `DS:0x12` (also already documented, under the palette-fade closure) onto the stack. Consistent with a "clear the screen and show the disk-swap prompt" routine, not anything hiscores-specific either. `UNKNOWN_fun_3506_dispatch` — the branch past `CS:0x351F` (`cmp byte[0x38a],3`, then arithmetic on `DS:0x130`/`0x132`/`0x134`/`SS:0x414`) was not traced past this point.
+
 **The consumer.** Not found by the direct-operand searches this document's own ranked item implicitly invited (`[0x88]`/`[0x86]` dereferences, checked exhaustively across all 12 non-PKLITE-packed shipped executables with zero hits) — because nothing ever addresses it that way. `GAME.EXE` instead **preloads a register**. Five sites in the image reach `call 0x3596` with `si` freshly set to `0x86`:
 
 ```
