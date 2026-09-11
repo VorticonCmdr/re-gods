@@ -50,7 +50,7 @@
 
 import { CELL_SOLID, CELL_CLIMBABLE, MAP_COLS } from '../formats/map.js';
 import { WALK_CYCLE, WALK_FOOTSTEP_PHASES, jumpPhase,
-         LADDER_JUMP_PHASE } from './states.js';
+         LADDER_JUMP_PHASE, LADDER_PHASE_MAX } from './states.js';
 import { FIRE_STATES, ENTRY, fireTick, fireAnimOffset, fireGuardBefore,
          fireGuardAfter, JUMP_ARC_STEP, JUMP_ARC_END,
          JUMP_ARC_EXIT } from './fire-states.js';
@@ -67,8 +67,22 @@ export const GRAVITY_STEP  = 1;    // per tick
 export const FALL_VMAX     = 10;   // clamp on DS:0x1b2
 export const FALL_BASE     = 4;    // dY = FALL_BASE + v
 export const AIR_STEPS_MAX = 3;    // DS:0x345 budget
-export const CLIMB_UP_STEP   = 4;  // see _climb — branch not isolated
-export const CLIMB_DOWN_STEP = 6;  // CS:0x5663 `add word [0x17c],0x6` [PROVEN]
+/* CS:0x5663 (descend, state 13) `add word [0x17c],0x6` AND CS:0x58c3
+ * (ascend, state 14) `sub word [0x17c],0x6` — BOTH directions step 6 px, not
+ * the 4/6 split this project's own notes carried. That 4 px number came from
+ * CS:0x55F6/0x561C, which — re-read chasing the top-of-ladder bug below —
+ * turn out to belong to the ladder-FIRE states (24/25), not plain climbing at
+ * all. The plain climb-up branch (state 14, CS:0x5707) was "not isolated to
+ * a single site" in this project's own words; it now is. */
+export const CLIMB_STEP = 6;
+/* CS:0x54b9/0x5707 `cmp byte [0x36c],0 / jnz` — the WHOLE climb handler,
+ * dismount and fire-on-ladder included, runs only every OTHER logic tick;
+ * the closed tick is a bare `jmp 0x5e9b` before input is even read. */
+export const CLIMB_EVERY_OTHER_TICK = true;
+/* CS:0x551b/0x576d (right) and CS:0x558b/0x57e5 (left) — DOWN + a direction
+ * must be held for THREE ticks (`cmp .. ,2 / jle bail` — proceeds only once
+ * the counter is > 2) before a sideways dismount is even attempted. */
+export const DISMOUNT_HOLD_TICKS = 3;
 
 export const ST = { GROUND: 'ground', JUMP: 'jump', FALL: 'fall', CLIMB: 'climb' };
 
@@ -208,6 +222,17 @@ function climbableThreeBelow(map, x, y) {
   return false;
 }
 
+/* CS:0x5797-0x57a4 (dismount right) / CS:0x5806-0x5813 (dismount left) — a
+ * secondary guard past the wall probe: when the hero isn't exactly row
+ * -aligned (`Y & 0xf != 0`), also require the cell three rows below, one
+ * column toward the dismount side, to be clear. Row-aligned dismounts skip
+ * this test outright. */
+function dismountBlocked(map, x, y, dir) {
+  if ((y & 0xf) === 0) return false;
+  const si = mapCursor(x, y) + 3 * MAP_COLS + dir;
+  return cellAt(map, si) === CELL_SOLID;
+}
+
 export class Player {
   constructor(x, y) {
     this.x = x | 0;          // DS:0x17a
@@ -240,6 +265,9 @@ export class Player {
     this.savedLadderY = 0;        // DS:0x1b6
     this.pendingAlloc = null;     // reserved on the press, emitted 3 ticks on
     this.emitted = null;          // {right} on the tick a shot actually spawns
+    this.ladderPingPong = false;  // DS:0x347 — the climb-cycle direction flag
+    this.dismountHold = 0;        // DS:0x353 / DS:0x348 — shared, see _climb
+    this.climbStep = false;       // set on the ticks the original plays SFX 0x5931
     /* What the sprite selector should use. Equal to `phase` everywhere except
      * walk+fire, which renders through the DS:0xd950 recoil table while
      * persisting the raw counter (CS:0x5D6B stores, then CS:0x5D75 remaps). */
@@ -281,16 +309,22 @@ export class Player {
    * @param {?{allocate:Function, emit:Function}} fire  the Arsenal, or null.
    *        `allocate()` returns an allocation or null (the original's inverted
    *        `cmp ax,0`); `emit(alloc, x, y, right)` writes the records.
+   * @param {number} tock  DS:0x36c, the every-other-frame toggle (CS:0x0172
+   *        `not`). Only `_climb` reads it. Defaults to a value that always
+   *        leaves the gate open, so a caller that doesn't thread the real
+   *        toggle through (tests, tools) climbs at the pre-existing rate
+   *        rather than silently halving it.
    */
-  tick(map, input, fire = null) {
+  tick(map, input, fire = null, tock = 1) {
     this.footstep = false;
+    this.climbStep = false;
     this.emitted = null;
     if (this.fireState >= 0) { this._fireTick(map, input, fire); return; }
     switch (this.state) {
       case ST.GROUND: this._ground(map, input, fire); break;
       case ST.JUMP:   this._jump(map, input, fire);   break;
       case ST.FALL:   this._fall(map, input, fire);   break;
-      case ST.CLIMB:  this._climb(map, input, fire);  break;
+      case ST.CLIMB:  this._climb(map, input, fire, tock); break;
     }
     if (this.fireState < 0) this.renderPhase = this.phase;
   }
@@ -511,7 +545,9 @@ export class Player {
       this.x = (this.x + 0x20) & 0xFFE0;
       this.state = ST.CLIMB;
       this.stateIndex = S.CLIMB;
-      this.phase = 0;           // UNKNOWN_ladder_anim_phase
+      this.phase = 0;
+      this.ladderPingPong = false;
+      this.dismountHold = 0;
       this.fromLadder = false;
       return;
     }
@@ -533,7 +569,9 @@ export class Player {
         this.x = (this.x + 0x20) & 0xFFE0;
         this.state = ST.CLIMB;
         this.stateIndex = S.CLIMB;
-        this.phase = 0;         // UNKNOWN_ladder_anim_phase
+        this.phase = 0;
+        this.ladderPingPong = false;
+        this.dismountHold = 0;
         this.fromLadder = true;
         return;
       }
@@ -622,7 +660,63 @@ export class Player {
     this._tryFire(this.facing < 0 ? 23 : 22, input, fire);
   }
 
-  _climb(map, input, fire) {
+  /**
+   * @param {number} tock  DS:0x36c — see `tick`'s own doc. The whole handler
+   *        is gated on it, exactly as the original's own first instruction is.
+   */
+  _climb(map, input, fire, tock) {
+    /* CS:0x54b9 / CS:0x5707 — the ENTIRE climb handler, dismount and
+     * fire-on-ladder included, runs only every other tick; the closed tick
+     * doesn't even read input. Everything below this line is the "open"
+     * half. */
+    if (tock === 0) return;
+
+    /* Jump OFF the ladder — CS:0x550c/0x557c (state 13, descending) and
+     * CS:0x575e/0x57d6 (state 14, ascending): UP + a direction is the SAME
+     * jump-off regardless of which climb state you're in, and it seeds the
+     * same "left a ladder" phase the ground-state jump entry already uses. */
+    if (input.up && (input.left || input.right)) {
+      const dir = input.right ? +1 : -1;
+      this.facing = dir;
+      this.state = ST.JUMP;
+      this.jumpCursor = 0;
+      this.stateIndex = dir > 0 ? S.JUMP_R : S.JUMP_L;
+      this.phase = LADDER_JUMP_PHASE[this.stateIndex];
+      this.fromLadder = false;
+      return;
+    }
+
+    /* Dismount SIDEWAYS onto solid ground — CS:0x5761-0x57b7 / 0x57cf-0x5826
+     * (state 14) and CS:0x54ef-0x555d / 0x5560-0x55cc (state 13), identical
+     * shape on both: DOWN + a direction, held for THREE gated ticks (the
+     * counter is DS:0x353 for right, DS:0x348 for left — one shared counter
+     * here, so switching dismount direction mid-hold doesn't restart it the
+     * way two separate counters would; a narrow, disclosed simplification),
+     * gated on the SAME three-cell wall probe the walk handlers use plus a
+     * secondary alignment guard. This is the ONLY way the original gets off
+     * a ladder onto a platform short of jumping — there is no auto-land at
+     * the top, which is the bug this was all chasing: the port used to
+     * invent a landing (or a fall) the original doesn't have. */
+    if (input.down && (input.left || input.right)) {
+      const dir = input.right ? +1 : -1;
+      this.dismountHold = (this.dismountHold || 0) + 1;
+      if (this.dismountHold >= DISMOUNT_HOLD_TICKS
+          && !wallBlocks(map, this.x, this.y, dir)
+          && !dismountBlocked(map, this.x, this.y, dir)) {
+        this.x += dir * 8;
+        this.y -= 4;
+        this.facing = dir;
+        this.state = ST.GROUND;
+        this.stateIndex = dir > 0 ? S.WALK_R : S.WALK_L;
+        this.phase = 6;
+        this.dismountHold = 0;
+        this.fromLadder = false;
+        return;
+      }
+      return;   // still holding (or blocked): no movement either way this tick
+    }
+    this.dismountHold = 0;
+
     /* DS:0x378 — the ladder facing, and it is set by THIS handler, one branch
      * above the entry it gates:
      *     54EF  test byte [0x382],0x8   (RIGHT)
@@ -647,24 +741,61 @@ export class Player {
         return;
       }
     }
-    /* CLIMBING DOWN IS 6 px, NOT 4 — and the branch is unambiguous because the
-     * test is a full-byte compare, not a bit test:
-     *     54CD  cmp byte [0x382],0x2 / jnz
-     *     54D4    jmp 0x564b        ; input == EXACTLY 0x02 (DOWN alone)
-     * and inside that block the step is `add word [0x17c],0x6` (CS:0x5663),
-     * reached from both arms of the animation ping-pong. The ascent is 4 px.
-     * UNKNOWN_ladder_up_branch: the plain climb-UP branch was not isolated to
-     * a single site, so 4 is taken from the `sub word [0x17c],4` sites that
-     * are visible and is the weaker of the two numbers. */
-    if (input.up)   this.y -= CLIMB_UP_STEP;
-    if (input.down) this.y += CLIMB_DOWN_STEP;
-    this.stateIndex = S.CLIMB;
-    this.phase = 0;                          // UNKNOWN_ladder_anim_phase
-    if (!climbableHere(map, this.x, this.y)) {
-      if (solidThreeBelow(map, this.x, this.y)) {
+
+    if (!input.up && !input.down) {
+      /* Neither direction held: the original's own final fallback (CS:0x562b
+       * / 0x5885) is "test the OTHER direction to hand off between the two
+       * climb states; otherwise `jmp 0x5e9b`" — a plain no-op. Standing still
+       * on a ladder does not animate and does not move. */
+      this.stateIndex = S.CLIMB;
+      return;
+    }
+
+    if (input.up) {
+      /* CS:0x58c3 `sub word [0x17c],0x6` — see CLIMB_STEP's own note: this
+       * used to be 4 px, taken from the wrong (ladder-FIRE) sites. */
+      const newY = this.y - CLIMB_STEP;
+      if (climbableHere(map, this.x, newY)) {
+        this.y = newY;
+      }
+      /* CS:0x58e7-0x58fa — when neither row around the new spot is still a
+       * ladder, the original REVERTS the step and stays in climb, frozen,
+       * rather than landing or falling. There is no auto-exit at the top of
+       * a ladder; dismount (above) or jump-off is how you leave it. Do
+       * nothing here — `newY` is simply not applied. */
+    } else {
+      /* CS:0x5663 `add word [0x17c],0x6` — descending. */
+      const newY = this.y + CLIMB_STEP;
+      if (solidThreeBelow(map, this.x, newY)) {
+        /* CS:0x566b/0x5670 — land at the bottom, into idle. */
+        this.y = newY & 0xfff0;
         this.state = ST.GROUND;
         this.stateIndex = S.IDLE;
-      } else this._enterFall();
+        this.phase = 0;
+        return;
+      }
+      if (climbableHere(map, this.x, newY)) {
+        this.y = newY;
+      } else {
+        /* CS:0x56af — the ladder ends with nothing solid below either:
+         * fall off the bottom. */
+        this._enterFall();
+        return;
+      }
     }
+
+    /* CS:0x565c-0x5699 (state 13) / CS:0x58b6-0x58e5 (state 14) — the
+     * climb-cycle animation, identical shape on both: 0..3, reversing at
+     * each end, with the step sound at the two turn-arounds. This is what
+     * was missing entirely — `phase` used to stay pinned at 0 for the whole
+     * climb, so the hero never appeared to move its limbs at all. */
+    if (this.ladderPingPong) {
+      this.phase--;
+      if (this.phase <= 0) { this.phase = 0; this.ladderPingPong = false; this.climbStep = true; }
+    } else {
+      this.phase++;
+      if (this.phase >= LADDER_PHASE_MAX) { this.phase = LADDER_PHASE_MAX; this.ladderPingPong = true; this.climbStep = true; }
+    }
+    this.stateIndex = S.CLIMB;
   }
 }

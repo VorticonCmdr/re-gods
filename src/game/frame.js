@@ -63,13 +63,16 @@ export const ENEMY_SHOTS_AT = 0x02ba;
  * spawn tick. Swapping these two gives every shot a free frame of collision at
  * the muzzle — a difference that is invisible in any per-module test.
  *
+ * @param {number} [tock=1] DS:0x36c, the every-other-frame toggle CS:0x0172
+ *   flips with `not`. Threaded straight to `player.tick` — see there for why
+ *   it defaults to always-open rather than 0.
  * @returns {{projectiles:object, emitted:?object}}
  */
 export function stepHeroFrame({ input, arsenal, grid, player, map, cam,
                                world = 1, objects = null, bar = 1,
                                cats = null, health = null, treasure = null,
                                burst = null, alloc = null, starburst = null,
-                               blocks = null, debris = null }) {
+                               blocks = null, debris = null, tock = 1 }) {
   arsenal.latchTick(input.fire);                                    // 019D
   grid.clear();                                                     // 01CC
   /* CS:0x0206 -> CS:0x1432, the object pass. Weapon pickup lives here, and it
@@ -103,7 +106,7 @@ export function stepHeroFrame({ input, arsenal, grid, player, map, cam,
    * the next one. */
   const burstFx = starburst ? starburst.step(cam, grid) : null;     // 0212
   const debrisFx = debris ? debris.step(cam) : [];
-  player.tick(map, input, arsenal);                                 // 0254
+  player.tick(map, input, arsenal, tock);                           // 0254
   return { projectiles, emitted: player.emitted, picked: picked.taken,
            consumed: picked.consumed || [], treasures: picked.treasures || [],
            loot, burstFx, blockFx, debrisFx };

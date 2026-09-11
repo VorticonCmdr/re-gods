@@ -652,7 +652,7 @@ async function main() {
                                              hero: { x: player.x, y: player.y } },
         treasure: { values: level.objValues, inventory, purse, score, burst },
         starburst, blocks, debris,
-        burst,
+        burst, tock,
         /* CS:0x38D7 — first-fit over the 200-slot runtime array. `drawObjects`
          * already excludes the map's dead slots, so the headroom here is
          * 200 minus what is live, which is the same number the original has. */

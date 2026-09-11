@@ -216,12 +216,17 @@ export function jumpPhase(state, cl, cursor) {
 }
 
 /* Phases the port sets with proof. Anything absent holds at 0 and is reported
- * as unmodelled rather than invented. The ladder states remain open: their
- * phase ping-pongs 0<->3 (CS:0x565C `inc cl / cmp cl,3 / jg`, CS:0x5688
- * `dec cl / jz`) with the climb-step sound CS:0x5931 fired only at the two
- * turn-arounds — but which branch is up and which is down is not settled, and
- * a fire while climbing saves the phase to DS:0x359 and restores it after.
- * UNKNOWN_ladder_anim_phase. */
+ * as unmodelled rather than invented. The ladder's phase ping-pongs 0<->3
+ * (CS:0x565C `inc cl / cmp cl,3 / jg`, CS:0x5688 `dec cl / jz` — state 13;
+ * CS:0x58B6/0x58D6 — state 14, identical shape) with a climb-step sound
+ * CS:0x5931 fired only at the two turn-arounds, and is now ported in
+ * player.js's `_climb` — every gated tick steps the cycle one way or the
+ * other, so the hero actually animates while climbing instead of freezing on
+ * frame 0. A fire while climbing still saves the phase to DS:0x359 and
+ * restores it after (not touched by this). UNKNOWN_ladder_anim_phase now
+ * narrows to only WHICH physical direction (up vs down) increments vs
+ * decrements the cycle — cosmetic, since both ends of the 0..3 range are
+ * reachable either way; the port doesn't attempt to pick a side. */
 export const PHASE_ZERO_STATES = [11, 12, 26];   // `xor cl,cl` on the main path
-export const UNMODELLED_PHASE_STATES = [13, 14];
+export const UNMODELLED_PHASE_STATES = [13];     // 14 (CLIMB) is now animated
 export const LADDER_PHASE_MAX = 3;               // CS:0x565E `cmp cl,0x3`
