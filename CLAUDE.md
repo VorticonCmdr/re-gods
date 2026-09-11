@@ -1938,6 +1938,55 @@ Two behaviours a port must reproduce:
 - **Floppy sound downgrade** (`FUN_1000_048e`): when running from drive < 2, Roland silently becomes Beeper and Sound Blaster becomes AdLib, with an on-screen notice — matching `READ.ME`'s warning about music on low-density floppies.
 - **The `+0x61` bias.** All 10 config bytes `[0x634..0x63d]` get `+0x61` before the EXEC so the command tail is printable; every consumer subtracts it. This resolves what would otherwise look like an inconsistency: the protection verdict is written as raw `'X'`/`'1'`/`'A'` (`0x58/0x31/0x41`), biased to `0xB9/0x92/0xA2`, and `GAME.EXE` recovers the original with `SUB AL,0x61` at `1000:0013` before comparing `[0x3e5]` against `0x58`/`0x31`/`0x41`. The round-trip is exact.
 
+## `HISCORES.BIN` decoded `[PROVEN]`
+
+This document had named `HISCORES.BIN` three times (as one of the three non-`P`-prefixed uncompressed assets, and as mutable runtime state written by the game rather than shipped) but never actually decoded its 216-byte format — the same kind of gap this session already closed for `SINCOS.DAT`. Its string appears twice (`DS:0xEA7F`, Table 2 `2f3d:5878`); the sole reader/writer pair is `FUN_1000_3211` (save) and `FUN_1000_3445` (load, which itself calls a third helper, `FUN_1000_3506`, not read this pass).
+
+**Layout: 10 records × 20 bytes, plus a 16-byte trailing block.** The save routine writes `CX=0xD8`(216) bytes from a buffer at `0x45E`; reading the shipped file at that same stride splits it perfectly:
+
+```
++0x000  200 B  10 × 20-byte TOP-TEN records
++0x0C8   16 B  4 × 4-byte XOR-obfuscated validation block (see below)
+```
+
+**Each 20-byte record is `{ name, NUL-padded, up to 18 bytes ; score, u16 LE, bytes 18–19 }`.** The name uses a **1-based alphabet encoding** (`A=1 … Z=26`, `0` = terminator/pad) — decoding all 10 shipped records this way gives **9 clean, unambiguous Greek deity/hero names, plus one generic placeholder**, confirming the encoding beyond doubt:
+
+| rec | bytes | decoded |
+|---|---|---|
+| 0 | `01 01 01 01 01 01` | `AAAAAA` (a generic placeholder — the only record with a non-zero score field, `0x1978`/`0x7819` depending on endianness, plausibly the shipped default score to beat) |
+| 1 | `08 05 12 01 03 0c 05 13` | `HERACLES` |
+| 2 | `1a 05 15 13` | `ZEUS` |
+| 3 | `08 05 12 01` | `HERA` |
+| 4 | `01 10 0f 0c 0c 0f` | `APOLLO` |
+| 5 | `10 0f 13 05 09 04 0f 0e` | `POSEIDON` |
+| 6 | `04 09 0f 0e 19 13 15 13` | `DIONYSUS` |
+| 7 | `01 12 05 13` | `ARES` |
+| 8 | `01 14 08 05 0e 01` | `ATHENA` |
+| 9 | `08 05 12 0d 05 13` | `HERMES` |
+
+Matching the game's own already-documented "`TOP TEN GODS`" high-score screen exactly — nine Greek gods and heroes pre-populating the board, plus one generic filler slot. Records 1–9 all carry a **zero** score field; only record 0 (`AAAAAA`) has a non-zero one. `UNKNOWN_hiscores_score_distribution` — whether that's simply how the shipped example file happened to be captured (a fresh, barely-played install) or whether only one slot is ever meaningfully scored by design wasn't traced further.
+
+**The trailing 16 bytes are a per-tick-state validation block, XOR-obfuscated per field — and it's the "other" `DS:0x432`.** `FUN_1000_3211` (save) writes four 4-byte values in sequence, each conditionally XORed:
+
+```
+3211  si = 0x526                          ; = 0x45E + 0xC8(200) — the LAST 16 bytes of the 216-byte buffer
+321b  ax=[0x432] ; bx=[0x434]              ; a DS-relative scratch pair — see the correction below
+3222  cx=ax|bx / jz 0x322f                 ; value exactly zero -> skip the XOR entirely
+3228  ax ^= 0x616f ; bx ^= 0x4368          ; else XOR with a fixed per-field key
+322f  [si]=ax ; [si+2]=bx ; si+=4          ; store, advance
+
+3237  ax=[0x432] ; bx=[0x434]              ; the SAME source read again — a second, independently-keyed copy
+3244  ax ^= 0x6e67 ; bx ^= 0x7345
+
+3253  ax=[0x436] ; bx=[0x438]              ; a second scratch pair
+3260  ax ^= 0x654d ; bx ^= 0x696e
+
+326f  ax=[0x43a] ; bx=[0x43c]              ; a third scratch pair
+327c  ax ^= 0x6f6e ; bx ^= 0x656c
+```
+
+⚠️ **Correction: this closes part of `UNKNOWN_ss432_indirect`.** That closure documented `SS:0x432` as a private two-instruction scratch pair and flagged "the six other `[0x432]` hits in the binary are `DS`-relative … and are a different variable" as unexplored. These are exactly those hits — a completely separate `DS:0x432`/`0x434` pair, unrelated to the `SS`-relative one, used here as (at least) one of the three 32-bit values this validation block protects. `[0x432]`/`[0x434]` is read identically by **both** of the first two sub-blocks (not two different sources), so the same 32-bit value is stored **twice**, each under a different XOR key — a plausible tamper-detection design (a save-editor patching one copy without recomputing the other becomes detectable on load), though the load side's own comparison logic (`FUN_1000_3445`'s continuation, `CS:0x3467` onward — the mirror-image `LODSW`/XOR/compare sequence, symbol-for-symbol the reverse of the save path) wasn't traced to its actual pass/fail branch this pass. Every field in the shipped file reads **zero**, so the XOR never actually fires in this example — `UNKNOWN_hiscores_0x432_0x436_0x43a` narrows the residual to what these three `DS:0x432`/`0x436`/`0x43a` scratch pairs actually hold (plausibly the score, lives, or world-progress totals at the moment of the last save, given the surrounding save/load gate tests `DS:0x384`/`0x390` — level/game-active-state flags already touched on elsewhere in this document).
+
 ## Formats validated by reconstruction `[PROVEN]`
 
 Every format above was originally proven by *reading* disassembly. All of the major ones have now also been proven by *rebuilding* — extractors were written and the output inspected. This is the strongest available check: a wrong format still produces a valid file, but not a coherent one.
