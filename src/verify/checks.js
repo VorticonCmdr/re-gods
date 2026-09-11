@@ -123,6 +123,7 @@ import { SLOT_STRIDE, PROJECTILE_SIZE, GROUP_STRIDE, GROUP_ENTRIES,
          stepFireball, pickTarget, unpackHunterVel, hunterTurnRate,
          TARGET_STRIDE, AXE_STATE_STRIDE, AXE_BOUNCE_VX, AXE_GRAVITY,
          AXE_VY_CAP, AXE_SPRITE_BASE, newAxeState, stepMagicAxe, axeSprite,
+         axeWallAt, spawnAxeVolley,
          HUNTER_VEL_CLAMP, HUNTER_TARGET_BIAS, HUNTER_CULL, hunterSteerAxis,
          stepHunter, stepHunterArray, HUNTER_NO_TARGET_AT,
          FUSE_START, FUSE_EXPLODE, BOMB_FRAGMENTS, BOMB_SPRITE_BASE,
@@ -3221,6 +3222,72 @@ export async function checkWeaponsProjectiles(fetchRaw) {
     `0x1aa = ${AXE_SPRITE_BASE}, and PINNED_SPRITE[9] (magic axe) is the same — ` +
     'an independent check on the pinned table, from a routine that never reads it');
 
+  /* ── the axe, wired end to end: spawn handlers 14/15 (which ALSO seed the
+   * state array), the real diagonal wall probe, and the debris spark on
+   * expiry (CS:0xA7A1) — game/hero-fire.js ───────────────────────────────── */
+  {
+    const st = { count: 1, base: 1 };                  // volleySize -> 1 shot
+    const { entries, states, facing } = spawnAxeVolley(st, 15, 19, 100, 100);
+    check(`spawnAxeVolley(handler 15) seeds a companion {vx,vy,life} per entry`,
+      facing === 1 && entries.length === 1 && entries[0].dir === 1
+      && states.length === 1 && states[0].vx === AXE_BOUNCE_VX
+      && states[0].vy === PROJECTILE_VELOCITY[1].vy && states[0].life === 0x32,
+      'HANDLERS[15] (CS:0x9b15): dy=-0x10 (not the common -0xc), dir=1 for ' +
+      'EVERY facing (stepMagicAxe never reads p.dir), and CS:0x9B52-0x9B66 ' +
+      'writes state.vx=+4, state.vy=PROJECTILE_VELOCITY[1].vy (LIVE, not a ' +
+      'baked constant — the weapon-arc potions can have swapped the table), ' +
+      'state.life=50');
+    const left = spawnAxeVolley(st, 14, 19, 100, 100);
+    check(`handler 14 (left) seeds the same dir but a NEGATIVE state.vx`,
+      left.facing === -1 && left.entries[0].dir === 1   // NOT mirrored to 4
+      && left.states[0].vx === -AXE_BOUNCE_VX,
+      'CS:0x9BC1 writes dir=1 too (not 4 — every other handler pair mirrors ' +
+      'dir by facing, this one cannot because nothing reads it) and ' +
+      'state.vx=-4 at CS:0x9BFE');
+
+    /* The wall probe takes Y too, and which neighbour cell it tests depends
+     * on the Y sub-tile position — a same-row-only probe cannot reproduce
+     * this. */
+    const pbWall = new Uint8Array(128 * 64);
+    pbWall[5 * 128 + 4] = 1;         // solid at col 4, row 5 (y 80..95)
+    check(`axeWallAt tests the SAME row when y has no sub-tile remainder`,
+      axeWallAt(3 * 32, 5 * 16, +1, pbWall) === true       // y=80, no remainder
+      && axeWallAt(3 * 32, 5 * 16 + 8, +1, pbWall) === false,  // y=88, has one
+      'CS:0xA5C6 `and bx,0xf / jz` — the y%16==0 case tests [si+0x1] (same ' +
+      'row, one col over); the other case tests [si+0x81] (one row DOWN)');
+    check(`...and the row-down neighbour when it does`,
+      axeWallAt(3 * 32, 4 * 16 + 8, +1, pbWall) === true,   // y=72 -> row 4, +0x81 -> row 5 col 5...
+      'CS:0xA5CB `cmp byte [si+0x81],1` — row+1, col+1 from a y with a ' +
+      'nonzero sub-tile remainder');
+
+    const grid = new DamageGrid();
+    const debris = new Debris();
+    const axeWeapon = { drawStyle: 0 };   // minimal fixture — w1 isn't in scope yet
+
+    /* Expiry drops a MOVING spark carrying the axe's own current velocity,
+     * not a stationary puff — matching the hunter's no-target arm and
+     * differing from the stationary terrain-stop/enemy-shot puffs.
+     * ⚠️ Gravity applies EVERY tick, including the one that expires — the
+     * original's own instruction order runs the vy clamp before CS:0xA737's
+     * lifetime test, and this port's step order matches it. So the spark's
+     * vy is the POST-gravity value, not whatever vy the record held when
+     * this tick started; the fixture picks a vy that stays nonzero after
+     * +2 so the two are still distinguishable. */
+    const expireArea = [{ tag: 19, x: 100, y: 100, dir: 0 }];
+    const expireState = newAxeState(); expireState[0] = { vx: 4, vy: -6, life: 0 };
+    const r = stepMagicAxe(expireArea, expireState, { x: 0, y: 0 }, noWall,
+      { grid, weapon: axeWeapon, debris });
+    check(`on expiry the axe drops a MOVING debris spark carrying its OWN (post-gravity) velocity`,
+      r.expired === 1 && expireArea[0].tag === 0
+      && debris.live === 1 && debris.slots.find((s) => s.alive).vx === 4
+      && debris.slots.find((s) => s.alive).vy === -6 + AXE_GRAVITY,
+      'CS:0xA737 `dec word [si+0x4] / js 0xa799` -> CS:0xA7A1 `call 0xa633` ' +
+      'with cx/dx = the state record\'s own vx/vy, AFTER this tick\'s own ' +
+      'gravity clamp already ran — a spark that keeps moving in whatever ' +
+      'direction the axe was bouncing (this tick\'s update included) when ' +
+      'it timed out');
+  }
+
   /* ── mover 3: the time bomb's `dir` is a FUSE ─────────────────────────── */
   const bombP = { tag: 1, x: 100, y: 60, dir: FUSE_START };
   const bombS = { vx: 0, vy: 0, phase: -1, landed: false };
@@ -3662,7 +3729,7 @@ export async function checkWeaponsProjectiles(fetchRaw) {
     const stems = ok.map((i) => (dmap[PINNED_SPRITE[i]] || {}).stem);
     const objectStems = GROUP_STEMS.objects;
     check(`every spawnable weapon's pinned sprite resolves inside \`objects\``,
-      ok.length === 6 && stems.length === 6
+      ok.length === 7 && stems.length === 7
         && stems.every((s) => s && objectStems.includes(s)),
       `descriptors ${ok.map((i) => PINNED_SPRITE[i]).join(', ')} -> ` +
       `${stems.join(', ')}. main.js loads always + objects + level<N>; a ` +
@@ -3673,14 +3740,15 @@ export async function checkWeaponsProjectiles(fetchRaw) {
   /* ── how much of the arsenal is actually reachable ────────────────────── */
   {
     const s = spawnableWeapons(w1);
-    check(`exactly 6 of the 11 shipped weapons have a decoded spawn handler`,
-      s.ok.length === 6 && s.ok.join() === '0,4,5,7,8,10',
-      `handlers 12/13 are decoded but NO shipped weapon references them, and ` +
-      `the hunter (8) uses its OWN pair (10/11, the 3-shot fan) rather than ` +
-      `the 0/1 the other five share, so the decoded set covers ` +
-      `${s.ok.length} weapons in practice, not 4 families of 11. The other ` +
-      `five are counted at the call site rather than throwing, the same ` +
-      `treatment the out-of-range \`dir\` gets`);
+    check(`exactly 7 of the 11 shipped weapons have a decoded spawn handler`,
+      s.ok.length === 7 && s.ok.join() === '0,4,5,7,8,9,10',
+      `handlers 12/13 are decoded but NO shipped weapon references them; the ` +
+      `hunter (8) uses its OWN pair (10/11, the 3-shot fan) and the magic ` +
+      `axe (9) its own (14/15, which ALSO seeds a companion state record — ` +
+      `see spawnAxeVolley), rather than the 0/1 the other five share, so the ` +
+      `decoded set covers ${s.ok.length} weapons in practice, not 4 families ` +
+      `of 11. The other four are counted at the call site rather than ` +
+      `throwing, the same treatment the out-of-range \`dir\` gets`);
     const cut = s.blocked.filter((b) => b.cut);
     check(`the one weapon with a NULL handler pair is the cut "flame"`,
       cut.length === 1 && cut[0].index === CUT_WEAPON,

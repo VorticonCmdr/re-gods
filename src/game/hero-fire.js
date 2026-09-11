@@ -60,7 +60,8 @@
 
 import { WEAPON_SLOTS, MAX_SUBSLOTS, tagFor, allocateShots, armWeapon,
          reloadWorld } from './weapons.js';
-import { spawnVolley, stepProjectiles, stepHunterArray, DECODED_HANDLERS,
+import { spawnVolley, spawnAxeVolley, stepProjectiles, stepHunterArray,
+         stepMagicAxe, axeWallAt, newAxeState, DECODED_HANDLERS,
          NULL_HANDLERS, AREA_ENTRIES, ENTRIES_REACHABLE, GROUP_ENTRIES,
          muzzle } from './projectiles.js';
 
@@ -70,6 +71,9 @@ import { spawnVolley, stepProjectiles, stepHunterArray, DECODED_HANDLERS,
  *  pickup.js; nothing gains from adding a hero-fire.js <-> frame.js edge
  *  for one integer). */
 export const HUNTER_WEAPON = 8;
+/** Weapon index 9 — the magic axe, the only weapon with a companion state
+ *  array (`Slot.axeState`, alongside its ordinary projectile records). */
+export const MAGIC_AXE_WEAPON = 9;
 
 /** Player states whose handler reaches the allocator (see the census above). */
 export const FIRE_CAPABLE_STATES = [0, 1, 8, 9, 11, 12, 13, 14];
@@ -104,6 +108,11 @@ export class Slot {
     this.weapon = -1;                 // <0 = empty, CS:0x95ed `js`
     this.st = null;                   // {index, base, count}
     this.area = Array.from({ length: AREA_ENTRIES }, emptyRecord);
+    /* DS:0xdec6 — the magic axe's own {vx,vy,life} companion to `area`.
+     * Every slot carries one; it is only ever read or written while
+     * `weapon === MAGIC_AXE_WEAPON`, same as every other slot carries
+     * fields other weapons never touch. */
+    this.axeState = newAxeState();
   }
 
   /** CS:0x9724 — a sub-slot is free when all THREE of its records are empty. */
@@ -125,8 +134,18 @@ export class Slot {
     return n;
   }
 
-  /** CS:0x9177 — `mov cx,0x48 / rep stosw`, the whole 144-byte area. */
-  clear() { for (const r of this.area) { r.tag = 0; r.x = 0; r.y = 0; r.dir = 0; } }
+  /** CS:0x9177 — `mov cx,0x48 / rep stosw`, the whole 144-byte area.
+   * ⚠️ `0x48` words = exactly 144 bytes, so for slot C this clear stops
+   * RIGHT AT `DS:0xdec6` (the axe state array) rather than clearing into
+   * it — the original does not appear to explicitly clear axe state on a
+   * weapon swap. Harmless either way: a cleared `area` means every `tag`
+   * is 0, and `stepMagicAxe` never reads `state[i]` before checking the
+   * paired record's tag, so stale state is unreachable. Clearing it here
+   * too is for this port's own hygiene, not a byte this claims to match. */
+  clear() {
+    for (const r of this.area) { r.tag = 0; r.x = 0; r.y = 0; r.dir = 0; }
+    for (const s of this.axeState) { s.vx = 0; s.vy = 0; s.life = 0; }
+  }
 }
 
 export class Arsenal {
@@ -216,13 +235,18 @@ export class Arsenal {
       const s = this.slots[a.slot];
       const m = muzzle({ x: heroX, y: heroY }, right,
                        { slot: a.slot, sel: this.altSelect, alt: null });
-      const { entries } = spawnVolley(s.st, handler, a.tag, m.x, m.y);
+      const isAxe = handler === 14 || handler === 15;
+      const { entries, states } = isAxe
+        ? spawnAxeVolley(s.st, handler, a.tag, m.x, m.y)
+        : spawnVolley(s.st, handler, a.tag, m.x, m.y);
       /* The handler writes consecutive 8-byte records from the sub-slot head,
-       * so record k of group g is area[g*3 + k] and carries tag + k. */
+       * so record k of group g is area[g*3 + k] and carries tag + k. The
+       * magic axe ALSO seeds the matching companion state[g*3 + k]. */
       const head = a.subslot * GROUP_ENTRIES;
       entries.forEach((e, k) => {
         const rec = s.area[head + k];
         rec.tag = e.tag; rec.x = e.x; rec.y = e.y; rec.dir = e.dir;
+        if (isAxe) Object.assign(s.axeState[head + k], states[k]);
       });
       n += entries.length;
       this.fired++;
@@ -253,6 +277,16 @@ export class Arsenal {
         moved += r.moved;
         this.stamped += r.stamped;
         this.noTarget += r.noTarget;
+        continue;
+      }
+      if (s.weapon === MAGIC_AXE_WEAPON) {
+        const wallAt = (x, y, dirSign) => axeWallAt(x, y, dirSign, planeB);
+        const r = stepMagicAxe(s.area, s.axeState, cam, wallAt,
+          { grid, weapon: w, debris });
+        moved += r.moved; culled += r.culled;
+        this.stamped += r.stamped;
+        this.axeBounced = (this.axeBounced || 0) + r.bounced;
+        this.axeExpired = (this.axeExpired || 0) + r.expired;
         continue;
       }
       const r = stepProjectiles(s.area, cam, {

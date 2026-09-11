@@ -126,17 +126,25 @@ export const HANDLERS = {
   11: { facing: +1, dx: 0,    dy: -0x0c, dirs: [0x0b00, 0x0b07, 0x0bf9], at: 0x9a82 },
   12: { facing: -1, dx: 0,    dy: -0x08, dirs: DIRS.left,  at: 0x996a },
   13: { facing: +1, dx: 0,    dy: -0x08, dirs: DIRS.right, at: 0x9964 },
+  /* 14/15 — the magic axe. `dir` written is {1,0,2} for BOTH facings (it
+   * drives nothing — see the state-seeding note near stepMagicAxe), and dx/dy
+   * are also NOT mirrored by facing, unlike every other pair: both handlers
+   * open `add ax,0x10 / sub bx,0x10`. See `spawnAxeVolley`, not `spawnVolley`
+   * — this pair also seeds a companion state slot per entry. */
+  14: { facing: -1, dx: 0x10, dy: -0x10, dirs: [1, 0, 2], at: 0x9bc1 },
+  15: { facing: +1, dx: 0x10, dy: -0x10, dirs: [1, 0, 2], at: 0x9b15 },
 };
 
-/* Handlers 2/3, 6/7, 8/9, 14/15 and 16..21 are not decoded. Shipped weapons
- * reference 2/3 (fireball), 6/7 (spear), 8/9 (time bomb) and 14/15 (magic
- * axe). ⚠️ CORRECTION — this line used to read "8/9 (hunter), 10/11 (time
- * bomb)", backwards from the table this project's own CLAUDE.md records
- * elsewhere (time bomb 8/9, hunter 10/11) and from what CS:0x9a82/0x9aca
- * actually decode to (the 3-shot fan above, matching the hunter's own
- * documented mover). UNKNOWN_projectile_handlers stands for 2/3, 6/7, 8/9,
- * 14/15. */
-export const DECODED_HANDLERS = [0, 1, 10, 11, 12, 13];
+/* Handlers 2/3, 6/7, 8/9 and 16..21 are not decoded. Shipped weapons
+ * reference 2/3 (fireball), 6/7 (spear) and 8/9 (time bomb). ⚠️ CORRECTION —
+ * this line used to read "8/9 (hunter), 10/11 (time bomb)", backwards from
+ * the table this project's own CLAUDE.md records elsewhere (time bomb 8/9,
+ * hunter 10/11) and from what CS:0x9a82/0x9aca actually decode to (the
+ * 3-shot fan above, matching the hunter's own documented mover). It also
+ * used to list 14/15 (magic axe) here — those are decoded too now, see
+ * HANDLERS[14]/[15] above. UNKNOWN_projectile_handlers stands for 2/3, 6/7,
+ * 8/9 only. */
+export const DECODED_HANDLERS = [0, 1, 10, 11, 12, 13, 14, 15];
 
 /**
  * CS:0x98d1 — how many of the three entries a volley fills.
@@ -194,6 +202,31 @@ export function spawnVolley(st, handler, tag, x, y) {
     entries.push({ tag: (tag + i) & 0xffff, x: px, y: py, dir: h.dirs[i] });
   }
   return { entries, facing: h.facing };
+}
+
+/**
+ * CS:0x9b15 (right) / CS:0x9bc1 (left) — the magic axe's own spawn, which
+ * ALSO seeds a `{vx, vy, life}` state record per entry (see `stepMagicAxe`).
+ * `vy` is read from the LIVE `PROJECTILE_VELOCITY` table (the weapon-arc
+ * potions can have swapped it), not a baked constant — the original reads
+ * the same mutable `DS:0xdf0e` words the common mover's dir lookup does.
+ *
+ * @returns {{entries:Array, states:Array<{vx,vy,life}>, facing:number}}
+ */
+export function spawnAxeVolley(st, handler, tag, x, y) {
+  const h = HANDLERS[handler];
+  if (!h) throw new Error(`axe handler ${handler} is not 14 or 15`);
+  const px = (x + h.dx) & 0xffff;
+  const py = (y + h.dy) & 0xffff;
+  const entries = [], states = [];
+  for (let i = 0; i < volleySize(st); i++) {
+    const dir = h.dirs[i];
+    entries.push({ tag: (tag + i) & 0xffff, x: px, y: py, dir });
+    states.push({ vx: h.facing > 0 ? AXE_BOUNCE_VX : -AXE_BOUNCE_VX,   // 9B52/0x9BFE
+                  vy: PROJECTILE_VELOCITY[dir].vy,                     // 9B59 et al.
+                  life: 0x32 });                                       // 9B62 — 50
+  }
+  return { entries, states, facing: h.facing };
 }
 
 /**
@@ -646,7 +679,58 @@ export const unpackHunterVel = (dir) => ({
  * despawns. Sprite: `0x1aa + ((weaponFrame + phase) mod 6) + 1`, and 0x1aa is
  * 426 — exactly PINNED_SPRITE[9], the magic axe's own descriptor, which is an
  * independent check on the pinned table. Bounces play sfx 0x09 (CS:0xa7ad).
- */
+ *
+ * ── The wall probes, CS:0xA5A5 (right) / CS:0xA5D9 (left) — decoded ───────
+ *
+ * Both take X AND Y (the mover passes both — an earlier revision of this
+ * port's `wallAt(x, dir)` signature dropped Y, which cannot reproduce this):
+ * the tile cell is the usual `0x5004 + (x&~0x1f)>>5 + ((y&~0xf)<<3)`, and
+ * which NEIGHBOUR cell gets tested depends on the Y sub-tile position —
+ *
+ *   A5C6  and bx,0xf / jz 0xa5d2        ; y has NO sub-tile remainder ->
+ *   A5CB  cmp byte [si+0x81],1 / jz     ;   test the SAME row, one col over
+ *   A5D2  cmp byte [si+0x1],1           ; y sub-tile != 0 -> test one row
+ *                                       ;   DOWN as well as one col over
+ *   (mirrored on the left at si-1 / si+0x7f)
+ *
+ * — a diagonal look-ahead, not a same-row-only probe. `ZF` on return is the
+ * test result (byte == 1 -> wall); the caller's own `jnz` after the call
+ * reads "not a wall -> keep flying".
+ *
+ * ── The spawn handlers, table indices 14 (left, CS:0x9bc1) / 15 (right,
+ * CS:0x9b15) — decoded ─────────────────────────────────────────────────
+ *
+ * Same muzzle/volley-count shape as every other handler, `dy = -0x10` (twice
+ * the common `-0xc`), and `dir` written to the projectile is `{1, 0, 2}` for
+ * BOTH facings — unlike every other handler pair, which mirrors `dir` by
+ * facing. That is because `dir` is otherwise unread here (`stepMagicAxe`
+ * never touches `p.dir`; movement comes entirely from the paired state
+ * record below), so there is nothing to mirror.
+ *
+ * What actually matters: each of the (up to 3) entries ALSO seeds a slot in
+ * the SAME `DS:0xdec6` state array the mover reads, at an index computed
+ * from the entry's own TAG (`(tag - 1) mod 9`-shaped, via two `cmp/sub 9`
+ * folds) — which lands on the exact array position the mover will later
+ * index by loop position, since the tag numbering and the record's physical
+ * slot share the same numbering:
+ *
+ *   9B40  [di]=tag(dx) / [di+2]=x(stosw) / [di+4]=y(bx) / [di+6]=dir(1/0/2)
+ *   9B52  [si]=4               ; state.vx := 4 (RIGHT); LEFT (0x9bfe) writes -4
+ *   9B59  cx=[0xdf14] ; [si+2]=cx     ; state.vy := PROJECTILE_VELOCITY[dir].vy
+ *   9B62  [si+4]=0x32          ; state.life := 50
+ *
+ * ⚠️ `DS:0xdf14` etc. are read straight out of the SAME mutable velocity
+ * table `PROJECTILE_VELOCITY` already documents (the three weapon-arc
+ * potions overwrite it) — so a fired axe's initial arc, not just its later
+ * homing... no, the axe never homes, but its initial `vy` genuinely tracks
+ * whichever arc potion is active at the moment it's thrown. This port must
+ * read the table live at spawn time, not bake a constant.
+ *
+ * `UNKNOWN_axe_debris` — CLOSED alongside the general debris pass: on
+ * expiry (`A737 dec word [si+0x4] / js 0xa799`), `CS:0xA7A1 call 0xa633`
+ * drops a debris spark carrying the axe's OWN current velocity (`cx=[si]`,
+ * `dx=[si+2]`, the state record's vx/vy) at its current position — a moving
+ * spark, like the hunter's no-target one, not a stationary puff. */
 export const AXE_STATE_DS = 0xdec6;
 export const AXE_STATE_STRIDE = 6;        // CS:0xa77d
 export const AXE_BOUNCE_VX = 4;           // CS:0xa6a9 / 0xa6c4
@@ -661,12 +745,37 @@ export const newAxeState = () =>
   Array.from({ length: MOVER_WALK }, () => ({ vx: 0, vy: 0, life: 0 }));
 
 /**
+ * CS:0xA5A5 (right, dirSign>0) / CS:0xA5D9 (left, dirSign<0) — the axe's own
+ * wall probe. NOT the common mover's floored single-cell test: which
+ * neighbour cell is tested depends on the Y sub-tile position, so a probe
+ * that only takes X (as an earlier revision of this port's `wallAt` did)
+ * cannot reproduce it.
+ */
+export function axeWallAt(x, y, dirSign, planeB) {
+  if (!planeB) return false;
+  const col = (x & ~0x1f) >> 5, row = (y & ~0xf) >> 4;
+  if (col < 0 || col > 127 || row < 0 || row > 63) return false;
+  const idx = row * 128 + col;
+  const ySub = y & 0xf;
+  const at = (off) => {
+    const j = idx + off;
+    return j >= 0 && j < planeB.length && planeB[j] === 1;
+  };
+  return dirSign > 0
+    ? (ySub !== 0 ? at(129) : at(1))     // CS:0xA5CB (+0x81) / 0xA5D2 (+0x1)
+    : (ySub !== 0 ? at(127) : at(-1));   // CS:0xA5FF (+0x7f) / 0xA605 (-0x1)
+}
+
+/**
  * CS:0xa678 — magic axe.
- * @param {(x:number,dir:number)=>boolean} wallAt  probe: is there a wall in
- *        that direction from world x? (CS:0xa5a5 right / 0xa5d9 left)
+ * @param {(x:number,y:number,dirSign:number)=>boolean} wallAt  the diagonal
+ *        look-ahead probe above — pass `axeWallAt` bound to a `planeB`, or
+ *        an equivalent.
+ * @param {?object} debris  the DS:0x8b4c owner — CS:0xA7A1 drops a moving
+ *        spark into it on expiry, carrying the axe's own current velocity.
  */
 export function stepMagicAxe(area, state, cam, wallAt, opts = {}) {
-  const { grid = null, weapon = null } = opts;
+  const { grid = null, weapon = null, debris = null } = opts;
   let moved = 0, culled = 0, bounced = 0, expired = 0, stamped = 0;
   for (let i = 0; i < MOVER_WALK; i++) {
     const p = area[i], s = state[i];
@@ -675,8 +784,8 @@ export function stepMagicAxe(area, state, cam, wallAt, opts = {}) {
     /* ⚠️ The probe is GATED on the sub-tile position — outside that window the
      * axe moves without ever testing for a wall. */
     if (s.vx >= 0) {
-      if (sub > 0xc && wallAt(p.x, +1)) { s.vx = -AXE_BOUNCE_VX; bounced++; }
-    } else if (sub < 4 && wallAt(p.x, -1)) { s.vx = AXE_BOUNCE_VX; bounced++; }
+      if (sub > 0xc && wallAt(p.x, p.y, +1)) { s.vx = -AXE_BOUNCE_VX; bounced++; }
+    } else if (sub < 4 && wallAt(p.x, p.y, -1)) { s.vx = AXE_BOUNCE_VX; bounced++; }
 
     p.x = (p.x + s.vx) | 0;
     p.y = (p.y + s.vy) | 0;
@@ -686,7 +795,10 @@ export function stepMagicAxe(area, state, cam, wallAt, opts = {}) {
     if (sx <= CULL.xMin || sy <= CULL.yMin || sx >= CULL.xMax || sy >= CULL.yMax) {
       p.tag = 0; culled++; continue;
     }
-    if (--s.life < 0) { p.tag = 0; expired++; continue; }  // CS:0xa737
+    if (--s.life < 0) {                                    // CS:0xa737
+      if (debris) debris.spawn(p.x, p.y, s.vx, s.vy);       // CS:0xA7A1
+      p.tag = 0; expired++; continue;
+    }
     moved++;
     if (grid && weapon && grid.stamp2x2(sx, sy, p.tag)) stamped++;
   }
