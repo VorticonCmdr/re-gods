@@ -44,7 +44,9 @@ import { GodsRandom } from './game/random.js';
 /* Contact and the grid scan are reached through game/frame.js, which owns the
  * order they must run in — see the note there. */
 import { Health, HEALTH_MAX, attackHero } from './game/combat.js';
-import { Nests } from './game/nest.js';
+import { Nests, Brood } from './game/nest.js';
+import { Statues } from './game/statue.js';
+import { Ce64Creatures, Ce64Spits, OBJECT_TYPE as CE64_OBJECT_TYPE } from './game/ce64.js';
 import { EnemyShots } from './game/enemy-shots.js';
 import { LineHazards } from './game/line-hazard.js';
 import { MarkerList, stepMarkers } from './game/markers.js';
@@ -350,11 +352,16 @@ async function main() {
   let arsenal = new Arsenal(level.weapons);
   const grid = new DamageGrid();
   /* CS:0x9320 — decode a grid tag back to the weapon that stamped it. Bound
-   * over the arsenal's live slots so the creature scan needs no other state. */
-  const decodeTag = (tag) => damageForTag(
+   * over the arsenal's live slots so the creature scan needs no other state.
+   * `mode` defaults to 0 (every ordinary creature); the DS:0xce64 world-3
+   * creature (game/ce64.js) forces mode:1 around its own contact/scan call,
+   * which is what makes the starburst/invulnerability-aura potions deal it
+   * only 50/0 damage instead of the usual 10000/10000 — see ce64.js's header. */
+  const decodeTag = (tag, mode = 0) => damageForTag(
     tag,
     arsenal.slots.map((s) => s.weapon),
-    Object.fromEntries(arsenal.slots.filter((s) => s.st).map((s) => [s.weapon, s.st])));
+    Object.fromEntries(arsenal.slots.filter((s) => s.st).map((s) => [s.weapon, s.st])),
+    mode);
   /* DS:0x365 — level progression only. 0 on world 1, so full damage here. */
   let difficulty = 0;
   let shotsFired = 0, creaturesShot = 0, picked = 0, consumed = 0, banked = 0;
@@ -381,6 +388,7 @@ async function main() {
   let opened = 0, lootLanded = 0, sbStamps = 0, lastBurstFx = null;
   let lastBlockFx = [];
   let lastNestFx = [], lastShotsFx = null, lastDebrisFx = [], lastLineHazardFx = null;
+  let lastBroodFx = [], lastStatueFx = [], lastCe64Fx = [], lastSpitFx = [];
   /* ⚠️ DEV SEED, exactly like the weapon picker above. The original puts a
    * "chest key" in DS:0x17e only through CROUCH + FIRE (CS:0x6069), which
    * this port does not implement — so with a truthful empty inventory the
@@ -421,6 +429,23 @@ async function main() {
    * for System A's stage 6. */
   let nests = new Nests(level.world, rng);
   let shots = new EnemyShots();
+  /* CS:0x894E — the world-2 nest's own brood children, DS:0x8014 (world 2
+   * only; NOT to be confused with the world-1 statue table below, which
+   * shares the same DOS address by coincidence — game/statue.js's own header
+   * explains why a JS port owns two separate arrays rather than one). Passed
+   * into `nests.step()` below in place of the `null` this file previously
+   * used, which is what silently made every nest death spawn nothing. */
+  let brood = new Brood();
+  /* CS:0x7CBD/0x7B68/0x7C4B/0x7C7C — the world-1-sublevel-B awakened statue
+   * (game/statue.js). Populated from the CURRENT level's own plane A once
+   * `levelInfo` exists, below, and again on every level switch. */
+  let statues = new Statues();
+  /* CS:0x7F0D — the world-3 DS:0xce64 creature and its "spit" sub-projectile
+   * (game/ce64.js). Unlike nest.js/statue.js this module calls combat.js
+   * directly, so main.js just hands it the real health/grid/decodeTag rather
+   * than an injected closure. */
+  let ce64Creatures = new Ce64Creatures(rng);
+  let ce64Spits = new Ce64Spits(rng);
   /* DS:0xd2be — the Bresenham line-hazard pool (game/line-hazard.js).
    * CS:0xE659's `attackBits` divert to CS:0xE5E4 is wired for BOTH entity
    * systems: entity-a.js's `stageFacingAndFire` (called LAST, as stage 6) and
@@ -506,6 +531,11 @@ async function main() {
   const camInit = (s) => cameraForSpawn(s.x, s.y);
   let cam = camInit(spawn);
   let levelInfo = { world: +LEVELS[0][0], sublevel: LEVELS[0][1] === 'A' ? 0 : 1 };
+  /* CS:0x7E9B — the statue populator wants a 'a'/'b' string, not levelInfo's
+   * own 0/1 encoding; producing zero records outside world 1 sublevel B is
+   * the single invariant this module cares about most. */
+  const sublevelLetter = (info) => (info.sublevel === 1 ? 'b' : 'a');
+  statues.populate(level.map.planeA, levelInfo.world, sublevelLetter(levelInfo));
   /* `dying` is counted in the RENDER callback and was previously declared with
    * `let` inside the TICK callback — a different function scope, so the first
    * creature to die would have thrown a ReferenceError mid-frame. Hoisted here
@@ -542,6 +572,8 @@ async function main() {
       nests = new Nests(level.world, rng); shots = new EnemyShots(); tock = 0;
       lineHazards = new LineHazards();
       markerList = new MarkerList();                    // CS:0x1437
+      brood = new Brood();
+      ce64Creatures = new Ce64Creatures(rng); ce64Spits = new Ce64Spits(rng);
       debris = new Debris();
       health = new Health();
       /* A real level change is not a game restart, so CS:0x914c does NOT run
@@ -572,6 +604,7 @@ async function main() {
       wireSpawn();
       cam = camInit(spawn);
       levelInfo = { world: +key[0], sublevel: key[1] === 'A' ? 0 : 1 };
+      statues.clear().populate(level.map.planeA, levelInfo.world, sublevelLetter(levelInfo));
       outOfRange = 0; unstamped = 0;
       $('event').textContent = '–';
     } finally {
@@ -665,6 +698,16 @@ async function main() {
         if (o.dead || o.type !== 115 || !(o.flag6 & 1)) continue;
         nests.spawn(o.x - cam.snapX, o.y, cam.snapX);
         o.dead = true;
+      }
+      /* CS:0x1C7D `call 0x7f0d` — the world-3 DS:0xce64 creature's own spawn,
+       * reached the same way as the nest's (object-walk, category-4 arm).
+       * ⚠️ UNLIKE THE NEST, this object is only marked dead on a SUCCESSFUL
+       * spawn — ce64.js's own header: "the sole caller CS:0x1C7D correctly
+       * retries a full pool rather than consuming the object", the opposite
+       * of the nest's own documented shipped bug just above. */
+      for (const o of level.drawObjects) {
+        if (o.dead || o.type !== CE64_OBJECT_TYPE || !(o.flag6 & 1)) continue;
+        if (ce64Creatures.spawn(o.x - cam.snapX, o.y, cam.snapX)) o.dead = true;
       }
       const fr = stepHeroFrame({
         input, arsenal, grid, player,
@@ -795,19 +838,58 @@ async function main() {
       }
 
       /* CS:0x0282 — the nest walker, BEFORE the System-B entity step at
-       * 0x0285 (below) and after the (unported) brood gate at 0x027F. */
+       * 0x0285 (below) and after the CS:0x027F brood gate (game/nest.js's
+       * `Brood`, now wired below instead of the `null` this file used to
+       * pass, which is what silently made every nest death spawn nothing). */
+      const camNow = { x: cam.snapX, y: cam.snapY };
       const nestContact = (box) => attackHero(
         { x: box.x, y: box.y, w: box.w, h: box.h, strength: box.hp },
         { x: player.x, y: player.y, state: player.stateIndex }, health,
         { invuln: fx.invuln > 0 }).strengthOut;
       const nestResult = nests.step(
-        { x: cam.snapX, y: cam.snapY }, { x: player.x }, fx.freeze,
-        nestContact, null, tock);
+        camNow, { x: player.x }, fx.freeze,
+        nestContact, brood, tock);
       for (const s of nestResult.shots) {
-        shots.fire(s.x, s.y, s.dir, { x: cam.snapX, y: cam.snapY });
+        shots.fire(s.x, s.y, s.dir, camNow);
       }
       lastNestFx = nestResult.drawn;
+      /* CS:0x894E — the brood children a nest death just spawned (if any).
+       * Ground-bounce honours "freezes aliens"; ballistic fall ignores it —
+       * see Brood#step's own header for why that asymmetry is real. */
+      lastBroodFx = brood.step(camNow, fx.freeze, nestContact, level.map.planeB).drawn;
       tock ^= 1;                                      // CS:0x0172 `not`
+
+      /* CS:0x7CBD/0x7B68 — the world-1-sublevel-B awakened statue. `statues`
+       * is empty (zero records) outside world 1 sublevel B, so this is a
+       * cheap no-op everywhere else. The trigger's own "don't wake on the
+       * hero" probe and the live creature's contact test share the SAME
+       * `nestContact` shape (`(box) => strengthOut`), since both are plain
+       * attackHero calls with a caller-supplied box. */
+      const statueScanGrid = (entity) => {
+        const r = creatureScansGrid(entity, grid, camNow, decodeTag,
+                                     difficulty, undefined, null,
+                                     { rng: () => rng.next(), debris });
+        return { killed: r.killed };
+      };
+      statues.checkTrigger(camNow, level.map.planeA, levelInfo.world, health,
+                            nestContact, rng);
+      const statueResult = statues.step(
+        camNow, { x: player.x, y: player.y }, fx.freeze,
+        nestContact, statueScanGrid, tock);
+      score.add(statueResult.score);
+      lastStatueFx = statueResult.drawn;
+
+      /* CS:0x7F0D — the world-3 DS:0xce64 creature and its "spit". Neither
+       * module needs injected callbacks (see ce64.js's own header for why it
+       * calls combat.js directly, unlike nest.js/statue.js), so this just
+       * hands them the real objects. */
+      const ce64Opts = { invuln: fx.invuln > 0, difficulty, debris, score };
+      lastCe64Fx = ce64Creatures.step(
+        camNow, { x: player.x, y: player.y, state: player.stateIndex }, fx.freeze,
+        health, grid, decodeTag, ce64Spits, ce64Opts).drawn;
+      lastSpitFx = ce64Spits.step(
+        camNow, { x: player.x, y: player.y, state: player.stateIndex }, fx.freeze,
+        health, grid, decodeTag, ce64Opts).drawn;
 
       runSpawns();
       /* THE HUNT. CS:0xf11f/0xf1e5 run the pathfinder only from the two walk
@@ -849,12 +931,16 @@ async function main() {
         }
       }
       runSpawnsA();
-      /* System A's own pipeline, CS:0xe001 — stages 1/2/4/5/6, per entity.
-       * Stage 3 (the attack) is not ported; see entity-a.js's header. */
+      /* System A's own pipeline, CS:0xe001 — all six stages, per entity.
+       * camera/markers unlock strategies 1/2 (CS:0xe9da/0xe88c); grid unlocks
+       * stage 3's attack/leap (CS:0xe487). All three are optional on tick()'s
+       * own signature, so this call is the only thing that actually arms
+       * them — see entity-a.js's header for what each one does. */
       for (const e of enemiesA) {
         const muzzle = e.tick(
           { x: player.x, y: player.y }, e.desc,
-          () => rng.next(), fx.freeze > 0);
+          () => rng.next(), fx.freeze > 0,
+          { x: cam.snapX, y: cam.snapY }, markerList.entries, grid);
         if (muzzle && muzzle.hazard) {
           /* CS:0xE5E4 — attackBits 1 throws at a jittered point near the
            * hero; 2 or 3 throw at the hero's exact position, muzzle +0x10 X. */
@@ -1032,6 +1118,42 @@ async function main() {
         else { outOfRange++; renderer.strokeRect(d.x, d.y, 16, 16, 10); }
       }
 
+      /* THE NEST'S BROOD CHILDREN — CS:0x894E, sprites off SS:0x360A (a
+       * placeholder table — see nest.js's own UNKNOWN_brood_sprite_table)
+       * plus the 0x6c(108)-base death burst every creature in this game
+       * shares. */
+      for (const d of lastBroodFx) {
+        const bf = hero && hero.frames[d.sprite];
+        if (bf) renderer.blitSprite(bf, d.x, d.y);
+        else { outOfRange++; renderer.strokeRect(d.x, d.y, 16, 12, 13); }
+      }
+
+      /* THE WORLD-1 SUBLEVEL-B AWAKENED STATUE — CS:0x7B68/0x7C4B/0x7C7C,
+       * sprites 450-455 (idle/moving) and 91-107 (death). */
+      for (const d of lastStatueFx) {
+        const sf = hero && hero.frames[d.sprite];
+        if (sf) renderer.blitSprite(sf, d.x, d.y);
+        else { outOfRange++; renderer.strokeRect(d.x, d.y, 32, 32, 14); }
+      }
+
+      /* THE WORLD-3 DS:0xce64 CREATURE — CS:0x7F5D, sprite table a
+       * deliberate placeholder (see ce64.js's UNKNOWN_ce64_sprite_table) and
+       * the 0x6c(108)-base death burst. */
+      for (const d of lastCe64Fx) {
+        const cf = hero && hero.frames[d.sprite];
+        if (cf) renderer.blitSprite(cf, d.x, d.y);
+        else { outOfRange++; renderer.strokeRect(d.x, d.y, 32, 40, 15); }
+      }
+
+      /* THE CREATURE'S "SPIT" SUB-PROJECTILE — sprites 492 (windup),
+       * 493-504 (flight) and 91-108 (death), all single-source this session,
+       * see ce64.js's own provenance note. */
+      for (const d of lastSpitFx) {
+        const spf = hero && hero.frames[d.sprite];
+        if (spf) renderer.blitSprite(spf, d.x, d.y);
+        else { outOfRange++; renderer.strokeRect(d.x, d.y, 24, 24, 15); }
+      }
+
       /* ENEMY SHOTS — CS:0x1FE7/0x2039, the shared mechanism by which any
        * shooting enemy fires (the nest, and now System A's stage 6). */
       if (lastShotsFx) for (const d of lastShotsFx) {
@@ -1103,7 +1225,9 @@ async function main() {
         (unstamped ? ` · ${unstamped} unstamped object types!` : '') +
         ` · ${enemies.filter((e) => e.alive).length}/${enemies.length} enemies` +
         ` · ${enemiesA.filter((e) => e.alive).length}/${enemiesA.length} sysA` +
-        ` · ${nests.live} nests · ${shots.live} shots · ${lineHazards.live} hazards · ${debris.live} debris` +
+        ` · ${nests.live} nests · ${brood.live} brood · ${statues.live} statues` +
+        ` · ${ce64Creatures.live} ce64 · ${ce64Spits.count} spits` +
+        ` · ${shots.live} shots · ${lineHazards.live} hazards · ${debris.live} debris` +
         ` · hp ${health.bar}/${health.target > HEALTH_MAX ? HEALTH_MAX : health.target}`        + (health.dead ? ' DEAD' : '') +
         ` · money ${purse.total} · score ${score.value}` +
         ` · lives ${fx.lives}` +

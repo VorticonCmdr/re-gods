@@ -200,6 +200,20 @@ for (const r of checkMarkers()) {
   console.log(line(r));
 }
 
+console.log('\n  The world-1 sublevel-B awakened statue (CS:0x7CBD/0x7B68/0x7C4B/0x7C7C):');
+const { checkStatue } = await import('../src/verify/checks.js');
+for (const r of checkStatue()) {
+  if (!r.pass && !r.note) bad++;
+  console.log(line(r));
+}
+
+console.log('\n  The world-3 DS:0xce64 creature and its "spit" sub-projectile:');
+const { checkCe64 } = await import('../src/verify/checks.js');
+for (const r of checkCe64()) {
+  if (!r.pass && !r.note) bad++;
+  console.log(line(r));
+}
+
 console.log('\n  System-A spawn chain and strategy census:');
 const { checkSpawnA } = await import('../src/verify/checks.js');
 for (const r of await checkSpawnA(fetchRaw)) {

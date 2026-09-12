@@ -26,7 +26,9 @@ import { parseGroupsB, parseGroupsA, GroupSlots, spriteForEntity, CLASS_TABLES_B
          CREATURE_DESCRIPTOR_BASE, MAX_ENTITIES } from '../game/spawn.js';
 import { EntityA, CLASS_TABLES_A, spriteForEntityA, rollStrategy,
          stageAccelerate, stageApply, stageFacingAndFire,
-         SPRITE_BASE_8FRAME, SPRITE_BASE_6FRAME } from '../game/entity-a.js';
+         SPRITE_BASE_8FRAME, SPRITE_BASE_6FRAME,
+         stageAttack, REACH_OFFSETS, DISPLACEMENT_TABLE,
+         ZONES, ZONE_SCRATCH, currentZone, strategy1, strategy2 } from '../game/entity-a.js';
 import { SELECTOR_TABLE, SELECTOR_TRIGGER, EVENT_TABLE_OFF, EVENT_COUNT,
          palfilsNameFor, parsePalfils, EventRunner } from '../game/events.js';
 import { spriteForType, parseObjectCategories, isDeadType, isUnstamped,
@@ -97,6 +99,13 @@ import { Nests, aimAt, broodCount, signed16,
          FIRE_PERIOD, HATCH_RELOAD, BAND_LEFT, BAND_RIGHT, MUZZLE,
          BROOD_AT_STATE, DEATH_FREE_AT_STATE, BROOD_SLOTS, BROOD_STRIDE,
          BROOD_Y_OFFSET, BROOD_HP, ST as NST } from '../game/nest.js';
+/* A separate import, appended rather than folded into the block above, so
+ * this pass's additions to checks.js stay strictly additive: the brood
+ * walker at CS:0x894E, closed and ported as `Brood` (see nest.js). */
+import { Brood, broodFacingOffset, BROOD_SEED_FALL_SUBSTATE, BROOD_BOX,
+         BROOD_BOUNCE_PROBE_X, BROOD_FALL_PROBE, BROOD_FALL_GRAVITY_CAP,
+         BROOD_DEATH_DRAW_OFFSET, BROOD_FACING_OFFSET, BROOD_SPRITE_TABLE,
+         DEATH_DRAW_OFFSET } from '../game/nest.js';
 import { Debris, SLOTS as DBG_SLOTS, STRIDE as DBG_STRIDE, LIFETIME_TICKS,
          SPRITE_FIRST, SPRITE_LAST, EXPIRE_AT } from '../game/debris.js';
 import { Destructibles, DESTRUCTIBLE_TILE, MIN_WORLD, MACE_INDEX, MACE_BONUS,
@@ -141,6 +150,29 @@ import { SLOT_STRIDE, PROJECTILE_SIZE, GROUP_STRIDE, GROUP_ENTRIES,
          PROJECTILE_VELOCITY, setWeaponArc, resetWeaponArc,
          MOVER_WALK, CULL, stepProjectiles,
          DECODED_MOVERS, stepMoverFrame, projectileSprite } from '../game/projectiles.js';
+/* A separate import, appended rather than folded into any block above, so
+ * this pass's addition stays strictly additive: ce64.js — the world-3-only
+ * creature (object type 96) and its "spit" sub-projectile. Names that would
+ * collide with an existing import (SEED_HP, DEATH_SPRITE_BASE,
+ * DEATH_DRAW_OFFSET, OBJECT_TYPE, OBJECT_SPRITE, WORLD, SLOTS, STRIDE — all
+ * already bound by nest.js above) are aliased with a CE64_ prefix, the same
+ * convention this file already uses for NEST_/ES_/LH_. */
+import { Ce64Creatures, Ce64Spits,
+         OBJECT_TYPE as CE64_TYPE, OBJECT_SPRITE as CE64_SPRITE,
+         WORLD as CE64_WORLD, SLOTS as CE64_SLOTS, STRIDE as CE64_STRIDE,
+         SEED_HP as CE64_SEED_HP, SEED_WANDER as CE64_SEED_WANDER,
+         SEED_TIMER as CE64_SEED_TIMER,
+         TIMER_RELOAD_BASE, TIMER_RELOAD_MASK,
+         ATTACK_AT_WANDER, WANDER_CYCLE_LENGTH, ATTACK_WINDOW,
+         BOX_CREATURE, SCORE_CREATURE_KILL, SCORE_SPIT_KILL,
+         DEATH_SPRITE_BASE as CE64_DEATH_SPRITE_BASE,
+         DEATH_DRAW_OFFSET as CE64_DEATH_DRAW_OFFSET, DEATH_FREE_AT,
+         WANDER_SPRITE, UNKNOWN_ce64_sprite_table,
+         SPIT_CAP, SPIT_WINDUP_TICKS, SPIT_ORIGIN_Y_BIAS, SPIT_ARM_HP,
+         SPIT_ARM_STEPS, SPIT_WINDUP_SPRITE, SPIT_SPRITE_BASE,
+         SPIT_FACING_LEFT_OFFSET, SPIT_FACING_RIGHT_OFFSET, SPIT_BOX,
+         SPIT_CULL, SPIT_DEATH_SPRITE_BASE,
+         SPIT_DEATH_FRAMES } from '../game/ce64.js';
 
 export function makeChecker() {
   const results = [];
@@ -1188,6 +1220,224 @@ export async function checkDescriptorAnchors(fetchRaw) {
         'pool\'s clear routine at CS:0x7F48, whose tail disarms the DS:0xce64 ' +
         'walker as a side effect.',
     });
+
+    /* ══ THE BROOD WALKER, CS:0x894E — CLOSED, no longer out of scope ═══════
+     *
+     * The note pushed just above still calls UNKNOWN_8014_brood open, listing
+     * field8/fieldA as unlabelled. It is stale as of the checks below, and it
+     * is left in place rather than edited — see nest.js's own walker section
+     * for the up-to-date account, which this block re-derives from the real
+     * `Brood` class rather than restating in prose. */
+    {
+      const camZero = { x: 0, y: 0 };
+      const emptyPlaneB = () => new Uint8Array(128 * 64);
+      const alive = (hp) => () => hp.strength;   // a contact stub that never hits
+
+      /* ── the seed: CHILDREN START FALLING, not bouncing ────────────────── */
+      {
+        const brood = new Brood();
+        const ok = brood.spawn(10, 20, 3, -4, BROOD_HP);
+        const s = brood.slots.find((sl) => sl.frame >= 0);
+        check(`a freshly spawned brood child starts BALLISTIC, fallSubstate=${BROOD_SEED_FALL_SUBSTATE}`,
+          ok && s.fallSubstate === BROOD_SEED_FALL_SUBSTATE && s.fallSubstate !== 0
+            && s.frame === 0 && s.strength === BROOD_HP,
+          `the seed block already on record in nest.js states "+0xc = 1" — a ` +
+          `child bursts upward (fieldA is always negative) and only settles ` +
+          `into GROUND-BOUNCE mode once it lands. A port that starts children ` +
+          `bouncing skips the burst arc entirely`);
+      }
+
+      /* ── ground-bounce: the step is NEVER undone, only the velocity flips ── */
+      {
+        const brood = new Brood();
+        brood.spawn(0, 0, 4, 0, BROOD_HP);
+        const s = brood.slots.find((sl) => sl.frame >= 0);
+        s.fallSubstate = 0;
+        const planeB = emptyPlaneB();
+        /* solid exactly where the RIGHT-facing probe (x+BROOD_BOUNCE_PROBE_X)
+         * lands after the step, at row 0 */
+        planeB[((4 + BROOD_BOUNCE_PROBE_X) >> 5)] = 1;
+        brood.step(camZero, 0, alive(s), planeB);
+        check(`ground-bounce steps x with the PRE-bounce vx, THEN reflects it`,
+          s.x === 4 && s.vx === -4,
+          `x lands at ${s.x} (the wall was found only AFTER stepping there) ` +
+          `and vx flips from 4 to ${s.vx} — CS:0x8A6C never un-steps the ` +
+          `position it just found solid, the same shape this file's own ` +
+          `hero/enemy wall probes use elsewhere`);
+      }
+
+      /* ── ballistic-fall gravity: capped at 8, an EIGHTH independent rule ── */
+      {
+        const brood = new Brood();
+        brood.spawn(0, 0, 0, 0, BROOD_HP);
+        const s = brood.slots.find((sl) => sl.frame >= 0);
+        const openSky = emptyPlaneB();
+        for (let t = 0; t < 20; t++) brood.step(camZero, 0, alive(s), openSky);
+        check(`ballistic-fall gravity caps at ${BROOD_FALL_GRAVITY_CAP}, not the magic axe's own (coincidentally equal) cap`,
+          s.vy === BROOD_FALL_GRAVITY_CAP && BROOD_FALL_GRAVITY_CAP === 8,
+          `20 ticks over open sky and vy has settled at ${s.vy} rather than ` +
+          `growing without bound — CS:0x8AB1's own \`inc / cmp 8 / jle\`. This ` +
+          `project already runs a growing list of independently-coded gravity ` +
+          `rules that do not share a routine; this is an eighth`);
+      }
+
+      /* ── landing: the transition back to ground-bounce ─────────────────── */
+      {
+        const brood = new Brood();
+        brood.spawn(0, 0, 0, 0, BROOD_HP);
+        const s = brood.slots.find((sl) => sl.frame >= 0);
+        const ground = emptyPlaneB();
+        /* solid exactly under the (x+0xc, y+0xf) probe on the very first
+         * fall tick (x=0,y=0 -> probe col 0, row 0), with the row above it
+         * (row -1) untested/absent — i.e. NOT solid. */
+        ground[(BROOD_FALL_PROBE.dy >> 4) * 128 + (BROOD_FALL_PROBE.dx >> 5)] = 1;
+        brood.step(camZero, 0, alive(s), ground);
+        check(`landing on solid ground switches fallSubstate back to 0, snapping y to the tile-row-plus-one`,
+          s.fallSubstate === 0 && s.vy === 0 && s.y === 16,
+          `probe (x+${BROOD_FALL_PROBE.dx}, y+${BROOD_FALL_PROBE.dy}) finds ` +
+          `solid ground on the first tick; y snaps from 0 to ${s.y} — floor to ` +
+          `the current tile row then ADD ONE FULL ROW, the same idiom CLAUDE.md ` +
+          `documents for the hero's own jump ceiling-ejection — and the child ` +
+          `returns to ground-bounce movement from the next tick on`);
+      }
+
+      /* ── the hitbox: a THIRD size in this file, not the parent's either box ── */
+      {
+        const brood = new Brood();
+        brood.spawn(0, 0, 0, 0, BROOD_HP);
+        const s = brood.slots.find((sl) => sl.frame >= 0);
+        s.fallSubstate = 0;
+        let seenBox = null;
+        brood.step(camZero, 0, (box) => { seenBox = box; return box.hp; }, emptyPlaneB());
+        check(`the brood contact box is ${BROOD_BOX.w}x${BROOD_BOX.h}, distinct from BOTH of the parent's own (${BOX_ALIVE.w}x${BOX_ALIVE.h} / ${BOX_HATCH.w}x${BOX_HATCH.h})`,
+          seenBox !== null && seenBox.w === 0x18 && seenBox.h === 0x10
+            && !(seenBox.w === BOX_ALIVE.w && seenBox.h === BOX_ALIVE.h)
+            && !(seenBox.w === BOX_HATCH.w && seenBox.h === BOX_HATCH.h),
+          `CS:0x898B \`[0x1e2]=0x18(24) ; [0x1e4]=0x10(16)\` — passed straight ` +
+          `to the shared CS:0xa9e4 thunk every creature in this game uses`);
+      }
+
+      /* ── death: reuses the parent's CAP, but NOT its duration or offset ── */
+      {
+        const dieAtFrame = (frame) => {
+          const brood = new Brood();
+          brood.spawn(0, 0, 0, 0, BROOD_HP);
+          const s = brood.slots.find((sl) => sl.frame >= 0);
+          s.frame = frame; s.strength = -1;
+          let ticks = 0;
+          while (s.frame >= 0 && ticks < 30) {
+            brood.step(camZero, 0, alive(s), emptyPlaneB());
+            ticks++;
+          }
+          return ticks;
+        };
+        const fromZero = dieAtFrame(0);
+        const fromFive = dieAtFrame(5);
+        check(`a child that died at frame 0 bursts for exactly DEATH_FREE_AT_STATE (${DEATH_FREE_AT_STATE}) ticks, reusing the PARENT's cap`,
+          fromZero === DEATH_FREE_AT_STATE,
+          `CS:0x8A5C increments +0x4 and compares against 7 — the SAME cap ` +
+          `this file already names DEATH_FREE_AT_STATE for the parent. But ` +
+          `unlike the parent's state, +0x4 here COUNTS UP from whatever frame ` +
+          `it held while alive, so 7 is a CAP, not a guaranteed duration`);
+        check(`a child that died holding a LATER frame bursts for FEWER ticks — death inherits the frame, it does not reset`,
+          fromFive === DEATH_FREE_AT_STATE - 5,
+          `died holding frame 5 -> only ${fromFive} ticks to reach the cap — ` +
+          `the same "death inherits the live state" shape this file already ` +
+          `documents for the parent's own #death, now confirmed for the brood ` +
+          `too. A port that always bursts for a flat ${DEATH_FREE_AT_STATE} ` +
+          `ticks loses this`);
+        check(`the brood's own death draw offset is NOT the parent's DEATH_DRAW_OFFSET — only the X survives`,
+          BROOD_DEATH_DRAW_OFFSET.dx === DEATH_DRAW_OFFSET.dx
+            && BROOD_DEATH_DRAW_OFFSET.dy !== DEATH_DRAW_OFFSET.dy
+            && BROOD_DEATH_DRAW_OFFSET.dy === -0x11,
+          `CS:0x8A43: X matches the parent's ${DEATH_DRAW_OFFSET.dx} exactly, ` +
+          `but Y is ${BROOD_DEATH_DRAW_OFFSET.dy} (-0x11), not ${DEATH_DRAW_OFFSET.dy} ` +
+          `— a task-level summary this pass started from asserted outright ` +
+          `reuse of the parent's own constant; the bytes disagree on Y, and ` +
+          `on drawing once rather than twice`);
+      }
+
+      /* ── facing: +3 for NON-NEGATIVE vx, not strictly-positive vx ────────── */
+      check(`the facing offset is +${BROOD_FACING_OFFSET} for non-negative vx (including exactly 0), 0 for negative`,
+        broodFacingOffset(0) === BROOD_FACING_OFFSET
+          && broodFacingOffset(5) === BROOD_FACING_OFFSET
+          && broodFacingOffset(-1) === 0,
+        `CS:0x89AA \`js\` skips the \`add dx,3\` only when vx is strictly ` +
+        `NEGATIVE — vx===0 still gets +${BROOD_FACING_OFFSET}, the same ` +
+        `"non-negative, not strictly positive" convention this file already ` +
+        `uses for the parent elsewhere (HATCH_EXPORT2_BELOW, aimAt)`);
+
+      /* ── freeze: an asymmetry between the two movement modes, kept as-is ── */
+      {
+        const falling = new Brood();
+        falling.spawn(0, 0, 0, 3, BROOD_HP);
+        const sFall = falling.slots.find((sl) => sl.frame >= 0);
+        sFall.fallSubstate = 1;
+        const yBefore = sFall.y;
+        falling.step(camZero, 999, alive(sFall), emptyPlaneB());
+
+        const bouncing = new Brood();
+        bouncing.spawn(0, 0, 4, 0, BROOD_HP);
+        const sBounce = bouncing.slots.find((sl) => sl.frame >= 0);
+        sBounce.fallSubstate = 0;
+        const xBefore = sBounce.x;
+        bouncing.step(camZero, 999, alive(sBounce), emptyPlaneB());
+
+        check(`"freezes aliens" stops GROUND-BOUNCE movement but NOT ballistic fall`,
+          sFall.y !== yBefore && sBounce.x === xBefore,
+          `CS:0x8970 jumps straight into the fall routine (0x8AB1) BEFORE the ` +
+          `freeze test at CS:0x8979 is ever reached — only a bouncing child ` +
+          `(fallSubstate 0) passes through it. So a falling child keeps ` +
+          `falling under freeze while a bouncing one is held still. Implemented ` +
+          `as traced rather than made uniform`);
+      }
+
+      /* ── the sprite table's own contents are genuinely unread ────────────── */
+      check(`BROOD_SPRITE_TABLE is an honest IDENTITY placeholder, not an invented sprite sequence`,
+        BROOD_SPRITE_TABLE.every((v, i) => v === i),
+        `SS:0x360A's own byte contents were never read by any pass over this ` +
+        `project — only the LOOKUP MECHANISM (frame-doubled word index, +-3 ` +
+        `facing variant) was ever proven. Per this task's own instruction not ` +
+        `to fabricate specific numbers, frame is passed straight through ` +
+        `rather than through an invented table. UNKNOWN_brood_sprite_table`);
+
+      /* ── end-to-end: Nests#brood really can drive a live Brood instance ──── */
+      {
+        const script = [0, 0, 3];     // count-draw, then fieldA, then field8 — same script nest.js's own brood test uses
+        let i = 0;
+        const rng = { next: () => script[i++] ?? 0 };
+        const nests = new Nests(2, rng);
+        const brood = new Brood();
+        nests.spawn(0, 200, 0);
+        i = 0;                        // spawn() itself burned one draw for the hatch timer
+        const parent = nests.slots[0];
+        parent.state = 0; parent.hp = -1;
+        let ticks = 0;
+        while (nests.live > 0 && ticks < 20) {
+          nests.step(camZero, { x: 0 }, 0, () => parent.hp, brood);
+          ticks++;
+        }
+        check(`Nests#brood's existing spawn(...) call drives a REAL Brood instance end to end, with no changes to Nests`,
+          brood.live > 0 && nests.broodlings === brood.live,
+          `spawned ${brood.live} live brood children through the SAME ` +
+          `argument order Nests already used before this pass — no field ` +
+          `renaming, no signature change on the Nests side was needed`);
+      }
+    }
+
+    results.push({
+      name: 'the brood walker is no longer out of scope; two residuals remain',
+      note: true, pass: true,
+      detail: 'UNKNOWN_brood_score — CS:0x8A33-0x8A65 (the decoded death path) ' +
+        'is draw / inc / free with no call into the shared BCD score entry ' +
+        'this project documents for other kills; whether an award happens off ' +
+        'that path is open, so Brood.score stays at 0 rather than a guess. ' +
+        'UNKNOWN_brood_sprite_table — SS:0x360A is proven to be a frame-' +
+        'doubled lookup with a +-3 facing variant, but its own byte contents ' +
+        'were never read; BROOD_SPRITE_TABLE is an identity placeholder. ' +
+        'UNKNOWN_8014_world1 and UNKNOWN_ce64_pool, named in the note above ' +
+        'this one, are unrelated to the walker and remain untouched by this pass.',
+    });
   }
 
   return results;
@@ -1682,6 +1932,202 @@ export function checkEntityA() {
   const w2 = new EntityA({ x: 0, y: 0 }); w2.cls = 0; w2.frame = 3; w2.facing = 0;
   check(`world>=2 default class adds the raw frame directly, +4 offset`,
     spriteForEntityA(2, 0, w2, dTables) === 1000 + 3 + 4);
+
+  /* ── Stage 3, CS:0xe487 -> FUN_1000_e4e2 — the reach-table scan ─────────
+   * Hit/no-hit cases, plus the DISPLACEMENT CURSOR DRIFT on a 2-hit scan —
+   * a first hit reads DISPLACEMENT_TABLE[0] cleanly, a second (later) hit
+   * reads whatever index the elapsed step count has drifted the cursor to,
+   * NOT the "next" table entry. */
+  {
+    const cam0 = { x: 0, y: 0 };
+    const emptyGrid = new DamageGrid(); emptyGrid.clear();
+
+    const eGateOff = new EntityA({ x: 80, y: 80 });
+    check(`stage 3 does nothing while descriptor +0xf (attackGate) is 0`,
+      stageAttack(eGateOff, { attackGate: 0, stepCap: 4 }, emptyGrid, cam0) === null);
+
+    const eNoHit = new EntityA({ x: 80, y: 80 });
+    check(`stage 3 finds nothing on an empty damage grid`,
+      stageAttack(eNoHit, { attackGate: 6, stepCap: 4 }, emptyGrid, cam0) === null);
+
+    const eFarOff = new EntityA({ x: -10000, y: -10000 });
+    check(`stage 3 stops (returns null) rather than reading garbage when the entity's own cell is off the grid`,
+      stageAttack(eFarOff, { attackGate: 6, stepCap: 4 }, emptyGrid, cam0) === null);
+
+    /* REACH_OFFSETS[0] = {dCol:-1, dRow:-1}, the scan's very FIRST probed
+     * cell. Stamping only this one gives a single, first-step hit. */
+    const off0 = REACH_OFFSETS[0];
+    const stampAt = (grid, off, tag) =>
+      { grid.buf[stampIndex(80 + off.dCol * CELL, 80 + off.dRow * CELL) - GRID_LO] = tag; };
+
+    const eHit0 = new EntityA({ x: 80, y: 80 });
+    eHit0.arrivedFine = true;               // prove stage 3 clears this on a hit
+    const gridHit0 = new DamageGrid(); gridHit0.clear();
+    stampAt(gridHit0, off0, 5);
+    const r0 = stageAttack(eHit0, { attackGate: 6, stepCap: 4 }, gridHit0, cam0);
+    check(`a hit on the very first probed cell reads DISPLACEMENT_TABLE at cursor 0`,
+      r0 && r0.hits.length === 1 && r0.hits[0].step === 0 && r0.hits[0].cursor === 0,
+      JSON.stringify(r0));
+    check(`the returned delta is DISPLACEMENT_TABLE[0] doubled and clamped to desc.stepCap (+0xc)`,
+      r0 && r0.dx === -4 && r0.dy === -4,   // {-8,-8} * 2 = {-16,-16}, clamped to +/-4
+      JSON.stringify(r0));
+    check(`a hit arms the windup (entity +0x16 -> 10, CS:0xE496) and clears arrivedFine`,
+      eHit0.stepCap === 10 && eHit0.arrivedFine === false);
+    check(`the steering delta blends onto the PRE-stage-2 velocity snapshot, not a bare assignment`,
+      eHit0.vx === eHit0.prevVx + r0.dx && eHit0.vy === eHit0.prevVy + r0.dy);
+
+    /* A second stamp at REACH_OFFSETS[3] = {dCol:2, dRow:-1} lands on the
+     * scan's 4th probed cell (step 3). attackGate=12 -> budget = (0x10-12)
+     * & 0xf = 4, so the scan visits steps 0,1,2,3 exactly and the cursor —
+     * which advances on EVERY step, hit or miss — has drifted to 3 by the
+     * time this second hit registers. A "clean, per-hit" table index would
+     * read 1 here; the original does not work that way. */
+    const off3 = REACH_OFFSETS[3];
+    const eHit2 = new EntityA({ x: 80, y: 80 });
+    const gridHit2 = new DamageGrid(); gridHit2.clear();
+    stampAt(gridHit2, off0, 5);
+    stampAt(gridHit2, off3, 7);
+    const r2 = stageAttack(eHit2, { attackGate: 12, stepCap: 4 }, gridHit2, cam0);
+    check(`a 2-hit scan caps at exactly 2 tracked hits`,
+      r2 && r2.hits.length === 2, JSON.stringify(r2));
+    check(`the FIRST hit still reads cursor 0 cleanly`,
+      r2 && r2.hits[0].step === 0 && r2.hits[0].cursor === 0);
+    check(`⚠️ the SECOND hit reads a DRIFTED cursor (3, the elapsed step count) — NOT a clean index 1`,
+      r2 && r2.hits[1].step === 3 && r2.hits[1].cursor === 3, JSON.stringify(r2));
+    check(`only the FIRST hit's displacement ever steers the entity — the second hit's drift has no gameplay effect`,
+      r2 && r2.dx === r0.dx && r2.dy === r0.dy);
+  }
+
+  /* ── Strategy 1, CS:0xe9da — the zone search ─────────────────────────── */
+  {
+    const cam0 = { x: 0, y: 0 };
+    const zone1 = ZONES[0];   // {loX:0, loY:0, hiX:160, hiY:60}
+    const w1z = zone1.hiX - zone1.loX, h1z = zone1.hiY - zone1.loY;
+
+    /* Force the desired===current(=1) branch deterministically: zoneWeight
+     * 127 always takes the weighted search, and with ZONE_SCRATCH
+     * permanently zero that search always yields zone 1. An entity at
+     * screen (50,20) is cleanly inside zone 1 and nowhere else. */
+    let boxOk = true, centreOk = true;
+    for (const rv of [0, 1, 32, 63, 64, 100, 126, 127]) {
+      const e = new EntityA({ x: 50, y: 20 });
+      const seq = [5, rv, rv];       // [0] passes the zoneWeight(127) gate; [1]/[2] offX/offY draws
+      let n = 0;
+      strategy1(e, { zoneWeight: 127 }, cam0, () => seq[n++] ?? rv);
+      const offX = (e.goalX - cam0.x) - zone1.loX + 16;
+      const offY = (e.goalY - cam0.y) - zone1.loY + 16;
+      if (offX < 0 || offX >= w1z || offY < 0 || offY >= h1z) boxOk = false;
+      /* This port's own reading of the documented "-16" shift: it centres a
+       * 32px-wide entity, so the entity's presumed CENTRE (goal + 16 on
+       * both axes) should land inside the zone's own rectangle. Flagged as
+       * an interpretation in strategy1's own header, not re-derived from
+       * CS:0xe9da's raw bytes — asserted here as this port's understanding,
+       * not as independently confirmed original behaviour. */
+      const cx = e.goalX - cam0.x + 16, cy = e.goalY - cam0.y + 16;
+      if (cx < zone1.loX || cx > zone1.hiX || cy < zone1.loY || cy > zone1.hiY) centreOk = false;
+    }
+    check(`strategy 1's raw scaled offset never escapes its own zone's width/height`, boxOk);
+    check(`(this port's reading of the -16 shift) the entity's presumed 32px-body centre lands inside the target zone`,
+      centreOk);
+
+    /* ⚠️ THE "WRONG DIRECTION" RING STEP, asserted explicitly. current=1,
+     * desired=6: the BACKWARD ring search finds desired in exactly 1 hop
+     * (zone 1 -> 6), so a "sensible" implementation would step backward.
+     * The original does the opposite: it is the FORWARD search that FAILS
+     * (blocked on its own very first hop, since ZONE_SCRATCH is
+     * permanently zero), and the entity steps FORWARD anyway — landing in
+     * zone 2, not the reachable zone 6. Independently re-verified from the
+     * raw disassembly twice in this project; not a transcription error. */
+    const eWrong = new EntityA({ x: 50, y: 20 });         // currentZone === 1
+    const wrongSeq = [1, 6, 0, 0];    // [0] fails the zoneWeight(0) gate -> reroll branch
+                                        // [1] rand()&7 === 6 -> desired = 6
+                                        // [2]/[3] offX/offY for the eventual setGoal
+    let wi = 0;
+    strategy1(eWrong, { zoneWeight: 0 }, cam0, () => wrongSeq[wi++] ?? 0);
+    check(`⚠️ current=1, desired=6: the reachable (1-hop, backward) direction is NOT taken`,
+      eWrong.storedZone === 2, `storedZone=${eWrong.storedZone} (expected 2, the FAILED forward direction, not 6)`);
+
+    /* Strategy 1 never stays sticky — every call re-arms entity.strategy. */
+    const eSticky = new EntityA({ x: 50, y: 20 });
+    eSticky.strategy = 1;
+    strategy1(eSticky, { zoneWeight: 127 }, cam0, () => 5);
+    check(`strategy 1 always re-arms the sticky-strategy byte to "unset" before returning`,
+      eSticky.strategy === -1);
+
+    /* currentZone's own asymmetric bounds, and its 0-return for an entity
+     * cleanly outside all 7 zones (an edge case the given spec does not
+     * itself address — see stepBack6's own comment for how strategy1
+     * handles it defensively rather than assuming it can't occur). */
+    check(`currentZone finds zone 1 for an entity well inside it`,
+      currentZone({ x: 50, y: 20 }, cam0) === 1);
+    check(`currentZone returns 0 for an entity cleanly outside every zone`,
+      currentZone({ x: 1000, y: 1000 }, cam0) === 0);
+  }
+
+  /* ── Strategy 2, CS:0xe88c — marker-seek ─────────────────────────────── */
+  {
+    const camera = { x: 200, y: 100 };
+    const markers = [{ x: 50, y: 30, type: 10 }];
+
+    const e = new EntityA({ x: 0, y: 0 });
+    strategy2(e, markers, camera, () => 0);
+    check(`strategy 2 converts a screen-frozen marker to a world goal via marker + CURRENT camera (not re-subtracted)`,
+      e.goalX === 250 && e.goalY === 130, `${e.goalX},${e.goalY}`);
+
+    const eEmpty = new EntityA({ x: 5, y: 5 });
+    eEmpty.goalX = 5; eEmpty.goalY = 5;
+    strategy2(eEmpty, [], camera, () => 0);
+    check(`strategy 2 with an empty marker list leaves the existing goal untouched`,
+      eEmpty.goalX === 5 && eEmpty.goalY === 5);
+
+    const eNull = new EntityA({ x: 5, y: 5 });
+    eNull.goalX = 5; eNull.goalY = 5;
+    strategy2(eNull, null, camera, () => 0);
+    check(`strategy 2 tolerates a null marker list the same way as an empty one`,
+      eNull.goalX === 5 && eNull.goalY === 5);
+  }
+
+  /* ── tick()'s own dispatch: strategies 1/2 are wired, gated on `camera` ─
+   * The one real caller (main.js) does not pass a camera yet, so this also
+   * locks in the documented fallback: no camera means the goal is left
+   * exactly as untouched as it was before this session. */
+  {
+    const cam0 = { x: 0, y: 0 };
+    const descBase = { seedPair: 0x11, seedWeight: 0, stepCap: 4, speedCap: 4, fireByte: 0, flags: 0 };
+
+    const eNoCam = new EntityA({ x: 50, y: 20, hp: 5 });
+    eNoCam.state = eNoCam.hp;           // skip the pre-life FSM
+    eNoCam.strategy = 1;
+    eNoCam.goalX = 999; eNoCam.goalY = 999;
+    eNoCam.tick({ x: 0, y: 0 }, descBase, () => 0, false);
+    check(`tick() leaves strategy 1's goal untouched when no camera is supplied (the current, real call-site behaviour)`,
+      eNoCam.goalX === 999 && eNoCam.goalY === 999);
+
+    const eCam = new EntityA({ x: 50, y: 20, hp: 5 });
+    eCam.state = eCam.hp;
+    eCam.strategy = 1;
+    eCam.goalX = 999; eCam.goalY = 999;
+    eCam.tick({ x: 0, y: 0 }, { ...descBase, zoneWeight: 127 }, () => 5, false, cam0);
+    check(`tick() DOES route strategy 1 through strategy1() once a camera is supplied`,
+      eCam.goalX !== 999 || eCam.goalY !== 999, `goal=${eCam.goalX},${eCam.goalY}`);
+
+    const eNoCam2 = new EntityA({ x: 0, y: 0, hp: 5 });
+    eNoCam2.state = eNoCam2.hp;
+    eNoCam2.strategy = 2;
+    eNoCam2.goalX = 999; eNoCam2.goalY = 999;
+    eNoCam2.tick({ x: 0, y: 0 }, descBase, () => 0, false, null, [{ x: 50, y: 30, type: 10 }]);
+    check(`tick() leaves strategy 2's goal untouched when no camera is supplied, even with markers present`,
+      eNoCam2.goalX === 999 && eNoCam2.goalY === 999);
+
+    const cam2 = { x: 200, y: 100 };
+    const eCam2 = new EntityA({ x: 0, y: 0, hp: 5 });
+    eCam2.state = eCam2.hp;
+    eCam2.strategy = 2;
+    eCam2.goalX = 999; eCam2.goalY = 999;
+    eCam2.tick({ x: 0, y: 0 }, descBase, () => 0, false, cam2, [{ x: 50, y: 30, type: 10 }]);
+    check(`tick() DOES route strategy 2 through strategy2() once both camera and markers are supplied`,
+      eCam2.goalX === 250 && eCam2.goalY === 130, `goal=${eCam2.goalX},${eCam2.goalY}`);
+  }
 
   return results;
 }
@@ -7146,6 +7592,648 @@ export function checkMarkers() {
   const idxUsed = seedGoals(st, 0, 0, 0);
   check('markersOverride forces idx 2 regardless of the descriptor nibbles',
     idxUsed === 2, `idx=${idxUsed}`);
+
+  return results;
+}
+
+/* Appended for game/statue.js — the world-1-sublevel-B awakened statue.
+ * Imported here rather than at the top of the file per this pass's own
+ * instructions (append-only; do not restructure the existing import block). */
+import { Statues, populateStatueTable, inStatueWindow, wakeRollPasses,
+         steerStep, MAP_COLS, PLANE_SIZE, TILE_A, TILE_B, STATUE_WORLD,
+         STATUE_SUBLEVEL, WAKE_DECOR_TILE, WAKE_STATE, WINDOW_COLS,
+         WINDOW_ROWS, WAKE_GATE, STEP_X_MIN, STEP_X_MAX, STEP_Y_MIN,
+         STEP_Y_MAX, IDLE_TABLE, FACING_OFFSET,
+         DEATH_SPRITE_BASE as STATUE_DEATH_SPRITE_BASE,
+         DEATH_FRAMES, KILL_POPUP_ID, KILL_SCORE } from '../game/statue.js';
+
+export function checkStatue() {
+  const { results, check } = makeChecker();
+  const missContact = (box) => box.hp;   // a contact call that always misses
+
+  /* (a) The populator produces records ONLY in world 1, sublevel B. */
+  const planeA1 = new Uint8Array(PLANE_SIZE);
+  planeA1[5 * MAP_COLS + 5] = TILE_A;
+  planeA1[6 * MAP_COLS + 6] = TILE_B;
+  check('the populator finds 0x23/0x24 tiles ONLY in world 1 sublevel B',
+    populateStatueTable(planeA1, 1, 'b').length === 2
+    && populateStatueTable(planeA1, 1, 'a').length === 0
+    && populateStatueTable(planeA1, 2, 'b').length === 0
+    && populateStatueTable(planeA1, 0, 'b').length === 0,
+    `b=${populateStatueTable(planeA1, 1, 'b').length} a=${populateStatueTable(planeA1, 1, 'a').length} `
+    + `w2=${populateStatueTable(planeA1, 2, 'b').length}`);
+  check('the two records carry the tile that actually matched (0x23 vs 0x24)',
+    populateStatueTable(planeA1, 1, 'b')[0].matchedTileId === TILE_A
+    && populateStatueTable(planeA1, 1, 'b')[1].matchedTileId === TILE_B);
+
+  /* (b) The on-screen window is STRICTLY open on all four sides. */
+  check('tileCol == camTileCol is OFF the left edge (inclusive fail)',
+    inStatueWindow(0, 5, 0, 0) === false);
+  check('tileCol == camTileCol+1 is ON, just inside the left edge',
+    inStatueWindow(1, 5, 0, 0) === true);
+  check(`tileCol == camTileCol+WINDOW_COLS-1 (${WINDOW_COLS - 1}) is ON, just inside the right edge`,
+    inStatueWindow(WINDOW_COLS - 1, 5, 0, 0) === true);
+  check(`tileCol == camTileCol+WINDOW_COLS (${WINDOW_COLS}) is OFF the right edge`,
+    inStatueWindow(WINDOW_COLS, 5, 0, 0) === false);
+  check('tileRow == camTileRow is OFF the top edge',
+    inStatueWindow(5, 0, 0, 0) === false);
+  check('tileRow == camTileRow+1 is ON, just inside the top edge',
+    inStatueWindow(5, 1, 0, 0) === true);
+  check(`tileRow == camTileRow+WINDOW_ROWS-1 (${WINDOW_ROWS - 1}) is ON, just inside the bottom edge`,
+    inStatueWindow(5, WINDOW_ROWS - 1, 0, 0) === true);
+  check(`tileRow == camTileRow+WINDOW_ROWS (${WINDOW_ROWS}) is OFF the bottom edge`,
+    inStatueWindow(5, WINDOW_ROWS, 0, 0) === false);
+
+  /* (c) The health-snapshot-restore trick around the wake-trigger's own
+   * probe: a probe HIT must never actually reduce health, even though the
+   * injected `contact` internally calls the REAL attackHero (exactly the
+   * shape main.js's own nestContact closure takes for nest.js). */
+  {
+    const statues = new Statues();
+    const planeA = new Uint8Array(PLANE_SIZE);
+    const idx = 5 * MAP_COLS + 5;                    // worldX=160, worldY=80
+    planeA[idx] = TILE_A;
+    statues.populate(planeA, STATUE_WORLD, STATUE_SUBLEVEL);
+    check('the probe fixture: exactly one record, tile 0x23, at (5,5)',
+      statues.records.length === 1 && statues.records[0].matchedTileId === TILE_A);
+
+    const health = new Health();                      // target=24, bar=1
+    const hero = { x: 150, y: 50, state: 0 };          // positioned to OVERLAP the 48x48 probe
+    let rngCalls = 0;
+    const rng = { next: () => { rngCalls++; return 0; } };
+    const contact = (box) => attackHero(
+      { x: box.x, y: box.y, w: box.w, h: box.h, strength: box.hp },
+      hero, health, {}).strengthOut;
+
+    const before = health.target;
+    const res = statues.checkTrigger({ x: 0, y: 0 }, planeA, STATUE_WORLD, health, contact, rng);
+    check('a probe that overlaps the hero DEFERS rather than waking',
+      res.deferredHero === true && res.woke === false && res.fired === false, JSON.stringify(res));
+    check('⚠️ the snapshot/restore trick: the probe hit must NOT reduce health',
+      health.target === before, `before=${before} after=${health.target}`);
+    check('the probe never reaches the random gate on a hero-overlap defer',
+      rngCalls === 0);
+    check('the record is NOT marked fired on a hero-overlap defer',
+      statues.records[0].fired === false);
+  }
+
+  /* The miss side of the same probe: hero far away, so the probe misses and
+   * the trigger proceeds past it (to the random gate, and then the wake). */
+  {
+    const statues = new Statues();
+    const planeA = new Uint8Array(PLANE_SIZE);
+    const idx = 5 * MAP_COLS + 5;
+    planeA[idx] = TILE_A;
+    statues.populate(planeA, STATUE_WORLD, STATUE_SUBLEVEL);
+    const health = new Health();
+    const heroFar = { x: 9000, y: 9000, state: 0 };
+    const contact = (box) => attackHero(
+      { x: box.x, y: box.y, w: box.w, h: box.h, strength: box.hp },
+      heroFar, health, {}).strengthOut;
+    const rngWake = { next: () => 0 };                 // 0 <= WAKE_GATE -> passes
+    const res = statues.checkTrigger({ x: 0, y: 0 }, planeA, STATUE_WORLD, health, contact, rngWake);
+    check('a miss + a passing random roll WAKES the statue', res.fired === true && res.woke === true,
+      JSON.stringify(res));
+    check('waking overwrites BOTH plane-A cells (the tile and one row below) to 0x0D',
+      planeA[idx] === WAKE_DECOR_TILE && planeA[idx + MAP_COLS] === WAKE_DECOR_TILE);
+    const spawned = statues.slots.find((s) => s.state === WAKE_STATE);
+    check('waking allocates into the runtime pool at WAKE_STATE (32)', !!spawned && statues.live === 1);
+    check('tile 0x23 seeds x=worldX, y=worldY, stepX=0, stepY=-4, phase=0 (no X nudge)',
+      spawned && spawned.x === 5 * 32 && spawned.y === 5 * 16
+      && spawned.stepX === 0 && spawned.stepY === -4 && spawned.phase === 0,
+      JSON.stringify(spawned));
+
+    const rngNoPass = { next: () => WAKE_GATE + 1 };   // one over the gate -> defers
+    const statues2 = new Statues();
+    const planeA2 = new Uint8Array(PLANE_SIZE);
+    planeA2[idx] = TILE_A;
+    statues2.populate(planeA2, STATUE_WORLD, STATUE_SUBLEVEL);
+    const res2 = statues2.checkTrigger({ x: 0, y: 0 }, planeA2, STATUE_WORLD, health, contact, rngNoPass);
+    check('a roll one OVER the gate defers randomly instead of waking',
+      res2.deferredRandom === true && res2.fired === false && res2.woke === false);
+  }
+
+  /* (d) The random gate's pass rate, enumerated exactly rather than sampled
+   * — wakeRollPasses is a pure function of one 16-bit input, so every value
+   * can be walked directly. ~24.4% (16001/65536) pass. */
+  {
+    let passCount = 0;
+    for (let r = 0; r <= 0xffff; r++) if (wakeRollPasses(r)) passCount++;
+    check(`the random gate passes exactly 16001 of 65536 rolls (~24.4%), got ${passCount}`,
+      passCount === 16001);
+  }
+
+  /* The cursor: advances by one record per call and wraps; CS:0x7CBD's own
+   * world gate resets it to 0 regardless of position. Off-window records
+   * must not even reach the probe (the injected callbacks throw if called). */
+  {
+    const throwingContact = () => { throw new Error('contact must not be called off-window'); };
+    const throwingRng = { next: () => { throw new Error('rng must not be called off-window'); } };
+    const statues = new Statues();
+    const planeA = new Uint8Array(PLANE_SIZE);
+    planeA[5 * MAP_COLS + 5] = TILE_A;
+    planeA[6 * MAP_COLS + 6] = TILE_B;
+    statues.populate(planeA, STATUE_WORLD, STATUE_SUBLEVEL);
+    const farCam = { x: 100000, y: 100000 };           // both records far off the 9x11 window
+    const health = new Health();
+    statues.checkTrigger(farCam, planeA, STATUE_WORLD, health, throwingContact, throwingRng);
+    check('an off-window record advances the cursor without probing', statues.cursor === 1);
+    statues.checkTrigger(farCam, planeA, STATUE_WORLD, health, throwingContact, throwingRng);
+    check('the cursor wraps back to 0 after the last record', statues.cursor === 0);
+    statues.checkTrigger(farCam, planeA, 2, health, throwingContact, throwingRng);   // wrong world
+    check('CS:0x7CBD\'s own world gate resets the cursor to 0 regardless of position',
+      statues.cursor === 0);
+  }
+
+  /* (e) The steering clamps: [-3,+3] on X, an ASYMMETRIC [-4,+4] on Y. */
+  {
+    let stepX = 0;
+    for (let i = 0; i < 10; i++) stepX = steerStep(0, 100, stepX, STEP_X_MIN, STEP_X_MAX);
+    check('steerStep ratchets up to +3 toward a target ahead, and no further',
+      stepX === STEP_X_MAX && STEP_X_MAX === 3, `stepX=${stepX}`);
+    let stepXNeg = 0;
+    for (let i = 0; i < 10; i++) stepXNeg = steerStep(100, 0, stepXNeg, STEP_X_MIN, STEP_X_MAX);
+    check('steerStep ratchets down to -3 toward a target behind, and no further',
+      stepXNeg === STEP_X_MIN && STEP_X_MIN === -3, `stepX=${stepXNeg}`);
+    let stepY = 0;
+    for (let i = 0; i < 10; i++) stepY = steerStep(0, 100, stepY, STEP_Y_MIN, STEP_Y_MAX);
+    check('the Y clamp is a DIFFERENT, asymmetric-from-X magnitude: +4, not +3',
+      stepY === STEP_Y_MAX && STEP_Y_MAX === 4, `stepY=${stepY}`);
+    check('pos === target counts as "ahead" (the <= branch), matching CS:0x7B68',
+      steerStep(50, 50, 0, STEP_X_MIN, STEP_X_MAX) === 1);
+  }
+
+  /* (f) The state<=4 vs state>4 split: above the floor, state counts down
+   * each "on" tock and phase is untouched; at or below it, state stops and
+   * phase animates instead. Both gated the SAME way on tock (this module's
+   * own documented judgment call: gate on tock===1). */
+  {
+    const above = new Statues();
+    Object.assign(above.slots[0], { x: 0, y: 0, state: 5, stepX: 0, stepY: 0, phase: 0 });
+    above.step({ x: 0, y: 0 }, { x: 0, y: 0 }, 0, missContact, null, 1);
+    check('state>4 (COUNTDOWN_FLOOR) counts DOWN on an "on" tock, phase untouched',
+      above.slots[0].state === 4 && above.slots[0].phase === 0,
+      `state=${above.slots[0].state} phase=${above.slots[0].phase}`);
+
+    const atFloor = new Statues();
+    Object.assign(atFloor.slots[0], { x: 0, y: 0, state: 4, stepX: 0, stepY: 0, phase: 0 });
+    atFloor.step({ x: 0, y: 0 }, { x: 0, y: 0 }, 0, missContact, null, 1);
+    check('state<=4 stops counting down; phase animates instead',
+      atFloor.slots[0].state === 4 && atFloor.slots[0].phase === 1,
+      `state=${atFloor.slots[0].state} phase=${atFloor.slots[0].phase}`);
+
+    const offTock = new Statues();
+    Object.assign(offTock.slots[0], { x: 0, y: 0, state: 5, stepX: 0, stepY: 0, phase: 0 });
+    offTock.step({ x: 0, y: 0 }, { x: 0, y: 0 }, 0, missContact, null, 0);
+    check('the "off" tock phase (per this module\'s own judgment call) touches neither',
+      offTock.slots[0].state === 5 && offTock.slots[0].phase === 0);
+  }
+
+  /* (g) The idle sprite table is 4 entries (an earlier guess of 8 is
+   * refuted), and stepX>=0 adds the +3 facing offset. */
+  check('IDLE_TABLE has exactly 4 entries, not 8', IDLE_TABLE.length === 4);
+  check('IDLE_TABLE reads 450,451,452,451 (DS:0xdf68)',
+    IDLE_TABLE[0] === 450 && IDLE_TABLE[1] === 451 && IDLE_TABLE[2] === 452 && IDLE_TABLE[3] === 451,
+    JSON.stringify(IDLE_TABLE));
+  {
+    const right = new Statues();
+    Object.assign(right.slots[0], { x: 0, y: 0, state: 10, stepX: 1, stepY: 0, phase: 0 });
+    const rRight = right.step({ x: 0, y: 0 }, { x: 1000, y: 0 }, 0, missContact, null, 0);
+    check('facing right (stepX>=0) adds the +3 facing offset',
+      rRight.drawn[0].sprite === IDLE_TABLE[0] + FACING_OFFSET, JSON.stringify(rRight.drawn[0]));
+
+    const left = new Statues();
+    Object.assign(left.slots[0], { x: 0, y: 0, state: 10, stepX: -1, stepY: 0, phase: 0 });
+    const rLeft = left.step({ x: 0, y: 0 }, { x: -1000, y: 0 }, 0, missContact, null, 0);
+    check('facing left (stepX<0) adds NO offset',
+      rLeft.drawn[0].sprite === IDLE_TABLE[0], JSON.stringify(rLeft.drawn[0]));
+  }
+
+  /* (h) The death sequence lasts EXACTLY 17 frames (sprites 91..107), then
+   * frees the slot — correcting an earlier, less precise "18 ticks" guess. */
+  {
+    const dying = new Statues();
+    Object.assign(dying.slots[0], { x: 0, y: 0, state: -1, stepX: 0, stepY: 0, phase: 0 });
+    const seen = [];
+    let stateAfter16 = null;
+    for (let i = 0; i < DEATH_FRAMES; i++) {
+      const r = dying.step({ x: 0, y: 0 }, { x: 0, y: 0 }, 0, missContact, null, 0);
+      seen.push(r.drawn[0].sprite);
+      if (i === DEATH_FRAMES - 2) stateAfter16 = dying.slots[0].state;
+    }
+    check(`the death sequence draws exactly ${DEATH_FRAMES} frames, sprites `
+      + `${STATUE_DEATH_SPRITE_BASE}..${STATUE_DEATH_SPRITE_BASE + DEATH_FRAMES - 1}, in order`,
+      seen.length === DEATH_FRAMES && seen[0] === STATUE_DEATH_SPRITE_BASE
+      && seen[DEATH_FRAMES - 1] === STATUE_DEATH_SPRITE_BASE + DEATH_FRAMES - 1, JSON.stringify(seen));
+    check('⚠️ corrects an earlier "18 ticks" guess: the slot is STILL occupied after 16 frames',
+      stateAfter16 === -1);
+    check('...and frees itself on exactly the 17th draw, not the 18th',
+      dying.slots[0].state === 0);
+    const rAfter = dying.step({ x: 0, y: 0 }, { x: 0, y: 0 }, 0, missContact, null, 0);
+    check('once freed, the slot draws nothing on a further call', rAfter.drawn.length === 0);
+  }
+
+  /* (i) Death awards 500 points (dl=5*100) and a popupId of 16 — both via a
+   * contact hit (the one-touch-kill convention every creature shares) and,
+   * separately, via the injected scanGrid (a weapon kill after a contact
+   * miss), matching frame.js's own two-step chain. */
+  {
+    const killedByContact = new Statues();
+    Object.assign(killedByContact.slots[0], { x: 0, y: 0, state: 10, stepX: 0, stepY: 0, phase: 0 });
+    const hitContact = () => -1;   // a REPORTED hit, exactly attackHero's own convention
+    const r = killedByContact.step({ x: 0, y: 0 }, { x: 0, y: 0 }, 0, hitContact, null, 0);
+    check('a contact hit is an outright one-touch kill',
+      r.killed === 1 && killedByContact.slots[0].state === -1 && killedByContact.slots[0].phase === 0);
+    check(`the kill awards KILL_SCORE (${KILL_SCORE}, dl=5*100) this tick`,
+      r.score === KILL_SCORE && KILL_SCORE === 500);
+    check(`the kill surfaces popupId ${KILL_POPUP_ID}`,
+      r.popups.length === 1 && r.popups[0].id === KILL_POPUP_ID && KILL_POPUP_ID === 16,
+      JSON.stringify(r.popups));
+    check('running totals (killed/score) accumulate onto the instance too',
+      killedByContact.killed === 1 && killedByContact.score === 500);
+
+    const killedByWeapon = new Statues();
+    Object.assign(killedByWeapon.slots[0], { x: 0, y: 0, state: 10, stepX: 0, stepY: 0, phase: 0 });
+    const scanKills = (entity) => { entity.state = -1; return { killed: true }; };
+    const rW = killedByWeapon.step({ x: 0, y: 0 }, { x: 0, y: 0 }, 0, missContact, scanKills, 0);
+    check('a weapon kill via scanGrid (after a contact MISS) also awards the reward',
+      rW.killed === 1 && rW.score === 500 && rW.popups[0].id === 16);
+
+    const woundedByWeapon = new Statues();
+    Object.assign(woundedByWeapon.slots[0], { x: 0, y: 0, state: 10, stepX: 0, stepY: 0, phase: 0 });
+    const scanWounds = (entity) => { entity.state = 3; return { killed: false }; };
+    const rWound = woundedByWeapon.step({ x: 0, y: 0 }, { x: 0, y: 0 }, 0, missContact, scanWounds, 0);
+    check('a non-lethal weapon hit reduces state and awards nothing',
+      rWound.killed === 0 && rWound.score === 0 && woundedByWeapon.slots[0].state === 3);
+
+    const noScanGrid = new Statues();
+    Object.assign(noScanGrid.slots[0], { x: 0, y: 0, state: 10, stepX: 0, stepY: 0, phase: 0 });
+    const rNoGrid = noScanGrid.step({ x: 0, y: 0 }, { x: 0, y: 0 }, 0, missContact, null, 0);
+    check('with no scanGrid supplied, a contact miss just leaves state unchanged',
+      rNoGrid.killed === 0 && noScanGrid.slots[0].state === 10);
+  }
+
+  return results;
+}
+
+/**
+ * ce64.js — the world-3-only creature (object type 96, 6 shipped placements)
+ * and its "spit" sub-projectile. Covers, in order: the wander/attack cycle
+ * timing (countdown, the reload, the 1->2->3(attack)->0 walk, and the
+ * on-screen attack gate); the DS:0x34 reportGate/mode:1 bracket actually
+ * being EXERCISED — a non-vacuous grid hit, not an empty spy that would pass
+ * `.every(...)` for free — and its real consequence via the REAL
+ * damageForTag, not a stub; the freeze-aliens rule; the death draw; the
+ * honest sprite-table placeholder; the spit's windup-to-armed transition at
+ * exactly 10 ticks, including the non-cumulative Y this project has been
+ * burned by before; the spit's hero-biased steering; the spit's death
+ * transition and its 18-frame sequence (sprites 91-108 inclusive,
+ * independently re-derived below rather than trusted); and the GLOBAL,
+ * cross-creature 10-spit cap.
+ */
+export function checkCe64() {
+  const { results, check } = makeChecker();
+
+  const farHero = { x: 100000, y: 100000, state: 0 };   // guaranteed miss, both hitboxes
+  const missDecode = () => { throw new Error('decodeTag must not be called on an empty grid cell (tag 0)'); };
+
+  /* (a) The wander/attack cycle: countdown while wanderState===0, a fixed
+   * reload (TIMER_RELOAD_BASE + rand()&TIMER_RELOAD_MASK — ce64.js's own
+   * header flags CS:0x7f36's "10" as the ONE-TIME SPAWN SEED only, not this
+   * reload), then a silent 1->2 tick, an attack exactly on reaching 3, and a
+   * SAME-TICK reset on reaching 4 (WANDER_CYCLE_LENGTH) — so a live draw call
+   * never actually sees wanderState===4. */
+  {
+    const rng0 = { next: () => 0 };                 // rand()&31 === 0 -> reload === TIMER_RELOAD_BASE
+    const c = new Ce64Creatures(rng0);
+    c.armed = true;
+    Object.assign(c.slots[0], { x: 0, y: 0, hp: CE64_SEED_HP, wanderState: 0, timer: 2 });
+    const grid = new DamageGrid();
+    const health = new Health();
+    const cam = { x: 0, y: 0 };
+
+    c.step(cam, farHero, 0, health, grid, missDecode, null, {});
+    check('wanderState===0: the timer counts DOWN one per tick',
+      c.slots[0].timer === 1 && c.slots[0].wanderState === 0, JSON.stringify(c.slots[0]));
+    c.step(cam, farHero, 0, health, grid, missDecode, null, {});
+    check('...down to 0, and 0 still counts as "keep counting" (the >=0 branch)',
+      c.slots[0].timer === 0 && c.slots[0].wanderState === 0, JSON.stringify(c.slots[0]));
+    c.step(cam, farHero, 0, health, grid, missDecode, null, {});
+    check(`...only once it goes NEGATIVE does it reload to ${TIMER_RELOAD_BASE} `
+      + `(TIMER_RELOAD_BASE + rand()&${TIMER_RELOAD_MASK}, ===0 with this rng) and advance to wanderState 1`,
+      c.slots[0].timer === TIMER_RELOAD_BASE && c.slots[0].wanderState === 1,
+      `timer=${c.slots[0].timer} wanderState=${c.slots[0].wanderState}`);
+
+    /* Walk the 1->2->3(attack)->0 cycle on-screen, so the attack genuinely
+     * fires — a fake `spits` records exactly when spawn() is called, and
+     * exactly what it was called with. */
+    const spawns = [];
+    const spits = { spawn: (x, y) => { spawns.push({ x, y }); return true; } };
+    const seenStates = [];
+    for (let i = 0; i < WANDER_CYCLE_LENGTH - 1; i++) {
+      c.step(cam, farHero, 0, health, grid, missDecode, spits, {});
+      seenStates.push(c.slots[0].wanderState);
+    }
+    check('the walk from wanderState 1 is 2 (silent), then 3 (the attack tick), then reset to 0 — '
+      + 'all inside WANDER_CYCLE_LENGTH-1 ticks, with 4 never actually observed',
+      JSON.stringify(seenStates) === JSON.stringify([2, 3, 0]), JSON.stringify(seenStates));
+    check(`the attack fires EXACTLY ONCE, on the wanderState===ATTACK_AT_WANDER(${ATTACK_AT_WANDER}) tick`,
+      spawns.length === 1, JSON.stringify(spawns));
+    check("the spit spawns at the CREATURE's own raw (x, y) — the -10 Y bias is Ce64Spits.spawn's own job, "
+      + 'not the creature\'s', spawns[0].x === 0 && spawns[0].y === 0, JSON.stringify(spawns[0]));
+  }
+
+  /* (a2) The on-screen attack gate genuinely gates — an off-window creature
+   * reaches wanderState===3 without ever calling spawn(). */
+  {
+    const c = new Ce64Creatures({ next: () => 0 });
+    c.armed = true;
+    Object.assign(c.slots[0], { x: 100000, y: 0, hp: CE64_SEED_HP, wanderState: 1, timer: 0 });
+    const throwingSpits = { spawn: () => { throw new Error('spawn must not fire for an off-screen creature'); } };
+    const grid = new DamageGrid();
+    const health = new Health();
+    const cam = { x: 0, y: 0 };                      // screenX = 100000, far past ATTACK_WINDOW.xMax
+    c.step(cam, farHero, 0, health, grid, missDecode, throwingSpits, {});
+    c.step(cam, farHero, 0, health, grid, missDecode, throwingSpits, {});
+    check(`ATTACK_WINDOW (x:[${ATTACK_WINDOW.xMin},${ATTACK_WINDOW.xMax}], `
+      + `y:[${ATTACK_WINDOW.yMin},${ATTACK_WINDOW.yMax}]) genuinely gates the attack: an `
+      + 'off-screen creature reaches the attack tick and the attempt fizzles silently',
+      c.slots[0].wanderState === 3);
+  }
+
+  /* (b) reportGate:1 / mode:1 — wired AND ACTUALLY USED, not merely accepted
+   * and ignored. A grid stamp genuinely under the creature's own BOX_CREATURE
+   * (verified first, so an empty capturedModes spy can't pass `.every(...)`
+   * vacuously) lets one tick prove three things at once: the hero still
+   * takes damage, the creature's OWN hp survives the contact untouched
+   * (reportGate), and the weapon-scan still runs the SAME tick — this
+   * creature's contact does NOT short-circuit its own scan, unlike
+   * CONTACT_SHORT_CIRCUITS_SCAN's rule for every other creature. */
+  {
+    const c = new Ce64Creatures({ next: () => 0 });
+    c.armed = true;
+    Object.assign(c.slots[0], { x: 0, y: 0, hp: CE64_SEED_HP, wanderState: 0, timer: 999 });
+    const grid = new DamageGrid();
+    grid.stamp2x2(0, 0, 0x01);                        // an ordinary weapon tag, under the creature's own box
+    const foundTag = grid.scan(0, 0, BOX_CREATURE.w, BOX_CREATURE.h);
+    check('setup sanity: the stamp really is inside BOX_CREATURE\'s own scan area — without this, '
+      + 'an empty capturedModes spy below would pass `.every(...)` vacuously and prove nothing',
+      foundTag === 0x01, `foundTag=${foundTag}`);
+
+    const health = new Health();
+    const before = health.target;
+    const overlappingHero = { x: 0, y: 0, state: 0 };   // BOX_CREATURE (32x40) math guarantees overlap
+    const capturedModes = [];
+    const decodeTag = (tag, mode) => { capturedModes.push(mode); return { damage: 10 }; };
+    c.step({ x: 0, y: 0 }, overlappingHero, 0, health, grid, decodeTag, null, { difficulty: 0 });
+
+    check('a contact hit still damages the HERO — reportGate only protects the CREATURE\'s own hp',
+      health.target < before, `before=${before} after=${health.target}`);
+    check('the decode spy actually fired this tick (non-vacuous — see the setup sanity check above)',
+      capturedModes.length > 0, JSON.stringify(capturedModes));
+    check('EVERY weapon-scan call this creature makes passes mode:1 — the forced DS:0x34 bracket, '
+      + 'not a default that just happens to read 0',
+      capturedModes.length > 0 && capturedModes.every((m) => m === 1), JSON.stringify(capturedModes));
+    check(`and because reportGate:1 held the contact's strengthOut === CE64_SEED_HP (${CE64_SEED_HP}), `
+      + `the scan genuinely ran on the SAME tick and its damage landed on the creature's own hp `
+      + `(${CE64_SEED_HP} - 10 = ${CE64_SEED_HP - 10}) — contact did NOT short-circuit it`,
+      c.slots[0].hp === CE64_SEED_HP - 10, `hp=${c.slots[0].hp}`);
+
+    /* The practical payoff this whole bracket exists for: collision.js's own
+     * REAL damageForTag (no stub, no new mechanism — reusing exactly what
+     * the task asked for) on the two special tags. Under mode:1 tag 0xFC
+     * (starburst) drops from 10000 to 50. */
+    const c2 = new Ce64Creatures({ next: () => 0 });
+    c2.armed = true;
+    Object.assign(c2.slots[0], { x: 0, y: 0, hp: CE64_SEED_HP, wanderState: 0, timer: 999 });
+    const grid2 = new DamageGrid();
+    grid2.stamp2x2(0, 0, 0xfc);                        // the starburst special tag
+    const realDecode = (tag, mode) => damageForTag(tag, [], {}, mode);
+    c2.step({ x: 0, y: 0 }, farHero, 0, new Health(), grid2, realDecode, null, {});
+    check('the practical consequence, via the REAL damageForTag (not a stub): a starburst hit '
+      + `(tag 0xFC) costs this creature only 50, not 10000 — ${CE64_SEED_HP} - 50 = ${CE64_SEED_HP - 50}`,
+      c2.slots[0].hp === CE64_SEED_HP - 50, `hp=${c2.slots[0].hp}`);
+  }
+
+  /* (c) Freeze-aliens: the universal rule — freeze stops wander/attack, but
+   * CONTACT and DRAW still run, every tick, even frozen. */
+  {
+    const c = new Ce64Creatures({ next: () => 0 });
+    c.armed = true;
+    Object.assign(c.slots[0], { x: 0, y: 0, hp: CE64_SEED_HP, wanderState: 0, timer: 3 });
+    const grid = new DamageGrid();
+    const health = new Health();
+    const r = c.step({ x: 0, y: 0 }, farHero, 1 /* freezeTimer !== 0 */, health, grid, missDecode, null, {});
+    check('freeze-aliens (freezeTimer!==0) leaves the countdown timer UNTOUCHED',
+      c.slots[0].timer === 3, `timer=${c.slots[0].timer}`);
+    check('...but CONTACT and DRAW still ran this tick, frozen or not',
+      r.drawn.length === 1, JSON.stringify(r.drawn));
+  }
+
+  /* (d) Death: hp<0 detected at the TOP of the loop draws the death-cloud
+   * (sprite = wanderState + 0x6c) at the documented (-4,-8) offset, and frees
+   * only after DEATH_FREE_AT frames — never before. */
+  {
+    const c = new Ce64Creatures({ next: () => 0 });
+    c.armed = true;
+    Object.assign(c.slots[0], { x: 50, y: 60, hp: -1, wanderState: 0, timer: 0 });
+    const grid = new DamageGrid();
+    const health = new Health();
+    const cam = { x: 10, y: 10 };
+    let lastDrawn = null;
+    for (let i = 0; i < DEATH_FREE_AT; i++) {
+      const r = c.step(cam, farHero, 0, health, grid, missDecode, null, {});
+      lastDrawn = r.drawn[0];
+      check(`death-draw frame ${i}: sprite === wanderState(${i}) + 0x6c === ${CE64_DEATH_SPRITE_BASE + i}`,
+        lastDrawn.sprite === CE64_DEATH_SPRITE_BASE + i, JSON.stringify(lastDrawn));
+    }
+    check(`the death draw offset is (${CE64_DEATH_DRAW_OFFSET.dx}, ${CE64_DEATH_DRAW_OFFSET.dy}) `
+      + 'relative to (x - cam.x, y - cam.y)',
+      lastDrawn.x === 50 - 10 + CE64_DEATH_DRAW_OFFSET.dx
+      && lastDrawn.y === 60 - 10 + CE64_DEATH_DRAW_OFFSET.dy, JSON.stringify(lastDrawn));
+    check(`the slot frees itself after exactly DEATH_FREE_AT (${DEATH_FREE_AT}) drawn frames, not before`,
+      c.slots[0].x === -1);
+  }
+
+  /* (e) The sprite table: an HONEST placeholder, not a fabricated guess.
+   * Length 4 is not a truncation of a 5-valued field — (a) above already
+   * proves wanderState's same-tick 4->0 reset means DRAW_ALIVE never
+   * actually sees a wanderState of 4. */
+  check('WANDER_SPRITE has exactly 4 entries (wanderState 4 resets to 0 in the SAME tick, before any draw sees it)',
+    WANDER_SPRITE.length === 4, JSON.stringify(WANDER_SPRITE));
+  check('WANDER_SPRITE is an HONEST placeholder — [0,0,0,0] — never a fabricated plausible-looking guess',
+    WANDER_SPRITE.every((v) => v === 0), JSON.stringify(WANDER_SPRITE));
+  check('the placeholder carries its own loud, address-citing disclaimer (UNKNOWN_ce64_sprite_table)',
+    typeof UNKNOWN_ce64_sprite_table === 'string'
+    && UNKNOWN_ce64_sprite_table.includes('CS:0x8003')
+    && UNKNOWN_ce64_sprite_table.includes('SS:0x3602')
+    && /never read/i.test(UNKNOWN_ce64_sprite_table),
+    UNKNOWN_ce64_sprite_table);
+
+  /* (f) Structural sanity — the facts the task states as ground truth. */
+  check(`object type ${CE64_TYPE} (sprite ${CE64_SPRITE} === 170+${CE64_TYPE})`,
+    CE64_TYPE === 96 && CE64_SPRITE === 170 + 96);
+  check(`world ${CE64_WORLD} only, a ${CE64_SLOTS}-slot pool at stride ${CE64_STRIDE}`,
+    CE64_WORLD === 3 && CE64_SLOTS === 10 && CE64_STRIDE === 10);
+  check('BOX_CREATURE is 0x20x0x28 (32x40), shared by contact AND the weapon-scan (per the task\'s '
+    + 'own citation of the bracketed CS:0x7fb5-0x7fdd call)',
+    BOX_CREATURE.w === 0x20 && BOX_CREATURE.h === 0x28);
+  check(`the seed values: hp=${CE64_SEED_HP} (0xc8/200), wanderState=${CE64_SEED_WANDER}, `
+    + `timer=${CE64_SEED_TIMER} (0xa/10, the ONE-TIME spawn seed, not the reload)`,
+    CE64_SEED_HP === 0xc8 && CE64_SEED_WANDER === 0 && CE64_SEED_TIMER === 0xa);
+  check(`SCORE_CREATURE_KILL===${SCORE_CREATURE_KILL} (1000, dl=0x10) and `
+    + `SCORE_SPIT_KILL===${SCORE_SPIT_KILL} (500, dl=5)`,
+    SCORE_CREATURE_KILL === 1000 && SCORE_SPIT_KILL === 500);
+
+  /* ══ THE SPIT ═══════════════════════════════════════════════════════════ */
+
+  /* (g) Windup: exactly SPIT_WINDUP_TICKS (10) ticks. Y is recomputed from a
+   * FIXED origin every tick — NOT accumulated. A `y += vy` port would land at
+   * originY-55 after 10 ticks (the sum -10-9-8-...-1), not originY-1. Every
+   * windup tick draws the fixed pose SPIT_WINDUP_SPRITE (492), no facing, no
+   * animation, and NO contact test runs (intangible while rising). On the
+   * 10th tick it arms: state=SPIT_ARM_HP(20, doubling as hp), steps=
+   * SPIT_ARM_STEPS(15), vx=vy=0. */
+  {
+    const spits = new Ce64Spits({ next: () => 0 });
+    const spawnOk = spits.spawn(200, 100);
+    const p = spits.spits[0];
+    check('spawn() applies the -10 origin bias internally: creatureY=100 -> originY=90',
+      spawnOk === true && p.originY === 100 + SPIT_ORIGIN_Y_BIAS, JSON.stringify(p));
+
+    const cam = { x: 0, y: 0 };
+    const throwingContact = () => { throw new Error('no contact test may run during windup — intangible while rising'); };
+    const drawnSprites = [];
+    for (let i = 0; i < SPIT_WINDUP_TICKS - 1; i++) {
+      const r = spits.step(cam, farHero, 0, new Health(), new DamageGrid(), throwingContact, {});
+      drawnSprites.push(r.drawn[0].sprite);
+    }
+    check(`after ${SPIT_WINDUP_TICKS - 1} ticks the spit is STILL winding up (state===-1), not yet armed`,
+      p.state === -1, `state=${p.state}`);
+
+    const r10 = spits.step(cam, farHero, 0, new Health(), new DamageGrid(), throwingContact, {});
+    drawnSprites.push(r10.drawn[0].sprite);
+    check(`every one of the ${SPIT_WINDUP_TICKS} windup draws uses the fixed pose SPIT_WINDUP_SPRITE `
+      + `(${SPIT_WINDUP_SPRITE}) — no facing, no animation`,
+      drawnSprites.length === SPIT_WINDUP_TICKS && drawnSprites.every((s) => s === SPIT_WINDUP_SPRITE),
+      JSON.stringify(drawnSprites));
+    check('⚠️ NOT CUMULATIVE: after exactly 10 ticks, y === originY - 1 — a `y += vy` port would '
+      + 'land at originY - 55 instead (the sum of -10 through -1)',
+      p.y === p.originY - 1, `y=${p.y} originY=${p.originY}`);
+    check(`the 10th tick ARMS: state===SPIT_ARM_HP(${SPIT_ARM_HP}), steps===SPIT_ARM_STEPS(${SPIT_ARM_STEPS}), `
+      + 'vx=vy=0', p.state === SPIT_ARM_HP && p.steps === SPIT_ARM_STEPS && p.vx === 0 && p.vy === 0,
+      JSON.stringify(p));
+  }
+
+  /* (h) The global spit cap: SHARED across every spawning creature, not
+   * per-creature — spawn() has no notion of who is calling it, so ten
+   * spawns from ten different "creatures" still hit one shared ceiling. */
+  {
+    const spits = new Ce64Spits({ next: () => 0 });
+    let ok = 0;
+    for (let i = 0; i < SPIT_CAP; i++) if (spits.spawn(i, i)) ok++;
+    check(`SPIT_CAP (${SPIT_CAP}) spawns — from what could be ten DIFFERENT creatures, since spawn() `
+      + 'takes no creature identity at all — all succeed',
+      ok === SPIT_CAP && spits.count === SPIT_CAP, `ok=${ok} count=${spits.count}`);
+    const fizzled = spits.spawn(999, 999);
+    check('the 11th spawn fizzles SILENTLY (returns false, throws nothing) once the GLOBAL cap is hit',
+      fizzled === false && spits.count === SPIT_CAP);
+    spits.spits.pop();
+    check('freeing one slot makes room for exactly one more spawn, and only one',
+      spits.spawn(1, 1) === true && spits.spawn(2, 2) === false && spits.count === SPIT_CAP);
+  }
+
+  /* (i) Steering biases toward the hero, on both axes, independently of the
+   * random magnitude — the SAME fixed rng, only the hero's position changes
+   * between the two cases below, isolating the sign logic from the roll. */
+  {
+    const rng7 = { next: () => 5 };                  // (5&7)+2 === 7, a fixed magnitude
+    const noContact = () => { throw new Error('a hero 100000px away cannot overlap a 24x24 box'); };
+
+    const towardBottomRight = new Ce64Spits(rng7);
+    towardBottomRight.spits.push(
+      { x: 100, y: 100, originY: 100, vx: 0, vy: 0, frame: 0, state: SPIT_ARM_HP, steps: 0 });
+    towardBottomRight.step({ x: 0, y: 0 }, { x: 100000, y: 100000, state: 0 }, 0,
+      new Health(), new DamageGrid(), noContact, {});
+    check('hero far to the RIGHT and BELOW -> vx and vy both steer POSITIVE (toward it)',
+      towardBottomRight.spits[0].vx === 7 && towardBottomRight.spits[0].vy === 7,
+      JSON.stringify(towardBottomRight.spits[0]));
+
+    const towardTopLeft = new Ce64Spits(rng7);
+    towardTopLeft.spits.push(
+      { x: 100, y: 100, originY: 100, vx: 0, vy: 0, frame: 0, state: SPIT_ARM_HP, steps: 0 });
+    towardTopLeft.step({ x: 0, y: 0 }, { x: -100000, y: -100000, state: 0 }, 0,
+      new Health(), new DamageGrid(), noContact, {});
+    check('hero far to the LEFT and ABOVE -> vx and vy both steer NEGATIVE (toward it) — same rng, '
+      + 'same magnitude (7), only the hero moved, isolating the sign logic',
+      towardTopLeft.spits[0].vx === -7 && towardTopLeft.spits[0].vy === -7,
+      JSON.stringify(towardTopLeft.spits[0]));
+    check(`the reseed also picks a fresh burst length: steps === (rand()&7)+3 === ${(5 & 7) + 3} with this rng`,
+      towardTopLeft.spits[0].steps === (5 & 7) + 3);
+  }
+
+  /* (j) The death transition: exactly one (-4,-4) nudge, SCORE_SPIT_KILL
+   * points, and the state===1/frame===-1 "just died" handoff — via the SAME
+   * shared attackHero entry the creature uses, but ORDINARY (no reportGate:
+   * one touch is an outright kill here, unlike the creature above). */
+  {
+    const scoreSpy = { calls: [], add(n) { this.calls.push(n); } };
+    const spits = new Ce64Spits({ next: () => 5 });
+    spits.spits.push({ x: 40, y: 40, originY: 40, vx: 0, vy: 0, frame: 0, state: SPIT_ARM_HP, steps: 1 });
+    const overlappingHero = { x: 40, y: 40, state: 0 };    // SPIT_BOX (24x24) math guarantees overlap
+    const health = new Health();
+    const before = health.target;
+    spits.step({ x: 0, y: 0 }, overlappingHero, 0, health, new DamageGrid(), missDecode, { score: scoreSpy });
+    const p = spits.spits[0];
+    check('a contact hit on the spit is an outright one-touch kill — ordinary contact, no reportGate needed',
+      health.target < before && p.state === 1 && p.frame === -1, JSON.stringify(p));
+    check(`death awards SCORE_SPIT_KILL (${SCORE_SPIT_KILL}) exactly once`,
+      scoreSpy.calls.length === 1 && scoreSpy.calls[0] === SCORE_SPIT_KILL, JSON.stringify(scoreSpy.calls));
+    check('the (-4,-4) position nudge is applied EXACTLY ONCE, on the death-transition tick itself',
+      p.x === 40 - 4 && p.y === 40 - 4, `x=${p.x} y=${p.y}`);
+
+    /* Run it again with the SAME overlapping hero — the death sequence, once
+     * entered, must not re-nudge or re-award on later ticks. */
+    spits.step({ x: 0, y: 0 }, overlappingHero, 0, health, new DamageGrid(), missDecode, { score: scoreSpy });
+    check('once in the death sequence, later ticks do NOT re-nudge or re-award',
+      p.x === 40 - 4 && p.y === 40 - 4 && scoreSpy.calls.length === 1);
+  }
+
+  /* (k) The death sequence: independently RE-DERIVE the arithmetic rather
+   * than trust the task's own summary. sprite = SPIT_DEATH_SPRITE_BASE(91) +
+   * deathFrame, deathFrame runs 0..SPIT_DEATH_FRAMES-1(17), so the LAST
+   * sprite drawn is 91+17 = 108, and the span 91..108 holds exactly
+   * 108-91+1 = 18 distinct sprites — matching SPIT_DEATH_FRAMES exactly, not
+   * off by one in either direction. The slot frees on the SAME tick it draws
+   * the final sprite (108), not the tick after. */
+  {
+    check(`re-derived arithmetic, not trusted: SPIT_DEATH_SPRITE_BASE(${SPIT_DEATH_SPRITE_BASE}) + `
+      + `(SPIT_DEATH_FRAMES(${SPIT_DEATH_FRAMES})-1) === 108, and that span holds exactly `
+      + `${SPIT_DEATH_FRAMES} distinct sprites (108-91+1=${108 - 91 + 1})`,
+      SPIT_DEATH_SPRITE_BASE + (SPIT_DEATH_FRAMES - 1) === 108
+      && (SPIT_DEATH_SPRITE_BASE + (SPIT_DEATH_FRAMES - 1)) - SPIT_DEATH_SPRITE_BASE + 1 === SPIT_DEATH_FRAMES
+      && SPIT_DEATH_SPRITE_BASE === 91 && SPIT_DEATH_FRAMES === 18);
+
+    const spits = new Ce64Spits({ next: () => 0 });
+    spits.spits.push({ x: 0, y: 0, originY: 0, vx: 0, vy: 0, frame: -1, state: 1, steps: 0 });
+    const cam = { x: 0, y: 0 };
+    const seen = [];
+    let countBeforeLastDraw = null;
+    for (let i = 0; i < SPIT_DEATH_FRAMES; i++) {
+      countBeforeLastDraw = spits.count;
+      const r = spits.step(cam, farHero, 0, new Health(), new DamageGrid(), missDecode, {});
+      seen.push(r.drawn.length ? r.drawn[0].sprite : null);
+    }
+    const expected = Array.from({ length: SPIT_DEATH_FRAMES }, (_, i) => SPIT_DEATH_SPRITE_BASE + i);
+    check(`the death sequence draws exactly ${SPIT_DEATH_FRAMES} frames, sprites `
+      + `${SPIT_DEATH_SPRITE_BASE}..${SPIT_DEATH_SPRITE_BASE + SPIT_DEATH_FRAMES - 1} in order`,
+      JSON.stringify(seen) === JSON.stringify(expected), JSON.stringify(seen));
+    check(`the slot is STILL occupied going into the final (${SPIT_DEATH_FRAMES}th) draw`,
+      countBeforeLastDraw === 1);
+    check(`...and freed on the SAME tick it draws the final sprite `
+      + `(${SPIT_DEATH_SPRITE_BASE + SPIT_DEATH_FRAMES - 1}), not the tick after`,
+      spits.count === 0);
+  }
 
   return results;
 }

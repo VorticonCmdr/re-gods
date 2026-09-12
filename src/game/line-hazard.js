@@ -123,10 +123,31 @@
  * other undocumented `enemy-shots.js` emitter pairs.
  *
  * ⚠️ `FUN_1000_b1c2` is `db4e`'s OTHER caller (CS:0xb236, per CLAUDE.md's
- * debris.js note) and is NOT this pool — its own call sites (CS:0x022D,
- * 0x0a02, 0x929b) sit immediately after CS:0xAD88's three documented call
- * sites, suggesting a related but SEPARATE hazard that also reuses `db4e` as
- * a shared hero-hit helper. Flagged, not investigated — `UNKNOWN_b1c2`.
+ * debris.js note) and is NOT this pool. `UNKNOWN_b1c2` is now CLOSED, and the
+ * answer is: DO NOT PORT IT. `FUN_1000_b1c2` (a `DS:0xaccc` "falling rock"
+ * pool) and two structurally richer siblings at `DS:0xad1c`/`DS:0xad94`
+ * (`FUN_1000_b3ce`/`FUN_1000_b4e7`, gated behind self-modifying `RET` bytes)
+ * are the SIXTH proven-cut feature in this project: an exhaustive operand
+ * search found no code anywhere that ever seeds a live record into any of
+ * the three arrays, and no code that ever flips either sibling's disarm gate
+ * back on — `FUN_1000_b3b2` (called once, at level init) explicitly force-
+ * writes both gates to `RET` and clears all three arrays, and nothing else
+ * touches them. All three share sprite atlas base `0x213` (531) with the
+ * ALSO-proven-cut world-4/System-A/class-3 environmental hazard. Porting any
+ * of this would render content the original game never showed a player —
+ * exactly the outcome this project's own evidence discipline exists to
+ * prevent. Left unported, deliberately, with this citation standing in for
+ * the empty code that would otherwise look like an oversight.
+ *
+ * `CS:0xAD88` (the three call sites this note used to point at) is a
+ * SEPARATE, LIVE system — the selector-2 spawn driver (`DS:0xaec0`, PALFILS
+ * `+0x0718`) — and is also not ported here. Unlike the falling-rock pools it
+ * is reachable in shipped data, but it is a fixed-per-class-handler shooter
+ * system layered on top of trigger-driven group activation, not a roaming
+ * creature, and porting it correctly needs its own `DS:0xdf80`-class-table
+ * wiring (handlers `CS:0xB03C`/`CS:0xB670`) that this pass did not do.
+ * Tracked as future work, same posture as the five other undocumented
+ * `enemy-shots.js` emitter pairs noted above — not silently dropped.
  */
 
 export const SLOTS = 20;                 // CS:0xdbd4 `mov bp,0x13` (0..19)

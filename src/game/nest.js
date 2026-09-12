@@ -292,14 +292,12 @@ export const DEATH_DRAW_OFFSET = Object.freeze({ dx: -4, dy: -8, secondDy: 0x18 
  *   +0xa = -((rand & 3) + 2), i.e. -2..-5 — always negative
  *   +0xc = 1
  *
- * ⚠️ +8 and +0xa are NOT labelled here. A small signed pair, one symmetric
- * about zero and one strictly negative, on a thing that bursts out of a
- * corpse, is CONSISTENT with {vx, vy} — but the consumer is the brood walker
- * at CS:0x894E, which is out of scope, so nothing here proves it. The port
- * carries them as field8 / fieldA. UNKNOWN_8014_brood.
- *
- * The body of the brood walker (CS:0x894E, gate CS:0x894D, counter DS:0x3af)
- * is deliberately OUT OF SCOPE: UNKNOWN_8014_brood. */
+ * ⚠️ +8 and +0xa were carried as field8/fieldA with no label, because their
+ * only consumer — the walker at CS:0x894E — was out of scope. It no longer
+ * is: see `Brood`, below. They ARE {vx, vy}, and `#brood`'s own call
+ * `brood.spawn(s.x, s.y + BROOD_Y_OFFSET, field8, fieldA, BROOD_HP)` was
+ * already exactly the argument order `Brood.spawn(x, y, vx, vy, hp)` below
+ * expects — nothing in THIS class changed to make that true. */
 export const BROOD_ARRAY_DS = 0x8014;
 export const BROOD_SLOTS = 16;             // CS:0x88F5 `mov bp,0xf` + dec/jns
 export const BROOD_STRIDE = 0x10;          // CS:0x88FE `add di,0x10`
@@ -307,6 +305,241 @@ export const BROOD_Y_OFFSET = 0x18;        // CS:0x890F
 export const BROOD_HP = 0x2b;              // CS:0x8932
 /** CS:0x88E7 + CS:0x8947 — walked, not read off the seed. */
 export const broodCount = (rand) => 3 + (rand & 1);
+
+/* ── THE BROOD WALKER, CS:0x894E — CLOSED, no longer out of scope `[STATIC]`
+ *
+ * This project's CLAUDE.md independently disassembled this exact address
+ * range and closed it under `UNKNOWN_8014_brood — CLOSED` after the comment
+ * above (and a task-level pseudocode summary this pass started from) were
+ * written. Cross-checking against it before writing `Brood` caught real
+ * divergences from that summary — recorded below, in this file's own
+ * "⚠️ CORRECTION" convention, because CLAUDE.md's byte-level decode is the
+ * more authoritative of the two and this project does not ship a class that
+ * contradicts its own primary source when a closer read is available.
+ *
+ *   894E  si = 0x8014 ; cx = 0x10                     ; 16 slots
+ *   895A  cmp word[si+4],0 / jns 0x8963 / jmp 0x8a07  ; +4 < 0 -> FREE, skip
+ *   8963  inc byte[0x3af]                              ; live-count (not modelled — see below)
+ *   8967  cmp word[si+6],0 / jns 0x8970 / jmp 0x8a33   ; +6 < 0 -> DEATH BRANCH
+ *   8970  cmp word[si+0xc],0 / jz 0x8979 / jmp 0x8ab1  ; +0xc != 0 -> BALLISTIC FALL, unconditionally
+ *   8979  cmp word[0x2fa],0 / jnz 0x8983 / call 0x8a6c ; +0xc == 0 -> GROUND BOUNCE, but ONLY when not frozen
+ *   8983  ax=[si] bx=[si+2] bp=[si+6]                  ; the shared CONTACT+DRAW tail
+ *   8997  call 0x1000:a9e4                              ; the SAME hero-contact-and-damage-grid-scan thunk every creature in this game uses
+ *   899A  [si+6] = bp                                   ; strength written back — the familiar BP-round-trip convention
+ *   899D  dx = [si+4] ; shl dx,1                        ; frame DOUBLED -> a word index
+ *   89A2  di = 0x360a + dx ; dx = word[ss:di]            ; SS:0x360A, the sprite table (contents never read out)
+ *   89AA  cmp word[si+8],0 / js .. / add dx,3            ; vx negative -> no +3; else (incl. vx==0) +3
+ *
+ * ⚠️ THE DEATH GATE IS +0x6 (strength), NOT +0x4 (frame). The pseudocode this
+ * pass started from described ONE field doing all three jobs (sprite index,
+ * dying counter, free sentinel) and had the contact call set that field to -1
+ * to enter death. The bytes disagree: +0x4 is ONLY EVER the free-test and the
+ * alive sprite index; it is +0x6 going negative (CS:0x8967) that routes into
+ * the death branch, and the contact call's own strength write-back
+ * (CS:0x899A) is what arms it — nothing ever writes -1 into +0x4.
+ *
+ *   8A33  ax=[si] bx=[si+2] dx=[si+4]                  ; world X/Y, frame
+ *   8A3B  ax -= [0xa] ; bx -= [0xc]                     ; -> screen
+ *   8A43  ax -= 4 ; bx -= 0x11 ; dx += 0x6c              ; draw offset AND sprite base
+ *   8A4D  [0x4]=ax [0x6]=bx [0x8]=dx ; call 0x3569        ; ONE draw, not the parent's two
+ *   8A5C  inc word[si+4] / cmp 7 / jl 0x8a07              ; frame COUNTS UP, capped at 7
+ *   8A65  [si+4] = 0xffff                                 ; free
+ *
+ * ⚠️ THE DEATH SPRITE COUNTS UP, NOT DOWN, and the Y OFFSET IS -0x11 (-17),
+ * NOT -8. The pseudocode this pass started from had frame counting DOWN from
+ * -1 to -8 with a (-4,-8) draw offset explicitly borrowed from the PARENT's
+ * own DEATH_DRAW_OFFSET, and asserted that reuse as fact. The bytes show
+ * frame INCREMENTING from whatever value it held while alive — so, exactly
+ * like the parent, death duration depends on the pose held at the moment of
+ * death, capped rather than fixed at 7 — and a Y offset of -0x11, not -8.
+ * DEATH_FREE_AT_STATE (7) is still the right constant to reuse, because the
+ * shipped cap really is 7 in both places; it is reused below as a CAP an
+ * up-counter is compared against, not as a guaranteed duration. The parent's
+ * DEATH_DRAW_OFFSET is NOT reused — see BROOD_DEATH_DRAW_OFFSET below, whose
+ * X matches the parent's (-4) and whose Y does not.
+ *
+ * ⚠️ BALLISTIC FALL DOES NOT HONOUR FREEZE; GROUND BOUNCE DOES. CS:0x8970
+ * jumps straight into the fall routine (0x8AB1) BEFORE the freeze test at
+ * CS:0x8979 is ever reached; only a BOUNCING child (fallSubstate 0) passes
+ * through that test. So a falling brood child keeps falling under "freezes
+ * aliens" while a bouncing one is held still. Implemented as traced, not
+ * smoothed into one rule — matching this file's own convention of keeping
+ * the parent's asymmetric cull rectangles and muzzles asymmetric.
+ *
+ * ⚠️ NO SCORE AWARD IS VISIBLE ON THIS PATH. CS:0x8A33-0x8A65 is draw / inc /
+ * free with no `call 0xc8b` (the shared BCD score entry this project
+ * documents elsewhere for other kills). So either a brood kill genuinely
+ * awards nothing, or an award happens somewhere off this decoded path —
+ * UNKNOWN_brood_score, below, is that second half; the first half (no award
+ * ON this specific path) is not itself in doubt.
+ *
+ * Not modelled: the gate byte at CS:0x894D and the live-counter DS:0x3af
+ * (self-disarm bookkeeping — see LIVE_COUNTER_DS above for the PARENT's own
+ * version of the same idiom). A 16-element JS array costs nothing to walk
+ * every tick regardless of occupancy, so there is no observable behaviour to
+ * reproduce by adding an equivalent flag here.
+ */
+
+export const BROOD_SEED_FRAME = 0;                  // "+4 = 0", already in the seed block above
+export const BROOD_SEED_FALL_SUBSTATE = 1;          // "+0xc = 1" — children start FALLING, not bouncing
+/** CS:0x898B `[0x1e2]=0x18(24) ; [0x1e4]=0x10(16)` — a THIRD box size in this
+ *  file, distinct from both BOX_HATCH (8x8) and BOX_ALIVE (24x24). */
+export const BROOD_BOX = Object.freeze({ w: 0x18, h: 0x10 });
+/** CS:0x8A6C. The ground-bounce wall probe adds this to the STEPPED x only
+ *  when moving right (vx >= 0) — the same muzzle-style facing offset this
+ *  project documents everywhere else; the left probe adds nothing. */
+export const BROOD_BOUNCE_PROBE_X = 0x18;
+/** CS:0x8AB1, "(+0xc, +0xf) past the new position" — pinned to the byte. */
+export const BROOD_FALL_PROBE = Object.freeze({ dx: 0x0c, dy: 0x0f });
+/** CS:0x8AB1 `inc / cmp 8 / jle`. An EIGHTH independently-coded gravity rule
+ *  in this project's running collection (hero 4+v/cap10, System-B v-then-
+ *  ++/cap16, time bomb stepped ++/cap4, magic axe +=2/cap8, starburst every-
+ *  8th-frame ++, chest loot ++/cap4) — the cap matching the magic axe's is a
+ *  coincidence of two separate authorings, not a shared routine. */
+export const BROOD_FALL_GRAVITY_CAP = 8;
+/** CS:0x8A43. ⚠️ NOT the parent's DEATH_DRAW_OFFSET — the X (-4) matches, the
+ *  Y does not (-0x11, not -8). See the correction above. */
+export const BROOD_DEATH_DRAW_OFFSET = Object.freeze({ dx: -4, dy: -0x11 });
+export const BROOD_FACING_OFFSET = 3;               // CS:0x89AA `add dx,3`
+
+/**
+ * SS:0x360A. CLAUDE.md's own CS:0x894E decode proves the LOOKUP exists (a
+ * frame-doubled word index into a small table) and proves the +-3 facing
+ * variant, but records no concrete byte ever read from the table itself —
+ * the residual it closed was the MECHANISM, not the CONTENTS, and no pass
+ * over this project (including this one) has read SS:0x360A live. Per this
+ * task's own instruction not to fabricate specific numbers, this is an
+ * IDENTITY placeholder — frame passed straight through, not an invented
+ * sprite sequence dressed up as a finding. See UNKNOWN_brood_sprite_table,
+ * below.
+ */
+export const BROOD_SPRITE_TABLE = Object.freeze([0, 1, 2, 3]);
+
+/** CS:0x89AA. `js` skips the `add dx,3` only when vx is NEGATIVE, so the
+ *  offset applies when vx is non-negative — right-facing, or stalled at
+ *  exactly 0 — the same "non-negative, not strictly positive" convention
+ *  this file already uses for the parent (HATCH_EXPORT2_BELOW, aimAt). */
+export function broodFacingOffset(vx) {
+  return vx >= 0 ? BROOD_FACING_OFFSET : 0;
+}
+
+/** CS:0x8A6C / CS:0x8AB1's own tile probes. This project's standard floored-
+ *  tile addressing: col = x>>5, row = y>>4, cell = row*128+col — the same
+ *  plane-B stride the hero's and every entity's own probes use elsewhere in
+ *  this game. Not exported: purely a shared implementation detail of the two
+ *  movement modes below. */
+function broodTileCell(x, y) {
+  return (y >> 4) * 128 + (x >> 5);
+}
+
+/**
+ * DS:0x8014, 16 records of 16 bytes — the array a dying Nests creature
+ * bursts into. `Nests#brood` (above) already calls `.spawn(...)` with
+ * exactly the argument order this class expects; nothing there changed.
+ */
+export class Brood {
+  constructor() {
+    this.slots = Array.from({ length: BROOD_SLOTS }, () => ({
+      x: 0, y: 0, frame: -1, strength: 0, vx: 0, vy: 0, fallSubstate: 0,
+    }));
+    this.killed = 0;
+    /** CS:0x8A33-0x8A65 is draw / inc / free with no score-award call on
+     *  this path. Kept at 0 rather than guessed at. UNKNOWN_brood_score. */
+    this.score = 0;
+  }
+
+  /** CS:0x895A's own free-slot search over BROOD_SLOTS, reached from
+   *  Nests#brood with (x, y, field8, fieldA, BROOD_HP). */
+  spawn(x, y, vx, vy, hp) {
+    const free = this.slots.find((s) => s.frame < 0);     // CS:0x895A `jns`
+    if (!free) return false;
+    free.x = x; free.y = y;
+    free.frame = BROOD_SEED_FRAME;                          // +4 = 0
+    free.strength = hp;                                     // +6 = 0x2b
+    free.vx = vx; free.vy = vy;                             // +8, +0xa
+    free.fallSubstate = BROOD_SEED_FALL_SUBSTATE;            // +0xc = 1 -- BALLISTIC, not bounce
+    return true;
+  }
+
+  /** Level init — no CS: address of its own; this port's equivalent of
+   *  clearing all 16 records to the free sentinel. */
+  clear() {
+    for (const s of this.slots) s.frame = -1;
+    return this;
+  }
+
+  get live() { return this.slots.reduce((n, s) => n + (s.frame >= 0 ? 1 : 0), 0); }
+
+  /**
+   * CS:0x894E. One tick over all 16 slots.
+   * @param {{x:number,y:number}} cam
+   * @param {number} freezeTimer   DS:0x2fa — honoured by GROUND BOUNCE only, see above
+   * @param {(e:object)=>number} contact  the CS:0xa9e4 thunk, BP-in-BP-out, same shape Nests uses
+   * @param {?Uint8Array} planeB
+   * @returns {{drawn:Array}}
+   */
+  step(cam, freezeTimer, contact, planeB) {
+    const drawn = [];
+    for (const s of this.slots) {
+      if (s.frame < 0) continue;                          // CS:0x895A -- free, skip
+
+      if (s.strength < 0) { this.#death(s, cam, drawn); continue; }   // CS:0x8967
+
+      if (s.fallSubstate !== 0) {
+        this.#fall(s, planeB);                              // CS:0x8970 -- unconditional, ignores freeze
+      } else if (freezeTimer === 0) {
+        this.#bounce(s, planeB);                            // CS:0x8979 -- gated on freeze
+      }
+
+      s.strength = contact({ x: s.x, y: s.y, w: BROOD_BOX.w, h: BROOD_BOX.h, hp: s.strength });   // CS:0x8997/0x899A
+      const sprite = (BROOD_SPRITE_TABLE[s.frame] ?? s.frame) + broodFacingOffset(s.vx);          // CS:0x899D-0x89AA
+      drawn.push({ x: s.x - cam.x, y: s.y - cam.y, sprite, gfxExport: 1 });
+      if (s.strength < 0) this.killed++;
+    }
+    return { drawn };
+  }
+
+  /** CS:0x8A6C. Plain linear X, no accel/cap. */
+  #bounce(s, planeB) {
+    s.x += s.vx;
+    const probeX = s.x + (s.vx >= 0 ? BROOD_BOUNCE_PROBE_X : 0);   // the muzzle-style facing offset
+    const cellHere = broodTileCell(probeX, s.y);
+    const cellBelow = cellHere + 128;                                // [di+0x80], one tile row down
+    const solid = (planeB && planeB[cellHere] === 1) || (planeB && planeB[cellBelow] === 1);
+    if (solid) s.vx = -s.vx;                                         // NEG word[si+8] -- the step above is NEVER undone
+  }
+
+  /** CS:0x8AB1. Gravity-fed, capped, with a lookahead landing probe. */
+  #fall(s, planeB) {
+    s.x += s.vx; s.y += s.vy;
+    s.vy = Math.min(s.vy + 1, BROOD_FALL_GRAVITY_CAP);
+    const probeX = s.x + BROOD_FALL_PROBE.dx, probeY = s.y + BROOD_FALL_PROBE.dy;
+    const cellHere = broodTileCell(probeX, probeY);
+    const cellAbove = cellHere - 128;
+    const solidHere = planeB && planeB[cellHere] === 1;
+    const solidAbove = planeB && planeB[cellAbove] === 1;
+    if (solidAbove || !solidHere) return;                            // keep falling
+    /* LAND. CLAUDE.md's own gloss for the bytes is "and 0xfff0 / inc" — floor
+     * Y to its own current tile row, then step ONE FULL TILE ROW (not +1
+     * pixel) in the direction of the fall. That is the same "floor into the
+     * tile being penetrated, then add a whole row to clear it" idiom this
+     * project documents for the hero's own jump ceiling-ejection, and it is
+     * how `inc` on a floored 16-pixel row boundary is resolved here. */
+    s.y = Math.floor(s.y / 16) * 16 + 16;
+    s.fallSubstate = 0;
+    s.vy = 0;
+  }
+
+  /** CS:0x8A33. Draws using the CURRENT (pre-increment) frame, ONE draw. */
+  #death(s, cam, drawn) {
+    const sprite = DEATH_SPRITE_BASE + s.frame;                       // 0x6c + frame, COUNTING UP
+    drawn.push({ x: s.x - cam.x + BROOD_DEATH_DRAW_OFFSET.dx,
+                 y: s.y - cam.y + BROOD_DEATH_DRAW_OFFSET.dy,
+                 sprite, gfxExport: 1 });
+    s.frame += 1;                                                      // CS:0x8A5C
+    if (s.frame >= DEATH_FREE_AT_STATE) s.frame = -1;                  // CS:0x8A65 -- DEATH_FREE_AT_STATE(7) reused as a CAP, not a fixed duration
+  }
+}
 
 /* ⚠️ DS:0x8014 IS ITSELF SHARED, and by world rather than by accident.
  * CS:0x7CBD and CS:0x7EB6 both gate on `cmp byte [0x42],1` — a WORLD-1
@@ -578,8 +811,20 @@ export const signed16 = (v) => ((v & 0xffff) ^ 0x8000) - 0x8000;
  * CS:0x2039 (right) and CS:0x1FE7 (left) — what array they write and whether
  * the thing they spawn can damage the hero is not established here.
  *
- * ── UNKNOWN_8014_brood / UNKNOWN_8014_world1 / UNKNOWN_ce64_pool ─────────
- * Three neighbouring subsystems deliberately left closed.
+ * ── UNKNOWN_8014_brood — the walker is CLOSED, ported as `Brood` above ───
+ * CS:0x894E's field map, movement, death and facing are all decoded and
+ * implemented (see the walker section above, which also corrects several
+ * specific claims a task-level summary made about this exact address range).
+ * Two residuals remain, both narrower than "the walker is out of scope":
+ *   UNKNOWN_brood_score — CS:0x8A33-0x8A65 shows no score-award call on the
+ *     decoded death path; whether one exists off that path is open.
+ *   UNKNOWN_brood_sprite_table — SS:0x360A's own contents were never read by
+ *     any pass over this project; `BROOD_SPRITE_TABLE` is an identity
+ *     placeholder, not an invented sprite sequence.
+ *
+ * ── UNKNOWN_8014_world1 / UNKNOWN_ce64_pool ──────────────────────────────
+ * Two neighbouring subsystems, unrelated to the brood walker, deliberately
+ * left out of scope of this pass.
  */
 export const UNKNOWN_nest_identity =
   'the game never names type 115 — POBJECTS gives it an empty name and description';

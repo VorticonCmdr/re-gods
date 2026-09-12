@@ -87,6 +87,13 @@ export function parseGroupsA(buf) {
       seedWeight: b[0x09],                     // stage 1 weight, 7-bit
       speedCap:   signByte(b[0x0b]),           // stage 4 (CS:0xe44d) clamp
       stepCap:    signByte(b[0x0c]),           // stage 2 (CS:0xe336) steering-step cap partner, also stage 3's (unported) range gate
+      /* Strategy 1's own weight, CS:0xe9de `mov bl,[si+0xd]` — the probability
+       * (out of 128) of taking the weighted-max-of-six-scratch-cells branch
+       * over the uniform 1..7 reroll. ⚠️ Do NOT confuse this with System-B's
+       * OWN +0xd field (spawn.js's parseGroupsB `budget`) — same byte offset,
+       * unrelated descriptor struct, unrelated meaning (B's is a pathfinder
+       * cost budget; A's is this stage-1 weight). */
+      zoneWeight: b[0x0d],                     // stage 1 (CS:0xe9de), NOT previously exposed
       extra:      b[0x0e],                     // copied to group-runtime +0x6 at materialise; consumer not traced
       attackGate: b[0x0f],                     // stage 3 (CS:0xe487) gate — stage 3 is NOT ported
       tileX:   b[0x12],
