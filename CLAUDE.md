@@ -3050,7 +3050,7 @@ Handler 1 (right) does `add ax,0x10 / sub bx,0xc` and writes dirs **1, 0, 2**; h
 | `CS:0x94e8` | `inc [rec+8]` — picking up one you **already hold** |
 | `CS:0x9451` | `inc [rec+8]` — a bulk power-up applied to all three slots (`CS:0x9426`) |
 
-The same pickup path also resets **`+0x04` to 0** unconditionally and **`+0x02` to 0** when it reads 3 (`CS:0x910d`, `CS:0x9118`), so those two are runtime state as well — `UNKNOWN_weapon_02` / `UNKNOWN_weapon_04`. Neither is parsed by the port.
+The same pickup path also resets **`+0x04` to 0** unconditionally and **`+0x02` to 0** when it reads 3 (`CS:0x910d`, `CS:0x9118`), so those two are runtime state as well — `UNKNOWN_weapon_02` / `UNKNOWN_weapon_04`, **both CLOSED** by the mover work under *`UNKNOWN_projectile_mover`* below: `+0x02` is the 3-entry draw-style index into `DS:0xdf26` (this pickup reset is a range guard, not a second field), and `+0x04` is the weapon's current animation frame, with `+0x1c` its frame count. Neither is parsed by the port.
 
 All three are reachable only from the pickup dispatcher `CS:0x94a7`, which branches on whether `bx` already matches one of the three slot words.
 
