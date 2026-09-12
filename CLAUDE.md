@@ -4093,7 +4093,21 @@ bfbf  cmp cx,0x118(280) / ...
 
 **The `id == 0x3D` divert is not a rejection — it's a deliberate second path.** `CS:0xBF59` (`and bx,0xfff0 / jmp 0xc041`) snaps the popup's Y to a 16-px tile boundary and jumps straight into `CS:0xC041` — this document's own already-documented **"steal-and-carry" respawn routine**, which allocates a fresh `DS:0x8314` object slot and drops a live object of type `(id − 11)` back into the world at the given position. `0x3D − 11 = 50`, and **`POBJECTS` type 50 is `"spike"`** (decompressed and read directly: `PWEAPONS`/`POBJECTS.001` record 50 → name `"spike"`, the one *named* category-4 object this document already flagged). So the world-2 nest's own death award (`popup id 0x2D`) and a spike hazard share this one entry point, but they take genuinely different branches: **a spike (id `0x3D`) is re-dropped into the world as a real, solid object instead of floating up as a collectible-style icon** — matching what a spike trap should do on reset (become a physical hazard again, not a score popup). The busy-slot fallback (`CS:0xBF6B`) reaches the identical respawn routine for the *same* reason: if a popup is already in flight, a second request is treated as "drop a real object" rather than losing the request.
 
-**Popup id `0x2D` (45) itself is the ordinary case** — `45 − 11 = 34`, and **`POBJECTS` type 34 is `"jewel"`** (same direct read; empty description). So the world-2 nest's death award floats a jewel-icon popup up from the kill point at `(x+4, y+0x18)`, falling under gravity (`Y += −6` per tick, uncapped in the bytes read here), while the BCD score chain separately and unconditionally credits the player 2500 points — the popup is purely a visual flourish layered on top of the score award, not the mechanism that grants it. `UNKNOWN_bf5f_special_sprites` — what sprites `0x117`(279)/`0x118`(280) get instead of the generic float, and which other popup ids reach them, is not traced past locating the branch.
+**Popup id `0x2D` (45) itself is the ordinary case** — `45 − 11 = 34`, and **`POBJECTS` type 34 is `"jewel"`** (same direct read; empty description). So the world-2 nest's death award floats a jewel-icon popup up from the kill point at `(x+4, y+0x18)`, falling under gravity (`Y += −6` per tick, uncapped in the bytes read here), while the BCD score chain separately and unconditionally credits the player 2500 points — the popup is purely a visual flourish layered on top of the score award, not the mechanism that grants it.
+
+**`UNKNOWN_bf5f_special_sprites` — CLOSED: the two special-cased sprites are the same alternate-blitter treatment, just raised and drawn through export 1 instead of export 2 `[PROVEN]`**
+
+```
+bfb9  cmp cx,0x117(279) / jz 0xbff1     ; sprite 279
+bfbf  cmp cx,0x118(280) / jz 0xbff1     ; sprite 280
+      [otherwise: [0x4]=ax / [0x6]=bx / [0x8]=cx / CALL 0x1000:356e]   ; the GENERIC case — export 2
+...
+bff1  bx -= 0x8                          ; raise the draw point 8px
+bff4  [0x4]=ax / [0x6]=bx / [0x8]=cx
+bfff  call 0x1000:3569                   ; export 1 — the OTHER masked-sprite blitter, not export 2
+```
+
+`sprite − 170` gives `POBJECTS` types **109** and **110**; decompressing `POBJECTS.001` and reading both records directly: **type 109 = `"magical gem"`, type 110 = `"treasure chest"`** — both category 2, both with an empty description, distinct from the ordinary treasure-category chest (type 16, category 1, description `"iron"`) this document already documents being scattered by the hidden trap object. So these two are a **second pair of dedicated popup-only icon sprites** — a gem and a chest — routed through export 1 (the sibling masked blitter, differing from export 2 only in clip bounds per this document's own driver-export table) with their draw point raised 8px, presumably because these two icons are taller than the ordinary floating pickups and would otherwise clip or sit visually low against the generic export-2 path. `UNKNOWN_bf5f_special_sprite_callers` — which specific award (a different scripted event, a different creature kill) ever passes popup id `0x94`(148, `→` type 109) or `0x95`(149, `→` type 110) was not traced; no call site among the ones already read in this document uses either id.
 
 ⚠️ **From a LIVE state, death inherits it; it does not reset.** `CS:0x87DA` is `cmp ...,4 / jnz` — an *equality* test — and `CS:0x87E9` frees at ≥ 7:
 
