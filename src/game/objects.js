@@ -1,3 +1,5 @@
+import { attrAtPixel, CELL_SOLID } from '../formats/map.js';
+
 /* objects.js — map objects: type -> sprite, category, and draw order.
  *
  * A .MAP carries 200 records {u16 x, u16 y, u16 type} at bulk +0x4000. Until
@@ -190,17 +192,162 @@ export function activationBox(camX, camY) {
            xMax: ax + ACTIVATION_MARGIN.xMax, yMax: by + ACTIVATION_MARGIN.yMax };
 }
 
-/** CS:0x11D3. Returns how many objects entered the box this pass. */
-export function activateObjects(objects, box) {
+/** CS:0x11D3. Returns how many objects entered the box this pass. `cats` is
+ *  optional (omit it and objects never start falling) so this stays callable
+ *  from every existing test that doesn't care about fall physics. When
+ *  given, it arms `o.fallDirty` on the SAME inactive->active edge CS:0x120F
+ *  marks dirty — see `isFallEligible`/`stepObjectFall` below. */
+export function activateObjects(objects, box, cats) {
   let newly = 0;
   for (const o of objects) {
     const out = o.dead || isDeadType(o.type)
       || o.x < box.xMin || o.x > box.xMax || o.y < box.yMin || o.y > box.yMax;
     if (out) { o.flag6 = 0; continue; }            // CS:0x1215 — NOT sticky
-    if (!(o.flag6 & 1)) newly++;                   // CS:0x120F marks it dirty
+    if (!(o.flag6 & 1)) {
+      newly++;                                     // CS:0x120F marks it dirty
+      if (cats && isFallEligible(o.type, cats)) o.fallDirty = -1;   // SS:0x438 := 0xFF, same instant
+    }
     o.flag6 |= 1;                                  // CS:0x1208
   }
   return newly;
+}
+
+/* ── Object fall physics — CS:0x1511-0x1631 ────────────────────────────────
+ *
+ * Reported live: "in the DOS version the items don't stay up in the air but
+ * fall down once they come into view." A per-object-slot dirty byte at
+ * SS:0x438+slotIndex — already on record elsewhere in this project as an
+ * under-documented scratch array — turns out to drive a small fall/bounce
+ * state machine, armed to 0xFF on the SAME inactive->active transition
+ * `activateObjects` already marks (CS:0x120F, immediately after CS:0x1208).
+ *
+ * THE PROBE — CS:0x1554-0x15CB, read byte-for-byte off the live disassembly.
+ * Two columns are tested for solid ground one row BELOW the object
+ * (`y + 0x10`): col1 = the object's own column, col2 a straddle column 0xF
+ * px to the right (the same threshold the hero's own wall probes use). Once
+ * ground is found, the SAME column's own row (`y`, un-incremented — provably
+ * the row directly above the ground row) is re-tested for embedding. The
+ * branch structure is ASYMMETRIC — when col1 has no ground below it, col1's
+ * own row is never re-tested at all, only col2's:
+ *
+ *     groundCol1 true  -> embedded = ownCol1 || ownCol2
+ *     groundCol1 false -> embedded = groundCol2 && ownCol2   (ownCol1 UNTESTED)
+ *     neither column has ground below                        -> always falls
+ *
+ * "Landed" additionally requires row alignment — CS:0x15CB-15D4 test
+ * `y & 0xC === 0` (y is always kept a multiple of 4 by the fall step below),
+ * so even a supported object keeps stepping by 4px until it reaches an exact
+ * 16px row boundary before it is allowed to rest.
+ *
+ * THE FALL STEP — CS:0x1587: `y = (y + 4) & 0xFFFC` every tick it is
+ * unsupported or unaligned; CS:0x1598 destroys the object once
+ * `y >= 0x400` (1024, the documented world height) — type := 0xFFFF,
+ * flag6 := 0.
+ *
+ * THE BOUNCE — CS:0x13F7-0x142A. On landing the dirty byte resets to 0
+ * (unless already the terminal 24) and a 24-entry signed Y-delta table at
+ * DS:0xdf2c is walked, ADDING each entry to the object's real Y once per
+ * tick. Read live via `read_memory("1ffd:df2c", 24)` — note 1ffd, not 1000,
+ * per this project's own DS-segment warning — and confirmed BYTE-IDENTICAL
+ * to the already-documented time-bomb settling-bounce table. There is no
+ * shipped audio engine, so the accompanying sound-cue table at SS:0x5450
+ * (which only gates whether a thud plays, never motion) is dropped.
+ *
+ * THE TERMINAL STATE — once the dirty byte clamps at 24 (0x18), CS:0x142D
+ * jumps straight back into the ground probe every tick forever, bypassing
+ * the sign test that starts the cycle, with no reset: if a supporting block
+ * is later destroyed, the very next probe finds no ground and the object
+ * re-enters the fall step, re-arming the sentinel. Essentially free once the
+ * probe exists, so it is kept rather than treated as a one-shot.
+ *
+ * WHY CATEGORY >= 3 NEVER VISIBLY MOVES — CS:0x1526 caches the object's
+ * pre-tick Y into a scratch word (SS:0x432) before ANY of the above runs,
+ * and CS:0x1613 restores it from that scratch word whenever the type is
+ * < 0xC0 (not a weapon) and the POBJECTS category is >= 3 (levers, and
+ * categories 4/5). Every sub-path above — the fall step, the bounce-delta
+ * add, and the terminal re-probe — funnels through the SAME shared tail at
+ * CS:0x15F1 before this restore is reached, so the undo is unconditional: a
+ * lever's dirty byte silently ticks through its whole fall/bounce cycle
+ * every time it is (re)activated, but its Y is pinned back every single
+ * tick and it never actually moves. So this port applies the gate UP FRONT
+ * (`isFallEligible`) instead of computing motion it would only discard.
+ *
+ * ⚠️ Weapon pickups (type >= 0xC0) skip the category test entirely
+ * (CS:0x15F5 `cmp cx,0xc0 / jl ... / jmp 0x1da0`), so they always fall.
+ */
+
+/** CS:0x13FF `mov di,0xdf2c` — confirmed byte-identical to the already-
+ *  documented time-bomb settling-bounce table via a live `read_memory` at
+ *  "1ffd:df2c" (24 bytes: fc fd fe ff 00 01 02 03 04 fd fe ff 00 01 02 03
+ *  fe ff 00 01 02 ff 00 01). */
+export const BOUNCE_DELTA = Object.freeze([
+  -4, -3, -2, -1, 0, 1, 2, 3, 4,
+  -3, -2, -1, 0, 1, 2, 3,
+  -2, -1, 0, 1, 2,
+  -1, 0, 1,
+]);
+
+export const FALL_STEP = 4;             // CS:0x1587 `add word [si+2],0x4`
+export const WORLD_HEIGHT = 0x400;      // CS:0x1598, the documented 1024px world height
+export const STRADDLE_OFFSET = 0xF;     // CS:0x1565/0x15AE `add ax,0xf`
+export const BOUNCE_TERMINAL = 24;      // CS:0x141B/0x141E `cmp dl,0x18 / jl` — clamp
+
+/** CS:0x160D/0x1621/0x15F5 — type<0xC0 && category>=3 never falls (see the
+ *  block comment above); weapons (type>=0xC0) always fall. `cats` is the
+ *  132-entry array `parseObjectCategories` returns; a type it has no entry
+ *  for is treated as not fall-eligible, matching the loader's own 132-type
+ *  stamp limit. */
+export function isFallEligible(type, cats) {
+  if (type >= WEAPON_TYPE_MIN) return true;
+  const cat = cats ? cats[type] : undefined;
+  return cat !== undefined && cat < CATEGORY.LEVER;
+}
+
+/** CS:0x1554-0x15CB — the ground/embed probe, reading `attrAtPixel` exactly
+ *  as the original addresses plane B (floored column, floored row — see
+ *  map.js). Returns true only for a genuine landing: supported AND
+ *  row-aligned. */
+function isGrounded(map, x, y) {
+  const groundCol1 = attrAtPixel(map, x, y + 0x10) === CELL_SOLID;
+  const groundCol2 = attrAtPixel(map, x + STRADDLE_OFFSET, y + 0x10) === CELL_SOLID;
+  let embedded;
+  if (groundCol1) {
+    const ownCol1 = attrAtPixel(map, x, y) === CELL_SOLID;
+    embedded = ownCol1 || attrAtPixel(map, x + STRADDLE_OFFSET, y) === CELL_SOLID;
+  } else if (groundCol2) {
+    embedded = attrAtPixel(map, x + STRADDLE_OFFSET, y) === CELL_SOLID;   // ownCol1 UNTESTED — CS:0x1561-0x1585
+  } else {
+    return false;                                     // no ground on either column -> falling
+  }
+  return !embedded && (y & 0xC) === 0;                 // CS:0x15CE-0x15D4 — row-alignment gate
+}
+
+/**
+ * CS:0x1511-0x1631, one object, one tick. `o.fallDirty` mirrors SS:0x438:
+ *   undefined -> not in the fall system (never activated, or category >= 3)
+ *   -1        -> the 0xFF sentinel: run the ground probe this tick
+ *   0..23     -> mid-bounce, apply BOUNCE_DELTA[o.fallDirty]
+ *   24        -> settled; re-probe every tick (CS:0x142D `jmp 0x1534`)
+ * Must run before the pickup contact test each tick, matching CS:0x0206's
+ * per-object walk (fall/bounce, THEN CS:0x168E's pickup call, same object,
+ * same frame) — see main.js.
+ */
+export function stepObjectFall(map, o) {
+  if (o.fallDirty === undefined || o.dead) return;
+  if (o.fallDirty === -1 || o.fallDirty === BOUNCE_TERMINAL) {
+    if (isGrounded(map, o.x, o.y)) {
+      if (o.fallDirty !== BOUNCE_TERMINAL) o.fallDirty = 0;   // CS:0x15E0 — start the bounce (else stays 24, CS:0x15DE)
+      return;
+    }
+    o.y = (o.y + FALL_STEP) & 0xFFFC;                  // CS:0x1587-0x158F
+    o.fallDirty = -1;                                  // CS:0x158B — re-arm the sentinel
+    if (o.y >= WORLD_HEIGHT) {                          // CS:0x1598-0x15A3
+      o.dead = true; o.type = 0xffff; o.flag6 = 0;
+    }
+    return;
+  }
+  o.y += BOUNCE_DELTA[o.fallDirty];                     // CS:0x1416
+  o.fallDirty = Math.min(o.fallDirty + 1, BOUNCE_TERMINAL);   // CS:0x1419-0x1420
 }
 
 /** CS:0x8FEF — map records -> the 200-slot runtime array. */

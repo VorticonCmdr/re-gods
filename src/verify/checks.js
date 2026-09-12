@@ -65,7 +65,9 @@ import { CHEST_MIN, CHEST_MAX, CHEST_KEY_BASE, chestKeyFor, openedType,
          OBJ_NAME_OFF, OBJ_NAME_MAX, OBJ_DESC_OFF, OBJ_DESC_MAX,
          OBJ_RECORD_SIZE } from '../game/treasure.js';
 import { expandMapObjects, allocObject, OBJECT_SLOTS, activationBox,
-         activateObjects, sortForDraw, insertSpawned } from '../game/objects.js';
+         activateObjects, sortForDraw, insertSpawned, CATEGORY, WEAPON_TYPE_MIN,
+         stepObjectFall, isFallEligible, BOUNCE_DELTA, FALL_STEP,
+         WORLD_HEIGHT, STRADDLE_OFFSET, BOUNCE_TERMINAL, ACTIVATION_MARGIN } from '../game/objects.js';
 import { GodsRandom } from '../game/random.js';
 import { CLASS_TABLES, EMPTY_CLASS, HAZARD_CLASS, HAZARD_HANDLERS,
          HAZARD_SPRITE_BASE, POOL_SLOTS, POOL_STRIDE,
@@ -108,7 +110,7 @@ import { JUMP_ARC_END, JUMP_ARC_EXIT, fireGuardBefore,
          fireGuardAfter } from '../game/fire-states.js';
 import { Player, ST, S as PS, JUMP_ARC_EARLY_LAND_CURSOR,
          WALK_STEP } from '../game/player.js';
-import { CELL_SOLID, CELL_CLIMBABLE, MAP_COLS as MC } from '../formats/map.js';
+import { CELL_SOLID, CELL_CLIMBABLE, MAP_COLS as MC, attrAt } from '../formats/map.js';
 import { parseWeapons, allocateShots, MAX_SUBSLOTS, WEAPON_SLOTS, tagFor,
          WEAPON_COUNT, PINNED_08, PINNED_SPRITE, PINNED_SPRITE2,
          armWeapon, pickUpAgain, refundFor, reloadWorld,
@@ -6154,6 +6156,345 @@ export async function checkWeaponsProjectiles(fetchRaw) {
       'per-projectile animation frame; and UNKNOWN_DS_0168 — which now has ' +
       'four behaviours and still no meaning.',
   });
+
+  /* ── Object fall physics — CS:0x1511-0x1631 ───────────────────────────
+   *
+   * Reported live: "in the DOS version the items don't stay up in the air
+   * but fall down once they come into view." A screenshot showed a weapon
+   * pickup floating unsupported next to a mystery box in PLEV1A.
+   */
+  {
+    const n = MC * 64;                          // MAP_ROWS
+    const flatMap = () => ({ planeA: new Uint8Array(n), planeB: new Uint8Array(n),
+                              widthPx: 4096, heightPx: 1024 });
+
+    check(`the live-read bounce table is BYTE-IDENTICAL to the time bomb's`,
+      BOUNCE_DELTA.join(',') === BOMB_BOUNCE.join(','),
+      `read live via read_memory("1ffd:df2c", 24) this session: ` +
+      `${BOUNCE_DELTA.join(',')} — this project's CLAUDE.md had assumed this ` +
+      `from recollection of the time-bomb's own table under a different ` +
+      `heading, and \`search_instructions\` had shown the constant 0xdf2c ` +
+      `appears exactly ONCE in the whole program, so the two tables were not ` +
+      `independently corroborated until this read`);
+
+    check(`the terminal state CLAMPS at 24, unlike the time bomb's own wrap`,
+      BOUNCE_TERMINAL === 24 && BOUNCE_TERMINAL === BOMB_BOUNCE.length,
+      `CS:0x1420 \`mov dl,0x18\` pins the dirty byte at 24 once it reaches ` +
+      `the table's own length, where the time bomb's mover (CS:0x142F ` +
+      `wraps to phase 0 instead) recycles the SAME table forever. One table, ` +
+      `two different consumers with different loop shapes`);
+
+    /* ── The category gate: weapons and cat<3 fall, cat>=3 never visibly
+     * moves — CS:0x1526/0x1613 cache-and-restore the object's own pre-tick
+     * Y around the whole state machine whenever type<0xC0 && category>=3,
+     * and every sub-path (fall step, bounce delta, terminal re-probe) shares
+     * the one tail that restore sits on, so the undo is unconditional. */
+    {
+      const map = flatMap();                    // no ground anywhere — pure open air
+      const startY = 100;                       // inside activationBox(0,0)'s yMax=0xF0
+      const weapon = { x: 0, y: startY, type: WEAPON_TYPE_MIN, flag6: 0 };
+      const lever = { x: 0, y: startY, type: 24, flag6: 0 };   // "lever off", category 3
+      const cats3 = new Uint8Array(STAMPED_TYPES);
+      cats3[24] = CATEGORY.LEVER;
+      // Drive it through the REAL entry point, not a hand-set `fallDirty` —
+      // the port's own gate is in `isFallEligible`/`activateObjects`, not in
+      // `stepObjectFall` itself (which mirrors CS:0x1511-0x1631 and, like
+      // the original, never re-checks category on its own).
+      activateObjects([weapon, lever], activationBox(0, 0), cats3);
+      for (let t = 0; t < 30; t++) { stepObjectFall(map, weapon); stepObjectFall(map, lever); }
+      check(`a weapon over open air falls; a lever placed identically never even enters the fall system`,
+        weapon.fallDirty !== undefined && weapon.y > startY
+          && lever.fallDirty === undefined && lever.y === startY,
+        `after activation + 30 ticks over solid-free ground: weapon ` +
+        `fallDirty=${weapon.fallDirty} y=${weapon.y} (fell ${weapon.y - startY}px); ` +
+        `lever fallDirty=${lever.fallDirty} y=${lever.y} (unchanged, and ` +
+        `never armed at all). CS:0x1613 restores a category>=3 object's Y ` +
+        `every tick regardless of what the fall/bounce state machine ` +
+        `computed, so this port gates UP FRONT (isFallEligible, applied at ` +
+        `the same CS:0x120F activation edge) instead of computing motion it ` +
+        `would only have to discard — this is the discriminating half of ` +
+        `the fix the user actually reported`);
+    }
+
+    {
+      check(`isFallEligible gates on category, not on a hardcoded type list`,
+        isFallEligible(WEAPON_TYPE_MIN, null) === true
+          && isFallEligible(WEAPON_TYPE_MIN + 5, undefined) === true
+          && isFallEligible(0, new Uint8Array([CATEGORY.LEVER])) === false
+          && isFallEligible(0, new Uint8Array([CATEGORY.SPECIAL5])) === false
+          && isFallEligible(0, new Uint8Array([CATEGORY.CONSUMABLE])) === true
+          && isFallEligible(0, new Uint8Array([CATEGORY.TREASURE])) === true
+          && isFallEligible(0, new Uint8Array([CATEGORY.KEY])) === true
+          && isFallEligible(0, undefined) === false,
+        `CS:0x15F5 (\`cmp cx,0xc0\`) exempts weapons from the category test ` +
+        `entirely — a null/undefined category table must still return true ` +
+        `for a weapon type, and false for any type with no known category`);
+    }
+
+    /* ── The two-column probe, and its documented asymmetry: when col1 has
+     * no ground below it, col1's own row is never re-tested for embedding —
+     * only col2's. STRADDLE_OFFSET (0xF) collapses col2 onto col1 unless the
+     * object's X remainder is >= 17 (0x11), so this needs an X that actually
+     * crosses a 32px column boundary to be discriminating. */
+    {
+      const map = flatMap();
+      const COL = 3;                                       // world x = 96..127
+      // Ground one row below column COL+1 only (not COL) — an object sitting
+      // with its OWN row over a solid tile in col+1, nothing under col itself.
+      map.planeB[8 * MC + (COL + 1)] = CELL_SOLID;          // row 8 = ground-below for row 7
+      map.planeB[7 * MC + (COL + 1)] = CELL_SOLID;          // row 7 = the object's OWN row, col+1 — embedded via straddle
+      const x = COL * 32 + 0x12;                            // remainder 0x12 (18) >= 0x11 -> straddles into col+1
+      const y = 7 * 16;                                     // own row = 7; ground-below-COL (row 8, col COL) is EMPTY
+      const o = { x, y, type: WEAPON_TYPE_MIN, flag6: 1, fallDirty: -1 };
+      stepObjectFall(map, o);
+      check(`the straddle probe finds embedding col1's own ground-below misses`,
+        o.y === y + FALL_STEP,
+        `x remainder 0x12 straddles into col+1 (x=${x}, own row=7); ` +
+        `groundCol1 (row 8, col ${COL}) is empty so the probe falls into the ` +
+        `"!groundCol1" branch, finds groundCol2 (row 8, col ${COL + 1}) ` +
+        `solid, and then tests ownCol2 (row 7, col ${COL + 1}) — ALSO solid ` +
+        `-> embedded -> keeps falling (y ${y}->${o.y}). A port using ` +
+        `\`(x+0xf)>>5 === x>>5\` as a shortcut collapses this straddle and ` +
+        `would wrongly call the object landed`);
+
+      // Now give col1 ITS OWN ground below (row 8, col COL too), so this
+      // object's `groundCol1` branch fires instead of the `!groundCol1` one
+      // the straddling object above took — and its OWN row (col COL, row 7)
+      // is clear, only col+1's is solid. A remainder small enough that
+      // `x+0xF` never leaves column COL (col2 === col1) must therefore LAND,
+      // even though the identical row/column-3 setup with a straddling X
+      // just fell — the two objects differ ONLY in whether x+0xF crosses the
+      // 32px boundary.
+      map.planeB[8 * MC + COL] = CELL_SOLID;               // col COL now also has ground below
+      const oAligned = { x: COL * 32 + 2, y, type: WEAPON_TYPE_MIN, flag6: 1, fallDirty: -1 };
+      stepObjectFall(map, oAligned);
+      check(`the same ground, reached WITHOUT straddling into col+1, LANDS`,
+        oAligned.y === y && oAligned.fallDirty === 0,
+        `x remainder 2 keeps col2 === col1 (x+0xf=${oAligned.x + STRADDLE_OFFSET} ` +
+        `is still inside column ${COL}), so the own-row embed test reads ` +
+        `col ${COL}'s row 7 (clear) rather than col ${COL + 1}'s (solid) — ` +
+        `not embedded -> LANDS at y=${oAligned.y}, fallDirty=${oAligned.fallDirty}. ` +
+        `A port that always tests col+1's own row regardless of the ` +
+        `straddle threshold would wrongly call THIS object embedded too`);
+    }
+
+    /* ── World-bottom destruction — CS:0x1598-0x15A3. */
+    {
+      const map = flatMap();                        // no ground anywhere, ever
+      const o = { x: 0, y: 0, type: WEAPON_TYPE_MIN, flag6: 1, fallDirty: -1, dead: false };
+      let ticks = 0;
+      while (!o.dead && ticks < 300) { stepObjectFall(map, o); ticks++; }
+      check(`an object with no ground anywhere is destroyed once y >= 1024`,
+        o.dead === true && o.type === 0xffff && o.flag6 === 0 && o.y >= WORLD_HEIGHT,
+        `fell to y=${o.y} over ${ticks} ticks (${FALL_STEP}px/tick, so ` +
+        `~${Math.ceil(WORLD_HEIGHT / FALL_STEP)} ticks expected) before ` +
+        `CS:0x159E/0x15A3 marked it dead — type := 0xFFFF, flag6 := 0, ` +
+        `matching the SAME dead-slot convention the rest of this array uses`);
+    }
+
+    /* ── The direct case: an object dropped above solid ground settles at a
+     * row-aligned Y, starts a bounce, and reaches the terminal re-probe
+     * state without ever moving again while support holds. */
+    {
+      const map = flatMap();
+      const ROW = 20;                               // solid floor at world y = 320
+      for (let c = 0; c < MC; c++) map.planeB[ROW * MC + c] = CELL_SOLID;
+      const restY = (ROW - 1) * 16;                  // the row directly above the floor
+      const o = { x: 100, y: restY - 40, type: WEAPON_TYPE_MIN, flag6: 1, fallDirty: -1 };
+      let ticks = 0;
+      while (o.fallDirty !== BOUNCE_TERMINAL && ticks < 100) { stepObjectFall(map, o); ticks++; }
+      const settledY = o.y;
+      const yAfterMoreTicks = [];
+      for (let i = 0; i < 10; i++) { stepObjectFall(map, o); yAfterMoreTicks.push(o.y); }
+      check(`a dropped object lands 16px-row-aligned and stays there once settled`,
+        settledY % 16 === 0 && settledY <= restY
+          && yAfterMoreTicks.every((y) => y === settledY),
+        `dropped from y=${restY - 40} onto a floor at row ${ROW} (y=${ROW * 16}); ` +
+        `settled at y=${settledY} after ${ticks} ticks and held there for 10 ` +
+        `more (${yAfterMoreTicks.join(',')}). CS:0x142D re-probes the SAME ` +
+        `ground test every tick once the dirty byte clamps at 24 — this is ` +
+        `what makes the object stay put rather than needing a one-shot ` +
+        `"landed" flag`);
+
+      /* ── The bonus finding: destroy the support out from under a settled
+       * object and it starts falling again, re-arming the sentinel exactly
+       * as CS:0x142D's perpetual re-probe implies. */
+      for (let c = 0; c < MC; c++) map.planeB[ROW * MC + c] = 0;   // the floor is gone
+      stepObjectFall(map, o);
+      check(`removing a settled object's support makes it fall again`,
+        o.y === settledY + FALL_STEP && o.fallDirty === -1,
+        `y ${settledY} -> ${o.y}, fallDirty reset to -1 (CS:0x158B re-arms ` +
+        `the 0xFF sentinel). CS:0x142D's jump back into the ground probe is ` +
+        `unconditional and runs every tick once terminal, which is what ` +
+        `makes this reachable without any extra bookkeeping — a block ` +
+        `destroyed under an already-settled item is not a special case`);
+    }
+
+    /* ── Re-arming on re-entry replays the bounce — CS:0x120F stores 0xFF
+     * unconditionally on every inactive->active edge, with no "already
+     * settled" test anywhere in activateObjects/stepObjectFall. So an item
+     * that scrolls off after settling and scrolls back on is re-armed and
+     * plays its whole landing bounce again. Faithful to the original, but
+     * nothing asserted it — a future reader who "fixes" arming to be
+     * one-shot would delete a real behaviour and stay green. */
+    {
+      const map = flatMap();
+      const ROW = 14;                     // settled Y must stay inside activationBox(0,0)'s yMax=0xF0
+      for (let c = 0; c < MC; c++) map.planeB[ROW * MC + c] = CELL_SOLID;
+      const restY = (ROW - 1) * 16;
+      const cats = new Uint8Array(STAMPED_TYPES);           // cat<3 -> fall-eligible
+      const o = { x: 100, y: restY, type: 0, flag6: 0 };
+      // Activate once, in the box, and run it to the settled/terminal state.
+      activateObjects([o], activationBox(0, 0), cats);
+      let ticks = 0;
+      while (o.fallDirty !== BOUNCE_TERMINAL && ticks < 100) { stepObjectFall(map, o); ticks++; }
+      const settledDirty = o.fallDirty, settledY = o.y;
+      // Scroll far enough away that the object leaves the activation box.
+      activateObjects([o], activationBox(0, 4000), cats);
+      const clearedFlag6 = o.flag6;
+      // Scroll back — the SAME inactive->active edge CS:0x120F marks dirty.
+      activateObjects([o], activationBox(0, 0), cats);
+      const rearmedDirty = o.fallDirty;
+      stepObjectFall(map, o);                 // tick 1: grounded -> re-enter the bounce at index 0 (CS:0x15E0), y unchanged this tick
+      const dirtyAfterFirstTick = o.fallDirty, yAfterFirstTick = o.y;
+      stepObjectFall(map, o);                 // tick 2: BOUNCE_DELTA[0] actually applied
+      check(`scrolling a settled object off-box and back RE-ARMS the sentinel and replays the bounce`,
+        settledDirty === BOUNCE_TERMINAL && clearedFlag6 === 0 && rearmedDirty === -1
+          && dirtyAfterFirstTick === 0 && yAfterFirstTick === settledY
+          && o.fallDirty === 1 && o.y === settledY + BOUNCE_DELTA[0],
+        `settled at fallDirty=${settledDirty} y=${settledY}; leaving the box ` +
+        `clears flag6 (=${clearedFlag6}), re-entering it re-arms fallDirty ` +
+        `to ${rearmedDirty} (the same 0xFF sentinel a brand-new activation ` +
+        `gets); the next tick finds the same ground still solid and re-enters ` +
+        `the bounce at index 0 (CS:0x15E0, y unchanged this tick: ` +
+        `${yAfterFirstTick}), and the tick after that actually applies ` +
+        `BOUNCE_DELTA[0] (y ${settledY} -> ${o.y}) — the LANDING BOUNCE ` +
+        `PLAYS OVER from the start rather than staying settled. CS:0x120F ` +
+        `has no "already settled" test — this is the original's own ` +
+        `behaviour, not a port bug, and a fix that makes arming one-shot ` +
+        `would be a real regression against it`);
+    }
+
+    /* ── Census against real shipped data, run as an actual SIMULATION rather
+     * than a one-shot ground check — advisor-recommended after the first
+     * pass found 616/652 (94%) of fall-eligible objects unsupported at
+     * placement, which is the wrong figure to trust on its own: average or
+     * presence-of-ground alone can't tell a sound decode from a systematic
+     * one-row offset. The discriminating number is how many of them get
+     * DESTROYED (fall clean off the bottom of the world, y >= 1024) when
+     * actually stepped on their own level's real plane B — a shipped game
+     * does not silently delete most of its pickups on first scroll-in, so
+     * that count must come back at or near zero for the decode to be sound. */
+    {
+      const keys = ['1A', '1B', '2A', '2B', '3A', '3B', '4A', '4B'];
+      let eligible = 0, unsupported = 0, destroyed = 0, alreadyUnreachable = 0, over32 = 0, maxDrop = 0;
+      const perLevel = [];
+      const destroyedSamples = [];
+      const unreachableSamples = [];
+      const CAP = 320;   // ceil(1024/4)=256 to fall the whole world, plus bounce/settle headroom
+      // The camera's own Y clamps well inside the world: CLAUDE.md's own
+      // "the camera clamps at 3776,864 (+160=1024)" figure is the highest
+      // scroll origin that ever exists, and activationBox adds a fixed
+      // 0xF0 margin on top of it — so no camera position can ever admit an
+      // object whose placed Y already sits at or past the world height. Such
+      // an object is dead shipped data (an authoring y<0 that wrapped to a
+      // huge u16), not something a real playthrough ever activates.
+      const MAX_REACHABLE_Y = 864 + ACTIVATION_MARGIN.yMax;   // 1104
+      for (const key of keys) {
+        const w = key[0];
+        const map = parseMap(dclDecompress(await fetchRaw(`game/PLEV${key}.MAP`)).data);
+        const levelCats = parseObjectCategories(
+          dclDecompress(await fetchRaw(`game/POBJECTS.00${w}`)).data);
+        let e = 0, u = 0;
+        for (const o of map.objects) {
+          if (isDeadType(o.type)) continue;
+          if (!isFallEligible(o.type, levelCats)) continue;
+          e++;
+          const gc1 = attrAt(map, (o.x >> 5), ((o.y + 0x10) >> 4)) === CELL_SOLID;
+          const gc2 = attrAt(map, ((o.x + STRADDLE_OFFSET) >> 5), ((o.y + 0x10) >> 4)) === CELL_SOLID;
+          if (!gc1 && !gc2) u++;
+
+          if (o.y > MAX_REACHABLE_Y) {
+            // Never activated in real play — no camera position's box can
+            // ever reach it. Simulating it anyway (as a direct fallDirty
+            // seed, bypassing activateObjects' own box test) would credit
+            // this port's DECODE with a destruction the real game's own
+            // activation gate prevents from ever happening.
+            alreadyUnreachable++;
+            if (unreachableSamples.length < 4)
+              unreachableSamples.push(`${key}@(${o.x},${o.y}) type=${o.type}`);
+            continue;
+          }
+
+          // The real simulation: arm it exactly as the inactive->active edge
+          // would, then run stepObjectFall against this level's REAL plane B
+          // until it settles (BOUNCE_TERMINAL) or is destroyed.
+          const sim = { x: o.x, y: o.y, type: o.type, flag6: 1, fallDirty: -1, dead: false };
+          const startY = sim.y;
+          let ticks = 0;
+          while (!sim.dead && sim.fallDirty !== BOUNCE_TERMINAL && ticks < CAP) {
+            stepObjectFall(map, sim);
+            ticks++;
+          }
+          if (sim.dead) {
+            destroyed++;
+            if (destroyedSamples.length < 8) destroyedSamples.push(`${key}@(${o.x},${o.y}) type=${o.type}`);
+          } else {
+            const drop = sim.y - startY;
+            if (drop > maxDrop) maxDrop = drop;
+            if (drop > 32) over32++;
+          }
+        }
+        eligible += e; unsupported += u;
+        perLevel.push(`${key}:${u}/${e}`);
+      }
+
+      check(`simulated against real level geometry, fall-eligible objects settle rather than fall off the world`,
+        destroyed === 0,
+        destroyed === 0
+          ? `0/${eligible - alreadyUnreachable} destroyed (y ${'>'}= ${WORLD_HEIGHT}) ` +
+            `across all 8 levels when actually stepped on their own real ` +
+            `plane B — corroborates the decode: a wrong ground probe or a ` +
+            `systematic row-offset would show up here as mass destruction, ` +
+            `not as the raw unsupported-at-placement count alone. ` +
+            `${alreadyUnreachable} object(s) were excluded as ALREADY past ` +
+            `the world height at placement (e.g. ${unreachableSamples.join('; ') || 'none'}) — ` +
+            `every camera position's activation box tops out at ` +
+            `${MAX_REACHABLE_Y}px, so these can never be activated in real ` +
+            `play regardless of the fall decode; they read as an authoring ` +
+            `y<0 that wrapped to a huge u16, the same "dead shipped data" ` +
+            `genre as this project's other proven-unread padding fields`
+          : `${destroyed}/${eligible - alreadyUnreachable} DESTROYED (of ${eligible} eligible, ` +
+            `${alreadyUnreachable} excluded as never-activatable) — e.g. ` +
+            `${destroyedSamples.join('; ')}. A shipped level does not delete ` +
+            `most of its ACTIVATABLE pickups on first scroll-in, so this many ` +
+            `falling clean through the world means the ground probe or its ` +
+            `column/row rounding disagrees with the original somewhere, not ` +
+            `that the level author placed them badly`);
+
+      results.push({
+        name: 'census: fall-eligible objects, all 8 levels — unsupported at placement vs. simulated drop',
+        note: true, pass: true,
+        detail: `${unsupported}/${eligible} (${Math.round(100 * unsupported / eligible)}%) placed ` +
+          `weapon/cat<3 objects have neither column solid one row below their ` +
+          `placed position — ${perLevel.join(', ')}. That is a large majority, ` +
+          `not "a small minority" as an earlier revision of this note said ` +
+          `while reporting the identical figure — a self-contradiction caught ` +
+          `on review. Read correctly, near-universal initial non-support ` +
+          `CORROBORATES the user's report ("items fall down once they come ` +
+          `into view" as the general behaviour of items, not a rare oddity), ` +
+          `rather than being a minority case needing an excuse. The ` +
+          `discriminating half is the simulation above (destroyed count, max ` +
+          `drop, count exceeding 32px): of the ${eligible} eligible objects, ` +
+          `${destroyed} were destroyed, the largest settled drop was ` +
+          `${maxDrop}px, and ${over32} settled after dropping more than one ` +
+          `tile (32px) — a long tail of multi-tile drops (rather than a ` +
+          `uniform 16px on nearly everything) is exactly the reported ` +
+          `screenshot shape: an item floating next to a ladder with open air ` +
+          `beneath it, not a one-row rounding offset on an otherwise-grounded set`,
+      });
+    }
+  }
 
   return results;
 }

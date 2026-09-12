@@ -26,7 +26,8 @@ import { spriteFor, STATE_INFO, UNMODELLED_PHASE_STATES } from './game/states.js
 import { buildDescriptorMap, GROUP_STEMS, HERO_DESCRIPTOR_MAX } from './formats/descriptors.js';
 import { spriteForType, parseObjectCategories, sortForDraw, isDeadType,
          isUnstamped, OBJECT_SLOTS, activationBox,
-         activateObjects, insertSpawned } from './game/objects.js';
+         activateObjects, insertSpawned,
+         stepObjectFall, isFallEligible } from './game/objects.js';
 import { parseObjectRecords, Score, Purse, TreasureBurst, INVENTORY_EMPTY,
          CHEST_MIN, CHEST_MAX, chestKeyFor } from './game/treasure.js';
 import { CONSUMABLES, WEAPON_ARCS, INVULN_TICKS_SPAWN } from './game/consumables.js';
@@ -629,8 +630,20 @@ async function main() {
        * there about the mutation that survived while it was inline here. */
       /* CS:0x11D3 — the activation pass, which owns `+6`. It runs ahead of the
        * object walk because the walk's own gate (CS:0x14A1) reads what it
-       * writes. The box is recomputed from the SNAPPED camera. */
-      activateObjects(level.drawObjects, activationBox(cam.snapX, cam.snapY));
+       * writes. The box is recomputed from the SNAPPED camera. Passing `cats`
+       * is what arms `fallDirty` on the same inactive->active edge CS:0x120F
+       * marks dirty — see game/objects.js's fall-physics block. */
+      activateObjects(level.drawObjects, activationBox(cam.snapX, cam.snapY), level.cats);
+      /* "in the DOS version the items don't stay up in the air but fall down
+       * once they come into view" — CS:0x1511-0x1631, one object per call,
+       * BEFORE the pickup contact test below (same order as the original's
+       * single per-object walk: fall/bounce first, CS:0x168E's pickup call
+       * second, same object, same tick). Only objects `activateObjects` just
+       * armed (weapons, or category < 3) carry `fallDirty` at all. */
+      for (const o of level.drawObjects) {
+        if (o.dead || !(o.flag6 & 1)) continue;
+        stepObjectFall(level.map, o);
+      }
       /* CS:0x1C91 `call 0x8611` — the world-2 nest creature's spawn, reached
        * from the object walk's category-4/sprite-0x11d dispatch arm, NOT
        * from the activation pass itself (a different per-frame walk over the
@@ -660,6 +673,17 @@ async function main() {
           const live = level.drawObjects.reduce((n, o) => n + (o.dead ? 0 : 1), 0);
           if (live >= OBJECT_SLOTS) return null;
           const s = { x: 0, y: 0, type: 0, flag6: 1, dead: false };
+          /* CS:0x13E0 marks the burst-settled loot's own dirty byte 0xFF the
+           * instant it materializes into a real object, same mechanism as
+           * activateObjects' CS:0x120F. Harmless fidelity: burst physics
+           * already computes a resting position, so this is normally a
+           * single immediate re-land (CS:0x1511 sees it already grounded and
+           * row-aligned) rather than a visible drop. `s.type` is 0 here and
+           * gets overwritten by the caller before use, so re-check eligibility
+           * once the real type is known would need a second pass — the type
+           * is always < 0xC0 treasure/consumable loot in practice (category
+           * < 3), so arming it unconditionally matches shipped behaviour. */
+          s.fallDirty = -1;
           level.drawObjects.push(s);
           return s;
         },
