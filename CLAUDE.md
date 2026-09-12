@@ -841,7 +841,42 @@ CS:0x8CA7                                        -> CALL FUN_1000_2189([0x15a],[
 
 All four spawn points fall inside the documented 4096×1024 world bounds, which is itself a check on the read — a wrong table offset or wrong world index would put at least one of the four outside `[0,4096)×[0,1024)`.
 
-**Respawn recomputes from the hero's actual (possibly zone-adjusted) landing position, not the level's static spawn table.** `FUN_1000_0845` — reached only by `JMP` from `CS:0x0940`, itself the tail of the death-reset chain at `CS:0x09BB` (called from the main loop's death test, `CS:0x01C4`/`0x01C9`) — this closes this document's own previously-flagged loose end: *"the lives decrement `0x93A dec word [0x224]` was **not** traced to this path"* is exactly `CS:0x093A`, now traced. `FUN_1000_0845` starts from the second spawn-point copy `[0x16e]`/`[0x170]` that `FUN_1000_8c34` stashed at level-load time, adjusts it through a small `SS:0x365a`-resident, 14-entry, stride-6 arrival-zone table keyed by a plane-B probe at the rounded landing tile (`UNKNOWN_respawn_zone_table` — a new, narrower residual; not traced past confirming it feeds `[0x17a]`/`[0x17c]` before the camera call), and only then calls `FUN_1000_2189` with the final, possibly-nudged position. So a respawn's camera can differ from the level's own opening camera when the zone table nudges the landing tile.
+**Respawn recomputes from the hero's actual (possibly zone-adjusted) landing position, not the level's static spawn table.** `FUN_1000_0845` — reached only by `JMP` from `CS:0x0940`, itself the tail of the death-reset chain at `CS:0x09BB` (called from the main loop's death test, `CS:0x01C4`/`0x01C9`) — this closes this document's own previously-flagged loose end: *"the lives decrement `0x93A dec word [0x224]` was **not** traced to this path"* is exactly `CS:0x093A`, now traced. `FUN_1000_0845` starts from the second spawn-point copy `[0x16e]`/`[0x170]` that `FUN_1000_8c34` stashed at level-load time, adjusts it through a small `SS:0x365a`-resident, 14-entry, stride-6 arrival-zone table keyed by a plane-B probe at the rounded landing tile, and only then calls `FUN_1000_2189` with the final, possibly-nudged position. So a respawn's camera can differ from the level's own opening camera when the zone table nudges the landing tile.
+
+**`UNKNOWN_respawn_zone_table` — CLOSED: an outward-radiating search for a plane-B cell tagged `0xFF`, and it identifies what that tag value is for `[PROVEN]`**
+
+```
+0873  ax=[0x16e] ; bx=[0x170]           ; the level-load spawn-point copy
+087a  ax+=0x10 ; bx+=0x8 ; ax&=0xffe0 ; bx&=0xfff0   ; round to the tile origin (32x16)
+0886  si = 0x5004 + (ax>>5) + ((bx&0xfff0)<<3)        ; the plane-B pointer at that tile — cx/dx keep the ROUNDED PIXEL origin
+08a1  bp=0xd(13) ; di=0x365a                          ; 14 candidate zone entries, stride 6
+08a7  bx = word SS:[di]                                ; this entry's own plane-B OFFSET (signed)
+08aa  cmp byte[bx+si],0xff / jz 0x8b5                  ; the probed cell reads EXACTLY 0xFF -> found, use this entry
+08af  di+=6 ; dec bp ; jns 0x8a7                        ; else try the next entry — falls through to the LAST entry if none match
+08b5  cx += word SS:[di+2] ; dx += word SS:[di+4]       ; add the entry's own {dX,dY} to the rounded tile origin
+08bd  [0x17a]=cx ; [0x17c]=dx                            ; final respawn position
+```
+
+Reading the table directly (`SS:0x365a`, 84 bytes, 14 × `{i16 planeBOffset, i16 dx, i16 dy}`) gives a clean, self-explaining search order — an outward ring radiating from the landing tile, checked in this exact sequence:
+
+| # | plane-B offset | `{dx, dy}` | cell relative to landing tile |
+|---|---|---|---|
+| 0 | `+1` | `(32, 0)` | one right |
+| 1 | `-1` | `(-32, 0)` | one left |
+| 2 | `-128` | `(0, -16)` | one row up |
+| 3 | `-127` | `(32, -16)` | one row up, one right |
+| 4 | `-129` | `(-32, -16)` | one row up, one left |
+| 5 | `+128` | `(0, 16)` | one row down |
+| 6 | `+129` | `(32, 16)` | one row down, one right |
+| 7 | `+127` | `(-32, 16)` | one row down, one left |
+| 8 | `+256` | `(0, 32)` | two rows down |
+| 9 | `+257` | `(32, 32)` | two rows down, one right |
+| 10 | `+255` | `(-32, 32)` | two rows down, one left |
+| 11 | `+384` | `(0, 48)` | three rows down |
+| 12 | `+385` | `(32, 48)` | three rows down, one right |
+| 13 | `+383` | `(-32, 48)` | three rows down, one left |
+
+So on death, the hero's respawn is nudged to the **nearest tile in this small, downward-biased search pattern that the level marks with plane-B value `0xFF`** — which identifies, for the first time in this document, what the `0xFF`/255 outlier in the plane-B census means (*"255 appearing 108 times"*, under *Plane B is not a boolean flag*): it is a level author's explicit **"valid respawn arrival tile"** marker, distinct from the `≥3` event-id range and from ordinary `0`/`1`/`2` terrain codes. The search checks immediate left/right first, then one row up, then progressively up to three rows *down* with left/right diagonals at each row — clearly biased toward finding solid ground below the death point rather than above it. ⚠️ **If none of the 14 entries match, the loop still applies entry 13's own `{dx,dy}`** (`di` simply reaches its last value when `bp` goes negative, and `0x8b5` runs unconditionally) — so a level with no `0xFF` tile anywhere near a given death point silently offsets the respawn by `(-32, +48)` from the rounded landing tile regardless, rather than falling back to the raw landing position.
 
 A port that seeds the scroll origin to `(0,0)` or to the raw, unclamped spawn point on every level load will visibly snap on the first frame in three of the four worlds (1, 2 and 4 — world 3's spawn point happens to clamp to `(0,0)` either way, so it alone matches by accident).
 
