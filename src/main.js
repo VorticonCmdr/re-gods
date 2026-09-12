@@ -47,6 +47,7 @@ import { Health, HEALTH_MAX, attackHero } from './game/combat.js';
 import { Nests } from './game/nest.js';
 import { EnemyShots } from './game/enemy-shots.js';
 import { LineHazards } from './game/line-hazard.js';
+import { MarkerList, stepMarkers } from './game/markers.js';
 import { Debris } from './game/debris.js';
 import { Arsenal, spawnableWeapons } from './game/hero-fire.js';
 import { stepHeroFrame, stepCreatureDamage } from './game/frame.js';
@@ -391,12 +392,16 @@ async function main() {
   /* Executing the verbs needs the inventory and the weapon slots, so the
    * context is attached here rather than beside the EventRunner. */
   events.actionCtx = buildActionCtx(level, inventory, arsenal);
-  /* DS:0xb5dc — the marker list strategy 2 heads for. It is populated by the
-   * object-pickup path when the hero takes an "attracts monsters" potion
-   * (type 45, CS:0x163d). Pickups are not modelled, so it stays empty and the
-   * seed short-circuits to the descriptor's other nibble, exactly as the
-   * original does with no markers placed. */
-  const markers = [];
+  /* DS:0xb5dc — the marker list strategy 2 heads for, game/markers.js.
+   * Populated below by the SAME per-object walk that drives fall physics
+   * (CS:0x1511-0x1668) — every on-screen category<3 object appends one,
+   * every frame, NOT gated on the hero touching it; a type-45 "attracts
+   * monsters" potion resets the list and forces every System-B enemy onto
+   * strategy 2 (DS:0x399). See game/markers.js's own header for why this is
+   * a hard-capped, freeze-until-reset buffer rather than an accumulating
+   * trail, and why its coordinates are screen-relative and FROZEN at write
+   * time rather than world coordinates. */
+  let markerList = new MarkerList();
   let slots = new GroupSlots();
   let enemies = [];
   let slotsA = new GroupSlots();
@@ -536,6 +541,7 @@ async function main() {
       rng = new GodsRandom(1);
       nests = new Nests(level.world, rng); shots = new EnemyShots(); tock = 0;
       lineHazards = new LineHazards();
+      markerList = new MarkerList();                    // CS:0x1437
       debris = new Debris();
       health = new Health();
       /* A real level change is not a game restart, so CS:0x914c does NOT run
@@ -644,6 +650,11 @@ async function main() {
         if (o.dead || !(o.flag6 & 1)) continue;
         stepObjectFall(level.map, o);
       }
+      /* CS:0x160D, the SAME per-object body as the fall physics above (one
+       * function, one gate) — every on-screen category<3 object appends a
+       * marker every frame. See game/markers.js. */
+      stepMarkers(level.drawObjects, level.cats, markerList,
+                  { x: cam.snapX, y: cam.snapY });
       /* CS:0x1C91 `call 0x8611` — the world-2 nest creature's spawn, reached
        * from the object walk's category-4/sprite-0x11d dispatch arm, NOT
        * from the activation pass itself (a different per-frame walk over the
@@ -816,7 +827,8 @@ async function main() {
             desc: e.desc,
             rnd: rng.next(),        // the single randomness input, CS:0x3836
             world: level.world,     // strategy 3's per-world waypoint list
-            markers,                // DS:0xb5dc — empty until an attract potion
+            markers: markerList.entries,       // DS:0xb5dc
+            markersOverride: markerList.override,   // DS:0x399
           }).verdict;
         }
         /* CS:0xE659, called BEFORE the mode dispatch for System B (see

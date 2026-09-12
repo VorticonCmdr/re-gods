@@ -193,6 +193,13 @@ for (const r of checkEntityA()) {
   console.log(line(r));
 }
 
+console.log('\n  The "attracts monsters" marker list (CS:0x1632-0x1668):');
+const { checkMarkers } = await import('../src/verify/checks.js');
+for (const r of checkMarkers()) {
+  if (!r.pass && !r.note) bad++;
+  console.log(line(r));
+}
+
 console.log('\n  System-A spawn chain and strategy census:');
 const { checkSpawnA } = await import('../src/verify/checks.js');
 for (const r of await checkSpawnA(fetchRaw)) {

@@ -84,7 +84,8 @@ const arcDelta = (curByte) => {
  * pointer, and the hop stage always reads from the base. Modelling the buffer
  * as `arr.push()` + `arr.length` makes that unrepresentable and silently
  * "fixes" a real behaviour. */
-export function makeState({ planeB, camX, camY, desc, world = 1, markers = null }) {
+export function makeState({ planeB, camX, camY, desc, world = 1, markers = null,
+                            markersOverride = false }) {
   return {
     verdict: -1,                       // DS:0x2ac
     best: 0xFFFF,                      // DS:0x2ae
@@ -103,7 +104,8 @@ export function makeState({ planeB, camX, camY, desc, world = 1, markers = null 
     moveCode: 0,                       // DS:0x2c4 — the hop's move code
     scrX: 0,                           // DS:0x2c6
     planeB, camX, camY, desc,
-    world, markers,   // strategy 3's list / strategy 2's DS:0xb5dc
+    world, markers, markersOverride,   // strategy 3's list / strategy 2's
+                                        // DS:0xb5dc + its DS:0x399 override
     oob: 0,                            // out-of-range grid/plane accesses
     bailouts: 0,                       // loop guards the original lacks
     expansions: 0,
@@ -428,7 +430,19 @@ export function expand(st, x, y) {
 
 /** CS:0xf7dd — the export-39 painter: marks a cell AND the one a row below. */
 function paintExport39(st, x, y) {
-  const sx = x - st.camX, sy = y - st.camY;
+  return paintExport39Screen(st, x - st.camX, y - st.camY);
+}
+
+/**
+ * The same export-39 grid write, taking SCREEN coordinates directly — no
+ * camera subtraction. This is what CS:0xf7bb actually calls for a marker
+ * (`mov cx,[si] / mov dx,[si+2] / call 0xf7dd`, no camera arithmetic in
+ * between): markers are stored screen-relative, FROZEN at the camera
+ * position when they were written (see game/markers.js), so re-subtracting
+ * the CURRENT camera here would silently erase that staleness rather than
+ * reproduce it.
+ */
+function paintExport39Screen(st, sx, sy) {
   const idx = ((sx - 8) >> 5) + GRID_PITCH * ((sy - 8) >> 4) + GRID_MARGIN;
   if (idx < 0 || idx >= 0x17c) return false;        // f7e3 `js` / f7e5 `cmp 0x17c`
   gw(st, idx, -1);                                  // f7f0
@@ -453,7 +467,14 @@ function paintColumn(st, x, y) {
 export function seedGoals(st, heroX, heroY, rnd) {
   st.grid.fill(0);                                  // f6de..f6e8
   const b8 = st.desc.seedPair;
-  const idx = seedStrategy(b8, st.desc.seedWeight, rnd);
+  /* CS:0xf6ed `cmp byte[0x399],0 / jz 0xf6f7 / jmp 0xf794` — the DS:0x399
+   * override (game/markers.js — set by a type-45 "attracts monsters" potion)
+   * skips the nibble roll ENTIRELY and jumps straight into the marker-seed
+   * body. `idx` here is forced to 2 for that reason; `b8`'s own nibbles are
+   * still passed to seedApply/seedFallback below exactly as the un-overridden
+   * path would, which is this port's documented, deliberate reading of an
+   * otherwise-undefined register state (UNKNOWN_seed2_override_fallback). */
+  const idx = st.markersOverride ? 2 : seedStrategy(b8, st.desc.seedWeight, rnd);
 
   if (idx === 0) {                                  // 0xf854 — direct pursuit
     paintColumn(st, heroX, heroY);
@@ -471,13 +492,22 @@ export function seedGoals(st, heroX, heroY, rnd) {
      * CS:0xf71a — which is `xchg cx,dx` followed by the dispatch, i.e. it
      * RETRIES WITH THE OTHER NIBBLE. Since markers only exist after an
      * "attracts monsters" potion, that fallback is the common case, and
-     * implementing it is what stops a third of shipped groups being inert. */
+     * implementing it is what stops a third of shipped groups being inert.
+     *
+     * ⚠️ MARKERS ARE SCREEN COORDINATES, FROZEN AT WRITE TIME (game/markers.js
+     * — CS:0x1632-0x1668 stores `sub ax,[0xa]`/`sub bx,[0xc]` against the
+     * camera THEN, and the reader below, CS:0xf7bb, feeds them to export 39
+     * with NO further camera arithmetic). So this uses paintExport39Screen,
+     * not paintExport39 — re-subtracting the CURRENT camera would erase the
+     * staleness the original actually has. Each record is also {x, y, type};
+     * only x/y are painted here, matching CS:0xf7bb which never touches the
+     * third word either. */
     const markers = st.markers || [];
     if (markers.length === 0) return seedFallback(st, heroX, heroY, b8, idx);  // f799
     const n = Math.min(markers.length, MARKER_MAX);       // f7ab clamp at 20
     let painted = false;                                  // [0x3cf]
     for (let i = 0; i < n; i++) {                         // f7bb..f7c7
-      if (paintExport39(st, markers[i][0], markers[i][1])) painted = true;
+      if (paintExport39Screen(st, markers[i].x, markers[i].y)) painted = true;
     }
     /* Nothing landed on the grid -> the same fallback (CS:0xf7d2/0xf7d9). */
     if (!painted) return seedFallback(st, heroX, heroY, b8, idx);

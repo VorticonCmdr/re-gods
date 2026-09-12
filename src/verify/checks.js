@@ -36,7 +36,8 @@ import { VERDICT, REACHABLE_VERDICTS, VERDICT_NONE, verdictAction, applyVerdict,
          GRID_MARGIN, heroCell, entityCell, SEED_STRATEGIES, SEED_WEIGHT_MASK,
          seedStrategy, seedBoxCells, seedColumnCells, gridIndex,
          WAYPOINTS, MARKER_MAX, ATTRACT_POTION_TYPE } from '../game/pathfind.js';
-import { runSearch } from '../game/pathfind-producers.js';
+import { runSearch, makeState, seedGoals } from '../game/pathfind-producers.js';
+import { MarkerList, stepMarkers, DISTRACT_TYPE } from '../game/markers.js';
 import { Health, HEALTH_MAX, damageFor, attackHero, creatureTouchesHero,
          difficultyScale, DIFFICULTY_MULTIPLIERS, difficultyForgiven,
          DIFFICULTY_PROGRESSION, creatureScansGrid, hitSparkAxis,
@@ -7048,6 +7049,103 @@ export async function checkZones(fetchRaw) {
       '0x1015 is the already-ported per-tick object-activation-box pass. ' +
       'UNKNOWN_zone_scan_caller and UNKNOWN_level_exit_destination both stand.',
   });
+
+  return results;
+}
+
+/* CS:0x1632-0x1668 — the "attracts monsters" marker list, game/markers.js. */
+export function checkMarkers() {
+  const { results, check } = makeChecker();
+
+  const m = new MarkerList();
+  check('a fresh list is empty and unarmed', m.entries.length === 0 &&
+    m.count === 0 && !m.override);
+
+  m.append(10, 20, 5);
+  check('an ordinary category<3 touch appends one record',
+    m.entries.length === 1 && m.count === 1 && !m.override,
+    JSON.stringify(m.entries));
+  check('the record is {x, y, type} — CS:0x1659/165E/1661, not just {x,y}',
+    m.entries[0].x === 10 && m.entries[0].y === 20 && m.entries[0].type === 5);
+
+  /* ⚠️ The cap does NOT wrap. Fill it to exactly MARKER_MAX, then confirm the
+   * 21st write is silently dropped. */
+  const m2 = new MarkerList();
+  for (let i = 0; i < MARKER_MAX; i++) m2.append(i, i, 1);
+  check(`MARKER_MAX (${MARKER_MAX}) ordinary touches fill the list exactly`,
+    m2.entries.length === MARKER_MAX && m2.count === MARKER_MAX);
+  m2.append(999, 999, 1);
+  check('the (MARKER_MAX+1)th touch is dropped, not appended or wrapped',
+    m2.entries.length === MARKER_MAX && m2.entries[0].x === 0,
+    `count=${m2.count} entries=${m2.entries.length}`);
+  const frozenCount = m2.count;
+  m2.append(999, 999, 1);
+  check('every touch AFTER the cap keeps incrementing count but never writes',
+    m2.count === frozenCount + 1 && m2.entries.length === MARKER_MAX);
+
+  /* Type 45 ("attracts monsters") resets the cursor to the BASE and forces
+   * the count to exactly MARKER_MAX — not zero — so exactly ONE more write
+   * (this potion's own position) lands before the list re-freezes. */
+  const m3 = new MarkerList();
+  for (let i = 0; i < 5; i++) m3.append(i, i, 1);
+  m3.append(77, 88, ATTRACT_POTION_TYPE);
+  check('type 45 resets the array to ONE entry — its own position',
+    m3.entries.length === 1 && m3.entries[0].x === 77 && m3.entries[0].y === 88
+    && m3.entries[0].type === ATTRACT_POTION_TYPE, JSON.stringify(m3.entries));
+  check('type 45 forces count to MARKER_MAX, NOT zero (CS:0x1648)',
+    m3.count === MARKER_MAX);
+  check('type 45 sets the global strategy-2 override (DS:0x399)', m3.override);
+  m3.append(1, 1, 1);
+  check('⚠️ the NEXT ordinary touch after a type-45 reset is already dropped'
+    + ' — a reset arms exactly ONE write, not an accumulating trail',
+    m3.entries.length === 1, JSON.stringify(m3.entries));
+
+  /* Type 46 ("distracts monsters") takes the same append path but never
+   * sets the override — CLAUDE.md: "the same marker-append path without
+   * setting the gate". */
+  const m4 = new MarkerList();
+  m4.append(1, 1, DISTRACT_TYPE);
+  check('type 46 appends like any other category<3 object, but does NOT '
+    + 'set the override', m4.entries.length === 1 && !m4.override);
+
+  m4.reset();
+  check('reset (CS:0x1437, level load) clears entries, count AND override',
+    m4.entries.length === 0 && m4.count === 0 && !m4.override);
+
+  /* stepMarkers: gating. Weapons, dead, off-screen and category>=3 objects
+   * must never append; only on-screen category<3 ones do, regardless of
+   * hero position (there is no hero in this call at all). */
+  const cats = new Uint8Array(200);
+  cats[5] = 0; cats[6] = 1; cats[7] = 2; cats[8] = 3; cats[9] = 4;
+  const objects = [
+    { x: 100, y: 50, type: 5, flag6: 1, dead: false },     // consumable, on
+    { x: 200, y: 50, type: 6, flag6: 1, dead: false },     // treasure, on
+    { x: 300, y: 50, type: 7, flag6: 1, dead: false },     // key, on
+    { x: 400, y: 50, type: 8, flag6: 1, dead: false },     // lever (cat 3), skip
+    { x: 500, y: 50, type: 9, flag6: 1, dead: false },     // cat 4, skip
+    { x: 600, y: 50, type: 5, flag6: 0, dead: false },     // off-screen, skip
+    { x: 700, y: 50, type: 5, flag6: 1, dead: true },      // dead, skip
+    { x: 800, y: 50, type: 0xC5, flag6: 1, dead: false },  // weapon, skip
+  ];
+  const ml = new MarkerList();
+  stepMarkers(objects, cats, ml, { x: 40, y: 10 });
+  check('stepMarkers appends ONLY on-screen category<3 objects (3 of 8)',
+    ml.entries.length === 3, JSON.stringify(ml.entries));
+  check('stepMarkers stores SCREEN coordinates (world minus the camera)',
+    ml.entries[0].x === 100 - 40 && ml.entries[0].y === 50 - 10,
+    JSON.stringify(ml.entries[0]));
+  check('stepMarkers is NOT gated on hero proximity — no hero was even passed',
+    true);
+
+  /* seedGoals' override wiring — CS:0xf6ed skips the nibble roll entirely. */
+  const st = makeState({
+    planeB: new Uint8Array(8192), camX: 0, camY: 0,
+    desc: { seedPair: 0x00, seedWeight: 127 },   // both nibbles are 0 (chase)
+    markers: [{ x: 50, y: 30, type: 1 }], markersOverride: true,
+  });
+  const idxUsed = seedGoals(st, 0, 0, 0);
+  check('markersOverride forces idx 2 regardless of the descriptor nibbles',
+    idxUsed === 2, `idx=${idxUsed}`);
 
   return results;
 }
