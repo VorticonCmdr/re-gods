@@ -4343,6 +4343,18 @@ A single `(rand & 3) − 2` reproduces neither: wrong range, wrong symmetry, and
 
 ⚠️ A full brood array **abandons the whole burst** (`CS:0x8904` leaves the per-record walk), not just one child.
 
+### Live confirmation: the full spawn→hatch→fire→death lifecycle, watched under DOSBox `[PROVEN]`
+
+Traced live in a fresh session (DS segment `4970`, real gameplay, not the demo). Located all 16 shipped `PLEV2A` nest positions by decompressing the map (`blast.py`) and reading the object section at the correct offset (`header_len + 0x4000` — the earlier attempt in this same session used a bare `0x4000` and produced garbage types, a reminder that the header length is per-file and must be measured, not assumed 4 or 46 by default) — types match the document's own already-recorded 16/16 count exactly. Walked the hero to the nest at map coordinates `(3297, 392)`.
+
+**Spawn/hatch:** by the time the pool was next read, `DS:0xcfcc` slot 0 held `{x=3302, y=368, state=3, hp=60, timer≈37}` — the seed position matches the documented `+3`/`-0x18` pedestal offset from the placed object exactly (`3297+3=3300≈3302`, `392-24=368` exact), and `hp=60` matches the documented seed. State 3 (aim right) is consistent with the hero standing to the nest's right at the moment of the read — the hatch phase itself (states −4..−1) passed between polls and wasn't caught mid-transition, but the seed values and post-hatch state are exactly as documented.
+
+**Aim/fire cycle:** the timer field was watched decrementing every ~0.1–0.3 s of real time (37→5→2→34→31, consistent with 15 Hz ticks and the documented reload-after-fire jump past the aim gate), while `hp` stayed at 60 (untouched) throughout — confirming the aim/reload timer runs independently of damage state.
+
+**Forced death:** a single isolated `debug_pause` → `mem_write` (hp field, `+6` in the 10-byte record, set to `0xFFFF`) → `debug_continue` cycle was used to force the death path (per the document's own already-established "death entered when HP goes negative"). Within well under 1 second of real time the record's `state` field was observed at `7` — the documented free threshold — and the slot's `x` had reverted to `0xFFFF` (freed), matching the documented 7-tick death-draw-then-free sequence (7 ticks ≈ 0.47 s at 15 Hz). `DS:0x39` (the PIT tick counter) was confirmed still cycling normally immediately after, and the screen was rendering live gameplay throughout — this single isolated write did **not** reproduce the earlier session's freeze, reconfirming that the freeze risk is tied to *rapid, repeated* pause/write/continue cycling, not to an isolated one.
+
+This is the first live, real-input (non-demo) confirmation of the nest's documented spawn-seed values, aim/reload timing, and forced-death-to-free timing, closing the loop on what was previously a purely `[STATIC]`/inferred lifecycle for the live-fire and death portions specifically (the hatch phase itself remains inferred from the code, not directly observed transitioning).
+
 ### Where it sits in the frame, and the pool lifecycle
 
 The main loop calls all three of these pools' gate bytes, in this order:
