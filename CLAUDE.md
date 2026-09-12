@@ -451,6 +451,27 @@ Three further derivations agree independently: state 26 dispatches input bit2 �
 
 **What the three remaps are for** `[PROVEN]`. Their inputs are exactly the phase-0 sprite of the three states the hero spends most of its time in: `52 = base(26)` idle → **25**, `54 = base(12)` fall right → **35**, `55 = base(11)` fall left → **38**. Base 52 exists to generate 51/52/53 for stop-left / standing / stop-right; the middle one is then redirected. **The hero's frames are not a contiguous block**, and a port that skips the remap draws the wrong sprite in three of the commonest states. All three redirects land on 32×48 frames.
 
+### ⚠️ Releasing a walk key does NOT normally enter idle — a shipped port bug, found live `[PROVEN]`
+
+An earlier revision of this document (and of `gods-web`) read the paragraph above as saying every release converges on state 26's single symmetric sprite 25 — "a direction-neutral standing pose." **That is true of state 26's own body, but wrong as an account of when the hero actually reaches state 26.** Reported live in the browser: the maintainer tested the real DOS game in DOSBox and found the hero "doesn't face the player but it doesn't turn away either — it keeps looking in the direction last given," directly contradicting the port's behaviour of always snapping to the back-view idle sprite on release.
+
+Fresh disassembly of the release path (`CS:0x5af2`–`0x5b35`, state 0's own exit, and its mirror `CS:0x5b08`–`0x5b33` for state 1) settles it:
+
+```
+5AF2  test byte [0x382],0x1 / jz 0x5b1e   ; UP held at the instant of release?
+5AF9    mov cl,0xff                        ; YES -> seed the idle-entry phase...
+5AFB    mov byte [0x377],0x1a(26)          ; ...and ONLY HERE does state become 26
+5B1E  cmp cl,0 / jnz 0x5b26                ; UP NOT held -> state 26 is NEVER entered
+5B26    mov cl,0x39(57)                     ; cl was nonzero -> lock a facing sentinel
+        [0x377] is NOT written -- state stays 0 (WALK_L)
+```
+
+and the mirror for state 1 (walk right): `CS:0x5B0F`/`0x5B11` (UP held → state 26, `cl:=1`) vs. `CS:0x5B2B`/`0x5B33` (UP not held → state stays 1, `cl:=0x2d`=45).
+
+So **state 26 (idle) is reached from a release only when UP happens to be held at that exact instant** — the far rarer case. In the ordinary case (UP not held), the state never changes: the hero freezes inside WALK_L or WALK_R forever, rendering `anim_base(0)+57=57` or `anim_base(1)+45=56` — genuine, *facing-specific* "stopped" sprites, not idle's back-view 25. Confirmed live under DOSBox (`DS:0x136A` this session): releasing RIGHT after auto-walking left `DS:0x377=1` (state stayed WALK_R) with `DS:0x36b=0x2D`, the exact `CS:0x5b33` constant; releasing LEFT similarly landed on `DS:0x377=0`, `DS:0x36b=0x39` — both screenshots show the hero visibly still facing the direction it had walked, matching the report exactly.
+
+`gods-web`'s `_ground()` previously forced `stateIndex = S.IDLE` unconditionally on every release. Fixed to gate on `input.up` exactly as above; three new assertions in `checks.js` cover both facings and the true UP-held idle-entry path. `node tools/verify-node.mjs`: 592/592 rows pass.
+
 ### States 4, 7, 18 and 19 `[PROVEN]`
 
 **18 and 19 are the crouch / inventory pair** — proven by the dispatcher gate rather than inferred. `CS:0x499A` special-cases exactly these two states, skipping the panel-retract call:
@@ -550,6 +571,24 @@ Applying the `+0x20` unconditionally — as the port did — takes an entry that
 
 **Fix** (`gods-web/src/game/player.js`): `climbableHere`/`climbableThreeBelow` now have column-returning variants (`climbableHereCol`, `climbableThreeBelowCol`) instead of a bare boolean, and a `ladderSnapX(x, col)` helper applies the `+0x20` only when `col === 1`. Both climb-entry call sites in `_ground` (`climbableThreeBelow` for descend-onto-ladder, `climbableHere` for climb-up) were switched to the column-aware versions. Three new assertions in `checks.js` cover it: entry from the ladder's own column no longer overshoots into an adjacent solid column and the hero actually climbs afterward, and entry approaching from the left (the genuine col+1 case) still correctly advances onto the ladder — a regression guard so the fix doesn't overcorrect the real forward-snap case. `node tools/verify-node.mjs`: 584/584 rows pass (up from 581); `node tools/lint-checks.mjs` passes.
 
+### The sideways ladder-dismount genuinely never tile-snaps — re-verified live, and it is not a bug `[PROVEN]`
+
+The maintainer separately reported "there is no clipping bug when dismounting a ladder and jumping onto a platform" — apparently contradicting the port's own dismount code (`this.x += dir*8; this.y -= 4;`, no `AND` anywhere). Re-disassembled all four dismount sites fresh (state 13/14 × left/right) and re-tested live under DOSBox:
+
+```
+57A6  mov byte [0x377],1  ; state:=WALK_RIGHT
+57AB  mov cl,6
+57AD  add word [0x17a],8  ; X: plain add, no snap
+57B2  sub word [0x17c],4  ; Y: plain sub, no snap
+57B7  jmp 0x5e9b
+```
+
+byte-identical (mirrored) at the other three sites. **There is no snap — the original really does produce a non-16-aligned Y**, confirmed live: mounting a ladder at `y=944` and dismounting after 3 climb steps landed at `y=934` (`938-4`, `934 mod 16 = 6`). The reason no clipping is ever *seen* is the self-correcting pipeline already documented elsewhere in this file: if the landing tile is open (the common case), the hero free-falls one 15 Hz tick and the fall-landing snap (`AND [0x17c],0xfff0`) corrects Y before it is ever rendered — confirmed live twice, both times settling back to a clean `y=944`. If the landing tile is instead solid, the walk state's own coarse ground check (`CS:0x593e`, floored row) accepts the unaligned Y with **no correction at all**, which would leave the hero's feet embedded up to 15 px — a real, still-unfalsified potential clipping case that neither this session nor the live test happened to hit (every tested dismount landed over open space).
+
+**So `gods-web`'s existing dismount code (no snap) already matches the original exactly — no fix needed.** `_ground`'s `solidThreeBelow`-gated fall entry and `_fall`'s own `y &= 0xfff0` landing snap already reproduce the same self-correction the original relies on.
+
+**A separate, genuine divergence was found in the same pass and left unfixed.** The original seeds a high initial animation phase on *every* ladder-mount transition — `CL:=0x1a` (idle-UP-mount, `CS:0x4a45`; walk-UP-climb-mount, newly found at `CS:0x5a4b-0x5a50`; walk-descend-left-mount, newly found at `CS:0x59ba-0x59bf`) or `CL:=0x1c` (walk-descend-right-mount, newly found at `CS:0x5c02-0x5c07` — asymmetric against the left-approach mirror) — which routes the very next tick into a high-`cl` continuation that performs **one automatic `CLIMB_STEP`-sized Y move with zero player input** before real input is ever read. Confirmed live: an idle-UP mount at `y=944` read back as `y=938` one tick later with no key held. `gods-web`'s `_ground` sets `this.phase = 0` on all four of these same transitions and applies no compensating step, so the port's climb sequence starts from a different residue class than the original's from the very first tick — which could itself explain some *other* future clipping report, since it shifts every subsequent climb-phase alignment by one step. `UNKNOWN_ladder_mount_free_tick` — not fixed this pass: the port's `_climb` ping-pong logic is built around a `0..3`-range `cl`, not the original's `cl>=0x14` redirect mechanism, so reusing the normal per-tick path with a seeded high phase would need its own verification against the port's tick/tock architecture before landing a fix, and the asymmetric `0x1a`-vs-`0x1c` seed on the two descend-approach directions was not itself traced to a confirmed differing effect.
+
 ### `UNKNOWN_ladder_anim_phase` — CLOSED: `cl=1` is left-foot-forward, `cl=3` is right-foot-forward `[PROVEN]`
 
 The residual (named in `gods-web/README.md`'s own status table) was purely which of the climb cycle's four `cl` values (sprites `anim_base(25)+cl` = 25/26/27/28) render which foot forward — not a movement-direction question, since the DOWN-only climb block applies the same `add [0x17c],6` regardless of phase (see above).
@@ -615,6 +654,37 @@ The two leading frames are the crouch, which independently matches the arc table
 ```
 
 Exactly symmetric — 4 ticks of wind-up, 32 px rise, apex, 32 px descent, then state `0x0b` (fall). **A port must copy this table; simulating it with gravity will not match.** Air control is a budget rather than a lockout: the rise is fully committed, and the fall allows 3 steering steps (12 px) before `DS:0x345` caps out.
+
+### The jump has a ceiling-ejection check — `CS:0xE4E`, previously undocumented `[PROVEN]`
+
+Found live: the maintainer tested the real DOS game and reported "when standing below a platform and jumping the character doesn't clip through the platform either." `gods-web`'s `_jump()` had no ceiling test at all — it applied the delta table unconditionally every tick — so the port's hero could rise straight through a low platform's underside. This document's own jump-animation prose above never mentioned a ceiling test either; it turns out to exist, shared by both jump handlers, and was simply never noticed.
+
+```
+4E4E  call 0x1000:496a         ; rebuild the plane-B cursor from the CURRENT (post-delta) X/Y
+4E5x  cmp byte [si],1 / jz hit ; solid at the hero's own cell?
+      (X&0x1f)>=8 -> also test [si+1]     ; the same straddle rule solidHere() already uses
+```
+
+Called **unconditionally every tick**, from both `CS:0x4F89` (state 8, jump left) and `CS:0x5188` (state 9, jump right), immediately after that tick's Y delta is applied — it is a penetration-ejection check, not a rise-only look-ahead, so it fires just as readily on the arc's downward half. On a hit:
+
+```
+4F8C  and word [0x17c],0xfff0   ; floor to the tile row the hero is now inside...
+4F92  add word [0x17c],0x10     ; ...then push ONE FULL ROW further down (the AND
+                                 ;   alone would move the hero UP, into the ceiling)
+4F97  mov byte [0x377],0xb/0xc  ; force FALL_LEFT/FALL_RIGHT
+4F9C  mov word [0x176],0        ; fall-damage zeroed here too (NOT just fallV/airSteps —
+                                 ; a port routing this through a generic "enter fall"
+                                 ; helper that omits this reset diverges)
+      mov byte [0x345],0 ; mov word [0x1b2],0 ; xor cl,cl
+      jmp 0x5e9b               ; skips the cursor advance AND the fire-guard this tick
+```
+
+⚠️ **The X-step runs BEFORE the Y delta, not after.** `CS:0x4E94`–`0x4EB9` (the wall-probe/X-step) executes using the hero's **pre-delta** Y — before the delta table at `CS:0x4F6F` is even reached. A port that applies the Y delta first and then walks tests the wrong row near a 16px boundary (up to 12px off during a double jump). `solidHere()` in `gods-web/src/game/player.js` was already byte-identical to `CS:0x4E4E`'s own straddle logic; it just had no call site in `_jump()`. Fixed: `_jump()` now walks before applying the delta, then calls `solidHere` after, matching the response above exactly. Confirmed live: an unobstructed jump still rises the documented symmetric 32 px; a jump under an injected low ceiling rises only as far as the tile boundary and bounces cleanly into a fall, never showing the hero's sprite inside the solid tile. `node tools/verify-node.mjs`: assertions added covering both the unobstructed arc and the ceiling-bounce case.
+
+Three adjacent findings from the same pass, **not yet ported** (real gaps, flagged for future work rather than fixed here):
+1. Both jump handlers also run a **mid-arc early-landing test** (`CALL 0x1000:4e2d`, "solid 3 below") at cursor thresholds that are asymmetric between the two handlers (state 8: `>=0x16` then `>=0x12`; state 9: `>=0x16` twice) — a genuine, confirmed asymmetry that must be copied verbatim if ported, not normalized to one threshold.
+2. Holding UP or DOWN while airborne, tile-aligned, over a climbable cell drops the hero straight into climb state 13/14 mid-jump (`Y &= 0xfff8`, a multiple of **8**, not 16) — refuting this project's own earlier claim that climb is only ever entered from the ground/idle handlers.
+3. `_fireTick`'s jump-family branch (states 20/21) needs the identical ceiling check (added — see the fix in `player.js`), but faithfully matching the original also requires reordering `_fireTick` so movement runs before the emit decision, since a ceiling-hitting tick in the original never emits a shot; that reorder was **not** made this pass, to avoid an unverified restructuring beyond the reported bug's scope.
 
 **Ladder snap** rounds to the **tile origin**, not the tile centre: `add word [0x17a],0x20` / `and word [0x17a],0xFFE0` — the `AND` can only yield a multiple of 32.
 
