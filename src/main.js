@@ -49,6 +49,8 @@ import { Statues } from './game/statue.js';
 import { Ce64Creatures, Ce64Spits, OBJECT_TYPE as CE64_OBJECT_TYPE } from './game/ce64.js';
 import { EnemyShots } from './game/enemy-shots.js';
 import { LineHazards } from './game/line-hazard.js';
+import { SelectorTwoSpawns, parseClasses as parseSelectorTwoClasses } from './game/selector2.js';
+import { PatGroups, parsePatDirectory, parsePatSpawnDescriptor } from './game/pat-objects.js';
 import { MarkerList, stepMarkers } from './game/markers.js';
 import { Debris } from './game/debris.js';
 import { Arsenal, spawnableWeapons } from './game/hero-fire.js';
@@ -143,6 +145,33 @@ async function loadLevel(key) {
   const objValues = parseObjectRecords(objRaw).map((r) => r.value);
   const groupsB = parseGroupsB(dclDecompress(pfRaw).data);
   const groupsA = parseGroupsA(dclDecompress(pfRaw).data);
+  /* PALFILS +0x0718 — selector-2's own stationary-turret class descriptors
+   * (game/selector2.js). Same window System-B's own per-world class table
+   * loader (CS:0xad62) is unrelated to; this one is level-authored data. */
+  const groupsSel2 = parseSelectorTwoClasses(dclDecompress(pfRaw).data);
+  /* PALFILS +0x0000 — selector-1's own PGOD0x.PAT spawn descriptors
+   * (game/pat-objects.js), 100 records of 8 bytes. Parsed unconditionally
+   * (the window exists in every PALFILS file); whether any of the 100
+   * indices is ever actually reachable from a shipped trigger on this
+   * particular level is not filtered here, matching how groupsA/groupsB/
+   * groupsSel2 are also parsed in full above. */
+  const patDescriptors = Array.from({ length: 100 },
+    (_, i) => parsePatSpawnDescriptor(palfilsData, i));
+  /* CS:0x3855 — `PGOD0<world>.PAT` loads ONLY on sublevel 'a'
+   * (`cmp byte [0x43],0 / jnz`). `key[1]` is 'A' or 'B' (palfilsNameFor's
+   * own convention), so this mirrors that gate exactly. A fetch failure
+   * (e.g. the asset genuinely missing) leaves both `null` rather than
+   * throwing — the level still loads, just with zero PAT objects. */
+  let patDirectory = null, patBlobBytes = null;
+  if (key[1] === 'A') {
+    try {
+      const patRaw = await fetchRaw(`game/PGOD0${key[0]}.PAT`);
+      patBlobBytes = dclDecompress(patRaw).data;
+      patDirectory = parsePatDirectory(patBlobBytes);
+    } catch (e) {
+      console.warn(`PGOD0${key[0]}.PAT failed to load — PAT objects inert on this level`, e);
+    }
+  }
   const drawObjects = sortForDraw(map.objects.filter((o) => !isDeadType(o.type)), cats);
 
   /* PWEAPONS is per-world, and Power (+0x06) genuinely differs between them —
@@ -153,7 +182,8 @@ async function loadLevel(key) {
     dclDecompress(await fetchRaw(`game/PWEAPONS.00${key[0]}`)).data);
 
   return { map, sheet, palette, tiles, tileCount: count, palfils, palfilsRaw: palfilsData, cats, drawObjects,
-           objValues, groupsB, groupsA, weapons, world: +key[0] };
+           objValues, groupsB, groupsA, groupsSel2, patDescriptors, patDirectory, patBlobBytes,
+           weapons, world: +key[0] };
 }
 
 /* THE HERO'S SPRITES.
@@ -388,7 +418,8 @@ async function main() {
   let opened = 0, lootLanded = 0, sbStamps = 0, lastBurstFx = null;
   let lastBlockFx = [];
   let lastNestFx = [], lastShotsFx = null, lastDebrisFx = [], lastLineHazardFx = null;
-  let lastBroodFx = [], lastStatueFx = [], lastCe64Fx = [], lastSpitFx = [];
+  let lastBroodFx = [], lastStatueFx = [], lastCe64Fx = [], lastSpitFx = [], lastSelectorTwoFx = [];
+  let lastPatFx = [];
   /* ⚠️ DEV SEED, exactly like the weapon picker above. The original puts a
    * "chest key" in DS:0x17e only through CROUCH + FIRE (CS:0x6069), which
    * this port does not implement — so with a truthful empty inventory the
@@ -456,6 +487,18 @@ async function main() {
   let lineHazards = new LineHazards();
   let firedHazardsByA = 0;
   let firedHazardsByB = 0;
+  /* CS:0xAD88/0xAD0D — the selector-2 stationary shooting turrets
+   * (game/selector2.js). Reuses the SAME `shots`/`lineHazards` instances
+   * every other emitter in this file shares — a turret's shot or hazard
+   * fragment lives in the identical pool as the hero's projectiles and
+   * enemy-shot family, exactly like the original's own shared arrays. */
+  let selectorTwo = new SelectorTwoSpawns();
+  /* CS:0xB908 — the selector-1 PGOD0x.PAT scripted objects
+   * (game/pat-objects.js). `patDirectory`/`patBlobBytes` are `null` outside
+   * sublevel 'a' (CS:0x3855's own load gate) or if the file failed to load,
+   * in which case this stays permanently empty rather than throwing. */
+  let patGroups = new PatGroups(level.patDirectory || []);
+  patGroups.blobBytes = level.patBlobBytes || null;
   /* CS:0x0172 `not byte [0x36c]` — the every-other-frame toggle the nest's
    * hatch animation reads (DS:0x36c). Not modelled elsewhere in this port
    * yet, so it is owned here. */
@@ -476,6 +519,16 @@ async function main() {
       const d = level.groupsA[param];
       if (!d || !d.live) return;
       slotsA.activate(d);
+    };
+    events.onSpawn2 = (param) => {
+      const d = level.groupsSel2[param];
+      if (!d || !d.live) return;
+      selectorTwo.spawn(d, level.world);
+    };
+    events.onSpawn1 = (param) => {
+      const d = level.patDescriptors && level.patDescriptors[param];
+      if (!d) return;
+      patGroups.activate(d, level.world);
     };
   };
   wireSpawn();
@@ -574,6 +627,9 @@ async function main() {
       markerList = new MarkerList();                    // CS:0x1437
       brood = new Brood();
       ce64Creatures = new Ce64Creatures(rng); ce64Spits = new Ce64Spits(rng);
+      selectorTwo = new SelectorTwoSpawns();
+      patGroups = new PatGroups(level.patDirectory || []);
+      patGroups.blobBytes = level.patBlobBytes || null;
       debris = new Debris();
       health = new Health();
       /* A real level change is not a game restart, so CS:0x914c does NOT run
@@ -891,6 +947,34 @@ async function main() {
         camNow, { x: player.x, y: player.y, state: player.stateIndex }, fx.freeze,
         health, grid, decodeTag, ce64Opts).drawn;
 
+      /* CS:0xAD88/0xAD0D — the selector-2 stationary shooting turrets
+       * (game/selector2.js). `fire`/`spawnHazard` route into the SAME
+       * `shots`/`lineHazards` pools every other emitter in this file
+       * shares. `spawnHazard`'s target is deliberately the bare, unjittered
+       * `hero.x+8, hero.y+6` this system's own CS:0xDBC6 computes — NOT
+       * `lineHazards.spawnJittered`'s own jittered target — see
+       * selector2.js's own `stepHandlerB` header for why. */
+      lastSelectorTwoFx = selectorTwo.step(
+        camNow, { x: player.x, y: player.y, state: player.stateIndex }, fx.freeze,
+        health, grid, decodeTag, tock,
+        (wx, wy, vx, cam) => shots.fire(wx, wy, vx, cam),
+        (wx, wy, n, cam) => lineHazards.spawn(wx, wy, player.x + 8, player.y + 6, n),
+        { invuln: fx.invuln > 0, score, debris }).drawn;
+
+      /* CS:0xB987 — the PGOD0x.PAT scripted objects (game/pat-objects.js).
+       * Reuses the SAME `shots`/`lineHazards` pools every other emitter in
+       * this file shares. CS:0xBCCF's own contact/damage is now wired too
+       * (attackHero, then — if that missed — creatureScansGrid, the SAME
+       * canonical shape frame.js's stepCreatureDamage and this file's own
+       * ce64Creatures.step() call already use), so a PAT object can now be
+       * killed by the hero's touch or by a weapon hit, and awards score on
+       * death via pat-objects.js's own `scoreForKey`. */
+      lastPatFx = patGroups.step(
+        camNow, fx.freeze, shots, lineHazards,
+        { x: player.x, y: player.y, state: player.stateIndex }, () => rng.next(), tock, null,
+        health, grid, decodeTag,
+        { invuln: fx.invuln > 0, difficulty, rng: () => rng.next(), debris, score });
+
       runSpawns();
       /* THE HUNT. CS:0xf11f/0xf1e5 run the pathfinder only from the two walk
        * modes, only on a tile crossing, and only when standing on ground —
@@ -1154,6 +1238,25 @@ async function main() {
         else { outOfRange++; renderer.strokeRect(d.x, d.y, 24, 24, 15); }
       }
 
+      /* THE SELECTOR-2 STATIONARY TURRETS — CS:0xAD88, sprites off the
+       * per-world class table's own spriteBase (worlds 1/2's ping-pong
+       * table or world 4's hardcoded base) plus the shared 0x6c(108)-base
+       * death burst. */
+      for (const d of lastSelectorTwoFx) {
+        const s2f = hero && hero.frames[d.sprite];
+        if (s2f) renderer.blitSprite(s2f, d.x, d.y);
+        else { outOfRange++; renderer.strokeRect(d.x, d.y, 24, 24, 15); }
+      }
+
+      /* PGOD0x.PAT SCRIPTED OBJECTS — CS:0xB987, sprite a fixed spriteBase
+       * per class (UNKNOWN_pat_animation_frame — the per-tick walk-cycle
+       * offset is not ported, see pat-objects.js's own header). */
+      for (const d of lastPatFx) {
+        const pf = hero && hero.frames[d.sprite];
+        if (pf) renderer.blitSprite(pf, d.x, d.y);
+        else { outOfRange++; renderer.strokeRect(d.x, d.y, 32, 32, 15); }
+      }
+
       /* ENEMY SHOTS — CS:0x1FE7/0x2039, the shared mechanism by which any
        * shooting enemy fires (the nest, and now System A's stage 6). */
       if (lastShotsFx) for (const d of lastShotsFx) {
@@ -1226,7 +1329,8 @@ async function main() {
         ` · ${enemies.filter((e) => e.alive).length}/${enemies.length} enemies` +
         ` · ${enemiesA.filter((e) => e.alive).length}/${enemiesA.length} sysA` +
         ` · ${nests.live} nests · ${brood.live} brood · ${statues.live} statues` +
-        ` · ${ce64Creatures.live} ce64 · ${ce64Spits.count} spits` +
+        ` · ${ce64Creatures.live} ce64 · ${ce64Spits.count} spits · ${selectorTwo.live} sel2` +
+        ` · ${patGroups.live} pat` +
         ` · ${shots.live} shots · ${lineHazards.live} hazards · ${debris.live} debris` +
         ` · hp ${health.bar}/${health.target > HEALTH_MAX ? HEALTH_MAX : health.target}`        + (health.dead ? ' DEAD' : '') +
         ` · money ${purse.total} · score ${score.value}` +

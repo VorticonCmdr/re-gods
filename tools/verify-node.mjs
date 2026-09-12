@@ -214,6 +214,27 @@ for (const r of checkCe64()) {
   console.log(line(r));
 }
 
+console.log('\n  The selector-2 stationary shooting turrets (CS:0xAD88/0xAD0D/0xB60E/0xB5E9/0xB670):');
+const { checkSelectorTwo } = await import('../src/verify/checks.js');
+for (const r of checkSelectorTwo()) {
+  if (!r.pass && !r.note) bad++;
+  console.log(line(r));
+}
+
+console.log('\n  The "falling rock" hazard pools (CS:0xB1C2/0xB3CE/0xB4E7, fed by B144/B2C7 — NOT dead):');
+const { checkRockfall } = await import('../src/verify/checks.js');
+for (const r of checkRockfall()) {
+  if (!r.pass && !r.note) bad++;
+  console.log(line(r));
+}
+
+console.log('\n  PGOD0x.PAT scripted objects and their shooting (CS:0xB908/0xB987/0xBC4B/0xBDDB):');
+const { checkPatObjects } = await import('../src/verify/checks.js');
+for (const r of await checkPatObjects(fetchRaw)) {
+  if (!r.pass && !r.note) bad++;
+  console.log(line(r));
+}
+
 console.log('\n  System-A spawn chain and strategy census:');
 const { checkSpawnA } = await import('../src/verify/checks.js');
 for (const r of await checkSpawnA(fetchRaw)) {

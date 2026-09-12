@@ -65,6 +65,14 @@ export const RUNTIME_SLOTS = 10;    // SS:0x36b4, stride 0x12
 export const MAX_ENTITIES  = 10;    // per group; the original never checks this
 export const SELECTOR_SPAWN_B = 4;
 export const SELECTOR_SPAWN_A = 5;
+/** CS:0x603A's own 1-based selector table, entry 2: `0xad06` -> the
+ *  selector-2 stationary-turret allocator (game/selector2.js). */
+export const SELECTOR_SPAWN_2 = 2;
+/** CS:0x603A's own 1-based selector table, entry 1: `0xb908` -> the
+ *  selector-1 PGOD0x.PAT scripted-object allocator (game/pat-objects.js).
+ *  Same consume-before-lookup shape as 2/4/5 (CS:0xB908's own `mov
+ *  word[si],0xffff` runs before it ever searches for a free runtime slot). */
+export const SELECTOR_SPAWN_1 = 1;
 
 /** Parse the 50 System-A group descriptors out of a decompressed PALFILS.
  *  Field positions per entity-a.js's header table and CLAUDE.md's System-A
@@ -157,19 +165,57 @@ export function parseGroupsB(buf) {
  * saw "6 apart" and flagged a contradiction; that came from pooling the
  * System-A and System-B tables. System A's bases really are 6-8 apart, which
  * is consistent with it having a different animation model entirely.) */
+/*
+ * `handlerA`/`handlerB` fields, added by a later session: verified fresh
+ * against a direct `read_memory` of all four `DS:0xdf80`-pointed per-world
+ * class tables (12 bytes/record, `{spriteBase, one, handlerA, w, h,
+ * handlerB}`, native little-endian words) — NOT decompiled, and cross-checked
+ * class-by-class against the shipped `PALFILS +0x0718` classIndex census
+ * (world1 dispatches {0,1,2,3,5}, world2 {0,1,2,3}, world3 {3,4}, world4
+ * {1,2,3,4,5} — every one of these lands on a real, non-`0xFFFF` record).
+ * `handlerA` values name a normalised family, not a literal address, since
+ * several distinct stub addresses (`B70E/B718/B722/B704/B71D/B6FF/B709/
+ * B6FA/B6F5/B83D`) all jump into ONE shared 32x32 body (`CS:0xB725`) that
+ * differs only in its own hardcoded sprite base (already captured in `base`
+ * here) — see `selector2.js`'s `handlerA_32x32` for that shared body.
+ * `handlerB` similarly names the emitter family: `'b670'` (`CS:0xB670`,
+ * `stepHandlerB`), `'b03c'` (`CS:0xB03C`/`0xB017`, `stepHandlerB03C` — the
+ * MAJORITY family, previously mis-documented as dead code because
+ * `get_xrefs_to` cannot see a reference stored as this table's own data
+ * field), `'b290'` (world 2's own rock-drop trigger, `CS:0xB290`) and
+ * `'b2f3'` (world 3's own rock-drop trigger, `CS:0xB2F3`).
+ */
 export const CLASS_TABLES_B = {
-  1: [{ base: 462, w: 32, h: 32 }, { base: 480, w: 32, h: 32 }, { base: 498, w: 32, h: 32 },
-      { base: 498, w: 32, h: 32 }, { base: 498, w: 32, h: 32 }, { base: 532, w: 24, h: 24 },
-      { base: 532, w: 24, h: 24 }, { base: 532, w: 24, h: 24 }],
-  2: [{ base: 450, w: 32, h: 32 }, { base: 468, w: 32, h: 32 }, { base: 521, w: 32, h: 32 },
-      { base: 525, w: 24, h: 24 }, { base: 486, w: 32, h: 32 }, { base: 521, w: 24, h: 24 },
-      { base: 521, w: 24, h: 24 }, { base: 521, w: 24, h: 24 }],
-  3: [{ base: 450, w: 32, h: 32 }, { base: 450, w: 32, h: 32 }, { base: 468, w: 32, h: 32 },
-      { base: 516, w: 24, h: 24 }, { base: 450, w: 32, h: 32 }, { base: 450, w: 32, h: 32 },
-      { base: 450, w: 32, h: 32 }],
-  4: [{ base: 450, w: 32, h: 32 }, { base: 486, w: 32, h: 32 }, { base: 468, w: 32, h: 32 },
-      { base: 547, w: 24, h: 24 }, { base: 486, w: 32, h: 32 }, { base: 486, w: 32, h: 32 },
-      { base: 486, w: 32, h: 32 }],
+  1: [{ base: 462, w: 32, h: 32, handlerA: '32x32', handlerB: 'b03c' },
+      { base: 480, w: 32, h: 32, handlerA: '32x32', handlerB: 'b03c' },
+      { base: 498, w: 32, h: 32, handlerA: '32x32', handlerB: 'b03c' },
+      { base: 498, w: 32, h: 32, handlerA: '32x32', handlerB: 'b03c' },
+      { base: 498, w: 32, h: 32, handlerA: '32x32', handlerB: 'b03c' },
+      { base: 532, w: 24, h: 24, handlerA: 'b60e', handlerB: 'b670' },
+      { base: 532, w: 24, h: 24, handlerA: 'b60e', handlerB: 'b670' },
+      { base: 532, w: 24, h: 24, handlerA: 'b60e', handlerB: 'b670' }],
+  2: [{ base: 450, w: 32, h: 32, handlerA: '32x32', handlerB: 'b03c' },
+      { base: 468, w: 32, h: 32, handlerA: '32x32', handlerB: 'b03c' },
+      { base: 521, w: 32, h: 32, handlerA: 'b144', handlerB: 'b290' },
+      { base: 525, w: 24, h: 24, handlerA: 'b60e', handlerB: 'b670' },
+      { base: 486, w: 32, h: 32, handlerA: '32x32', handlerB: 'b03c' },
+      { base: 521, w: 24, h: 24, handlerA: 'b144', handlerB: 'b290' },
+      { base: 521, w: 24, h: 24, handlerA: 'b144', handlerB: 'b290' },
+      { base: 521, w: 24, h: 24, handlerA: 'b144', handlerB: 'b290' }],
+  3: [{ base: 450, w: 32, h: 32, handlerA: '32x32', handlerB: 'b03c' },
+      { base: 450, w: 32, h: 32, handlerA: '32x32', handlerB: 'b03c' },
+      { base: 468, w: 32, h: 32, handlerA: '32x32', handlerB: 'b03c' },
+      { base: 516, w: 24, h: 24, handlerA: 'b2c7', handlerB: 'b2f3' },
+      { base: 450, w: 32, h: 32, handlerA: '32x32', handlerB: 'b03c' },
+      { base: 450, w: 32, h: 32, handlerA: '32x32', handlerB: 'b03c' },
+      { base: 450, w: 32, h: 32, handlerA: '32x32', handlerB: 'b03c' }],
+  4: [{ base: 450, w: 32, h: 32, handlerA: '32x32', handlerB: 'b03c' },
+      { base: 486, w: 32, h: 32, handlerA: '32x32', handlerB: 'b03c' },
+      { base: 468, w: 32, h: 32, handlerA: '32x32', handlerB: 'b03c' },
+      { base: 547, w: 24, h: 24, handlerA: 'b5e9', handlerB: 'b670' },
+      { base: 486, w: 32, h: 32, handlerA: '32x32', handlerB: 'b03c' },
+      { base: 486, w: 32, h: 32, handlerA: '32x32', handlerB: 'b03c' },
+      { base: 486, w: 32, h: 32, handlerA: '32x32', handlerB: 'b03c' }],
 };
 
 /* The per-world creature atlases start at descriptor #450 — `always` (170) +

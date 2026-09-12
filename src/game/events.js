@@ -51,7 +51,7 @@
 
 import { parseAllTriggers, evalTrigger, verbOf, isLive } from './trigger.js';
 import { fireTrigger } from './trigger-actions.js';
-import { SELECTOR_SPAWN_B, SELECTOR_SPAWN_A } from './spawn.js';
+import { SELECTOR_SPAWN_B, SELECTOR_SPAWN_A, SELECTOR_SPAWN_2, SELECTOR_SPAWN_1 } from './spawn.js';
 
 /** ACT5 chain limit — a port-only guard; see dispatchEvent(). */
 export const ACT5_MAX_DEPTH = 16;
@@ -224,6 +224,23 @@ export class EventRunner {
     if (ev.selector === SELECTOR_SPAWN_A) {
       this.consumedEvents.add(id);
       if (this.onSpawnA) this.onSpawnA(ev.param);
+      return null;
+    }
+
+    /* Selector 2 — the stationary-turret allocator (CS:0xad06 -> CS:0xAD0D),
+     * same consume-before-lookup shape as 4/5 (CS:0xAD0D's own caller
+     * consumes the event before ever touching the 10-slot runtime pool). */
+    if (ev.selector === SELECTOR_SPAWN_2) {
+      this.consumedEvents.add(id);
+      if (this.onSpawn2) this.onSpawn2(ev.param);
+      return null;
+    }
+
+    /* Selector 1 — the PGOD0x.PAT scripted-object allocator (CS:0xb908,
+     * game/pat-objects.js), same consume-before-lookup shape as 2/4/5. */
+    if (ev.selector === SELECTOR_SPAWN_1) {
+      this.consumedEvents.add(id);
+      if (this.onSpawn1) this.onSpawn1(ev.param);
       return null;
     }
 

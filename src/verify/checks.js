@@ -31,6 +31,11 @@ import { EntityA, CLASS_TABLES_A, spriteForEntityA, rollStrategy,
          ZONES, ZONE_SCRATCH, currentZone, strategy1, strategy2 } from '../game/entity-a.js';
 import { SELECTOR_TABLE, SELECTOR_TRIGGER, EVENT_TABLE_OFF, EVENT_COUNT,
          palfilsNameFor, parsePalfils, EventRunner } from '../game/events.js';
+import { GROUP_SLOTS as PAT_GROUP_SLOTS, SUBRECORDS_PER_GROUP, ABSOLUTE_TAG,
+         HOLD_BOX, reloadTicks, decodeDelta, parsePatDirectory,
+         parsePatSpawnDescriptor, CLASS_TABLE_A, PatGroups,
+         DEATH_SPRITE_BASE as PAT_DEATH_SPRITE_BASE, DEATH_RETIRE_AT,
+         scoreForKey } from '../game/pat-objects.js';
 import { spriteForType, parseObjectCategories, isDeadType, isUnstamped,
          OBJECT_SPRITE_BASE, STAMPED_TYPES } from '../game/objects.js';
 import { VERDICT, REACHABLE_VERDICTS, VERDICT_NONE, verdictAction, applyVerdict, search, searchable,
@@ -87,6 +92,12 @@ import { LineHazards, jitterTarget, isCrouching as lhIsCrouching,
          PROBE_BIAS, WALL_DEBRIS_BIAS, HERO_HIT_DEBRIS_BIAS,
          CULL as LH_CULL, SPRITE_BASE as LH_SPRITE_BASE, MUZZLE_X_OFFSET,
          TARGET_JITTER_MASK, TARGET_JITTER_BIAS } from '../game/line-hazard.js';
+import { SelectorTwoSpawns, parseClasses as parseSelectorTwoClasses,
+         culled as selectorTwoCulled, scoreForState0, stepHandlerB as selectorTwoHandlerB,
+         stepHandlerB03C as selectorTwoHandlerB03C,
+         DEATH_FRAMES as SEL2_DEATH_FRAMES,
+         DEATH_SPRITE_BASE as SEL2_DEATH_SPRITE_BASE } from '../game/selector2.js';
+import { RockSettlePool, RockBurstPool } from '../game/rockfall.js';
 import { HERO_SHOTS_AT, ENEMY_SHOTS_AT } from '../game/frame.js';
 import { Nests, aimAt, broodCount, signed16,
          OBJECT_TYPE as NEST_TYPE, OBJECT_SPRITE as NEST_OBJ_SPRITE,
@@ -8233,6 +8244,1017 @@ export function checkCe64() {
     check(`...and freed on the SAME tick it draws the final sprite `
       + `(${SPIT_DEATH_SPRITE_BASE + SPIT_DEATH_FRAMES - 1}), not the tick after`,
       spits.count === 0);
+  }
+
+  return results;
+}
+
+/**
+ * The selector-2 stationary shooting turrets (CS:0xAD88/0xAD0D, game/
+ * selector2.js) — spawn/materialise, fire-rate gating, both handlerA idle-
+ * animation gates, both muzzle-offset families (ordinary shot and the
+ * Bresenham line-hazard divert), the cull dispatch, contact/damage/score,
+ * the death fade, and the group-elimination reward.
+ */
+export function checkSelectorTwo() {
+  const { results, check } = makeChecker();
+  const RUNTIME_SLOTS_SEL2 = 10;   // DS:0xaec0, 10 x 0x20 — selector2.js's own RUNTIME_SLOTS
+
+  /* (a) parseClasses — field-by-field, against a synthetic 16-byte record
+   * built at PALFILS +0x0718's own offset so a wrong CLASS_OFF would fail
+   * this test even with every field otherwise correct. */
+  {
+    const buf = new Uint8Array(0x0718 + 16);
+    const o = 0x0718;
+    buf[o + 0x0] = 0x01; buf[o + 0x1] = 0x40;   // spawnX = 0x0140
+    buf[o + 0x2] = 0x00; buf[o + 0x3] = 0x50;   // spawnY = 0x0050
+    buf[o + 0x4] = 0x00;                         // entityFacing = 0
+    buf[o + 0x5] = 0x03;                         // drawStyle = 3
+    buf[o + 0x6] = 0x00; buf[o + 0x7] = 0x0a;    // staggerStep = 10
+    buf[o + 0x8] = 0x02;                         // entityCount = 2
+    buf[o + 0x9] = 0x05;                         // entityState0 = 5
+    buf[o + 0xa] = 0x00; buf[o + 0xb] = 0x05;    // classIndex = 5
+    buf[o + 0xc] = 0x00;                         // facingSelect = 0
+    buf[o + 0xd] = 0x08;                         // reloadByte = 8
+    buf[o + 0xe] = 0x2d;                         // rewardItemId = 45
+    const c = parseSelectorTwoClasses(buf)[0];
+    check('CS:0xAD0D-0xAD61: every field lands at its own documented offset',
+      c.spawnX === 0x140 && c.spawnY === 0x50 && c.entityFacing === 0 &&
+      c.drawStyle === 3 && c.staggerStep === 10 && c.entityCount === 2 &&
+      c.entityState0 === 5 && c.classIndex === 5 && c.facingSelect === 0 &&
+      c.reloadByte === 8 && c.rewardItemId === 0x2d && c.live === true,
+      JSON.stringify(c));
+
+    const dead = new Uint8Array(0x0718 + 16);
+    check('entityCount===0 -> live===false, the materialise-loop-bound convention',
+      parseSelectorTwoClasses(dead)[0].live === false);
+
+    /* entityFacing is SIGN-EXTENDED (CS:0xADE1 `cbw`); drawStyle/entityCount/
+     * entityState0/facingSelect/reloadByte/rewardItemId are all ZERO-
+     * extended raw bytes (no cbw anywhere in their own copy). */
+    const neg = new Uint8Array(0x0718 + 16);
+    neg[0x0718 + 0x4] = 0xff;
+    check('entityFacing 0xFF sign-extends to -1, not 255',
+      parseSelectorTwoClasses(neg)[0].entityFacing === -1);
+  }
+
+  /* (b) The 6-entry cull table, SS:0x3586 — only ONE edge per style, not a
+   * 4-way box; 0/1 never cull at all. */
+  {
+    check('style 0/1 never cull, at any coordinate',
+      selectorTwoCulled(0, -99999, -99999) === false &&
+      selectorTwoCulled(1, 99999, 99999) === false);
+    check('style 2 (left, CS:0xAF27): cull strictly below -0x70, not at it',
+      selectorTwoCulled(2, -0x71, 0) === true && selectorTwoCulled(2, -0x70, 0) === false);
+    check('style 3 (right, CS:0xAF3A): cull strictly above 0x190',
+      selectorTwoCulled(3, 0x191, 0) === true && selectorTwoCulled(3, 0x190, 0) === false);
+    check('style 4 (top, CS:0xAF4D): cull strictly below -0x48',
+      selectorTwoCulled(4, 0, -0x49) === true && selectorTwoCulled(4, 0, -0x48) === false);
+    check('style 5 (bottom, CS:0xAF60): cull strictly above 0xe8',
+      selectorTwoCulled(5, 0, 0xe9) === true && selectorTwoCulled(5, 0, 0xe8) === false);
+    /* Each style tests exactly ONE edge — a right-cull style must NOT also
+     * cull on the left, unlike a real 4-way clip box. */
+    check('style 2 (left-only) does not cull a far-right coordinate',
+      selectorTwoCulled(2, 99999, 0) === false);
+  }
+
+  /* (c) scoreForState0 — CS:0xAF7D's common-case closed form. */
+  {
+    check('scoreForState0(0) = ((0>>1)+1)*100 = 100', scoreForState0(0) === 100);
+    check('scoreForState0(5) = ((5>>1)+1)*100 = 300', scoreForState0(5) === 300);
+    check('scoreForState0(9) = ((9>>1)+1)*100 = 500', scoreForState0(9) === 500);
+  }
+
+  /* (d) Per-CLASS handler resolution off CLASS_TABLES_B — corrects the
+   * earlier per-WORLD `HANDLER_FOR` model. Six distinct families across the
+   * four worlds' live-dispatched classes (world1 uses idx{0,1,2,3,5},
+   * world2 idx{0,1,2,3}, world3 idx{3,4}, world4 idx{1,2,3,4,5}). */
+  {
+    check('world1 idx0-4: the shared 32x32 body / b03c (the MAJORITY family, previously mis-closed as dead)',
+      CLASS_TABLES_B[1][0].handlerA === '32x32' && CLASS_TABLES_B[1][0].handlerB === 'b03c' &&
+      CLASS_TABLES_B[1][2].handlerA === '32x32' && CLASS_TABLES_B[1][3].handlerB === 'b03c');
+    check('world1 idx5-7 / world2 idx3 / world4 idx3: b60e or b5e9, the ONLY classes the earlier model covered',
+      CLASS_TABLES_B[1][5].handlerA === 'b60e' && CLASS_TABLES_B[2][3].handlerA === 'b60e' &&
+      CLASS_TABLES_B[4][3].handlerA === 'b5e9');
+    check('world2 idx2/5/6/7: b144/b290, the rock-drop attack (NOT inert as an earlier pass guessed)',
+      CLASS_TABLES_B[2][2].handlerA === 'b144' && CLASS_TABLES_B[2][2].handlerB === 'b290' &&
+      CLASS_TABLES_B[2][5].handlerA === 'b144');
+    check('world3 idx3: b2c7/b2f3, the two-piece rock-burst attack',
+      CLASS_TABLES_B[3][3].handlerA === 'b2c7' && CLASS_TABLES_B[3][3].handlerB === 'b2f3');
+    check('world3 idx4 (the other live class): the shared 32x32 body / b03c, base 450',
+      CLASS_TABLES_B[3][4].handlerA === '32x32' && CLASS_TABLES_B[3][4].base === 450);
+  }
+
+  /* (d2) stepHandlerB03C — the second, MAJORITY handlerB family. Own muzzle
+   * constants, no world-4 special case. */
+  {
+    const slot03c = { reloadByte: 8, facingSelect: 0 };
+    const left03c = { x: 100, y: 200, facing: 0, reloadTimer: 1, frame: 0 };
+    const rLeft03c = selectorTwoHandlerB03C(left03c, slot03c, 1);
+    check('CS:0xB07D (left, via 0x1FE7): muzzle x-8, y+0, vx negative',
+      rLeft03c.kind === 'shot' && rLeft03c.worldX === 100 - 8 && rLeft03c.worldY === 200 &&
+      rLeft03c.vx === -((8 >> 2) + 4), JSON.stringify(rLeft03c));
+
+    const right03c = { x: 100, y: 200, facing: 1, reloadTimer: 1, frame: 0 };
+    const rRight03c = selectorTwoHandlerB03C(right03c, slot03c, 1);
+    check('CS:0xB08F (right, via 0x2039): muzzle x+0x20, y+0 — different from B670\'s own x+0xe',
+      rRight03c.kind === 'shot' && rRight03c.worldX === 100 + 0x20 && rRight03c.worldY === 200,
+      JSON.stringify(rRight03c));
+    check('B03C never kicks the frame on world 4 (no world-4 special case anywhere)',
+      selectorTwoHandlerB03C({ x: 0, y: 0, facing: 1, reloadTimer: 1, frame: 0 },
+        slot03c, 4).kind === 'shot');
+
+    const slotHaz03c = { reloadByte: 8, facingSelect: 1 };
+    const hazAny = { x: 100, y: 200, facing: 0, reloadTimer: 1, frame: 0 };
+    const rHaz03c = selectorTwoHandlerB03C(hazAny, slotHaz03c, 1);
+    check('CS:0xB017: hazard muzzle x+0x10, y+0 — no facing dependence at all',
+      rHaz03c.kind === 'hazard' && rHaz03c.worldX === 100 + 0x10 && rHaz03c.worldY === 200,
+      JSON.stringify(rHaz03c));
+    check('CS:0xB017-B021: same n=(reloadByte>>1)+2 formula as B63F',
+      rHaz03c.n === (8 >> 1) + 2, rHaz03c.n);
+  }
+
+  /* (e) stepHandlerB — fire-rate gate, reseed, BOTH muzzle families, the
+   * facingSelect divert, and the world-4 special cases. Every constant
+   * below is cited to its own CS: address inside selector2.js itself; this
+   * only re-derives the arithmetic independently. */
+  {
+    const slot = { reloadByte: 8, facingSelect: 0, world: 1 };
+
+    const notYet = { x: 0, y: 0, facing: 0, reloadTimer: 5, frame: 0 };
+    check('CS:0xB676: the reload timer counts DOWN and does not fire above 0',
+      selectorTwoHandlerB(notYet, slot, 1) === null && notYet.reloadTimer === 4);
+
+    const never = { reloadByte: 0, facingSelect: 0, world: 1 };
+    const untouched = { x: 0, y: 0, facing: 0, reloadTimer: 999, frame: 0 };
+    check('CS:0xB670-B674: reloadByte===0 never fires, and never even decrements the timer',
+      selectorTwoHandlerB(untouched, never, 1) === null && untouched.reloadTimer === 999);
+
+    const left = { x: 100, y: 200, facing: 0, reloadTimer: 1, frame: 0 };
+    const rLeft = selectorTwoHandlerB(left, slot, 1);
+    check('CS:0xB687-B692: reload reseeds to (16-reloadByte)<<2 on every fire',
+      left.reloadTimer === (16 - 8) << 2, left.reloadTimer);
+    check('CS:0xB6AD: facing===0 -> LEFT, vx = -((reloadByte>>2)+4)',
+      rLeft.kind === 'shot' && rLeft.vx === -((8 >> 2) + 4), JSON.stringify(rLeft));
+    check('CS:0xB6B3-B6C8 (left, non-world4): muzzle x+0xa, y+0xc',
+      rLeft.worldX === 100 + 0xa && rLeft.worldY === 200 + 0xc, JSON.stringify(rLeft));
+
+    const right = { x: 100, y: 200, facing: 1, reloadTimer: 1, frame: 0 };
+    const rRight = selectorTwoHandlerB(right, slot, 1);
+    check('CS:0xB6A7: facing!=0 -> RIGHT, vx = +((reloadByte>>2)+4)',
+      rRight.kind === 'shot' && rRight.vx === (8 >> 2) + 4, JSON.stringify(rRight));
+    check('CS:0xB6CE-B6E9 (right, non-world4, JNZ taken -> b6e4 only): muzzle x+0xe, y+0xc',
+      rRight.worldX === 100 + 0xe && rRight.worldY === 200 + 0xc, JSON.stringify(rRight));
+
+    const slotW4 = { reloadByte: 8, facingSelect: 0, world: 4 };
+    const leftW4 = { x: 100, y: 200, facing: 0, reloadTimer: 1, frame: 0 };
+    const rLeftW4 = selectorTwoHandlerB(leftW4, slotW4, 4);
+    check('CS:0xB6BE-B6C5 (left, world4): ONLY y gets the extra -4 (y+0xc-4=y+8); x unchanged',
+      rLeftW4.worldX === 100 + 0xa && rLeftW4.worldY === 200 + 8, JSON.stringify(rLeftW4));
+
+    const rightW4 = { x: 100, y: 200, facing: 1, reloadTimer: 1, frame: 0 };
+    const rRightW4 = selectorTwoHandlerB(rightW4, slotW4, 4);
+    check('CS:0xB6DC-B6E7 (right, world4, JNZ NOT taken -> falls through BOTH adds): '
+      + 'x = x+4+0xe = x+0x12, y = y-4+0xc = y+8',
+      rRightW4.worldX === 100 + 0x12 && rRightW4.worldY === 200 + 8, JSON.stringify(rRightW4));
+    check('CS:0xB682: world 4 ALSO kicks the animation frame by 1 on every fire',
+      rightW4.frame === 1, rightW4.frame);
+    check("world 1/2 (non-world4) never kicks the frame from handlerB",
+      right.frame === 0, right.frame);
+
+    const slotHaz = { reloadByte: 8, facingSelect: 1, world: 1 };
+    const hazLeft = { x: 100, y: 200, facing: 0, reloadTimer: 1, frame: 0 };
+    const rHazLeft = selectorTwoHandlerB(hazLeft, slotHaz, 1);
+    check('CS:0xB699 facingSelect!=0 diverts to the line-hazard seed (CS:0xB63F), not a shot',
+      rHazLeft.kind === 'hazard', JSON.stringify(rHazLeft));
+    check('CS:0xB647-B650: facing===0 KEEPS the larger offset, x+0x16, y+0xd — '
+      + 'the OPPOSITE polarity from the ordinary-shot muzzle above',
+      rHazLeft.worldX === 100 + 0x16 && rHazLeft.worldY === 200 + 0xd, JSON.stringify(rHazLeft));
+    check('CS:0xB654-B65E: hazard step count n = (reloadByte>>1)+2, read off CS:0xDBE8\'s own '
+      + 'write of DS:0x1f0 into the new line-hazard slot',
+      rHazLeft.n === (8 >> 1) + 2, rHazLeft.n);
+
+    const hazRight = { x: 100, y: 200, facing: 1, reloadTimer: 1, frame: 0 };
+    const rHazRight = selectorTwoHandlerB(hazRight, slotHaz, 1);
+    check('CS:0xB64D: facing!=0 SUBTRACTS 0x1c, net x-6 — the hazard muzzle never matches '
+      + 'the ordinary-shot muzzle\'s own facing convention',
+      rHazRight.worldX === 100 + 0x16 - 0x1c, JSON.stringify(rHazRight));
+  }
+
+  /* (f) handlerA's two frame-advance gates, exercised through the real pool
+   * so the sprite/animation path is covered end to end, not just the raw
+   * arithmetic. Both gates are read fresh off the disassembly in
+   * selector2.js's own header — this checks the OPPOSITE shapes hold. */
+  {
+    const grid = new DamageGrid();
+    const health = new Health();
+    const farHero = { x: 100000, y: 100000, state: 0 };
+    const missDecode = () => { throw new Error('must not be called on an empty grid cell'); };
+    const cam = { x: 0, y: 0 };
+    const noop = () => {};
+
+    const pool = new SelectorTwoSpawns();
+    const desc1 = { index: 0, spawnX: 0, spawnY: 0, entityFacing: 1, drawStyle: 0,
+      staggerStep: 0, entityCount: 1, entityState0: 99, classIndex: 5,
+      facingSelect: 0, reloadByte: 8, rewardItemId: 0xff, live: true };
+    check('spawn() against the real CLASS_TABLES_B[1][5] (world1 idx5, base 532/24x24)',
+      pool.spawn(desc1, 1) === true);
+    pool.step(cam, farHero, 0, health, grid, missDecode, 0, noop, noop, {});   // materialise-only tick
+    const e = pool.slots[0].entities[0];
+    check('b60e seed: frame starts at 0, reloadTimer seeded (16-8)<<2=32',
+      e.frame === 0 && e.reloadTimer === 32, JSON.stringify(e));
+
+    /* frame===0, reloadTimer NOT 1 -> stays at 0 (CS:0xB62B-B635). */
+    pool.step(cam, farHero, 0, health, grid, missDecode, 0, noop, noop, {});
+    check('b60e: frame===0 does not advance while reloadTimer !== 1', e.frame === 0, e.frame);
+
+    /* Force reloadTimer to 2 -- NOT 1. `#stepAlive` runs handlerB (which
+     * unconditionally decrements the timer, CS:0xB676) BEFORE handlerA
+     * (CS:0xAE5D then CS:0xAE62 — fire, THEN animate), so a timer of 1
+     * going into this tick would hit handlerB's own zero-check, FIRE, and
+     * get RESEEDED to (16-reloadByte)<<2 before handlerA ever reads it —
+     * handlerA would then see the reseeded value, never 1. Starting at 2,
+     * handlerB decrements 2->1 (not zero, no fire, no reseed), and handlerA
+     * sees exactly the 1 CS:0xB631 checks for. */
+    e.reloadTimer = 2;
+    pool.step(cam, farHero, 0, health, grid, missDecode, 0, noop, noop, {});
+    check('b60e: frame===0 advances exactly when reloadByte!=0 AND reloadTimer===1 '
+      + '(as OBSERVED BY handlerA, i.e. after handlerB\'s own decrement)',
+      e.frame === 1, e.frame);
+
+    /* Now frame!=0 (=1): CS:0xB629 skips the reloadTimer gate entirely and
+     * ALWAYS advances, even with reloadTimer far from 1. */
+    e.reloadTimer = 999;
+    pool.step(cam, farHero, 0, health, grid, missDecode, 0, noop, noop, {});
+    check('b60e: frame!=0 advances UNCONDITIONALLY, ignoring reloadTimer entirely',
+      e.frame === 2, e.frame);
+
+    /* b5e9 (world 4): the OPPOSITE gate — frame===0 NEVER advances by
+     * itself; frame!=0 advances only when tock===0. The only way frame
+     * leaves 0 at all is handlerB's own world-4 fire-kick. */
+    const poolW4 = new SelectorTwoSpawns();
+    const desc4 = { index: 0, spawnX: 0, spawnY: 0, entityFacing: 1, drawStyle: 0,
+      staggerStep: 0, entityCount: 1, entityState0: 99, classIndex: 3,
+      facingSelect: 0, reloadByte: 8, rewardItemId: 0xff, live: true };
+    check('spawn() against the real CLASS_TABLES_B[4][3] (world4 idx3, base 547/24x24)',
+      poolW4.spawn(desc4, 4) === true);
+    poolW4.step(cam, farHero, 0, health, grid, missDecode, 1, noop, noop, {});   // materialise-only
+    const e4 = poolW4.slots[0].entities[0];
+    poolW4.step(cam, farHero, 0, health, grid, missDecode, 1, noop, noop, {});   // tock=1: b5e9's own gate never even applies at frame 0
+    check('b5e9: frame===0 never advances on its own, tock or not', e4.frame === 0, e4.frame);
+    e4.frame = 1;                          // simulate handlerB's own fire-kick having just fired
+    poolW4.step(cam, farHero, 0, health, grid, missDecode, 1, noop, noop, {});   // tock=1 -> gated OFF
+    check('b5e9: frame!=0 does NOT advance while tock!=0', e4.frame === 1, e4.frame);
+    poolW4.step(cam, farHero, 0, health, grid, missDecode, 0, noop, noop, {});   // tock=0 -> advances
+    check('b5e9: frame!=0 advances exactly on the tock===0 tick', e4.frame === 2, e4.frame);
+  }
+
+  /* (g) Full lifecycle through the real pool: materialise -> stagger ->
+   * fire -> cull-vs-contact -> kill -> score -> dying fade -> elimination
+   * reward -> slot free. */
+  {
+    const grid = new DamageGrid();
+    const health = new Health();
+    const farHero = { x: 100000, y: 100000, state: 0 };
+    const missDecode = () => { throw new Error('must not be called on an empty grid cell'); };
+    const cam = { x: 0, y: 0 };
+
+    const pool = new SelectorTwoSpawns();
+    const desc = { index: 0, spawnX: 1000, spawnY: 500, entityFacing: 0, drawStyle: 0,
+      staggerStep: 5, entityCount: 2, entityState0: 3, classIndex: 5,
+      facingSelect: 0, reloadByte: 0, rewardItemId: 0x10, live: true };   // reloadByte=0 -> never fires, isolating the contact/death path
+    check('spawn into a free slot succeeds', pool.spawn(desc, 1) === true);
+
+    const fired = [];
+    const fire = (wx, wy, vx) => fired.push({ wx, wy, vx });
+    let hazardCalls = 0;
+    const spawnHazard = () => { hazardCalls++; };
+
+    pool.step(cam, farHero, 0, health, grid, missDecode, 0, fire, spawnHazard, {});   // materialise
+    check('materialise seeds entityCount(2) entities, cumulative stagger 0/5',
+      pool.slots[0].entities.length === 2 &&
+      pool.slots[0].entities[0].stagger === 0 && pool.slots[0].entities[1].stagger === 5,
+      JSON.stringify(pool.slots[0].entities));
+
+    pool.step(cam, farHero, 0, health, grid, missDecode, 0, fire, spawnHazard, {});
+    check('CS:0xAE41/0xAE44: a staggered entity (stagger=5) does nothing this tick',
+      pool.slots[0].entities[1].stagger === 4);
+    check('the non-staggered entity (0) is alive and produced no shot (reloadByte=0)',
+      pool.slots[0].entities[0].state === 3 && fired.length === 0 && hazardCalls === 0);
+
+    /* Full slots refuse cleanly. */
+    for (let i = 0; i < RUNTIME_SLOTS_SEL2 - 1; i++) {
+      check(`fill slot ${i + 2}/10`, pool.spawn({ ...desc, spawnX: i }, 1) === true);
+    }
+    check('CS:0xAD2B: an 11th spawn attempt into a full pool is refused, counted, not thrown',
+      pool.spawn(desc, 1) === false && pool.refused === 1);
+
+    /* Kill the first entity directly (isolating the score/death-fade path
+     * from the contact-box geometry this file's other checks already
+     * cover via combat.js's own suite) and drive it through the fade. */
+    const scoreAdds = [];
+    const scoreObj = { add: (n) => scoreAdds.push(n) };
+    pool.slots[0].entities[0].state = -1;      // as if attackHero/creatureScansGrid just killed it
+    pool.slots[0].entities[0].frame = -1;
+    const drawn1 = pool.step(cam, farHero, 0, health, grid, missDecode, 0, fire, spawnHazard,
+      { score: scoreObj }).drawn;
+    check('CS:0xAFC1-AFD0: the FIRST dying tick caches the slot\'s own last-dying position',
+      pool.slots[0].lastDyingX === 1000 && pool.slots[0].lastDyingY === 500);
+    check('the dying entity draws the CS:0x6c-base death sprite at frame 0 this tick',
+      drawn1.some((d) => d.sprite === SEL2_DEATH_SPRITE_BASE + 0),
+      JSON.stringify(drawn1));
+
+    /* Drive the remaining death frames to finalisation. `drawn1` already
+     * ran the FIRST dying tick (frame -1 -> 0, drawn); reaching the
+     * CS:0xAFD7 `>= 7` finalise threshold from frame 0 takes SEL2_DEATH_
+     * FRAMES(7) MORE increments (0->1->2->3->4->5->6->7). */
+    for (let i = 0; i < SEL2_DEATH_FRAMES; i++) {
+      pool.step(cam, farHero, 0, health, grid, missDecode, 0, fire, spawnHazard, {});
+    }
+    check(`CS:0xAFD7: 1 + ${SEL2_DEATH_FRAMES} total increments finalises the dying entity to state 0`,
+      pool.slots[0].entities[0].state === 0);
+
+    /* Now finish off entity 1 (still alive at hp 3) the same way, so the
+     * WHOLE batch reaches state 0 and the elimination reward can fire.
+     * From a fresh frame=-1 this needs SEL2_DEATH_FRAMES+1(8) increments
+     * (-1->0->1->2->3->4->5->6->7) to reach the same threshold. */
+    pool.slots[0].entities[1].state = -1;
+    pool.slots[0].entities[1].frame = -1;
+    for (let i = 0; i <= SEL2_DEATH_FRAMES; i++) {
+      pool.step(cam, farHero, 0, health, grid, missDecode, 0, fire, spawnHazard, {});
+    }
+    check('CS:0xAED0-0xAF0F: once EVERY entity in the batch reaches state 0, '
+      + 'the group-elimination reward fires exactly once',
+      pool.eliminated === 1, pool.eliminated);
+    check('CS:0xBF5F id encoding: rewardItemId=0x10 (>=0xB) -> POBJECTS type 0x10-0xB=5',
+      pool.rewards.length === 1 && pool.rewards[0].itemType === 5 && pool.rewards[0].popupValue === null,
+      JSON.stringify(pool.rewards));
+    /* ⚠️ NOT freed yet, on THIS exact tick. CS:0xAE19's own per-slot reset
+     * tallies `deadCount` from each entity's STATE AS OBSERVED AT THE TOP
+     * of its own turn (CS:0xAE2B) — an entity that transitions from dying
+     * to state===0 DURING this very tick's CS:0xAFBD-AFEC was still counted
+     * toward `dyingCount`, not `deadCount`, for this tick's own tally. So
+     * CS:0xAF0A's `deadCount>=total` deactivation test genuinely needs a
+     * FOLLOWING tick before it can see both entities as state===0 at once —
+     * this is a faithful reproduction of the original's own bookkeeping
+     * order, not a bug. */
+    check('the slot is NOT yet freed on the very tick the last entity finalises',
+      pool.slots[0] !== null);
+    pool.step(cam, farHero, 0, health, grid, missDecode, 0, fire, spawnHazard, {});
+    check('CS:0xAF0A: the slot IS freed one tick later, once BOTH entities read '
+      + 'state===0 at the top of the same per-entity loop',
+      pool.slots.indexOf(null) !== -1 && pool.slots.filter((s) => s !== null).length === 9,
+      JSON.stringify(pool.slots.map((s) => s !== null)));
+  }
+
+  /* (h) A plain numeric reward (id < 0xB) decodes as a popup value, not an
+   * item type — the OTHER branch of CS:0xBF5F's own id encoding. */
+  {
+    const grid = new DamageGrid();
+    const health = new Health();
+    const farHero = { x: 100000, y: 100000, state: 0 };
+    const missDecode = () => { throw new Error('must not be called on an empty grid cell'); };
+    const cam = { x: 0, y: 0 };
+    const pool = new SelectorTwoSpawns();
+    const desc = { index: 0, spawnX: 0, spawnY: 0, entityFacing: 0, drawStyle: 0,
+      staggerStep: 0, entityCount: 1, entityState0: 1, classIndex: 5,
+      facingSelect: 0, reloadByte: 0, rewardItemId: 6, live: true };   // 6 < 0xB
+    pool.spawn(desc, 1);
+    pool.step(cam, farHero, 0, health, grid, missDecode, 0, () => {}, () => {}, {});   // materialise
+    pool.slots[0].entities[0].state = 0;   // culled/dead with no death fade
+    pool.step(cam, farHero, 0, health, grid, missDecode, 0, () => {}, () => {}, {});
+    check('rewardItemId < 0xB decodes as a plain popupValue, itemType null',
+      pool.rewards.length === 1 && pool.rewards[0].popupValue === 6 && pool.rewards[0].itemType === null,
+      JSON.stringify(pool.rewards));
+  }
+
+  /* (i) world2's b144/b290 rock-drop, exercised end to end through the real
+   * pool: reload-gated frame kick -> 3-tick wind-up -> a settle rock lands
+   * in `pool.rockSettle` at the entity's own muzzle offset. */
+  {
+    const grid = new DamageGrid();
+    const health = new Health();
+    const farHero = { x: 100000, y: 100000, state: 0 };
+    const missDecode = () => { throw new Error('must not be called on an empty grid cell'); };
+    const cam = { x: 0, y: 0 };
+    const noop = () => {};
+
+    const pool = new SelectorTwoSpawns();
+    const desc = { index: 0, spawnX: 500, spawnY: 300, entityFacing: 0, drawStyle: 0,
+      staggerStep: 0, entityCount: 1, entityState0: 99, classIndex: 2,
+      facingSelect: 0, reloadByte: 8, rewardItemId: 0xff, live: true };
+    check('spawn() against CLASS_TABLES_B[2][2] (b144/b290, base 521)', pool.spawn(desc, 2) === true);
+    pool.step(cam, farHero, 0, health, grid, missDecode, 1, noop, noop, {});   // materialise
+    const e = pool.slots[0].entities[0];
+    check('CS:0xB152: frame stays 0 until b290 kicks it (no shipped reload has yet expired)',
+      e.frame === 0);
+
+    /* Drive the reload timer to expiry: seeded (16-8)<<2=32 ticks. */
+    for (let i = 0; i < 32; i++) pool.step(cam, farHero, 0, health, grid, missDecode, 1, noop, noop, {});
+    check('CS:0xB29B: on reload expiry, b290 kicks frame to 1', e.frame === 1, e.frame);
+
+    check('rockSettle starts empty', pool.rockSettle.live === 0);
+    /* Two more tock=0 ticks: frame 1->2->3, the last one signals the drop. */
+    pool.step(cam, farHero, 0, health, grid, missDecode, 0, noop, noop, {});
+    check('frame 1->2, no drop yet', e.frame === 2 && pool.rockSettle.live === 0, e.frame);
+    pool.step(cam, farHero, 0, health, grid, missDecode, 0, noop, noop, {});
+    /* `SelectorTwoSpawns.step()` runs the rock pools' own physics AFTER the
+     * entity loop each call — matching CLAUDE.md's own main-loop ordering
+     * (`CS:0xAD88` at `0x0223` runs before `b1c2`'s walker at `0x022D`), so
+     * a rock spawned THIS tick is also stepped once (`y+=2`) before this
+     * check ever observes it. */
+    check('CS:0xB161: frame reaches EXACTLY 3 -> a settle rock drops, muzzle x+0xa,y+0x12 (+2 same-tick fall step)',
+      e.frame === 3 && pool.rockSettle.live === 1 &&
+      pool.rockSettle.slots.some((s) => s && s.x === 500 + 0xa && s.y === 300 + 0x12 + 2),
+      JSON.stringify(pool.rockSettle.slots));
+    pool.step(cam, farHero, 0, health, grid, missDecode, 0, noop, noop, {});
+    check('CS:0xB163: frame > 3 resets to 0, only ONE rock per reload cycle',
+      e.frame === 0 && pool.rockSettle.live === 1);
+  }
+
+  /* (j) world3's b2c7/b2f3 two-piece rock-burst, the same end-to-end shape
+   * but into `pool.rockBurst`, seeded from DS:0xdf54's own {vx,vy} pairs. */
+  {
+    const grid = new DamageGrid();
+    const health = new Health();
+    const farHero = { x: 100000, y: 100000, state: 0 };
+    const missDecode = () => { throw new Error('must not be called on an empty grid cell'); };
+    /* Camera keeps the muzzle point ON-SCREEN — `RockBurstPool.step()` runs
+     * in the SAME tick as the drop (same ordering rationale as test (i)
+     * above), and an off-screen spawn would be silently culled before this
+     * check ever observes it. */
+    const cam = { x: 600, y: 300 };
+    const noop = () => {};
+
+    const pool = new SelectorTwoSpawns();
+    const desc = { index: 0, spawnX: 700, spawnY: 400, entityFacing: 0, drawStyle: 0,
+      staggerStep: 0, entityCount: 1, entityState0: 99, classIndex: 3,
+      facingSelect: 0, reloadByte: 0xc, rewardItemId: 0xff, live: true };
+    check('spawn() against CLASS_TABLES_B[3][3] (b2c7/b2f3, base 516)', pool.spawn(desc, 3) === true);
+    pool.step(cam, farHero, 0, health, grid, missDecode, 1, noop, noop, {});
+    const e = pool.slots[0].entities[0];
+    const reload = (16 - 0xc) << 2;
+    for (let i = 0; i < reload; i++) pool.step(cam, farHero, 0, health, grid, missDecode, 1, noop, noop, {});
+    check('b2f3 kicks frame to 1 on reload expiry', e.frame === 1, e.frame);
+    pool.step(cam, farHero, 0, health, grid, missDecode, 0, noop, noop, {});
+    pool.step(cam, farHero, 0, health, grid, missDecode, 0, noop, noop, {});
+    /* Muzzle x+3,y+0xb = (703,411); the SAME-tick RockBurstPool step then
+     * applies position+=velocity (CS:0xB3F0) AND, since this is a tock===0
+     * tick, gravity/drag (CS:0xB441-B458): vy 4->5, |vx| 4->3. */
+    check('CS:0xB2EB: frame reaches 3 -> TWO rock-burst pieces drop, muzzle x+3,y+0xb, {vx:+/-4,vy:4}',
+      e.frame === 3 && pool.rockBurst.live === 2 &&
+      pool.rockBurst.slots.filter(Boolean).every((s) => s.y === 411 + 4 && s.vy === 5) &&
+      pool.rockBurst.slots.filter(Boolean).some((s) => s.x === 703 + 4 && s.vx === 3) &&
+      pool.rockBurst.slots.filter(Boolean).some((s) => s.x === 703 - 4 && s.vx === -3),
+      JSON.stringify(pool.rockBurst.slots.filter(Boolean)));
+  }
+
+  return results;
+}
+
+/**
+ * `rockfall.js` — the "falling rock" hazard pools, tested standalone.
+ * `UNKNOWN_b1c2`'s original "sixth cut feature" closure is REFUTED (see
+ * CLAUDE.md's own correction); both pools are live, fed by selector-2.
+ */
+export function checkRockfall() {
+  const { results, check } = makeChecker();
+
+  /* (a) RockSettlePool — DS:0xaccc. Gravity-free 2px/tick fall (no ground
+   * probe modelled), a 4-entry sprite ping-pong on the shared tock, and a
+   * lifetime countdown that frees the slot at negative. */
+  {
+    const pool = new RockSettlePool();
+    check('spawn() seeds lifetime=0x37, type=0 (CS:0xB1AD/B1B2)',
+      pool.spawn(100, 200) === true && pool.slots[0].lifetime === 0x37 && pool.slots[0].type === 0);
+    const drawn = [];
+    pool.step({ x: 0, y: 0 }, 1, drawn);
+    check('CS:0xB16E: worldY += 2 every tick', pool.slots[0].y === 202, pool.slots[0].y);
+    check('tock!=0: type does not advance', pool.slots[0].type === 0);
+    pool.step({ x: 0, y: 0 }, 0, drawn);
+    check('CS:0xdf44 read live: {531,532,533,532} — tock===0: type advances 0->1, sprite = 532',
+      pool.slots[0].type === 1 && drawn.some((d) => d.sprite === 532), drawn);
+    check('10 slots, refused past capacity', (() => {
+      for (let i = 0; i < 9; i++) pool.spawn(i, i);
+      return pool.spawn(999, 999) === false && pool.refused === 1;
+    })());
+  }
+
+  /* (b) RockSettlePool lifetime expiry. */
+  {
+    const pool = new RockSettlePool();
+    pool.spawn(0, 0);
+    for (let i = 0; i <= 0x37; i++) pool.step({ x: 0, y: 0 }, 1, []);
+    check('CS:0xB236: lifetime counts down from 0x37 and frees the slot once negative',
+      pool.slots[0] === null);
+  }
+
+  /* (c) RockBurstPool — DS:0xad1c/0xad94. Gravity (vy++), drag (vx decays
+   * toward 0), a hard screen-space cull, and a flat 5x5 zero-strength
+   * hero-hit that consumes the record and drops a moving debris spark. */
+  {
+    const pool = new RockBurstPool();
+    check('spawn() writes up to 12 records with the given {vx,vy} pairs',
+      pool.spawn(100, 100, [{ vx: 4, vy: 4 }, { vx: -4, vy: 4 }]) === true &&
+      pool.live === 2);
+    const health = new Health();
+    const hero = { x: -9999, y: -9999, state: 0 };   // far away, no hit
+    const drawn = [];
+    pool.step({ x: 0, y: 0 }, hero, health, 1, {}, drawn, null);
+    const s0 = pool.slots.find(Boolean);
+    /* spawn()'s own CS:0xB35E/B361 offset (+3) is applied FIRST: 100+3=103,
+     * then +/-4 velocity this tick -> 107 or 99. */
+    check('CS:0xB3F0-B3F8: position += velocity every tick regardless of tock',
+      s0 && (s0.x === 107 || s0.x === 99), s0 && s0.x);   // one of the two pieces (+4 or -4)
+    check('tock!=0: no gravity/drag yet', s0.vy === 4);
+    pool.step({ x: 0, y: 0 }, hero, health, 0, {}, drawn, null);
+    check('CS:0xB448: gravity — vy increments on the tock===0 tick', s0.vy === 5, s0.vy);
+    check('CS:0xB44B-B458: drag — nonzero vx decays by 1 toward 0',
+      Math.abs(s0.vx) === 3, s0.vx);
+    check('CS:0xB424: sprite = type + 0x213', drawn.some((d) => d.sprite === 0x213 + s0.type), drawn);
+  }
+
+  /* (d) RockBurstPool cull and hero-hit, isolated. */
+  {
+    const pool = new RockBurstPool();
+    pool.spawn(0, 0, [{ vx: 0, vy: 0 }]);
+    pool.step({ x: 9999, y: 9999 }, { x: 0, y: 0, state: 0 }, new Health(), 1, {}, []);
+    check('CS:0xB3FF-B421: off-screen -> silently freed, no debris, no hit',
+      pool.live === 0);
+
+    const pool2 = new RockBurstPool();
+    pool2.spawn(0, 0, [{ vx: 0, vy: 0 }]);
+    const health2 = new Health();
+    const hero2 = { x: -10, y: -4, state: 0 };           // overlaps CS:0xac59's own hero core box at (0,0)
+    const debrisSpawns = [];
+    const fakeDebris = { spawn: (...a) => debrisSpawns.push(a) };
+    pool2.step({ x: 0, y: 0 }, hero2, health2, 1, {}, [], fakeDebris);
+    check('CS:0xB49F/0xac59: a hero overlap consumes the record and drops a MOVING debris spark',
+      pool2.live === 0 && debrisSpawns.length === 1, JSON.stringify(debrisSpawns));
+    check('CS:0xac59\'s own damageFor(0) formula: a flat 5 damage off the default 24-point target',
+      health2.target === 0x18 - 5, health2.target);
+  }
+
+  return results;
+}
+
+/**
+ * PGOD0x.PAT scripted objects (selector 1) — CS:0xB908 (allocator),
+ * CS:0xB987 (per-tick driver), CS:0xBC4B (generic shoot), CS:0xBDDB/0xBD71/
+ * 0xBD9F (World 4's own attack-state pair). See game/pat-objects.js's own
+ * header for the full byte-level derivation.
+ */
+export async function checkPatObjects(fetchRaw) {
+  const { results, check } = makeChecker();
+
+  /* (a) decodeDelta — the standard shl4/sar4 signed-nibble extraction,
+   * independently re-derived rather than trusted: every nibble 0x0..0x7
+   * must read as itself, every nibble 0x8..0xf as itself-minus-16. */
+  {
+    let allMatch = true;
+    for (let n = 0; n < 16; n++) {
+      const expected = n < 8 ? n : n - 16;
+      const lo = decodeDelta(n).dy;
+      const hi = decodeDelta(n << 4).dx;
+      if (lo !== expected || hi !== expected) allMatch = false;
+    }
+    check('decodeDelta: all 16 nibble values sign-extend correctly in both the low (dy) and high (dx) position',
+      allMatch);
+    check('decodeDelta(0x00) is {dx:0,dy:0}', decodeDelta(0).dx === 0 && decodeDelta(0).dy === 0);
+    check('decodeDelta packs BOTH nibbles independently: 0x71 -> dx=7 (high), dy=1 (low), not dx=1,dy=7',
+      decodeDelta(0x71).dx === 7 && decodeDelta(0x71).dy === 1);
+  }
+
+  /* (b) reloadTicks — PAT's OWN formula, (16-v)*2, NOT selector-2's
+   * (16-v)<<2. Re-derived at the two ends of the nibble range. */
+  check('reloadTicks(0) === 32, reloadTicks(15) === 2 — PAT\'s own (16-v)*2, not selector-2\'s (16-v)<<2',
+    reloadTicks(0) === 32 && reloadTicks(15) === 2);
+
+  /* (c) parsePatDirectory — synthetic 400-byte directory, 3 live entries and
+   * one CLAUDE.md-documented dead one (negative +0), running-pointer math
+   * checked against a manually-computed expectation. */
+  {
+    const dir = new Uint8Array(PAT_GROUP_SLOTS * 10 * 8);   // 400 bytes, 50 entries
+    const dv = new DataView(dir.buffer);
+    // entry 0: live, length 10
+    dv.setInt16(0 * 8 + 0, 4, true); dv.setUint16(0 * 8 + 6, 10, false);
+    // entry 1: DEAD (+0 negative) — must be skipped, must NOT consume payload space
+    dv.setInt16(1 * 8 + 0, -1, true); dv.setUint16(1 * 8 + 6, 999, false);
+    // entry 2: live, length 20 — its blobOffset must NOT include entry 1's length
+    dv.setInt16(2 * 8 + 0, 5, true); dv.setUint16(2 * 8 + 6, 20, false);
+    const parsed = parsePatDirectory(dir);
+    check('entry 0 (live) starts at the payload base, 0x190', parsed[0]?.blobOffset === 0x190);
+    check('entry 0\'s length is read as the REAL on-disk BE u16 field (+6), not the placeholder +0',
+      parsed[0]?.blobLength === 10);
+    check('entry 1 (negative +0 on disk) parses to null — CLAUDE.md\'s own "an entry whose +0 is negative is skipped"',
+      parsed[1] === null);
+    check('entry 2\'s running pointer skips OVER the dead entry 1 rather than budgeting space for it '
+      + '(0x190+10=0x19a, not 0x190+10+999)',
+      parsed[2]?.blobOffset === 0x190 + 10, JSON.stringify(parsed[2]));
+  }
+
+  /* (d) parsePatSpawnDescriptor — synthetic 8-byte PALFILS record, every
+   * field independently constructed and checked against its OWN offset,
+   * not against a value that could pass by coincidence. */
+  {
+    const buf = new Uint8Array(8);
+    buf[0] = 7;                 // entityCount
+    buf[1] = 3;                 // pathClassIndex
+    buf[2] = 0x01; buf[3] = 0x2c; // staggerStep BE = 0x012c = 300
+    buf[4] = 200;                // key
+    buf[5] = 2;                  // behaviorClassIndex
+    buf[6] = 0xab;                // nibbles: hi=0xa, lo=0xb
+    buf[7] = 55;                  // extra
+    const d = parsePatSpawnDescriptor(buf, 0);
+    check('parsePatSpawnDescriptor reads entityCount from byte 0', d.entityCount === 7);
+    check('...pathClassIndex from byte 1 (the PAT DIRECTORY index, CS:0xB9AE)', d.pathClassIndex === 3);
+    check('...staggerStep as a BIG-ENDIAN u16 from bytes 2-3 (0x012c=300), not little-endian',
+      d.staggerStep === 300, `got ${d.staggerStep}`);
+    check('...key from byte 4', d.key === 200);
+    check('...behaviorClassIndex (the SEPARATE System-A class_table index, CS:0xB953) from byte 5',
+      d.behaviorClassIndex === 2);
+    check('...the nibble pair from byte 6: HIGH nibble -> hiNibble, LOW nibble -> loNibble (not swapped)',
+      d.hiNibble === 0xa && d.loNibble === 0xb, JSON.stringify(d));
+    check('a non-zero `index` offsets by 8 bytes per record, matching CS:0xB90C\'s own classIdx*8',
+      parsePatSpawnDescriptor(new Uint8Array(16).fill(0), 1).entityCount === 0); // no throw, in range
+  }
+
+  /* (e) CLASS_TABLE_A — world 4 class index 2 must be the exact byte-for-
+   * byte read this session took live off 1ffd:e21a+24: sprite 504, 32x48
+   * (TALLER than every other class, all 32x32), attack-state/attack-fire. */
+  {
+    const w4c2 = CLASS_TABLE_A[4]?.[2];
+    check('World 4 class index 2 (1ffd:e21a+2*12, read live) is spriteBase=504, w=32, h=48',
+      w4c2 && w4c2.spriteBase === 504 && w4c2.w === 32 && w4c2.h === 48, JSON.stringify(w4c2));
+    check('...and is wired to the attack-state/attack-fire pair (CS:0xBDDB/CS:0xBD71), not the generic one',
+      w4c2 && w4c2.handlerA === 'attack-state' && w4c2.handlerB === 'attack-fire');
+    check('World 4 class index 3 is the ALREADY-DOCUMENTED cut hazard (CS:0xbd38/0xbd0b), never placed — '
+      + 'read live at the same table to confirm it sits exactly where CLAUDE.md already puts it',
+      CLASS_TABLE_A[4]?.[3]?.spriteBase === 531);
+    check('World 1 classes 0 and 2 both wire handlerB to the generic BC4B fire',
+      CLASS_TABLE_A[1]?.[0]?.handlerB === 'bc4b' && CLASS_TABLE_A[1]?.[2]?.handlerB === 'bc4b');
+    check('World 1 class 1 is the UN-READ third handler (CS:0xBF58) — animates, never fires, not guessed at',
+      CLASS_TABLE_A[1]?.[1]?.handlerB === 'unknown');
+  }
+
+  /* (f) HOLD_BOX — the exact 4-edge screen-space box CS:0xBA95-0xBAB0 tests,
+   * re-derived from its own cited hex immediates rather than trusted. */
+  check('HOLD_BOX matches CS:0xBA95/BA9A/BAA7/BAAC\'s own immediates exactly (-0x24,0x144,-0x28,0xc4)',
+    HOLD_BOX.xMin === -0x24 && HOLD_BOX.xMax === 0x144
+    && HOLD_BOX.yMin === -0x28 && HOLD_BOX.yMax === 0xc4);
+
+  /* (g) PatGroups — end-to-end behavioural tests against a synthetic
+   * directory + blob, exercising seed -> move -> hold -> retire, and both
+   * shoot handlers, without needing a real shipped .PAT file. */
+  {
+    /* A 1-entry directory (class 0) whose blob is a RELATIVE-tagged path:
+     * {x=100,y=100} (BE16, relative to camera) then two delta bytes:
+     * 0x01 (dy=+0,dx=+1... wait: low nibble->dy, high nibble->dx) so byte
+     * 0x10 means dx=+1,dy=0, and 0x01 means dx=0,dy=+1. Use 0x10 then 0x01. */
+    const blob = new Uint8Array(0x190 + 6);
+    const bv = new DataView(blob.buffer);
+    bv.setUint16(0x190 + 0, 100, false);   // x
+    bv.setUint16(0x190 + 2, 100, false);   // y
+    blob[0x190 + 4] = 0x10;                 // dx=+1, dy=0
+    blob[0x190 + 5] = 0x01;                 // dx=0, dy=+1
+
+    const directory = new Array(PAT_GROUP_SLOTS * 10).fill(null);
+    directory[0] = { blobOffset: 0x190, blobLength: 6 };
+
+    const groups = new PatGroups(directory);
+    groups.blobBytes = blob;
+
+    const desc = { entityCount: 1, pathClassIndex: 0, staggerStep: 0, key: 42,
+                    behaviorClassIndex: 0, hiNibble: 0, loNibble: 0 };
+    const ok = groups.activate(desc, 1);          // world 1, class 0 -> spriteBase 450, handlerB bc4b
+    check('activate() succeeds for a known (world, behaviorClassIndex) pair', ok === true);
+    check('a full pool refuses the 6th activation and counts it, rather than silently overwriting a slot',
+      (() => {
+        for (let i = 0; i < PAT_GROUP_SLOTS - 1; i++) groups.activate(desc, 1);
+        const before = groups.lostActivations;
+        const refused = groups.activate(desc, 1) === false;
+        return refused && groups.lostActivations === before + 1;
+      })());
+
+    const g2 = new PatGroups(directory);
+    g2.blobBytes = blob;
+    g2.activate(desc, 1);
+    const cam = { x: 0, y: 0 };
+    const hero = { x: 0, y: 0 };
+    const shots = new EnemyShots();
+    const lineHazards = new LineHazards();
+
+    /* Seed happens lazily on the first step() — CS:0xB9A3-0xBA3E seeds and
+     * then `JMP b977` (the OUTER slot loop tail), never falling through into
+     * movement/dispatch/draw on the SAME tick it seeds. So the first step()
+     * draws NOTHING; the sub-record's own seeded position (100,100) is never
+     * independently observable from the outside except via its first move. */
+    const r0 = g2.step(cam, 0, shots, lineHazards, hero, () => 0, 0, null);
+    check('the seed tick draws nothing — CS:0xBA3E jumps straight to the next slot, skipping movement/dispatch/draw',
+      r0.length === 0, JSON.stringify(r0));
+
+    const r1 = g2.step(cam, 0, shots, lineHazards, hero, () => 0, 0, null);
+    check('tick 2 (the first "materialised" tick): stagger is already 0, so movement applies immediately — '
+      + 'delta byte 0x10 -> dx=+1,dy=0 on top of the seeded (100,100)',
+      r1.length === 1 && r1[0].x === 101 && r1[0].y === 100, JSON.stringify(r1));
+
+    const r2 = g2.step(cam, 0, shots, lineHazards, hero, () => 0, 0, null);
+    check('tick 3 applies delta byte 0x01 -> dx=0, dy=+1', r2[0].x === 101 && r2[0].y === 101, JSON.stringify(r2[0]));
+
+    /* Cursor is now past the 2-byte movement stream (blobEnd). The
+     * sub-record sits at screen (101,101), well inside HOLD_BOX, so it must
+     * HOLD (re-apply the SAME last delta) rather than retire. */
+    const r3 = g2.step(cam, 0, shots, lineHazards, hero, () => 0, 0, null);
+    check('past the blob\'s own end but still on-screen: HOLD, re-applying the last delta (0x01 -> dy+1 again), not retire',
+      r3.length === 1 && r3[0].x === 101 && r3[0].y === 102, JSON.stringify(r3));
+    const r4 = g2.step(cam, 0, shots, lineHazards, hero, () => 0, 0, null);
+    check('holding is not one-shot: it keeps re-applying the same delta tick after tick',
+      r4.length === 1 && r4[0].y === 103, JSON.stringify(r4));
+
+    /* Now move the camera so the sub-record's SCREEN position falls outside
+     * HOLD_BOX (world x=101, camera x=500 -> screen x=-399, past xMin=-0x24). */
+    const farCam = { x: 500, y: 0 };
+    const r5 = g2.step(farCam, 0, shots, lineHazards, hero, () => 0, 0, null);
+    check('once scrolled off past HOLD_BOX, the sub-record RETIRES (drawn list empties) rather than holding forever',
+      r5.length === 0, JSON.stringify(r5));
+  }
+
+  /* (h) CS:0xBC4B — generic fire, both nibble branches, re-derived speed
+   * formula and muzzle offsets. */
+  {
+    const directory = new Array(PAT_GROUP_SLOTS * 10).fill(null);
+    // absolute-tagged path whose own cursor lands exactly on blobEnd, so the
+    // seeded sub-record HOLDS at a fixed point forever (well inside HOLD_BOX)
+    // — movement is not what this block is testing.
+    const absBlob = new Uint8Array(0x197);   // one extra byte past blobEnd so the immediate hold-check reads a defined (zero) delta, not undefined
+    const av = new DataView(absBlob.buffer);
+    av.setUint16(0x190, ABSOLUTE_TAG, false);
+    av.setUint16(0x192, 50, false);   // x
+    av.setUint16(0x194, 60, false);   // y
+    directory[0] = { blobOffset: 0x190, blobLength: 6 };   // cursor lands exactly on blobEnd -> HOLD immediately
+
+    const cam = { x: 0, y: 0 };
+    const hero = { x: 999, y: 999 };
+
+    /* Low nibble (fire-rate divisor) = 4, so reload seeds to (16-4)*2=24 —
+     * step it down to exactly the firing tick to keep the test tight rather
+     * than looping 24 times. */
+    const mkGroups = (loNibble, hiNibble) => {
+      const g = new PatGroups(directory);
+      g.blobBytes = absBlob;
+      const desc = { entityCount: 1, pathClassIndex: 0, staggerStep: 0, key: 1,
+                      behaviorClassIndex: 0, hiNibble, loNibble };
+      g.activate(desc, 1);   // world 1 class 0 -> handlerB: bc4b
+      return g;
+    };
+
+    /* hiNibble===0 branch: an ordinary projectile, direction from "did I
+     * just move right or left" (here: never moves, so firingRight defaults
+     * true via `s.x >= this.lastPretickX`, both undefined->NaN comparisons
+     * would be false — force a real pretick value via one seed tick first). */
+    const g = mkGroups(4, 0);
+    const shots = new EnemyShots();
+    const lineHazards = new LineHazards();
+    g.step(cam, 0, shots, lineHazards, hero, () => 0, 0, null);   // seed tick, sets lastPretickX
+    for (let i = 0; i < 24; i++) g.step(cam, 0, shots, lineHazards, hero, () => 0, 0, null);
+    check('CS:0xBC4B hiNibble===0: fires an ordinary projectile through the shared EnemyShots emitter '
+      + 'once the reload timer expires ((16-4)*2=24 ticks)',
+      shots.live === 1, `shots.live=${shots.live} fired=${shots.fired}`);
+
+    /* hiNibble!==0 branch: diverts into the line-hazard seed instead. */
+    const g2 = mkGroups(4, 1);
+    const shots2 = new EnemyShots();
+    const lineHazards2 = new LineHazards();
+    g2.step(cam, 0, shots2, lineHazards2, hero, () => 0, 0, null);
+    for (let i = 0; i < 24; i++) g2.step(cam, 0, shots2, lineHazards2, hero, () => 0, 0, null);
+    check('CS:0xBC4B hiNibble!==0: diverts into the Bresenham line-hazard seed instead of an ordinary shot',
+      lineHazards2.live === 1 && shots2.live === 0,
+      `hazards=${lineHazards2.live} shots=${shots2.live}`);
+
+    /* loNibble===0: this class never fires, regardless of ticks elapsed. */
+    const g3 = mkGroups(0, 0);
+    const shots3 = new EnemyShots();
+    const lineHazards3 = new LineHazards();
+    for (let i = 0; i < 40; i++) g3.step(cam, 0, shots3, lineHazards3, hero, () => 0, 0, null);
+    check('CS:0xBC4B loNibble===0 (DS:0x230===0): this class NEVER fires, no matter how many ticks pass',
+      shots3.live === 0 && lineHazards3.live === 0);
+  }
+
+  /* (i) The World-4 attack-state machine — CS:0xBDDB/CS:0xBD71/CS:0xBD9F.
+   * Arms only from phase 3 on a tock tick, fires exactly once at phase 6,
+   * ends the attack after phase 7 wraps. */
+  {
+    const directory = new Array(PAT_GROUP_SLOTS * 10).fill(null);
+    const absBlob = new Uint8Array(0x197);   // one extra byte past blobEnd so the immediate hold-check reads a defined (zero) delta, not undefined
+    const av = new DataView(absBlob.buffer);
+    av.setUint16(0x190, ABSOLUTE_TAG, false);
+    av.setUint16(0x192, 50, false);
+    av.setUint16(0x194, 60, false);
+    directory[0] = { blobOffset: 0x190, blobLength: 6 };
+
+    const g = new PatGroups(directory);
+    g.blobBytes = absBlob;
+    const desc = { entityCount: 1, pathClassIndex: 0, staggerStep: 0, key: 1,
+                    behaviorClassIndex: 2, hiNibble: 0, loNibble: 4 };
+    g.activate(desc, 4);   // world 4 class 2 -> attack-state/attack-fire
+    const cam = { x: 0, y: 0 };
+    const hero = { x: 999, y: 999 };
+    const shots = new EnemyShots();
+    const lineHazards = new LineHazards();
+
+    g.step(cam, 0, shots, lineHazards, hero, () => 0, 0, null);   // seed tick
+    /* Drive the reload down to 0 on a TOCK tick so CS:0xBD71 arms (phase
+     * must be exactly 3 for the arm to take — a fresh sub-record starts at
+     * attackState 0, so walk it to 3 first via non-tock ticks, which must
+     * NOT arm even once the reload also happens to hit 0 without tock). */
+    const sub = g.slots.find((s) => s.active).subs[0];
+    sub.attackState = 3;
+    sub.reload = 0;
+    g.step(cam, 0, shots, lineHazards, hero, () => 0, 0, null);      // reload->-1 (BD71 arms on NEGATIVE, `JNS`, not zero), but NO tock -> must not arm
+    check('CS:0xBD71 does NOT arm the attack without the tock toggle, even at phase 3 with reload expired',
+      (sub.attackState & 4) === 0, `attackState=${sub.attackState}`);
+
+    sub.attackState = 3;
+    sub.reload = 0;
+    g.step(cam, 0, shots, lineHazards, hero, () => 0, 1, null);      // reload->-1, tock=1 -> ARMS
+    check('CS:0xBD71 arms on the tock tick once phase===3 and reload has expired (3 -> 4, sets bit 2)',
+      (sub.attackState & 4) !== 0 && sub.attackState === 4, `attackState=${sub.attackState}`);
+
+    /* ⚠️ CS:0xBDDB's own phase advance is ITSELF gated on tock (`CS:0xBDEC
+     * JZ be02` skips the whole increment on a non-tock tick) — a non-tock
+     * tick must leave the phase untouched, caught only by this explicit
+     * regression check after the first draft of this port missed the gate
+     * entirely and advanced every tick. */
+    g.step(cam, 0, shots, lineHazards, hero, () => 0, 0, null);
+    check('the attack phase does NOT advance on a non-tock tick', sub.attackState === 4);
+
+    /* Now step through the attack ON TOCK TICKS ONLY: 4 -> 5 -> 6 (fires,
+     * on the TRANSITION into 6) -> 7 -> 0 (ends). */
+    g.step(cam, 0, shots, lineHazards, hero, () => 0, 1, null);      // 4 -> 5
+    check('attack phase advances 4 -> 5 without firing', shots.live === 0 && sub.attackState === 5);
+    g.step(cam, 0, shots, lineHazards, hero, () => 0, 1, null);      // 5 -> 6, FIRES on this transition
+    check('CS:0xBD9F fires on the transition landing on phase 6, through the shared EnemyShots emitter',
+      shots.live === 1 && sub.attackState === 6, `shots.live=${shots.live} attackState=${sub.attackState}`);
+    g.step(cam, 0, shots, lineHazards, hero, () => 0, 1, null);      // 6 -> 7
+    check('attack phase advances 6 -> 7 firing only once, not on every subsequent tick',
+      shots.live === 1 && sub.attackState === 7);
+    g.step(cam, 0, shots, lineHazards, hero, () => 0, 1, null);      // 7 -> 8 -> clears to bit3 only, ends
+    check('the transition past 7 CLEARS bit 2 — the attack ends, walk resumes',
+      (sub.attackState & 4) === 0, `attackState=${sub.attackState}`);
+  }
+
+  /* (j) parsePatDirectory against the REAL shipped, decompressed
+   * PGOD0{1..4}.PAT files — not just synthetic bytes. This is what found
+   * the zero-length-entry refinement above: a first pass of this parser,
+   * using only "on-disk +0 negative -> dead", read world 3's real file as
+   * 49 live entries instead of CLAUDE.md's own already-published 1, because
+   * a long tail of genuinely-unused directory slots is all-zero on disk
+   * (not flagged negative) rather than negative. */
+  if (fetchRaw) {
+    const expectedLive = { 1: 38, 2: 6, 3: 1, 4: 22 };
+    const expectedSize = { 1: 5320, 2: 776, 3: 556, 4: 2818 };
+    for (const world of [1, 2, 3, 4]) {
+      const data = dclDecompress(await fetchRaw(`game/PGOD0${world}.PAT`)).data;
+      check(`world ${world}: PGOD0${world}.PAT decompresses to CLAUDE.md's own published size `
+        + `(${expectedSize[world]})`, data.length === expectedSize[world], `got ${data.length}`);
+      const dir = parsePatDirectory(data);
+      const live = dir.filter(Boolean).length;
+      check(`world ${world}: exactly ${expectedLive[world]} live (non-negative AND non-zero-length) `
+        + `directory entries, matching CLAUDE.md's own already-published count`,
+        live === expectedLive[world], `got ${live}`);
+      const lastLiveIdx = dir.map((d, i) => (d ? i : -1)).filter((i) => i >= 0).pop();
+      const lastEntry = dir[lastLiveIdx];
+      check(`world ${world}: the running-pointer math closes EXACTLY on the real file's own length `
+        + '(400 + sum of every non-negative entry\'s own length, dead or zero-length ones contributing 0)',
+        lastEntry.blobOffset + lastEntry.blobLength === data.length,
+        `${lastEntry.blobOffset}+${lastEntry.blobLength} vs ${data.length}`);
+    }
+  }
+
+  /* (k) CS:0xBCCF — contact/damage, closed in a follow-up pass. */
+  {
+    /* scoreForKey — re-derive CS:0xAF7D's own formula independently rather
+     * than trust the constant: value=(v>>1)+1, and the packed BCD digit
+     * pair times 100 (this project's own established "one BCD digit
+     * position = one hundred score points" scale, matching selector2.js's
+     * own identical `scoreForState0`). */
+    check('scoreForKey(0) === 100 (value=1, the minimum)', scoreForKey(0) === 100);
+    check('scoreForKey(200) === 10100 (value=101 -> BCD 0x101 -> 101*100)', scoreForKey(200) === 10100);
+
+    const directory = new Array(PAT_GROUP_SLOTS * 10).fill(null);
+    const absBlob = new Uint8Array(0x1a0);           // roomy: seed + a handful of movement bytes
+    const av = new DataView(absBlob.buffer);
+    av.setUint16(0x190, ABSOLUTE_TAG, false);
+    av.setUint16(0x192, 100, false);                  // x
+    av.setUint16(0x194, 100, false);                  // y
+    absBlob[0x196] = 0x10;                             // one real delta byte: dx=+1,dy=0
+    directory[0] = { blobOffset: 0x190, blobLength: 7 };
+
+    const mkGroup = (key = 200) => {
+      const g = new PatGroups(directory);
+      g.blobBytes = absBlob;
+      const desc = { entityCount: 1, pathClassIndex: 0, staggerStep: 0, key,
+                      behaviorClassIndex: 0, hiNibble: 0, loNibble: 0 }; // loNibble=0 -> BC4B never fires, isolates the contact test
+      g.activate(desc, 1);           // world 1 class 0 -> 32x32 box
+      return g;
+    };
+    const farHero = { x: -100000, y: -100000, state: 0 };
+    const cam = { x: 0, y: 0 };
+
+    /* A hero-touch kill. attackHero's own hero-core box is centred on the
+     * HERO, so put the hero exactly on the sub-record's own seeded (100,100)
+     * world position. */
+    {
+      const g = mkGroup(200);
+      g.step(cam, 0, null, null, farHero, () => 0, 0, null);   // seed tick — nothing else runs yet
+      const sub = g.slots.find((s) => s.active).subs[0];
+      const health = new Health();
+      const score = { calls: [], add(n) { this.calls.push(n); } };
+      const touchingHero = { x: sub.x, y: sub.y, state: 0 };
+      const drawn = g.step(cam, 0, null, null, touchingHero, () => 0, 0, null,
+                            health, null, null, { score });
+      check('a hero touch (attackHero) alone kills a PAT object — no DS:0x34/reportGate bracket, '
+        + 'unlike ce64.js\'s own creature', sub.key < 0, `key=${sub.key}`);
+      check('the kill still draws the ORDINARY sprite on the SAME tick (CS:0xBB43\'s own `jmp bb49`)',
+        drawn.length === 1 && drawn[0].sprite === 450 /* world1 class0 spriteBase */, JSON.stringify(drawn));
+      check(`score is awarded exactly once, scoreForKey(200)=${scoreForKey(200)}`,
+        score.calls.length === 1 && score.calls[0] === scoreForKey(200), JSON.stringify(score.calls));
+      check('attackState (the shared +0xe field) is forced to -1 on death',
+        sub.attackState === -1);
+    }
+
+    /* A weapon-hit kill via creatureScansGrid — hero far away so attackHero
+     * itself cannot possibly hit, isolating the grid-scan branch. Uses its
+     * OWN zero-delta blob (0x00 -> dx=0,dy=0) so the sub-record's position
+     * is stable across the tick: movement runs BEFORE the contact test in
+     * the same step(), and the original's own stamp-floors/scan-rounds
+     * asymmetry (this project's own documented `stampIndex`/`scanIndex`
+     * discrepancy, collision.js) means a MOVING entity can straddle a cell
+     * boundary between when this test stamps and when the scan reads back
+     * — a real property of the original, not something to route around by
+     * fudging the stamp; holding still sidesteps it instead. */
+    {
+      const stillDir = new Array(PAT_GROUP_SLOTS * 10).fill(null);
+      const stillBlob = new Uint8Array(0x197);
+      const sv = new DataView(stillBlob.buffer);
+      sv.setUint16(0x190, ABSOLUTE_TAG, false);
+      /* 96, not 100: this project's own DamageGrid documents `stampIndex`
+       * (floors) and `scanIndex` (rounds half-up) agreeing ONLY on exact
+       * multiples of 8 — confirmed directly (`stampIndex(100,100)=6422` vs
+       * `scanIndex(100,100)=6471`, a genuine divergence at a non-aligned
+       * coordinate, the same real asymmetry CLAUDE.md's own "The scanner"
+       * section documents for the original game). 96 sidesteps that
+       * entirely rather than depending on it. */
+      sv.setUint16(0x192, 96, false);
+      sv.setUint16(0x194, 96, false);
+      stillBlob[0x196] = 0x00;                       // dx=0, dy=0 — never moves
+      stillDir[0] = { blobOffset: 0x190, blobLength: 7 };
+      const g = new PatGroups(stillDir);
+      g.blobBytes = stillBlob;
+      g.activate({ entityCount: 1, pathClassIndex: 0, staggerStep: 0, key: 5,
+                    behaviorClassIndex: 0, hiNibble: 0, loNibble: 0 }, 1);
+      g.step(cam, 0, null, null, farHero, () => 0, 0, null);   // seed
+      const sub = g.slots.find((s) => s.active).subs[0];
+      const grid = new DamageGrid(); grid.clear();
+      const sx = sub.x - cam.x, sy = sub.y - cam.y;
+      grid.buf[stampIndex(sx, sy) - GRID_LO] = 7;               // an arbitrary nonzero tag
+      const lethalDecode = () => ({ damage: 999, weapon: 0 });   // guarantees state<=0
+      const health = new Health();
+      const score = { calls: [], add(n) { this.calls.push(n); } };
+      g.step(cam, 0, null, null, farHero, () => 0, 0, null,
+             health, grid, lethalDecode, { score });
+      check('a lethal weapon hit (creatureScansGrid) also kills the sub-record, with the hero '
+        + 'too far away for attackHero to have contributed', sub.key < 0, `key=${sub.key}`);
+      check('score awarded on the weapon-kill path too', score.calls.length === 1);
+    }
+
+    /* The death-draw sequence itself: exactly DEATH_RETIRE_AT frames drawn
+     * (sprites PAT_DEATH_SPRITE_BASE..PAT_DEATH_SPRITE_BASE+DEATH_RETIRE_AT-1), the
+     * corpse sliding by the SAME frozen delta byte every tick, then a clean
+     * retirement with no further draw. */
+    {
+      const g = mkGroup(1);
+      g.step(cam, 0, null, null, farHero, () => 0, 0, null);   // seed
+      const sub = g.slots.find((s) => s.active).subs[0];
+      g.step(cam, 0, null, null, farHero, () => 0, 0, null);    // tick 1: applies delta 0x10 -> x=101
+      check('sanity: the sub-record actually moved before dying (x=101)', sub.x === 101, `x=${sub.x}`);
+      const xBeforeDeath = sub.x;
+      sub.key = -1; sub.attackState = -1; sub.deathDelta = 0x10;   // simulate #onKilled having just fired
+      const seen = [];
+      for (let i = 0; i < DEATH_RETIRE_AT + 2; i++) {
+        const drawn = g.step(cam, 0, null, null, farHero, () => 0, 0, null);
+        seen.push(drawn.length ? drawn[0].sprite : null);
+      }
+      const expected = Array.from({ length: DEATH_RETIRE_AT }, (_, i) => PAT_DEATH_SPRITE_BASE + i)
+        .concat([null, null]);
+      check(`the death draw is exactly ${DEATH_RETIRE_AT} frames, sprites `
+        + `${PAT_DEATH_SPRITE_BASE}..${PAT_DEATH_SPRITE_BASE + DEATH_RETIRE_AT - 1}, then nothing`,
+        JSON.stringify(seen) === JSON.stringify(expected), JSON.stringify(seen));
+      check('the corpse slides by the SAME frozen delta (0x10 -> dx=+1) every death-draw tick',
+        sub.x === xBeforeDeath + DEATH_RETIRE_AT, `x=${sub.x} expected=${xBeforeDeath + DEATH_RETIRE_AT}`);
+      check('fully retired after DEATH_RETIRE_AT frames (key back to 0, the ordinary retire sentinel)',
+        sub.key === 0);
+    }
   }
 
   return results;

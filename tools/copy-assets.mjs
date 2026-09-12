@@ -47,6 +47,10 @@ const WANTED = [
   // (528/528), so the port reads the shipped asset, not the executable.
   'POBJECTS.001','POBJECTS.002','POBJECTS.003','POBJECTS.004',
   'PWEAPONS.001','PWEAPONS.002','PWEAPONS.003','PWEAPONS.004',
+  // PGOD0x.PAT — the selector-1 scripted-movement/shooting objects
+  // (game/pat-objects.js). Loaded only on sublevel 'a' (CS:0x3855's own
+  // `cmp byte [0x43],0 / jnz` gate), one file per world.
+  'PGOD01.PAT','PGOD02.PAT','PGOD03.PAT','PGOD04.PAT',
 ];
 
 if (!existsSync(SRC)) {
