@@ -5123,6 +5123,49 @@ Tracing the reachable closure of the 8 sites by hand — including one indirect 
 
 Two automation traps surfaced doing this and are worth recording as a method note for the next displacement census: a naive push/pop-bracket-skipping backward scan can walk **into an unrelated, textually-earlier function** and return a confident wrong answer — it misattributed 5 genuine object-array writes inside the `CS:0x177D` pickup dispatcher (treasure/consumable/weapon dead-marking, chest open/already-open re-activation) to an unrelated `mov si,0xdf96` at `CS:0x16DC`, 2.7 KB away, simply because that address happened to sit on the scan's path. And any such scanner is blind to a **register returned by a `CALL`** — which is exactly how the `CS:0x38D7` allocator's 3 writes (`CS:0x13D0`, `0x3DBD`, `0x3E28`, all `mov word [ds:bp+0x6],0x1` on a freshly-allocated object) were found only by grepping every `call 0x38d7` site and reading each one directly, not by trusting the tracer's output.
 
+## Object fall physics — placed objects fall once they scroll into view `[PROVEN]`
+
+Reported live: *"in the DOS version the items don't stay up in the air but fall down once they come into view."* A screenshot showed a weapon pickup floating unsupported next to a mystery box in `PLEV1A`. The mechanism is a small per-slot state machine, keyed off the SAME activation flag `UNKNOWN_object_flag6` already documents — the fall/bounce logic is armed on the identical inactive→active edge that flag's own bit 0 marks dirty, not a separate trigger.
+
+**A per-object-slot dirty byte at `SS:0x438+slotIndex`** — already on record elsewhere in this document as an under-documented scratch array — is a three-role overloaded state machine: (a) `0xFF` = "just activated, needs a fall-check this tick" (b) once falling stops, a 0–23 index into a 24-byte Y-delta bounce table (c) once clamped at 24 (terminal), a "perpetually re-verify support" sentinel that jumps straight back into the ground probe every frame forever, with no reset.
+
+```
+CS:0x120F  mov byte [bp+0],0xff        ; the activation edge — SS:0x438 := 0xFF, UNCONDITIONALLY
+```
+
+**The bounce table, `CS:0x13FF mov di,0xdf2c`, is `[PROVEN]` via live `read_memory("1ffd:df2c", 24)`** this session — note `1ffd:`, not `1000:`, per this document's own DS-segment warning, which cost an earlier pass of this same investigation a whole session of garbage reads before the correct segment was used:
+
+```
+fc fd fe ff 00 01 02 03 04 fd fe ff 00 01 02 03 fe ff 00 01 02 ff 00 01
+  -4 -3 -2 -1  0  1  2  3  4 -3 -2 -1  0  1  2  3 -2 -1  0  1  2 -1  0  1
+```
+
+**Byte-identical to the already-documented time-bomb settling-bounce table** (`BOMB_BOUNCE` in the port's `projectiles.js`), confirming the two were never independently corroborated until this session — CLAUDE.md had carried the fall table from recollection of the bomb's own table under a different heading. The **consumer differs**: the object-fall state machine **clamps** at index 24 (`CS:0x1420 mov dl,0x18`) once the table is exhausted, where the time bomb's own mover (`CS:0x142F`) **wraps** back to phase 0 and recycles the same table forever — one table, two different terminal behaviours.
+
+**The ground/embed probe, `CS:0x1554-0x15CB`**, tests two columns for solid ground one row below the object (`y + 0x10`): col1 = the object's own column (`x >> 5`), col2 = a straddle column `0xF` px to the right (`(x + 0xF) >> 5` — the same threshold the hero's own wall probes use). Once ground is found on either column, the SAME column's own row (`y`, un-incremented — the row directly above the ground row) is re-tested for embedding. **The branch structure is asymmetric**, and this is the detail a naive symmetric probe gets wrong: when col1 has no ground below it, col1's own row is **never** re-tested — only col2's:
+
+```
+groundCol1 true  -> embedded = ownCol1 || ownCol2
+groundCol1 false -> embedded = groundCol2 && ownCol2      ; ownCol1 is UNTESTED
+neither column has ground below                            -> always falls
+```
+
+"Landed" additionally requires row alignment (`y & 0xC === 0`, `CS:0x15CB-15D4`) — since the fall step below always keeps `y` a multiple of 4, an object keeps stepping by 4px until it reaches an exact 16px row boundary before it may rest.
+
+**The fall step, `CS:0x1587`: `y = (y + 4) & 0xFFFC` every tick it is unsupported or unaligned.** **World-bottom destruction, `CS:0x1598-0x15A3`: once `y >= 0x400` (1024, the documented world height), the object is destroyed** — `type := 0xFFFF`, `flag6 := 0`, the same dead-slot convention this array already uses for a collected pickup.
+
+**Why category >= 3 (levers, and categories 4/5) never visibly moves.** `CS:0x1526` caches the object's pre-tick Y into a scratch word (`SS:0x432`) before any of the above runs, and `CS:0x1613` restores it from that scratch word whenever the type is `< 0xC0` (not a weapon) and the `POBJECTS` category is `>= 3`. Every sub-path — the fall step, the bounce-delta add, and the terminal re-probe — funnels through the SAME shared tail (`CS:0x15F1`) before this restore is reached, so the undo is **unconditional**: a lever's dirty byte ticks through its whole fall/bounce cycle every time it is (re)activated, but its Y is pinned back every single tick and it never actually moves. Weapons (`type >= 0xC0`) skip the category test entirely (`CS:0x15F5 cmp cx,0xc0 / jl ... / jmp 0x1da0`) and always fall.
+
+**Port design decision.** Since the category-gate's net effect is provably always zero, the port (`gods-web/src/game/objects.js`, `isFallEligible`) applies the gate **up front** — checked once at the inactive→active transition (`activateObjects`) — rather than replicating the original's compute-then-discard restore mechanism. This is a legitimate simplification validated by the exhaustive disassembly trace above, not a behavioural deviation: `stepObjectFall` itself never re-checks category, exactly like the original's own state machine never actually un-does a lever's motion by any other means.
+
+**No sticky "already settled" state — re-arming on re-entry replays the bounce, and this is deliberate, not a bug.** `activateObjects` fires `SS:0x438 := 0xFF` on every inactive→active edge with no "already settled" test anywhere in `CS:0x120F` or its callers, and activation is not sticky (an object that scrolls off has its activation flag cleared, per `UNKNOWN_object_flag6` above). So a settled item that scrolls off-screen and back on is re-armed to the `0xFF` sentinel, finds the same ground still solid, and **plays its full landing bounce again from index 0** — verified in the port's own test suite: settle an object, deactivate it (scroll the activation box away), reactivate it (scroll back), and `fallDirty` returns to `-1` and the bounce genuinely restarts (one tick to re-enter the bounce at index 0 with Y unchanged, the next tick actually applies `BOUNCE_DELTA[0]`).
+
+**Shipped-data verification — not just presence-of-ground, but a full simulation against real level geometry.** A census across all 8 `.MAP` files found **616 of 652** fall-eligible objects (weapon pickups or category `< 3`) have no ground directly beneath either probed column at their placed position — `1A:83/85, 1B:89/89, 2A:86/88, 2B:76/81, 3A:50/64, 3B:54/56, 4A:80/86, 4B:98/103`. That 94% figure is **not** a minority case to be explained away — read correctly, near-universal initial non-support *corroborates* the reported behaviour (items falling is the general case, not a rare oddity), and an earlier revision of this project's own notes wrongly called the identical figure "a small minority," a self-contradiction caught on review.
+
+The number that actually discriminates a sound decode from a systematic probe error is not that raw percentage — it is **how many of those objects get destroyed** (fall clean through the bottom of the world) when the fall/bounce state machine is actually run against each level's real plane B. A shipped game does not silently delete most of its pickups on first scroll-in; a wrong ground probe or a systematic row-offset would show up here as mass destruction. Simulating all 652 eligible objects to settle/destruction on their own level's real geometry: **0 destroyed** (excluding one object, `PLEV2A` object #114, type 5 at `y = 65529` — an authoring `y < 0` that wrapped to a huge `u16`, sitting far past every real camera position's activation-box reach and therefore never activated in actual play regardless of the fall decode, the same "dead shipped data" genre as this document's other proven-unread padding fields). Of the 651 genuinely simulated, the largest settled drop was **278px** and **425** settled after falling more than one tile (32px) — a long tail of multi-tile drops, exactly the reported screenshot's shape (an item floating next to a ladder with open air beneath it), not a uniform one-row rounding artefact.
+
+**Tag discipline.** This mechanic is tagged `[PROVEN]` for the bounce table (a live `read_memory`) and the shipped-data simulation (executed against real level bytes), but the fall-step/ground-probe/category-gate disassembly itself was read, not watched executing — the disassembly-only parts remain `[STATIC]` until a live trace confirms them. **To promote:** an execute breakpoint on the fall-step store at offset `CS:0x1587` (resolve the live segment first — this project has recorded `CS=0x1000`, `CS=877`(`0x36D`), and other values across different traced sessions depending on where DOS actually loads `GAME.EXE`; see *`UNKNOWN_asset_load_segments` — CLOSED*) should hit repeatedly for an unsupported object, with `[SI+2]` (the object's Y) climbing by 4 each hit.
+
 ### `UNKNOWN_chest_key_surplus` — partly closed: one key's real purpose found in shipped trigger text
 
 Counted over all 8 shipped maps, with the carry-forward above in mind:
