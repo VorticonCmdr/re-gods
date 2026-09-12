@@ -681,10 +681,49 @@ Called **unconditionally every tick**, from both `CS:0x4F89` (state 8, jump left
 
 ⚠️ **The X-step runs BEFORE the Y delta, not after.** `CS:0x4E94`–`0x4EB9` (the wall-probe/X-step) executes using the hero's **pre-delta** Y — before the delta table at `CS:0x4F6F` is even reached. A port that applies the Y delta first and then walks tests the wrong row near a 16px boundary (up to 12px off during a double jump). `solidHere()` in `gods-web/src/game/player.js` was already byte-identical to `CS:0x4E4E`'s own straddle logic; it just had no call site in `_jump()`. Fixed: `_jump()` now walks before applying the delta, then calls `solidHere` after, matching the response above exactly. Confirmed live: an unobstructed jump still rises the documented symmetric 32 px; a jump under an injected low ceiling rises only as far as the tile boundary and bounces cleanly into a fall, never showing the hero's sprite inside the solid tile. `node tools/verify-node.mjs`: assertions added covering both the unobstructed arc and the ceiling-bounce case.
 
-Three adjacent findings from the same pass, **not yet ported** (real gaps, flagged for future work rather than fixed here):
-1. Both jump handlers also run a **mid-arc early-landing test** (`CALL 0x1000:4e2d`, "solid 3 below") at cursor thresholds that are asymmetric between the two handlers (state 8: `>=0x16` then `>=0x12`; state 9: `>=0x16` twice) — a genuine, confirmed asymmetry that must be copied verbatim if ported, not normalized to one threshold.
-2. Holding UP or DOWN while airborne, tile-aligned, over a climbable cell drops the hero straight into climb state 13/14 mid-jump (`Y &= 0xfff8`, a multiple of **8**, not 16) — refuting this project's own earlier claim that climb is only ever entered from the ground/idle handlers.
-3. `_fireTick`'s jump-family branch (states 20/21) needs the identical ceiling check (added — see the fix in `player.js`), but faithfully matching the original also requires reordering `_fireTick` so movement runs before the emit decision, since a ceiling-hitting tick in the original never emits a shot; that reorder was **not** made this pass, to avoid an unverified restructuring beyond the reported bug's scope.
+Two adjacent findings from the same pass, **not yet ported** (real gaps, flagged for future work rather than fixed here):
+1. Holding UP or DOWN while airborne, tile-aligned, over a climbable cell drops the hero straight into climb state 13/14 mid-jump (`Y &= 0xfff8`, a multiple of **8**, not 16) — refuting this project's own earlier claim that climb is only ever entered from the ground/idle handlers.
+2. `_fireTick`'s jump-family branch (states 20/21) needs the identical ceiling check (added — see the fix in `player.js`), but faithfully matching the original also requires reordering `_fireTick` so movement runs before the emit decision, since a ceiling-hitting tick in the original never emits a shot; that reorder was **not** made this pass, to avoid an unverified restructuring beyond the reported bug's scope.
+
+### The jump has a mid-arc EARLY-LANDING check too — `CS:0x4E2D`, now ported `[PROVEN]`
+
+⚠️ **Corrects a claim this document itself made one pass earlier** (in the list above, now removed): an early revision recorded this check as having thresholds "asymmetric between the two handlers (state 8: `>=0x16` then `>=0x12`; state 9: `>=0x16` twice)". A full, fresh instruction-by-instruction disassembly of both handler bodies this pass (`1000:4e6c`–`1000:4fab` for state 8, `1000:5064`–`1000:51a3` for state 9) finds **exactly one** such check in each, both gated on the **identical** threshold `cmp byte [0x358],0x16`. The asymmetry claim does not survive a real read; it was refuted, not confirmed.
+
+Reported live in the browser as two related clipping bugs: *"the ladder dismount clipping bug happens when the hero doesn't climb up the ladder all the way but instead jumps off earlier"* and *"the other clipping bug is when I try to jump onto the other platform (left) from the platform I am currently standing on"*. Both trace to the same missing mechanism.
+
+```
+4F49  cmp byte [0x358],0x16 / jl 0x4f6f    ; jumpCursor < 22 -> skip, go straight to the arc delta
+4F50  call 0x1000:4e2d                      ; the ground probe — see below
+4F53  cmp ch,0 / jz 0x4f6f                  ; not landed -> fall through to the normal arc path
+4F58  mov byte [0x377],0x11                 ; state := 17 ("land left"), anim_base 31 (== JUMP_L's base)
+4F5D  and word [0x17c],0xfff0               ; Y-snap to the tile row
+4F62  xor cl,cl                             ; phase := 0
+4F64  mov byte [0x357],0x0
+4F69  call 0x1000:4c54                      ; landing sound effect
+4F6C  jmp 0x1000:5e9b                       ; epilogue — the arc delta for THIS tick is never applied
+```
+
+State 9 (jump right) mirrors it exactly at `CS:0x5148`–`0x516B`, same threshold, transitioning to state `0x10` ("land right", base 29) instead. `CS:0x4E2D` is the shared probe, and it is **byte-identical in shape** to `solidThreeBelow` — `[si+0x180]` (3 rows below), with the straddle test `(X&0x1f)>=8 -> also test [si+0x181]`:
+
+```
+4E2D  call 0x1000:496a          ; rebuild the plane-B cursor from the CURRENT (pre-delta) X/Y
+4E30  xor ch,ch
+4E32  cmp byte [si+0x180],1 / jz 0x4e4b     ; solid 3 rows below?
+4E39  mov ax,[0x17a] / and ax,0x1f / cmp ax,8 / jl 0x4e4d
+4E44  cmp byte [si+0x181],1 / jnz 0x4e4d    ; the straddle neighbor
+4E4B  inc ch
+4E4D  ret
+```
+
+Two things matter for a port, both confirmed by tracing the caller sequence exactly rather than assumed from the probe's shape alone:
+
+- **The order.** The probe runs AFTER that tick's own horizontal walk step (`CS:0x4E94`–`0x4EB9` / `CS:0x508C`–`0x50B5`) but BEFORE that tick's arc delta is read from `DS:0xd922` — so it tests the position the hero is ABOUT to occupy horizontally this tick, at the Y it still holds from last tick. A port that probes after applying the delta lands a tick late, at the wrong row.
+- **`0x16` (22) is NOT "past the apex".** `i = cursor>>1 = 11`, and `JUMP_DELTAS[11]` is `+1` — the table is still RISING through `i=13` (peak at `i=12`/`13`, both `+0`/`+1` net). The check is live for the last two rising ticks as well as the whole descent, not gated on direction.
+- **The jump's own Y never dips below the launch height until the very last delta is applied** — `JUMP_DELTAS` sums to exactly 0 over all 23 entries (`0+0+0+0+6+6+5+4+4+3+2+1+1+0-1-1-2-3-4-4-5-6-6=0`), so the arc returns to the exact launch Y and no lower. Consequently this check can only ever catch a platform **at or above** the launch height — exactly the "clear a gap onto a similar or slightly higher ledge" geometry the reported bug describes. A platform genuinely lower than launch height is caught by the pre-existing FALL landing check instead, once the scripted arc completes and transitions out of JUMP.
+
+**Fix** (`gods-web/src/game/player.js`, `_jump()`): a new exported constant `JUMP_ARC_EARLY_LAND_CURSOR = 0x16` gates a `solidThreeBelow` probe inserted between the horizontal walk step and the arc-delta application, matching the instruction order above exactly. On a hit: `Y &= 0xfff0`, transition straight to `ST.GROUND`/`S.IDLE` (this port has no separate one-tick landing pose for states 16/17 — the same simplification `_fall()`'s own landing already makes, so the two landing paths now agree). The old `_jump()` had no landing test of any kind mid-arc — only the unrelated `solidHere` ceiling-ejection check (opposite direction, penetration not landing) — so it ran the full scripted 23-entry arc regardless of what was underfoot, walking further past a reachable ledge every remaining tick before ever testing the ground via FALL, which is exactly the "hero clips past the platform" symptom reported. Six new `checks.js` assertions cover: landing mid-arc on a higher platform instead of sailing over it, a regression guard that a jump over genuinely open air still completes the full arc into FALL, the exact threshold boundary (`jumpCursor` one tick before 0x16 does not land; at 0x16 it does, on the identical ground), and a ladder jump-off at a non-tile-aligned Y catching a nearby ledge mid-arc and landing tile-aligned. `node tools/verify-node.mjs`: 566/566 assertions pass (up from 560); `node tools/lint-checks.mjs` passes.
+
+Not yet confirmed live in DOSBox for this specific mechanic (the port fix rests on the disassembly alone, tagged `[STATIC]` for the live-observation half of this project's evidence standard). To promote: an execute breakpoint at `877:0x4f50` (state 8) or `877:0x514f` (state 9) should hit, with `CH=1` in the return register on the tick the hero lands short of the arc's scripted end — i.e., before `DS:0x358` reaches `0x2e`.
 
 **Ladder snap** rounds to the **tile origin**, not the tile centre: `add word [0x17a],0x20` / `and word [0x17a],0xFFE0` — the `AND` can only yield a multiple of 32.
 
