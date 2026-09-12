@@ -1655,7 +1655,31 @@ CS:0x1269C / 0x12CD4 / 0x12EEB / 0x132DE / 0x164BF:
 
 `CS:0x3596` is the graphics-export-9 thunk (`mov bp,0x5276` → `(0x5276−0x5252)/4 = 9`, `call far [bp+0]`) — export 9 is already in this document's own driver-export table as **"palette fade-in"** (`VGA:0x0FAA`).
 
-⚠️ **The fifth site is not literally identical to the other four.** `CS:0x164BF`/`0x164C2` set up `si`/`ax` the same way, but the `call 0x3596` itself is bracketed by `push word [0x42]` / `mov byte [0x42],0x0` before it and `pop word [0x42]` after — forcing the byte this document elsewhere identifies as the current **world** number to `0` for the duration of the call, then restoring it. Export 9's own body never reads `DS:0x42`, so the reason for the bracket is not established here; flagged as `UNKNOWN_export9_world_zero_bracket` rather than folded into the "identical" framing.
+⚠️ **The fifth site is not literally identical to the other four.** `CS:0x164BF`/`0x164C2` set up `si`/`ax` the same way, but the `call 0x3596` itself is bracketed by `push word [0x42]` / `mov byte [0x42],0x0` before it and `pop word [0x42]` after — forcing the byte this document elsewhere identifies as the current **world** number to `0` for the duration of the call, then restoring it. Export 9's own body never reads `DS:0x42`, so the reason for the bracket is not established here.
+
+**`UNKNOWN_export9_world_zero_bracket` — partly closed: identifies the whole screen this fade belongs to, but not the reason for forcing world `0` `[STATIC]`**
+
+⚠️ **A note on this session's own address citations, since it tripped up the tool calls needed to chase this down:** this document's `CS:0xNNNNN` addresses, when they run past four hex digits (`> 0xFFFF`), are the **linear address** (`segment*16 + offset`, matching the file-offset formula this document already establishes elsewhere), not a literal `segment:offset` pair — `CS:0x164BF` means offset `0x64BF` within `CS=0x1000` (linear `0x10000 + 0x64BF = 0x164BF`), confirmed by cross-checking against the already-verified `CS:0x125A8` unpack-entry call site, which resolves cleanly to `1000:25A8` and disassembles to exactly the documented `CALLF 0x40EC:0000`.
+
+`CS:0x164BF` (`= 1000:64BF`) sits inside **`FUN_1000_648b`**, a previously undocumented, complete function — this document's own already-established `FUN_1000_3506` caller list names it only as an address, with no description. Read in full, it is the **"LOADING" screen shown at each level (re)load**:
+
+```
+648b  call 0x1000:359d (ax=2)     ; export 15, clear page
+6492  call 0x1000:3506             ; refresh the status-panel backdrop + load smallfnt (this document's own closure)
+6495  [0x33] = 0                   ; a flag clear, not chased further
+649a  si = 0xebf1 ; [0x389] = 0x46 ; call 0x1000:646f   ; draw "LOADING" (DS:0xebf1), CENTERED
+64a5  al = [0x42] - 1 ; cbw ; ax*=2 ; si = 0xeb5a + ax ; si = word[si]
+                                    ; -> this document's own already-documented 4-world-name table
+                                    ;    (THE CITY / THE TEMPLE / THE LABYRINTH / THE UNDERWORLD)
+64b4  [0x389] = 0x64(100) ; call 0x1000:646f            ; draw the CURRENT WORLD's own name, CENTERED
+64bc  call 0x1000:35a8              ; graphics EXPORT 13 — frame sync + hardware page flip (commits the drawn text)
+64bf  si=0x86 ; ax=1 ; push[0x42] ; [0x42]=0 ; call 0x1000:3596 ; pop[0x42]
+                                    ; -> export 9, fade IN — revealing the freshly-composed screen
+```
+
+`CS:0x1000:646F` (the routine both text draws share) is a **centering** helper: it walks the ASCIIZ string at `SI` to measure its length, computes `AX = 0xA0 − (length-derived value)` (`0xA0 = 160`, half the 320px screen width), and calls `CS:0x224E` (a text-draw routine using this document's own universal `{[0x4],[0x6],[0x8]}` draw-call convention, `BX=[0x389]` selecting the font/message-id base) — so both `"LOADING"` and the world's own name are drawn horizontally centered. `DS:0xebf1` reads directly as `"LOADING\0COMPLETED\0BONUS\0…"` — a small pool of level-transition captions this document had not previously located.
+
+So the whole picture is now clear: this is the level-loading title card — clear the screen, draw `"LOADING"` then the destination world's own name (both centered), flip the page to show it, then fade up from black to reveal it. **What remains open is only the narrow original question**: *why* the world byte is forced to `0` for the duration of just this one fade-in and not the analogous fade calls elsewhere. Export 9's own body still never reads `DS:0x42` (confirmed again on this pass), and the sequence has no fade-*out* of its own to compare against (the preceding `CS:0x35A8` is graphics **export 13**, frame-sync-and-flip, not a fade) — so the bracket cannot be explained by anything inside this function or inside the driver call it wraps. The remaining candidate explanation — some other, unidentified per-frame process reading `DS:0x42` during the fade's own multi-vsync wait loop — was not chased further; that would need a live breakpoint during an actual level-load fade, not static reading.
 
 **Traced into `VGA.EXE`, and re-traced on this pass with the loose ends closed.** Export 9 runs a **fixed 8-pass** fade-blend — `ax` is seeded to `0x8` and decremented to `0`, not a "16-step" loop as an earlier revision of this section had it. **16 is the per-pass color count**, not the step count: each of the 8 passes walks all 16 palette slots (`bx = 0xf` down to `0`) via `call 0x107e`/`0x106c`, nudging a **working buffer at `DS:0x12`** one nibble-unit closer to the target on each of its three 3-bit channels (masks `0x7`/`0x70`/`0x700`, one `inc`/`add` per channel per pass) — so a channel with a delta of up to 7 fully converges within the 8 passes. The per-pass target read, `mov dx,[bx+si]` at `VGA:0x0FC0`, is a bare, unswapped load against `si = 0x86` — which only produces the correct comparison because `DS:0x86` is pre-swapped native, exactly the correction above.
 
