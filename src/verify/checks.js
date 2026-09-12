@@ -3953,6 +3953,93 @@ export async function checkWeaponsProjectiles(fetchRaw) {
       `DOES run here, landing exactly on the ladder`);
   }
 
+  /* ── idle facing persists the last-walked direction — a shipped-bug fix ──
+   * CS:0x5af2-0x5b35: releasing a walk key only enters state 26 (idle) when
+   * UP happens to be held at that exact instant (CS:0x5af9/0x5b0f). In the
+   * ordinary case the state NEVER changes and the phase locks to a facing-
+   * specific sentinel — 0x39=57 (left) or 0x2d=45 (right) — rendering a
+   * "stopped, still facing that way" pose. Confirmed live in DOSBox by the
+   * maintainer and independently by a fresh disassembly of the same bytes.
+   * An earlier revision of this port forced every release into idle's single
+   * symmetric sprite (25) regardless of facing. */
+  {
+    const m = flatMap();
+    const p = new Player(2 * 32, 9 * 16);
+    for (let i = 0; i < 4; i++) p.tick(m, IN());                // settle
+    for (let i = 0; i < 3; i++) p.tick(m, IN({ right: true }));  // walk right
+    p.tick(m, IN());                                             // release, UP not held
+    check(`releasing RIGHT with UP not held stays in WALK_R, not IDLE`,
+      p.stateIndex === PS.WALK_R && p.phase === 0x2d,
+      `state=${p.stateIndex} phase=0x${p.phase.toString(16)} — CS:0x5b2b/0x5b33 ` +
+      `locks cl=0x2d(45), rendering sprite ${spriteFor(PS.WALK_R, 0x2d)} (11+45=56), ` +
+      `a facing-specific stopped pose, not idle's symmetric sprite 25`);
+    for (let i = 0; i < 10; i++) p.tick(m, IN());
+    check(`...and the locked pose holds indefinitely while stopped`,
+      p.stateIndex === PS.WALK_R && p.phase === 0x2d,
+      'state 26 is never reached without a fresh UP press (CS:0x5b23/0x5b30 ' +
+      'do nothing on this path)');
+
+    const p2 = new Player(2 * 32, 9 * 16);
+    for (let i = 0; i < 4; i++) p2.tick(m, IN());
+    for (let i = 0; i < 3; i++) p2.tick(m, IN({ left: true }));
+    p2.tick(m, IN());
+    check(`releasing LEFT with UP not held stays in WALK_L, not IDLE`,
+      p2.stateIndex === PS.WALK_L && p2.phase === 0x39,
+      `state=${p2.stateIndex} phase=0x${p2.phase.toString(16)} — CS:0x5b1e/0x5b26 ` +
+      `locks cl=0x39(57), rendering sprite ${spriteFor(PS.WALK_L, 0x39)} (0+57=57)`);
+
+    const p3 = new Player(2 * 32, 9 * 16);
+    for (let i = 0; i < 4; i++) p3.tick(m, IN());
+    for (let i = 0; i < 3; i++) p3.tick(m, IN({ right: true }));
+    p3.tick(m, IN({ up: true }));                                // release WITH up held
+    check(`releasing RIGHT with UP HELD is the one path that enters true IDLE`,
+      p3.stateIndex === PS.IDLE,
+      'CS:0x5b0f/0x5b11 — the only site that ever writes state 26 on a release');
+    p3.tick(m, IN());
+    check(`...and idle's own handler (CS:49CA \`sub cl,cl\`) zeros the phase ` +
+          `on its very next tick, converging on the symmetric sprite 25`,
+      p3.stateIndex === PS.IDLE && p3.phase === 0 && spriteFor(PS.IDLE, 0) === 25,
+      `phase=${p3.phase}`);
+  }
+
+  /* ── jump ceiling collision — a missing feature, now added ─────────────
+   * CS:0x4E4E, shared by both jump handlers (state 8 CS:0x4F89 / state 9
+   * CS:0x5188): every tick, after the Y delta is applied, re-probes the
+   * hero's own cell for solid ground and — on a hit — floors to that tile
+   * row then pushes ONE FULL ROW back down, forcing a fall. An earlier
+   * revision of this port had no such check at all: `_jump()` applied
+   * JUMP_DELTAS unconditionally, so the hero's head would pass straight
+   * through a low platform. Confirmed missing live in DOSBox by the
+   * maintainer, then confirmed present in the original via a fresh
+   * disassembly of both jump handlers. */
+  {
+    const m = flatMap();                        // floor at row 12 (y=192)
+    const CEIL_ROW = 8, CEIL_COL = 5;            // 16px above the hero's start row
+    m.planeB[CEIL_ROW * MC + CEIL_COL] = CELL_SOLID;
+    const p = new Player(CEIL_COL * 32, 9 * 16); // row 9 = y144, 3 rows above the floor
+    for (let i = 0; i < 4; i++) p.tick(m, IN());                    // settle
+    p.tick(m, IN({ up: true, right: true }));                       // launch the jump
+    const ys = [];
+    let hitCeiling = false;
+    for (let i = 0; i < 8; i++) {
+      p.tick(m, IN());
+      ys.push(p.y);
+      if (p.state === ST.FALL) hitCeiling = true;
+    }
+    check(`a jump under a low platform never rises past the ceiling row`,
+      Math.min(...ys) >= 9 * 16,
+      `y sequence: ${ys.join(',')} — CS:0x4E4E's ejection check stops the rise ` +
+      `the instant the hero's own cell reads solid, never letting the drawn Y ` +
+      `cross into the ceiling tile's row`);
+    check(`...forcing FALL rather than letting the arc continue to rise`,
+      hitCeiling,
+      'the ceiling-hit branch sets ST.FALL and returns before the arc cursor advances');
+    check(`...then lands cleanly back where the jump started, having only ` +
+          `bounced off the ceiling rather than passed through it`,
+      p.state === ST.GROUND && p.y === 9 * 16,
+      `state=${p.state} y=${p.y}`);
+  }
+
   /* ── walk-fire halts the hero, and resumes mid-cycle ──────────────────── */
   {
     const { a, p, m } = armed();

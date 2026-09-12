@@ -428,6 +428,15 @@ export class Player {
         this.y -= d;
         if (this.doubleJump) this.y -= d;      // CS:0x53AD
       }
+      /* CS:0x4E4E's shared ceiling-ejection check (see the plain `_jump` for
+       * the full derivation) is reached from a jump-fire exactly as it is from
+       * an ordinary jump — a fired shot doesn't exempt the hero from clipping
+       * head-first through a low platform. */
+      if (solidHere(map, this.x, this.y)) {
+        this.y = (this.y & 0xfff0) + 0x10;
+        this._leaveFire(st.right ? S.FALL_R : S.FALL_L, 0);
+        return;
+      }
       this.jumpCursor += JUMP_ARC_STEP;        // CS:0x53F9 / 0x542B — BOTH paths
       if (this.jumpCursor >= JUMP_ARC_END) {
         /* ⚠️ The cursor exit WINS over the phase exit — it is tested after. */
@@ -534,17 +543,39 @@ export class Player {
        * exposed so the hook exists and is dated by evidence, not invented. */
       this.footstep = WALK_FOOTSTEP_PHASES.includes(this.phase);
     } else {
-      /* Leaving walk-left writes `mov cl,0xff` (CS:5AF9) and walk-right
-       * `mov cl,0x1` (CS:5B0F) before entering state 26, so the STOPPING tick
-       * renders 52-1 = 51 or 52+1 = 53. State 26's own handler then opens with
-       * `sub cl,cl` (CS:49CA), so every later idle tick renders a flat 52 — a
-       * direction-neutral standing pose. Reproduced exactly. */
-      if (this.stateIndex !== S.IDLE) {
+      /* ⚠️ CORRECTED — an earlier revision of this port had EVERY release enter
+       * state 26 (idle), rendering the single direction-neutral sprite 25
+       * regardless of facing. Live DOSBox testing (both by the maintainer and
+       * by re-reading CS:0x5af2-0x5b35 fresh) shows that is wrong: state 26 is
+       * only reached when UP happens to be held at the exact instant the walk
+       * key is released (CS:0x5af9/0x5afb left, CS:0x5b0f/0x5b11 right). In the
+       * ordinary case — UP not held — the state NEVER changes: the hero stays
+       * in WALK_L/WALK_R forever, and the phase locks to a fixed, facing-
+       * specific sentinel (CS:0x5b1e/0x5b26 left -> cl=0x39=57; CS:0x5b08/0x5b2b
+       * right -> cl=0x2d=45) that renders sprite 0+57=57 or 11+45=56 — a
+       * "stopped, still facing that way" pose, not idle's back-view sprite 25.
+       * Confirmed live: DS:0x377 never became 26 in either direction after a
+       * plain key release, and DS:0x36b landed on exactly these two constants. */
+      if (input.up) {
+        /* CS:5AF9/5AFB (left) or CS:5B0F/5B11 (right) — the ONLY way a release
+         * reaches true idle. State 26's own handler (CS:49CA `sub cl,cl`) zeros
+         * the phase again on its very next tick, converging on sprite 25. */
         this.phase = this.facing < 0 ? 0xff : 0x01;
         this.stateIndex = S.IDLE;
-      } else {
+      } else if (this.stateIndex === S.IDLE) {
+        /* Already idling (reached via the branch above on a prior tick, or via
+         * a fall/climb-bottom landing) and UP is no longer held: state 26's own
+         * body still runs every tick and keeps zeroing cl. */
         this.phase = 0;
+      } else if (this.phase !== 0) {
+        /* CS:5B1E/5B26 (left) or 5B2B/5B33 (right): UP not held, and this is
+         * the tick the walk key was just released — lock the facing-specific
+         * stopped pose. stateIndex is deliberately left at WALK_L/WALK_R. */
+        this.phase = this.facing < 0 ? 0x39 : 0x2d;
       }
+      /* else: phase is already the locked sentinel (or already 0 at true rest)
+       * — CS:5B23/5B30 do nothing at all on this path, so neither field is
+       * touched again until the player moves or presses UP. */
     }
 
     /* ⚠️ JUMP vs CLIMB priority, re-read from CS:0x5a05-0x5a21 (walk-left),
@@ -615,12 +646,44 @@ export class Player {
     const i = this.jumpCursor >> 1;          // cursor is a byte offset
     if (i >= JUMP_DELTAS.length) { this._enterFall(); return; }
     const d = JUMP_DELTAS[i];
-    this.y -= d;
-    if (this.doubleJump) this.y -= d;        // applied twice when [0x174] != 0
-    /* The rise is COMMITTED: handlers 8/9 test input bits 0x01/0x02/0x80 only,
+    /* ⚠️ REORDERED — CS:0x4E94-0x4EB9 (state 8) / CS:0x508C-0x50B5 (state 9):
+     * the wall-probe/X-step runs against the PRE-delta Y, before the delta
+     * table is even reached at CS:0x4F6F/0x516E. An earlier revision of this
+     * port applied the Y delta first, so the wall probe could test the wrong
+     * row near a 16px boundary (up to 12px off during a double jump).
+     * The rise is COMMITTED: handlers 8/9 test input bits 0x01/0x02/0x80 only,
      * never 0x04/0x08, so direction cannot be steered while rising. Horizontal
      * motion is a hard-coded +/-4 gated on `cmp byte [0x358],4; jl`. */
     if (this.jumpCursor >= 4) this._walk(map, this.facing);
+    this.y -= d;
+    if (this.doubleJump) this.y -= d;        // applied twice when [0x174] != 0
+
+    /* CS:0x4E4E — a shared "is the hero now standing inside solid ground"
+     * ejection check, called from BOTH state 8 (CS:0x4F89) and state 9
+     * (CS:0x5188) unconditionally every tick after the Y delta is applied. It
+     * is NOT gated on the sign of the delta: it is a penetration check, not a
+     * rise/fall look-ahead, so it fires just as readily on the arc's downward
+     * half — this is what stops the hero's head clipping through a low
+     * platform on the way up. `solidHere` is already byte-identical to this
+     * routine's own straddle-tested cell read. On a hit: floor to the tile row
+     * and then push ONE FULL ROW further down (CS:0x4F8F-0x4F96 / 0x5190-
+     * 0x5195 — `and 0xfff0` alone would move the hero UP into the ceiling
+     * tile), force a fall, and — matching the original's own `jmp 0x5e9b` —
+     * return before the cursor advances or the fire-guard runs this tick.
+     * Zeroing fallDamage here (not just fallV/airSteps) matters: CS:0x4FB3/
+     * 0x51AA do it too, and `_enterFall()` deliberately does not (it also
+     * serves the unrelated ledge-walk-off entry), so this is inlined rather
+     * than routed through it. */
+    if (solidHere(map, this.x, this.y)) {
+      this.y = (this.y & 0xfff0) + 0x10;
+      this.state = ST.FALL;
+      this.stateIndex = this.facing < 0 ? S.FALL_L : S.FALL_R;
+      this.fallV = 0;
+      this.airSteps = 0;
+      this.fallDamage = 0;
+      this.phase = 0;
+      return;
+    }
     this.stateIndex = this.facing < 0 ? S.JUMP_L : S.JUMP_R;
     /* The handler's phase chain runs on the cursor as it stands BEFORE this
      * frame's advance — so read it first, then step. */
