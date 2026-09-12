@@ -106,7 +106,8 @@ import { Starburst, BURST_TEMPLATE, PARTICLES_PER_BURST, SLOTS,
          SPAWNER_CALLERS } from '../game/starburst.js';
 import { JUMP_ARC_END, JUMP_ARC_EXIT, fireGuardBefore,
          fireGuardAfter } from '../game/fire-states.js';
-import { Player, ST, S as PS } from '../game/player.js';
+import { Player, ST, S as PS, JUMP_ARC_EARLY_LAND_CURSOR,
+         WALK_STEP } from '../game/player.js';
 import { CELL_SOLID, CELL_CLIMBABLE, MAP_COLS as MC } from '../formats/map.js';
 import { parseWeapons, allocateShots, MAX_SUBSLOTS, WEAPON_SLOTS, tagFor,
          WEAPON_COUNT, PINNED_08, PINNED_SPRITE, PINNED_SPRITE2,
@@ -3887,6 +3888,136 @@ export async function checkWeaponsProjectiles(fetchRaw) {
       'one map row away from the row the landing check itself used, so the ' +
       'hero immediately falls, drops a pixel, and lands again — the reported ' +
       'idle/fall flicker');
+  }
+
+  /* ── the JUMP arc has its OWN early-landing check — this port had none at
+   * all (the reported "jump onto the platform to the left, the hero clips
+   * past it" bug). CS:0x4F49-0x4F6C (state 8) / CS:0x5148-0x516B (state 9):
+   * once the jump-arc cursor reaches 0x16 (22), every tick FIRST probes
+   * solidThreeBelow at the current position — after that tick's own
+   * horizontal step, before that tick's arc delta is even read — via
+   * CS:0x4e2d, byte-identical in shape to the probe FALL already uses for
+   * landing. On a hit, the arc delta is never applied: the hero lands
+   * exactly where it stands, Y snapped to the tile row. The old `_jump()`
+   * had no such test — it read only `solidHere` (a ceiling-ejection check,
+   * fired the OPPOSITE direction) — so it ran the full scripted 23-entry arc
+   * regardless of what was underfoot, sailing over a platform reachable
+   * partway through instead of landing on it.
+   *
+   * 0x16 is NOT "past the apex": i = cursor>>1 = 11, and JUMP_DELTAS[11] is
+   * +1 — the table is still RISING through i=13. The jump's own Y never
+   * dips below the launch height until the very last delta is applied
+   * (JUMP_DELTAS sums to exactly 0 over all 23 entries, so the arc returns
+   * to the exact launch Y and no lower) — so this check only ever matters
+   * for a platform at or ABOVE the launch height, exactly the "gap crossing
+   * onto a similar or slightly higher ledge" geometry the report describes. */
+  {
+    const n = MC * 64;
+    const planeB = new Uint8Array(n);
+    for (let c = 0; c <= 5; c++) planeB[12 * MC + c] = CELL_SOLID;    // launch platform
+    for (let c = 5; c <= 20; c++) planeB[10 * MC + c] = CELL_SOLID;   // target, 2 rows HIGHER
+    const gapMap = { planeA: new Uint8Array(n), planeB,
+                      widthPx: 4096, heightPx: 1024 };
+
+    const p = new Player(5 * 32, 9 * 16);              // resting on the launch edge
+    for (let i = 0; i < 4; i++) p.tick(gapMap, IN(), null);           // settle
+    p.tick(gapMap, IN({ up: true, right: true }), null);              // launch right
+    let landedAtCursor = -1;
+    for (let i = 0; i < 40 && landedAtCursor < 0; i++) {
+      const cursorBefore = p.jumpCursor;
+      p.tick(gapMap, IN(), null);
+      if (p.state === ST.GROUND) landedAtCursor = cursorBefore;
+    }
+    check(`a jump lands on a platform reached MID-ARC instead of sailing over it`,
+      landedAtCursor === JUMP_ARC_EARLY_LAND_CURSOR && p.y === 112
+        && p.x >= 5 * 32,
+      `landed at jumpCursor=${landedAtCursor}, y=${p.y}, x=${p.x} — a port ` +
+      `without this check runs the full scripted arc (cursor to ` +
+      `${JUMP_ARC_END.toString(16)}) before ever testing the ground, ` +
+      `drifting ${((JUMP_ARC_END - landedAtCursor) / 2) * WALK_STEP}px ` +
+      `further before it even starts to fall`);
+  }
+  {
+    /* A regression guard in the opposite direction: a gap with NOTHING below
+     * anywhere in reach must still run the full arc and enter FALL, not
+     * spuriously stop mid-air. solidThreeBelow only reads real map cells, so
+     * this mostly exercises that the new check doesn't disturb the ordinary
+     * no-platform path. */
+    const n = MC * 64;
+    const planeB = new Uint8Array(n);
+    for (let c = 0; c <= 5; c++) planeB[12 * MC + c] = CELL_SOLID;
+    const openMap = { planeA: new Uint8Array(n), planeB,
+                       widthPx: 4096, heightPx: 1024 };
+    const p = new Player(5 * 32, 9 * 16);
+    for (let i = 0; i < 4; i++) p.tick(openMap, IN(), null);
+    p.tick(openMap, IN({ up: true, right: true }), null);
+    let sawFall = false, everGrounded = false;
+    for (let i = 0; i < 40; i++) {
+      p.tick(openMap, IN(), null);
+      if (p.state === ST.FALL) sawFall = true;
+      if (p.state === ST.GROUND) everGrounded = true;
+    }
+    check(`a jump over open air still completes the arc and falls — no ` +
+          `spurious mid-air landing`,
+      sawFall && !everGrounded,
+      `state=${p.state} sawFall=${sawFall} everGrounded=${everGrounded}`);
+  }
+  {
+    /* The threshold itself, tested at the exact boundary: cursor 20 must NOT
+     * land even with solid ground already 3 rows below; cursor 22 must. */
+    const m = flatMap();                              // floor at row 12
+    const y0 = 9 * 16;                                 // 144 — 3 rows above row 12
+    const p1 = new Player(2 * 32, y0);
+    p1.state = ST.JUMP; p1.jumpCursor = JUMP_ARC_EARLY_LAND_CURSOR - 2; p1.facing = 1;
+    p1.tick(m, IN(), null);
+    check(`jumpCursor one tick BEFORE the threshold does not early-land`,
+      p1.state === ST.JUMP,
+      `state=${p1.state} y=${p1.y} — solid ground is already 3 rows below ` +
+      `at y=${y0}; only the cursor gate should be holding this back`);
+
+    const p2 = new Player(2 * 32, y0);
+    p2.state = ST.JUMP; p2.jumpCursor = JUMP_ARC_EARLY_LAND_CURSOR; p2.facing = 1;
+    p2.tick(m, IN(), null);
+    check(`jumpCursor AT the threshold early-lands on the same ground`,
+      p2.state === ST.GROUND && p2.y === y0,
+      `state=${p2.state} y=${p2.y} (expected ${y0}) — an off-by-one on ` +
+      `JUMP_ARC_EARLY_LAND_CURSOR is invisible any other way`);
+  }
+  {
+    /* Bug 1 — jumping OFF A LADDER mid-climb, at an arbitrary, non-tile-
+     * aligned Y. The jump arc's own Y never goes below the LAUNCH height
+     * until the very last delta (see the note above), so a dismount high on
+     * a ladder with the real floor far below lands via the pre-existing
+     * (already correct) FALL check, not this one — the early-landing check
+     * only matters here the same way it does for a ground jump: when a
+     * ledge is reachable within the arc's own ~32px rise-and-return, which
+     * is exactly the geometry a mid-climb dismount onto a nearby platform
+     * produces. Reuses the exact platform from the mid-arc check above (row
+     * 10, cols 5-20), started 3px off-grid to prove the snap doesn't depend
+     * on having dismounted from a tile-aligned rung. */
+    const n = MC * 64;
+    const planeB = new Uint8Array(n);
+    for (let c = 0; c <= 5; c++) planeB[12 * MC + c] = CELL_SOLID;
+    for (let c = 5; c <= 20; c++) planeB[10 * MC + c] = CELL_SOLID;
+    const ladderMap = { planeA: new Uint8Array(n), planeB,
+                         widthPx: 4096, heightPx: 1024 };
+    const p = new Player(5 * 32, 9 * 16 + 3);          // mid-climb, NOT tile-aligned
+    p.state = ST.CLIMB;
+    p.tick(ladderMap, IN({ up: true, right: true }), null);   // jump off, rightward
+    check(`jumping off a ladder mid-climb enters JUMP, not still CLIMB`,
+      p.state === ST.JUMP, `state=${p.state}`);
+    let landedAtCursor = -1;
+    for (let i = 0; i < 60 && landedAtCursor < 0; i++) {
+      const cursorBefore = p.jumpCursor;
+      p.tick(ladderMap, IN(), null);
+      if (p.state === ST.GROUND) landedAtCursor = cursorBefore;
+    }
+    check(`a ladder jump-off at a non-tile-aligned Y still catches a nearby ` +
+          `ledge MID-ARC and lands tile-aligned`,
+      landedAtCursor === JUMP_ARC_EARLY_LAND_CURSOR && p.y === 112,
+      `landed at jumpCursor=${landedAtCursor}, y=${p.y} — the port's own ` +
+      'landing SNAPS Y (`y &= 0xfff0`) the same way the mid-arc check above ' +
+      'does, regardless of the 3px off-grid rung the jump-off started from');
   }
 
   /* ── ladder-entry X snap is NOT unconditional (CS:0x4A36/0x59AB/0x5A3C/

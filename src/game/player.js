@@ -67,6 +67,14 @@ export const GRAVITY_STEP  = 1;    // per tick
 export const FALL_VMAX     = 10;   // clamp on DS:0x1b2
 export const FALL_BASE     = 4;    // dY = FALL_BASE + v
 export const AIR_STEPS_MAX = 3;    // DS:0x345 budget
+/* CS:0x4F49 (state 8, jump left) / CS:0x5148 (state 9, jump right) —
+ * `cmp byte [0x358],0x16 / jl <skip>`. Once the jump-arc cursor reaches this
+ * value, the handler probes solidThreeBelow BEFORE reading that tick's arc
+ * delta and, on a hit, lands on the spot instead of applying the delta.
+ * 0x16 = 22 is NOT "past the apex" — i = cursor>>1 = 11, and JUMP_DELTAS[11]
+ * is +1 (still rising); the table doesn't turn negative until i=14. The
+ * probe is live for the last two rising ticks as well as the whole descent. */
+export const JUMP_ARC_EARLY_LAND_CURSOR = 0x16;
 /* CS:0x5663 (descend, state 13) `add word [0x17c],0x6` AND CS:0x58c3
  * (ascend, state 14) `sub word [0x17c],0x6` — BOTH directions step 6 px, not
  * the 4/6 split this project's own notes carried. That 4 px number came from
@@ -655,6 +663,42 @@ export class Player {
      * never 0x04/0x08, so direction cannot be steered while rising. Horizontal
      * motion is a hard-coded +/-4 gated on `cmp byte [0x358],4; jl`. */
     if (this.jumpCursor >= 4) this._walk(map, this.facing);
+
+    /* CS:0x4F49-0x4F6C (state 8) / CS:0x5148-0x516B (state 9) — an
+     * EARLY-LANDING check this port lacked entirely. Once the cursor reaches
+     * JUMP_ARC_EARLY_LAND_CURSOR, every tick first probes solidThreeBelow at
+     * the CURRENT position (after this tick's own horizontal step, but
+     * BEFORE this tick's arc delta is even read) via CS:0x4e2d — byte-
+     * identical in shape to solidThreeBelow's own straddle test, and to the
+     * probe FALL uses for landing. On a hit the arc delta is never applied:
+     * the hero lands exactly where it stands, Y snapped to the tile row
+     * (`AND [0x17c],0xFFF0`), transitioning straight into a landed state
+     * (16/17 in the original, `anim_base` 29/31 — the same base as JUMP_R/
+     * JUMP_L — with phase 0). This port has no separate landing pose (see
+     * FALL's own landing a few lines below, which makes the same
+     * simplification), so it goes straight to GROUND/IDLE rather than
+     * inventing a timed pose it can't verify.
+     *
+     * Without this, a jump whose feet come within 3 rows of solid ground
+     * mid-arc sails over it instead of landing — this is the reported "jump
+     * onto the platform to the left, the hero clips past it" bug. It also
+     * covers jumping off a ladder mid-climb at an arbitrary, non-tile-
+     * aligned Y: the raw arc used to run to its scripted end (or into FALL)
+     * regardless of what was underfoot; now it catches the first solid
+     * ground it reaches, same as the original. */
+    if (this.jumpCursor >= JUMP_ARC_EARLY_LAND_CURSOR
+        && solidThreeBelow(map, this.x, this.y)) {
+      this.y &= 0xfff0;
+      this.state = ST.GROUND;
+      this.fallV = 0;
+      this.airSteps = 0;
+      this.fallDamage = 0;
+      this.stateIndex = S.IDLE;
+      this.phase = 0;
+      this.renderPhase = 0;
+      return;
+    }
+
     this.y -= d;
     if (this.doubleJump) this.y -= d;        // applied twice when [0x174] != 0
 
