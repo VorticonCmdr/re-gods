@@ -2270,7 +2270,27 @@ edaa  cmp [0x3c3], [si] / jl 0xedb6     ; only "empty" (not "dying") count matte
 edb1    [bp+0] = 0                      ; ALL entities fully finished -> free the group-runtime slot
 ```
 
-So a System-B monster group can carry its own **group-clear bonus item**, encoded as a signed 16-bit id in the previously-uncatalogued descriptor field `+0x10`, big-endian on disk like every other `SI`-read descriptor word in this document — negative means "no reward". The reward fires once, at the position of whichever entity happened to die last (cached via `DS:0x202`/`0x204`), gated by a new group-runtime field `+0x10` (a one-shot latch, distinct from and three fields after the already-documented `+0xe`/`copy of descriptor +0xe`... — this project's own `SS:0x36b4` stride-`0x12` runtime layout gains a newly-identified `+0x10` field: "group reward already awarded"), and only *after* that the group-runtime slot is freed and can be reallocated by a future trigger. `UNKNOWN_sysB_reward_ids` — which descriptor records ship a non-negative `+0x10` value, and what those ids decode to via the shared `CS:0xBF5F` `<0xB`-weapon / `≥0xB`-object split, was not censused this pass.
+So a System-B monster group can carry its own **group-clear bonus item**, encoded as a signed 16-bit id in the previously-uncatalogued descriptor field `+0x10`, big-endian on disk like every other `SI`-read descriptor word in this document — negative means "no reward". The reward fires once, at the position of whichever entity happened to die last (cached via `DS:0x202`/`0x204`), gated by a new group-runtime field `+0x10` (a one-shot latch, distinct from and three fields after the already-documented `+0xe`/`copy of descriptor +0xe`... — this project's own `SS:0x36b4` stride-`0x12` runtime layout gains a newly-identified `+0x10` field: "group reward already awarded"), and only *after* that the group-runtime slot is freed and can be reallocated by a future trigger.
+
+**`UNKNOWN_sysB_reward_ids` — CLOSED: censused across all 8 shipped levels, and it corrects the `<0xB` branch's own meaning `[PROVEN]`**
+
+⚠️ **Correction first: `id < 0xB` is not a weapon-recovery branch.** Re-reading `CS:0xBF5F`'s own body (this document's now-closed `UNKNOWN_bf5f_popup_id` section) settles it precisely: `id < 0xB` reaches `CS:0xC004`, "a plain numeric popup (score-style)" — it is **not** the weapon-index recovery this document documents elsewhere for the unrelated `CS:0xC041` steal-and-carry routine (which recovers a weapon via `id − 0xC0`, a completely different encoding). `id ≥ 0xB` is the only branch that recovers a `POBJECTS` type (`id − 0xB`).
+
+Decompressing all 8 `PALFILS.0{A,B}{1-4}` files (`blast.py`) and reading every live System-B descriptor's `+0x10` field directly gives a small, fully decodable set of distinct values:
+
+| `+0x10` | meaning | how common |
+|---|---|---|
+| `-1` | no reward | the minority — worlds 2–3 only, never worlds 1/4 |
+| `0`, `6` | plain numeric popup (`id < 0xB`, `CS:0xC004`) | rare, two isolated records |
+| `22` → type 11, `"chrystal"` | the overwhelming **default** — nearly every live group in every world | dominant |
+| `21` → type 10, `"diamond"` | a handful, world 1 | |
+| `17`/`18` → types 6/7, `"water chrystal"`/`"fire chrystal"` | world 1 only | |
+| `135`/`136` → types 124/125, `"fire gem"`/`"water gem"` | world 2 only | |
+| `112` → type 101, `"gold bowl"` | worlds 4A/4B, one group each | |
+| `46`/`11` → type 35/0, `"health"` (`"restores energy"`) | one group each, worlds 3/2 | |
+| `56` → type 45, `"potion" / "attracts monsters"` | world 3, two groups | |
+
+So a cleared monster group overwhelmingly drops a **chrystal** (the default reward almost every world's author left in place), with a sprinkling of diamonds, elemental gems, a gold bowl, an outright health potion, and — strikingly — the **same `"attracts monsters"` potion type this document already documents forcing every System-B enemy onto pathfinder strategy 2** (`DS:0x399`/`DS:0x398`, under *`UNKNOWN_seed_2`/`UNKNOWN_seed_3`*) as a **clearing reward** in world 3. A handful of groups (world 2 and 3 only) award nothing at all. No group in any shipped level reaches the numeric-popup branch with a value worth noting (`0`/`6`, both essentially inert score-style flourishes), and none reaches the two unreachable icon sprites (`0x94`/`0x95`, this document's own already-closed *`UNKNOWN_bf5f_special_sprite_callers`*) — this is an entirely separate, fully-populated reward channel from that dead one.
 
 ### The enemy sprite — `UNKNOWN_sysB_sprite_formula` CLOSED `[PROVEN]`
 
