@@ -199,11 +199,33 @@ export function wallBlocks(map, x, y, dir) {
  * below: a single-row test (what this used to be) is one vertical pixel of
  * rounding away from missing a ladder the original would have found. Used
  * for both entry (_ground) and continuation (_climb). */
-function climbableHere(map, x, y) {
+/** Which column actually matched — 0 (the hero's own column) or 1 (one
+ *  column to the right) — or null. The entry sites need this, not just the
+ *  boolean: see `ladderSnapX` below. */
+function climbableHereCol(map, x, y) {
   const si = mapCursor(x, y);
   const col = (x & 0x1f) >= 0x10 ? 1 : 0;
-  return cellAt(map, si + col) === CELL_CLIMBABLE
-      || cellAt(map, si + MAP_COLS + col) === CELL_CLIMBABLE;
+  if (cellAt(map, si + col) === CELL_CLIMBABLE
+      || cellAt(map, si + MAP_COLS + col) === CELL_CLIMBABLE) return col;
+  return null;
+}
+function climbableHere(map, x, y) {
+  return climbableHereCol(map, x, y) !== null;
+}
+
+/* CS:0x4A36/0x59AB/0x5A3C/0x5BF3/0x5C80 — the ladder X snap, and it is NOT
+ * unconditional. `add word [0x17a],0x20` runs ONLY on the col-1 (one column
+ * right) match; the col-0 (the hero's OWN column) match jumps straight to
+ * the `and word [0x17a],0xffe0` alone (e.g. CS:0x4a61 `jz 0x1000:4a3b`, which
+ * is the AND, skipping the ADD two bytes before it at 0x4a36). So a hero
+ * already standing in the ladder's own column is floored to that SAME
+ * column; only an approach from the col-1 side advances a whole tile.
+ * ⚠️ Applying `(x+0x20)&0xFFE0` unconditionally — as this port used to —
+ * shoves a col-0 entry one tile PAST the ladder, into whatever the next
+ * column holds. That is the reported clipping bug: the hero snaps into
+ * solid geometry beside the ladder instead of standing on it. */
+function ladderSnapX(x, col) {
+  return col === 1 ? (x + 0x20) & 0xFFE0 : x & 0xFFE0;
 }
 
 /* CS:0x598a-0x59e5 (walk-left) / CS:0x5bd2-0x5c02 (walk-right) — the
@@ -214,12 +236,18 @@ function climbableHere(map, x, y) {
  * this behind a `call 0x5b38 / jc` that falls to crouch instead when it
  * fails — not modelled here; a port press that would have crouched may
  * descend a ladder instead in that narrow edge case.) */
-function climbableThreeBelow(map, x, y) {
+/* CS:0x599d tries col+1 FIRST (only when sub >= 0xc); CS:0x59de falls back
+ * to col+0 (only when sub <= 0x14) — same priority a caller needs for the
+ * snap, not just the OR this used to collapse it to. */
+function climbableThreeBelowCol(map, x, y) {
   const si = mapCursor(x, y) + 3 * MAP_COLS;
   const sub = x & 0x1f;
-  if (sub <= 0x14 && cellAt(map, si) === CELL_CLIMBABLE) return true;
-  if (sub >= 0x0c && cellAt(map, si + 1) === CELL_CLIMBABLE) return true;
-  return false;
+  if (sub >= 0x0c && cellAt(map, si + 1) === CELL_CLIMBABLE) return 1;
+  if (sub <= 0x14 && cellAt(map, si) === CELL_CLIMBABLE) return 0;
+  return null;
+}
+function climbableThreeBelow(map, x, y) {
+  return climbableThreeBelowCol(map, x, y) !== null;
 }
 
 /* CS:0x5797-0x57a4 (dismount right) / CS:0x5806-0x5813 (dismount left) — a
@@ -537,12 +565,14 @@ export class Player {
      *     for a climbable cell; climb if found.
      *   - UP alone with no climbable cell -> nothing happens this tick
      *     (CS:0x5a64 / CS:0x4a6a `jmp 0x5e9b`) — NOT a jump. */
-    if (moving && input.down && climbableThreeBelow(map, this.x, this.y)) {
+    const descendCol = (moving && input.down)
+      ? climbableThreeBelowCol(map, this.x, this.y) : null;
+    if (descendCol !== null) {
       /* CS:0x59ab (walk-left) / CS:0x5bf3 (walk-right) — descend onto a
        * ladder three rows (48 px) below, tested before UP is even looked
        * at. The port's ladder is simplified (see _climb's own note), so
        * only the state transition and the X snap are reproduced. */
-      this.x = (this.x + 0x20) & 0xFFE0;
+      this.x = ladderSnapX(this.x, descendCol);
       this.state = ST.CLIMB;
       this.stateIndex = S.CLIMB;
       this.phase = 0;
@@ -564,9 +594,9 @@ export class Player {
         this.fromLadder = false;
         return;
       }
-      if (climbableHere(map, this.x, this.y)) {
-        /* Ladder snap: add 0x20 then AND 0xFFE0 -> multiple of 32 (tile origin) */
-        this.x = (this.x + 0x20) & 0xFFE0;
+      const climbCol = climbableHereCol(map, this.x, this.y);
+      if (climbCol !== null) {
+        this.x = ladderSnapX(this.x, climbCol);
         this.state = ST.CLIMB;
         this.stateIndex = S.CLIMB;
         this.phase = 0;

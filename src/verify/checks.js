@@ -21,7 +21,7 @@ import { STATE_INFO, STATE_TABLE, spriteFor, NON_RENDERING_STATES, jumpPhase,
          LADDER_JUMP_PHASE } from '../game/states.js';
 import { emittableStates } from '../game/player.js';
 import { MODE, MODE_TABLE, EntityB, hopDelta, hopCursorNext,
-         groundBelow, onScreen } from '../game/entity.js';
+         groundBelow, onScreen, fireB } from '../game/entity.js';
 import { parseGroupsB, parseGroupsA, GroupSlots, spriteForEntity, CLASS_TABLES_B,
          CREATURE_DESCRIPTOR_BASE, MAX_ENTITIES } from '../game/spawn.js';
 import { EntityA, CLASS_TABLES_A, spriteForEntityA, rollStrategy,
@@ -1523,6 +1523,39 @@ export function checkEntityB() {
   check(`cull window is x (-63,351), y (-63,223) — slack on left/top only`,
     onScreen(-63 + 1, 0, 0, 0) && !onScreen(-64, 0, 0, 0) &&
     onScreen(350, 0, 0, 0) && !onScreen(352, 0, 0, 0));
+
+  /* CS:0xE659, System B's own reading — called via fireB. Same reload gate
+   * and attackBits divert as System A's stageFacingAndFire, but facing comes
+   * from the entity's OWN mode bit (DS:0xd95a's bit test reduces to exactly
+   * this module's `facingOf`), and — unlike System A — there is no "zero own
+   * velocity means don't fire" gate: System B has no signed X-velocity
+   * register at this point, so a live entity fires whenever its reload timer
+   * allows, regardless of mode. */
+  check(`fireByte 0 never arms (no desc also refuses, silently)`,
+    fireB(new EntityB({ x: 0, y: 0 }), { fire: 0x00, flags: 0 }) === null &&
+    fireB(new EntityB({ x: 0, y: 0 }), null) === null);
+
+  const bRight = new EntityB({ x: 0, y: 0, mode: MODE.WALK_R });
+  const shotR = fireB(bRight, { fire: 0x31, flags: 0 });
+  check(`mode WALK_R (odd) fires from x+32, dir = +hiNibble — no velocity gate needed`,
+    shotR && shotR.x === bRight.x + 0x20 && shotR.dir === 3, JSON.stringify(shotR));
+
+  const bLeft = new EntityB({ x: 0, y: 0, mode: MODE.HOP_L });
+  const shotL = fireB(bLeft, { fire: 0x31, flags: 0 });
+  check(`mode HOP_L (even) fires from x-8, dir = -hiNibble — mid-hop still fires`,
+    shotL && shotL.x === bLeft.x - 8 && shotL.dir === -3, JSON.stringify(shotL));
+
+  const bReload = new EntityB({ x: 0, y: 0, mode: MODE.WALK_R });
+  const first = fireB(bReload, { fire: 0x31, flags: 0 });
+  const second = fireB(bReload, { fire: 0x31, flags: 0 });
+  check(`the reload timer blocks an immediate second shot`, first && second === null);
+
+  const bHazard = new EntityB({ x: 10, y: 20, mode: MODE.WALK_L });
+  const hazardB = fireB(bHazard, { fire: 0x61, flags: 0x10 });   // (0x10>>4)&3 = 1
+  check(`attackBits != 0 diverts to a hazard spawn, unmuzzled, n = hi nibble`,
+    hazardB && hazardB.hazard === true && hazardB.attackBits === 1 &&
+    hazardB.n === 6 && hazardB.x === 10 && hazardB.y === 20,
+    JSON.stringify(hazardB));
 
   return results;
 }
@@ -3854,6 +3887,70 @@ export async function checkWeaponsProjectiles(fetchRaw) {
       'one map row away from the row the landing check itself used, so the ' +
       'hero immediately falls, drops a pixel, and lands again — the reported ' +
       'idle/fall flicker');
+  }
+
+  /* ── ladder-entry X snap is NOT unconditional (CS:0x4A36/0x59AB/0x5A3C/
+   * 0x5BF3/0x5C80) — reported live as "instead of standing on top the
+   * character stands in it". `add word [0x17a],0x20` runs ONLY on the col+1
+   * (one column right) match; a col+0 match — the hero already standing in
+   * the ladder's own column — jumps straight to `and word [0x17a],0xffe0`
+   * alone (e.g. CS:0x4a61 `jz 0x1000:4a3b`, skipping the ADD two bytes
+   * before it). An earlier version of this port applied `(x+0x20)&0xFFE0`
+   * unconditionally, which shoves a col+0 entry one whole tile PAST the
+   * ladder into whatever the next column holds — reproduced live in the
+   * browser: entering climb at PLEV1A's first ladder (world x=224) snapped
+   * to x=256, a solid pillar one tile to the right, and froze there forever
+   * (256 is never climbable, so every later up-tick's climbableHere failed
+   * and reverted with no motion) while the sprite rendered embedded in the
+   * wall instead of on the ladder. */
+  {
+    const n = MC * 64;
+    const planeB = new Uint8Array(n);
+    for (let c = 0; c < MC; c++) planeB[12 * MC + c] = CELL_SOLID;
+    for (let r = 4; r < 12; r++) planeB[r * MC + 20] = CELL_CLIMBABLE;
+    // col 21 — where the OLD unconditional +0x20 snap would have landed —
+    // is SOLID, exactly like the wall pillar next to the real ladder.
+    for (let r = 4; r < 12; r++) planeB[r * MC + 21] = CELL_SOLID;
+    const laddermap = { planeA: new Uint8Array(n), planeB,
+                         widthPx: 4096, heightPx: 1024 };
+
+    /* Standing exactly in the ladder's own column (col 20, sub 0 < 0x10) —
+     * the col+0 match. */
+    const a1 = new Arsenal(w1);
+    const p1 = new Player(20 * 32, 9 * 16);
+    for (let i = 0; i < 4; i++) p1.tick(laddermap, IN(), a1);   // settle
+    p1.tick(laddermap, IN({ up: true }), a1);
+    check(`climb entry from the ladder's OWN column does NOT overshoot into ` +
+          `the solid column beside it`,
+      p1.state === ST.CLIMB && p1.x === 20 * 32,
+      `x=${p1.x} state=${p1.state} — the col+0 branch floors X to its OWN ` +
+      `tile (CS:0x4a61 -> 0x4a3b, the AND with no preceding ADD); the old ` +
+      `unconditional (x+0x20)&0xFFE0 would have parked the hero at ` +
+      `${(20 * 32 + 0x20) & 0xFFE0} — inside the solid pillar`);
+    let climbed = false;
+    for (let i = 0; i < 10; i++) {
+      p1.tick(laddermap, IN({ up: true }), a1);
+      if (p1.y < 9 * 16) climbed = true;
+    }
+    check(`...and the hero actually climbs afterward, rather than freezing ` +
+          `wedged in the wall`,
+      climbed && p1.x === 20 * 32,
+      `a hero snapped into solid geometry can never pass climbableHere ` +
+      `again, so every later up-tick reverts with zero Y motion — the ` +
+      `"stands in it instead of on top of it" report`);
+
+    /* Approaching from the left (col 19, sub >= 0x10) — the col+1 match —
+     * must still correctly advance INTO the ladder's column. Regression
+     * guard: the fix must not turn off the genuine forward-snap case. */
+    const a2 = new Arsenal(w1);
+    const p2 = new Player(19 * 32 + 24, 9 * 16);   // sub = 24 >= 0x10
+    for (let i = 0; i < 4; i++) p2.tick(laddermap, IN(), a2);
+    p2.tick(laddermap, IN({ up: true }), a2);
+    check(`climb entry approaching from the LEFT still advances into the ` +
+          `ladder's own column (the genuine col+1 case)`,
+      p2.state === ST.CLIMB && p2.x === 20 * 32,
+      `x=${p2.x} — CS:0x5a36 \`cmp [SI+1],2\` matched, so the ADD 0x20 ` +
+      `DOES run here, landing exactly on the ladder`);
   }
 
   /* ── walk-fire halts the hero, and resumes mid-cycle ──────────────────── */

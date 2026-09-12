@@ -11,7 +11,8 @@
  *   faked:
  *   Hop (modes 4/5) IS ported — see _hop, CS:0xf316/0xf3ee.
  *   Hunting lives in pathfind.js / pathfind-producers.js and contact damage
- *   in combat.js; both are wired. What is still NOT here:
+ *   in combat.js; both are wired. Firing IS ported — see fireB below.
+ *   What is still NOT here:
  *     - The DEATH sequence. Contact sets state -1 (see isDying below) and the
  *       original branches to CS:0xf02a, which is unread.
  *       UNKNOWN_creature_death_anim — the port stops drawing instead.
@@ -135,6 +136,55 @@ export function onScreen(x, y, camX, camY) {
 }
 
 /**
+ * CS:0xE659 — the shared facing-and-fire step, System-B's own reading.
+ *
+ * Shared code, called from BOTH entity systems' per-frame drivers — see
+ * entity-a.js's `stageFacingAndFire` for System A's own reading (velocity-
+ * sign facing, called LAST as stage 6). For System B, CS:0xEDB8 calls this
+ * FIRST, before the DS:0xdbe0 movement-mode dispatch, so it is invoked here
+ * at the top of `tick()`, before the mode switch — not after, unlike A.
+ *
+ * The two systems' fire logic is otherwise identical (reload gate, the
+ * attackBits divert to the DS:0xd2be line-hazard pool) EXCEPT for how
+ * facing is read:
+ *   CS:0xe6d4  cx = [di+0xa]                 ; System B's OWN movement-mode field
+ *   CS:0xe6d7  ax = [0xd95a] ; ax >>= cl ; test ax,1
+ *   CS:0xe6df  jnz e6ad (LEFT) / jmp e6c3 (RIGHT)
+ * `DS:0xd95a` reads 0x0015 = 0b00010101: bits 0/2/4 (WALK_L/FALL_L/HOP_L) are
+ * set -> LEFT; bits 1/3/5 (the right-facing mirrors) are clear -> RIGHT. That
+ * is EXACTLY this module's own `facingOf` (mode bit 0), so no new bit-test
+ * table is needed — `(mode & 1) === 0` is LEFT.
+ *
+ * ⚠️ Unlike System A, there is NO "zero own velocity means don't fire" gate
+ * here (CS:0xe6a5 is System-A-exclusive, inside the same attackBits==0
+ * branch): System B has no signed X-velocity register at this point in its
+ * record (`+0x12` is the fall/hop cursor, not a velocity split by sign), so
+ * a live System-B entity fires whenever its reload timer allows, in whatever
+ * direction its current mode faces — even mid-hop or mid-fall.
+ */
+export function fireB(e, desc) {
+  if (!desc) return null;
+  const fireByte = desc.fire;
+  const loNibble = fireByte & 0xf;
+  if (fireByte === 0 || loNibble === 0) return null;   // CS:0xe659/0xe666
+
+  e.reloadTimer--;
+  if (e.reloadTimer > 0) return null;                  // CS:0xe66b
+  e.reloadTimer = (0x10 - loNibble) << 2;               // CS:0xe670-e67a
+
+  const hiNibble = (fireByte >> 4) & 0xf;
+  const attackBits = (desc.flags >> 4) & 3;             // CS:0xe67d
+  if (attackBits !== 0) {
+    return { hazard: true, attackBits, n: hiNibble, x: e.x, y: e.y };   // CS:0xe5e4
+  }
+
+  const right = (e.mode & 1) === 1;                     // CS:0xd95a bit test == facingOf
+  const dir = right ? hiNibble : -hiNibble;             // CS:0xe6ad `neg bx`
+  const muzzleX = right ? e.x + 0x20 : e.x - 8;          // CS:0xe6c7/0xe6b3
+  return { x: muzzleX, y: e.y, dir };
+}
+
+/**
  * One System-B entity. Field names carry their DS offsets so the mapping back
  * to the disassembly stays visible.
  */
@@ -166,6 +216,7 @@ export class EntityB {
     this.state = EST.WAITING;   // +0x08
     this.hp = hp;               // descriptor +0x01
     this.timer = delay;         // +0x06, the per-entity stagger
+    this.reloadTimer = 0;       // +0xe — CS:0xe659's per-entity fire/reload timer
   }
 
   get alive() { return this.state > 0; }
@@ -184,21 +235,31 @@ export class EntityB {
    *   that PRODUCES it: UNKNOWN_pathfinder_producers. With no producers the
    *   search reports -1 and the entity patrols, which is the original's own
    *   no-path behaviour rather than an invention.
+   * @param {?{fire:number, flags:number}} desc  the group descriptor, for
+   *   `fireB` — omit (or pass null) to leave this entity silent, e.g. for
+   *   groups whose descriptor isn't tracked yet or in isolated unit tests.
+   * @returns {?({x:number,y:number,dir:number}|{hazard:true,attackBits:number,n:number,x:number,y:number})}
+   *   a muzzle to fire from, a line-hazard spawn request, or null — see
+   *   fireB's own header for the shape.
    */
-  tick(planeB, verdict = VERDICT_NONE) {
-    /* CS:0xff20 — the pre-life states run before any locomotion.
+  tick(planeB, verdict = VERDICT_NONE, desc = null) {
+    /* CS:0xff20 — the pre-life states run before any locomotion or fire.
      *   waiting (-2): count the stagger down, then materialise
      *   materialising (-3): 5 ticks, then become alive with the descriptor HP
      * The materialise effect itself (CS:0xff59) is not ported. */
     if (this.state === EST.WAITING) {
       if (--this.timer <= 0) { this.state = EST.MATERIALISING; this.timer = MATERIALISE_TICKS; }
-      return;
+      return null;
     }
     if (this.state === EST.MATERIALISING) {
       if (--this.timer <= 0) { this.state = this.hp; this.timer = 0; }
-      return;
+      return null;
     }
-    if (this.state <= 0) return;          // dying or free
+    if (this.state <= 0) return null;          // dying or free
+
+    /* CS:0xE659 runs BEFORE the mode dispatch for System B (unlike System A's
+     * stage 6, which runs last) — see fireB's own header. */
+    const muzzle = fireB(this, desc);
 
     switch (this.mode) {
       case MODE.WALK_L: case MODE.WALK_R: this._walk(planeB, verdict); break;
@@ -206,6 +267,7 @@ export class EntityB {
       case MODE.HOP_L:  case MODE.HOP_R:  this._hop(planeB); break;
       default: break;
     }
+    return muzzle;
   }
 
   /**

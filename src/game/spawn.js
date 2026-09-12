@@ -110,7 +110,8 @@ export function parseGroupsB(buf) {
       count:   b[0x00],                       // 1..10; 0 = dead record
       hp:      b[0x01],
       flags:  (b[0x04] << 8) | b[0x05],       // big-endian; bit 9 = initial facing
-      fire:    b[0x06],                       // lo nibble rate, hi nibble UNKNOWN
+      fire:    b[0x06],                       // stage 6 (CS:0xe659, via entity.js's fireB):
+                                                // lo nibble reload rate, hi nibble direction/config
       cls:     b[0x07],                       // sprite-class index
       /* The four fields the PATHFINDER reads — see pathfind.js / -producers.js.
        * +0x08 is two goal-strategy nibbles, +0x09 the 7-bit weight favouring

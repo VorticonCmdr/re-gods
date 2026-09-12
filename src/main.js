@@ -400,11 +400,13 @@ async function main() {
   let enemies = [];
   let slotsA = new GroupSlots();
   let enemiesA = [];
-  /* Stage 6 (CS:0xe659) is ported and now wired end to end: the reload
-   * timer, facing test and muzzle computation feed the shared EnemyShots
-   * array below, the same one the nest creature fires through. Counted
-   * separately so the split between the two firing paths stays visible. */
+  /* Stage 6 (CS:0xe659) is ported and now wired end to end for BOTH entity
+   * systems: the reload timer, facing test and muzzle computation feed the
+   * shared EnemyShots array below, the same one the nest creature fires
+   * through. Counted separately per system so the split between the two
+   * firing paths stays visible. */
   let firedByA = 0;
+  let firedByB = 0;
 
   /* CS:0x8611 / CS:0x1FE7-0x2039 — the world-2 nest creature and the shared
    * enemy-shot array both exist as fully-ported, fully-tested modules
@@ -414,17 +416,15 @@ async function main() {
   let nests = new Nests(level.world, rng);
   let shots = new EnemyShots();
   /* DS:0xd2be — the Bresenham line-hazard pool (game/line-hazard.js).
-   * CS:0xE659's `attackBits` divert to CS:0xE5E4 is wired for SYSTEM A
-   * (entity-a.js's `stageFacingAndFire` returns a `{hazard:true,...}`
-   * descriptor instead of a muzzle when attackBits != 0; see below).
-   * ⚠️ SYSTEM B HAS NO FIRE LOGIC AT ALL IN THIS PORT — CS:0xE659 is shared
-   * by both entity systems, but this project has never ported System B's own
-   * per-frame driver call into it (a pre-existing gap, not introduced here;
-   * 59 of the 71 live descriptors CLAUDE.md's stage-6 census counts belong
-   * to System B). So System-B entities neither fire ordinary shots nor throw
-   * line hazards yet. */
+   * CS:0xE659's `attackBits` divert to CS:0xE5E4 is wired for BOTH entity
+   * systems: entity-a.js's `stageFacingAndFire` (called LAST, as stage 6) and
+   * entity.js's `fireB` (called FIRST, before the DS:0xdbe0 mode dispatch —
+   * see fireB's own header for why the two systems' call order differs) both
+   * return a `{hazard:true,...}` descriptor instead of a muzzle when
+   * attackBits != 0; both are routed the same way below. */
   let lineHazards = new LineHazards();
   let firedHazardsByA = 0;
+  let firedHazardsByB = 0;
   /* CS:0x0172 `not byte [0x36c]` — the every-other-frame toggle the nest's
    * hatch animation reads (DS:0x36c). Not modelled elsewhere in this port
    * yet, so it is owned here. */
@@ -529,9 +529,9 @@ async function main() {
       spawn = levelSpawn(level.world);
       player = new Player(spawn.x, spawn.y);
       events = new EventRunner(level.map, level.palfils);
-      slots = new GroupSlots(); enemies = []; clamped = 0;
+      slots = new GroupSlots(); enemies = []; clamped = 0; firedByB = 0;
       slotsA = new GroupSlots(); enemiesA = []; clampedA = 0; firedByA = 0;
-      firedHazardsByA = 0;
+      firedHazardsByA = 0; firedHazardsByB = 0;
       rng = new GodsRandom(1);
       nests = new Nests(level.world, rng); shots = new EnemyShots(); tock = 0;
       lineHazards = new LineHazards();
@@ -795,7 +795,22 @@ async function main() {
             markers,                // DS:0xb5dc — empty until an attract potion
           }).verdict;
         }
-        e.tick(level.map.planeB, verdict);
+        /* CS:0xE659, called BEFORE the mode dispatch for System B (see
+         * entity.js's fireB header) — the muzzle/hazard it returns is routed
+         * exactly like System A's own stage 6, below. */
+        const muzzleB = e.tick(level.map.planeB, verdict, e.desc);
+        if (muzzleB && muzzleB.hazard) {
+          firedHazardsByB++;
+          if (muzzleB.attackBits === 1) {
+            lineHazards.spawnJittered(muzzleB.x, muzzleB.y, player.x, player.y,
+                                       muzzleB.n, () => rng.next());
+          } else {
+            lineHazards.spawnAtHero(muzzleB.x, muzzleB.y, player.x, player.y, muzzleB.n);
+          }
+        } else if (muzzleB) {
+          firedByB++;
+          shots.fire(muzzleB.x, muzzleB.y, muzzleB.dir, { x: cam.snapX, y: cam.snapY });
+        }
       }
       runSpawnsA();
       /* System A's own pipeline, CS:0xe001 — stages 1/2/4/5/6, per entity.
