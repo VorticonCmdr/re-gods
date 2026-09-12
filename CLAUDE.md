@@ -2168,11 +2168,47 @@ Previously-undocumented: `CS:0x2EB0`–`0x3075` is the interactive input loop be
 
 **Net finding, and how it differs from this document's other dead/cut content.** Every other "cut feature" catalogued in this project (the `flame` weapon, the familiar potion chain, the world-4 System-A hazard, the damage-grid's `0xFD` tag, the second `DS:0x365` incrementer at `CS:0xD5F7`) is either unplaced level data or an unwired call target — code that would work if something pointed at it. This is different: `FUN_1000_2503`, the ASCII classifier at `0x2FDA`–`0x3075`, and the whole character-encoding scheme this session reverse-engineered from it (a-z → 1–26, 0-9 → 0x1D–0x26, `.` → 0x1B, Space → 0x1C, Backspace/grid-`.` → erase, Enter/grid-`+` → `CS:0x3030`) are all **real, correct, and permanently unreachable by construction** — a genuine authoring bug in the shipped `GAME.EXE`, not missing content. A player has never been able to type a hiscore name on a real keyboard in this release; the grid was always the only path, on every platform this binary shipped for.
 
+### The title screen — a 3-option menu, cascading into hiscores, then into the attract-mode demo `[PROVEN]`
+
+`FUN_1000_2c82` — this document previously described only as "the loader [that] drives a 6-state attract-mode cycler" — turns out to be much more: it is the **entire title-screen main-menu loop**, and the already-documented `joyl`/`joyg` attract cycler is just what it falls into after being left idle long enough. Read in full (`CS:0x2C82`–`0x2E26`), the structure is:
+
+```
+2C82  init: stop/reset sound (sound exports 6/12), load hiscores, world:=0, [0x3d7]:=0 (an outer "how many
+        idle cycles" counter)
+2CAF  <-- the state-machine head
+2CB3  cmp [0x3d7],3 / jl continue  ; fewer than 3 full idle cycles so far -> keep showing the menu
+2CBA  cmp [0x384],2 / jl continue  ; (a second gate on an untraced flag)
+2CC1  jmp 0x2da6                    ; 3+ idle cycles -> FALL INTO THE ATTRACT-MODE joyl/joyg CYCLER
+2CC4  reset the menu cursor (DS:0x385:=0) and the idle timer (DS:0x11e:0x120, the 32-bit level-timer
+        pair, reused here as an IDLE counter); draw the menu (FUN_1000_317d)
+2CF1  <-- redraw-and-poll head
+2CF7  cmp [0x11e],100 / jl poll_input     ; idle timer < 100 ticks (~6.7s at 15Hz) -> keep polling
+2CFE    clear page ; call 0x1000:32c0      ; timed out -> show the "TOP TEN GODS" HISCORE TABLE
+2D07    jmp 0x2caf                         ; then go back to the state-machine head (bumping [0x3d7]
+                                             ;   implicitly via whatever 32c0/its own ~500-tick wait does)
+2D09  poll_input: call 0x241d (scancode poll) ; call 0x2503 (BIOS keyboard peek — result never tested,
+        exactly the same silently-discarded-keyboard pattern as the hiscore/password screens)
+        UP   -> cursor -1, clamp at 0, click sfx 0x119, redraw
+        DOWN -> cursor +1, clamp at [0x386] (the option count), click sfx 0x119, redraw
+        FIRE -> confirm sfx 0x233 (same sound the grid-entry widget uses to confirm), dispatch on cursor:
+                cursor 0 -> world:=1, sublevel:='a', [0x391]:=1, JMP 0x1000:2a37   ; BEGIN QUEST
+                cursor 1 -> JMP 0x1000:2e2f                                        ; ENTER PASSWORD
+                cursor 2 -> [0x11a]:=1, JMP 0x1000:22ed -> INT 21h AH=4Ch(AL=1)     ; QUIT
+```
+
+**So the menu is exactly three options — Begin Quest, Enter Password, Quit** — the last confirmed by tracing `CS:0x22ED` to a plain `INT 21h AH=4Ch` (DOS terminate) with the exit code taken from `DS:0x11a`; exit code 1 lands in `GODS.EXE`'s own already-documented "anything but 0 or 5 → `Thank you for playing GODS.`" branch. **Both real menu choices converge on the same continuation** — `JMP 0x1000:2a37` (world 1) and the password routine's own `JMP 0x1000:2ea0`/`2ea8`/`2d9e` tail both land at `CS:0x2d9e` (`sublevel:=0`) immediately before that same `JMP 0x1000:2a37`, the central level loader this document already extensively documents.
+
+**Idle timeout has two layers, not one.** Leave the menu alone for ~6.7 s and it shows the hiscore table (`FUN_1000_32c0`, which itself waits roughly 500 ticks for a keypress before clearing and returning); do that **three times in a row** with no real input in between (`DS:0x3d7` reaching 3, alongside an untraced second gate on `DS:0x384`) and the loop instead falls into `CS:0x2da6` — **the already-documented 6-state `joyl`/`joyg` attract cycler**. So "attract mode" is not a parallel top-level state in this game; it is what the *title-screen menu itself* degrades into after being ignored for long enough — a detail this document previously had no model for at all.
+
+**The `joyl` states feed their recording into this very same menu loop, which is why the demo briefly shows the password screen.** `CS:0x2DBA`–`0x2DD2`: an even cycler state loads `"joylN.dat"` into the shared playback buffer, sets `DS:0x3bd:=1` (playback), and jumps straight back to `CS:0x2cc4` — the menu's own redraw-and-poll head. So a `joyl` segment is simply **the recorded demo navigating this same title menu with fake joystick input** (real gameplay's per-frame `DS:0x382` poller is the same one the menu's own UP/DOWN/FIRE dispatch reads), which is exactly how the attract-mode session ended up briefly opening `"ENTER A PASSWORD"` — the developers scripted the demo to show off the menu, including a peek at the password screen, before it navigates to Begin Quest.
+
+**The `joyg` states set the world with a two-stage indexing scheme worth getting right.** `CS:0x2DD5`–`0x2DE9` computes `W = (state−1) >> 1` for the odd states 1/3/5, giving **0, 1, 2** — not 1, 2, 3 — and stores that raw 0-based value into `DS:0x42` before jumping to `FUN_1000_6b00`. It is `FUN_1000_6b00` itself (`CS:0x6B00`–`0x6B0B`, confirmed by direct disassembly) that does `AL=[0x42] / INC AL / (wrap 5→1) / [0x42]:=AL` — turning the raw 0/1/2 into the real 1-based world 1/2/3 the rest of the game expects. This two-step handoff is exactly why this session's own live reads showed `DS:0x42 = 1, 2, 3` for the three `joyg` segments (matching real play) even though the attract-cycler's own arithmetic computes 0, 1, 2 first — both readings are correct, at two different points in the call chain, and a port modelling only one of them would misnumber the demo's own world selection.
+
 ### The password / level-select screen — `FUN_1000_2e2f`, a previously undocumented feature `[PROVEN]`
 
-Found live: watching the attract-mode demo cycle through its title-screen states, it briefly showed a screen this document had never encountered — `"ENTER A PASSWORD"` (`1ffd:eb96`), on the exact same letter-grid tablet UI as the hiscore name-entry screen. Tracing it fully resolves a real, previously-undocumented game feature — a level-select cheat/password system — and **retroactively corrects** the `HISCORES.BIN` closure above: the three `DS:0x432`/`0x436`/`0x43a` fields that closure called "inert anti-tamper scaffolding" are, in fact, the storage for this feature's three passwords.
+Found live: watching the attract-mode demo cycle through its title-screen states (see immediately above), it briefly showed a screen this document had never encountered — `"ENTER A PASSWORD"` (`1ffd:eb96`), on the exact same letter-grid tablet UI as the hiscore name-entry screen. Tracing it fully resolves a real, previously-undocumented game feature — a level-select cheat/password system — and **retroactively corrects** the `HISCORES.BIN` closure above: the three `DS:0x432`/`0x436`/`0x43a` fields that closure called "inert anti-tamper scaffolding" are, in fact, the storage for this feature's three passwords.
 
-**It's reached from the title-screen main menu, not the attract cycler's own `joyl`/`joyg` state machine.** `FUN_1000_2c82` — this document's own already-documented "6-state attract-mode cycler" — turns out to *also* implement the title screen's real menu: a block gated on `DS:0x385` (the same grid-cursor variable the hiscore/password screens themselves use) dispatches `DS:0x385 < 1` to one path (presumably `"BEGIN QUEST"`), `DS:0x385 == 1` to `JMP 0x1000:2e2f` (password entry), and `DS:0x385 > 1` to a third path. During attract-mode playback the recorded joystick input walks the cursor through these menu options as part of the demo showcase — which is how a screen with no dedicated "attract state" of its own got shown at all.
+It's reached as menu option 1 (`JMP 0x1000:2e2f` from `CS:0x2d7c`, per the menu dispatch just documented).
 
 **`FUN_1000_2e2f`, read in full:**
 
