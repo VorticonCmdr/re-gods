@@ -46,6 +46,25 @@
  *   "measured EFFECTIVE strategy share" note should be re-read against the
  *   current call site rather than the pre-integration figure.
  *
+ *   STEAL-AND-CARRY (CS:0xE88C/E90E/E99F/E0C1-E198/E25C-E282) is now ported
+ *   for System A: `strategy2` bails on an already-carrying entity (the
+ *   degenerate half of E88C's own redirect, see `strategy2`'s own header for
+ *   the disclosed simplification), then attempts a theft (`stealAttempt` ->
+ *   `searchAndSteal`) after setting its goal. `stepCarriedItem` (the
+ *   ease-toward-carrier + probabilistic drop, CS:0xE0C1-E198) and the
+ *   death-time drop (inside `tick()`'s own DYING branch, CS:0xE25C-E282) are
+ *   both implemented, but — UNLIKE every other stage in this file —
+ *   `stepCarriedItem` is deliberately NOT called from inside `tick()`: it
+ *   mutates the shared object array via `objects.js`'s `dropCarriedItem`,
+ *   which `tick()` has no popup/objects side-effect channel for beyond the
+ *   one-shot `deathDropId` bookkeeping. main.js calls it once per entity,
+ *   per tick, alongside `tick()` — see main.js's own per-entity loop.
+ *   ⚠️ SCOPED TO SYSTEM A ONLY THIS PASS. System B's own mirror
+ *   (CS:0xEF01/EFA2/EE13-EEB9) is a disclosed, separate gap: its own theft
+ *   gate tests a genuine System-B-only global (DS:0x3cd) whose writer has
+ *   not been located in this port, and inventing a per-entity substitute for
+ *   an untraced global would be a guess dressed as a port. See entity.js.
+ *
  * WHAT IS NOT PORTED
  *   ⚠️⚠️ CORRECTION, a later session: stage 3's attack/leap (`stageAttack`,
  *   CS:0xe487 -> FUN_1000_e4e2's 48-entry two-ring reach scan) was
@@ -97,11 +116,14 @@
  *   +0x04        animation frame                unconsumed by any known code
  *   +0x08        state word (shared     +0x1b  COARSE arrival flag (32px)
  *                contact/death sentinel, +0x1c/+0x1e  goal X / Y
- *                CS:0xff93)              +0x24  sticky strategy byte
- *   +0x0e        per-entity fire/reload  +0x25  FINE arrival flag (8px)
- *                timer (stage 6)         +0x26  animation reseed countdown
- *   +0x12/+0x14  velocity X / Y          +0x27  facing (0 = last moved left,
- *   +0x16        triple-duty: steering            1 = last moved right)
+ *                CS:0xff93)              +0x20/+0x22  carried item's own
+ *   +0x0e        per-entity fire/reload         EASED position (CS:0xE0C1-8)
+ *                timer (stage 6)         +0x24  sticky strategy byte
+ *   +0x10        carried item TYPE,      +0x25  FINE arrival flag (8px)
+ *                negative = not carrying +0x26  animation reseed countdown
+ *                (CS:0xE99F/E0C1/E25C)   +0x27  facing (0 = last moved left,
+ *   +0x12/+0x14  velocity X / Y                  1 = last moved right)
+ *   +0x16        triple-duty: steering
  *                step cap (stage 2), attack-cooldown display (stage 3 —
  *                `stageAttack` refills this to 10 on a hit, CS:0xE496; the
  *                mechanism is implemented below, see WHAT IS NOT PORTED for
@@ -121,6 +143,11 @@ import { GodsRandom } from './random.js';
  * (the projectile/creature box scan, CS:0xAAAA) and would silently apply the
  * wrong clip rule to the reach-table scan below. See stageAttack's header. */
 import { cellIndex, GRID_LO, GRID_HI, ROW_STRIDE, CELL } from './collision.js';
+/* Steal-and-carry (strategy2's own theft attempt, below) needs the object
+ * array's own dead/type convention to skip already-consumed slots, and
+ * markers.js's own MARKER_MAX clamp (CS:0xE91B-E996 walks at most 20). */
+import { isDeadType } from './objects.js';
+import { MARKER_MAX } from './markers.js';
 
 /** Sticky-strategy sentinel: matches EntityB's WAITING convention of -2. */
 export const EST = { FREE: 0, DYING: -1, WAITING: -2, MATERIALISING: -3 };
@@ -410,13 +437,38 @@ export function strategy1(entity, desc, camera, rand) {
  * is this port's best-understood reading, not a re-derivation from
  * CS:0xe88c's own bytes.
  *
+ * ⚠️ ALREADY-CARRYING BAIL/REDIRECT — DEGENERATE HALF ONLY, DISCLOSED.
+ * CS:0xE88C's own entry, read fresh in a later session: `cmp word[di+0x10],0
+ * / js e89c` (not carrying -> the goal-pick + steal below) `/ cmp dl,cl /
+ * jnz e899 (-> jmp e769, RE-DISPATCH through the alternate strategy nibble)
+ * / jmp e9da (bail, RET)` (carrying, alt==self -> bail). The redirect target
+ * (`alt`) is recoverable on demand from `desc.seedPair`'s own two nibbles
+ * without a new persisted field (`alt = this.strategy===lo ? hi : lo`), but
+ * ACTUALLY re-dispatching mid-tick through another strategy's handler would
+ * need restructuring tick()'s own stage-1 dispatch to call itself
+ * recursively — out of scope for this pass and risky to bolt onto already-
+ * tested strategy 0/1 code for a sub-behaviour orthogonal to steal-and-carry
+ * itself. This port always takes the DEGENERATE branch instead (leave the
+ * goal alone, skip the steal), which is exactly what the original itself
+ * does whenever `alt===2` (redirects to itself) or the marker list is empty
+ * (E892's own shared tail) — i.e. it is correct in those two cases and an
+ * approximation otherwise.
+ *
  * @param {EntityA} entity
  * @param {?Array<{x:number,y:number,type:number}>} markers  screen-relative
  *   marker records — e.g. a MarkerList's own `.entries` (game/markers.js)
  * @param {{x:number,y:number}} camera  the CURRENT snapped scroll origin
  * @param {() => number} rand  the shared replay-table draw
+ * @param {?{flags:number}} desc  the group descriptor — `flags` (the raw
+ *   +0x4 BE word) is read by `stealAttempt` below; omit only from a caller
+ *   that also omits `objects` (steal disabled).
+ * @param {?object[]} objects  the 200-slot runtime object array (see
+ *   objects.js), for the theft attempt below. Omitting it (the default)
+ *   skips the steal entirely rather than throwing — the same fallback shape
+ *   `camera`/`markers` already use elsewhere in this file.
  */
-export function strategy2(entity, markers, camera, rand) {
+export function strategy2(entity, markers, camera, rand, desc = null, objects = null) {
+  if (entity.carriedType >= 0) return;                  // CS:0xE88C `js e89c` fails — see above
   if (!markers || markers.length === 0) return;        // nothing to seek — leave the goal alone
   /* Uniform pick over the list. The specific RNG consumption for "pick one
    * marker" was not given as a cited CS:0xe88c instruction this session —
@@ -427,6 +479,172 @@ export function strategy2(entity, markers, camera, rand) {
   entity.goalY = marker.y + camera.y;
   entity.storedZone = -1;                               // not a zone-strategy goal — see strategy1
   entity.goalFresh = true;
+
+  /* CS:0xE8FB `call 0xE90E` — the theft attempt, run every time this branch
+   * sets a fresh goal (not gated on the goal-pick's own outcome). */
+  if (objects) stealAttempt(entity, markers, desc, camera, objects);
+}
+
+/** CS:0xE90E/0xE99F's shared 2-bit descriptor-flag test: ordinary categories
+ *  read bits [1:0] of the group descriptor's own +0x4 BE word directly;
+ *  weapon-range types (>=0xC0) read the SAME word shifted right 2, bits
+ *  [3:2]. This is a DIFFERENT bit slice from `stageFacingAndFire`'s own
+ *  attackBits (bits [5:4] of the same word) — three independent 2-bit
+ *  fields packed into one descriptor word. */
+function stealFlagBits(flags, type) {
+  return type >= 0xC0 ? (flags >> 2) & 3 : flags & 3;
+}
+
+/**
+ * CS:0xE90E — the theft attempt: walk the marker list front-to-back looking
+ * for the FIRST marker both eligible (nonzero `stealFlagBits`) and within a
+ * 48x48 box of the entity, then hand it to `searchAndSteal`. Stops after the
+ * first eligible-AND-proximate marker either way (steal success or miss) —
+ * CS:0xE996's own `ret`, not a fall-through to the next marker.
+ *
+ *   E90E  bail if marker count==0 or already carrying (mirrors strategy2's
+ *         own bail — redundant here, kept for callers that invoke this
+ *         directly rather than through strategy2)
+ *   E912  entityX = e.x-8, entityY = e.y-8 (computed ONCE, not per-marker)
+ *   E91B..E996  for i in 0..min(count,20): bits = stealFlagBits(flags,
+ *         marker.type); bits===0 -> skip (can't steal this category);
+ *         else boxX = marker.x+8+camera.x, boxY = marker.y+8+camera.y;
+ *         proximity: boxX-48 <= entityX <= boxX (ditto Y); on pass, the
+ *         marker's world pos WITHOUT the +8 bias (worldX = marker.x+
+ *         camera.x, worldY = marker.y+camera.y) feeds searchAndSteal.
+ *
+ * NOTE on eligibility being "per-marker": `flags` is read from the group
+ * DESCRIPTOR, not from the marker itself — `stealFlagBits(flags, marker.
+ * type)` varies only through `marker.type`, and in this port every marker
+ * markers.js's stepMarkers ever produces has `cat < 3` (weapons, type>=0xC0,
+ * are filtered out at the marker-production stage — see markers.js's own
+ * header). So `stealFlagBits` collapses to the SAME `flags & 3` value for
+ * every marker in the loop this port can ever observe: either every marker
+ * this entity sees is eligible, or none are. There is no genuine per-marker
+ * distinction to find here — don't go looking for one; it can't exist while
+ * stepMarkers keeps its weapon-skip.
+ *
+ * @param {EntityA} entity
+ * @param {Array<{x:number,y:number,type:number}>} markers  screen-relative
+ * @param {?{flags:number}} desc  group descriptor; a missing `desc` (or a
+ *   missing `flags`) reads as an all-zero flag word — every marker then
+ *   fails the eligibility test, matching CS:0xE90E's own "bits===0 -> skip"
+ *   for a group with no theft-eligible categories at all.
+ * @param {{x:number,y:number}} camera
+ * @param {object[]} objects  the 200-slot object array (objects.js)
+ */
+export function stealAttempt(entity, markers, desc, camera, objects) {
+  if (!markers || markers.length === 0) return;
+  if (entity.carriedType >= 0) return;
+
+  const flags = desc ? (desc.flags ?? 0) : 0;
+  const entityX = entity.x - 8;
+  const entityY = entity.y - 8;
+  const count = Math.min(markers.length, MARKER_MAX);
+  for (let i = 0; i < count; i++) {
+    const marker = markers[i];
+    if (stealFlagBits(flags, marker.type) === 0) continue;   // e996 — can't steal this category
+
+    const boxX = marker.x + 8 + camera.x;
+    const boxY = marker.y + 8 + camera.y;
+    if (entityX < boxX - 48 || entityX > boxX) continue;
+    if (entityY < boxY - 48 || entityY > boxY) continue;
+
+    searchAndSteal(entity, objects, marker.type, marker.x + camera.x, marker.y + camera.y);
+    return;                                               // CS:0xE996 `ret` — first match only
+  }
+}
+
+/**
+ * CS:0xE99F — walk the 200-slot object array BACKWARD looking for a live
+ * object exactly matching `type`/`worldX`/`worldY`; on a match, kill the
+ * object and carry it (`carriedX/Y/Type`). Silent no-op if nothing matches
+ * after the whole array — the original's own `ret` with no side effect.
+ *
+ * @param {EntityA} entity
+ * @param {object[]} objects  the 200-slot runtime array, objects.js's own
+ *   `{x, y, type, flag6, dead, slot}` representation
+ * @param {number} type
+ * @param {number} worldX
+ * @param {number} worldY
+ */
+export function searchAndSteal(entity, objects, type, worldX, worldY) {
+  for (let i = objects.length - 1; i >= 0; i--) {
+    const o = objects[i];
+    if (o.dead || isDeadType(o.type) || !(o.flag6 & 1)) continue;
+    if (o.type === type && o.x === worldX && o.y === worldY) {
+      entity.carriedX = worldX;
+      entity.carriedY = worldY;
+      entity.carriedType = type;
+      o.dead = true; o.type = 0xffff; o.flag6 = 0;        // CS:0xE99F's own kill
+      return;
+    }
+  }
+}
+
+/**
+ * CS:0xE0C1-0xE198 — carried-icon ease, then a probabilistic drop back into
+ * the world. Runs every tick an entity is carrying something, independent
+ * of which stage-1 strategy is currently active (the original's own
+ * alive-branch draw routine, a different call site from the six-stage
+ * movement pipeline `tick()` already ports — see the file header). Not
+ * called from `tick()` itself: the drop mutates the shared object array,
+ * which `tick()` otherwise never touches directly (`stealAttempt` above is
+ * the one exception, itself gated behind an explicit `objects` argument) —
+ * main.js calls this once per entity, per tick, alongside `tick()`.
+ *
+ * EASE, CS:0xE0C1-E0E8: halve the remaining distance to (x+8, y+24) via an
+ * ARITHMETIC right shift (SAR — floors toward -infinity on a negative
+ * delta, not a truncating `/2`), every tick regardless of the drop roll.
+ *
+ * DROP, CS:0xE0EB-E198: ordinary items test descriptor `flags & 3` (0 -> drop
+ * now, 2 -> never, else a 1-in-128 roll); weapons test `flags & 0xC` against
+ * 0/8 the same way (CS:0xE14A-E198's own mirror) — kept as the literal
+ * unshifted mask/compare rather than normalised to a shifted 0..3 value,
+ * matching the actual bytes rather than `stealFlagBits`'s own different
+ * (shifted) reading of the same word.
+ * ⚠️ Weapons are UNREACHABLE via this port's marker producer
+ * (markers.js:166 skips type>=0xC0), so `entity.carriedType` can never be
+ * a weapon in practice and the `&0xC` branch below is implemented for
+ * fidelity, not exercised by normal play — see `stealAttempt`'s own header
+ * for the identical caveat on the theft side.
+ *
+ * @param {EntityA} entity
+ * @param {{flags:number}} desc
+ * @param {() => number} rand
+ * @returns {?{id:number, x:number, y:number}} a drop request — `id` already
+ *   carries the +0xB/-0xC0 bias `objects.js`'s `dropCarriedItem` expects —
+ *   or null if nothing carried, or carried but not dropped this tick.
+ */
+export function stepCarriedItem(entity, desc, rand) {
+  if (entity.carriedType < 0) return null;              // CS:0xE0C1 `js` — not carrying
+
+  const targetX = entity.x + 8, targetY = entity.y + 24;
+  entity.carriedX += (targetX - entity.carriedX) >> 1;
+  entity.carriedY += (targetY - entity.carriedY) >> 1;
+
+  const isWeapon = entity.carriedType >= 0xC0;
+  const bits = isWeapon ? (desc.flags & 0xc) : (desc.flags & 3);
+  const never = isWeapon ? 8 : 2;
+  let drop;
+  if (bits === 0) drop = true;                          // e12f/e17d — drop now
+  else if (bits === never) drop = false;                 // e149 — never
+  else drop = (rand() & 0x7f) === 0;                     // 1-in-128 roll
+
+  if (!drop) return null;
+
+  const id = isWeapon ? entity.carriedType - 0xC0 : entity.carriedType + 0xB;
+  // Drop lands at the CARRIED ICON's own eased position (carriedX/Y above),
+  // not the entity's own (x, y) — System A's icon visibly trails the entity
+  // by up to half the remaining distance each tick, so a drop can land
+  // noticeably behind where the entity currently stands. System B does the
+  // OPPOSITE: CS:0xEEBA recomputes the carried icon's screen position fresh
+  // every frame from a fixed per-class attach-point offset (a rigid attach,
+  // not an eased trail), so its own drop — unported, System B out of scope
+  // this pass — would use the entity's own current position instead.
+  const x = entity.carriedX, y = entity.carriedY;
+  entity.carriedType = -1;                               // [di+0x10] = 0xffff
+  return { id, x, y };
 }
 
 /** CS:0xe336 — accelerate toward the goal, or decay and mark arrival.
@@ -791,6 +1009,28 @@ export class EntityA {
      * original entity record. */
     this.storedZone = -1;
     this.goalFresh = false;
+    /* Steal-and-carry, CS:0xE99F/CS:0xE0C1-E198/CS:0xE25C-E282 — [di+0x10]/
+     * [di+0x20]/[di+0x22]. Negative = carrying nothing, the same convention
+     * `state`/`strategy` already use in this file. carriedX/Y are the
+     * carried icon's OWN eased position (System A eases toward the entity;
+     * System B, unported, rigidly attaches instead — see CLAUDE.md's
+     * "steal-and-carry" section for the asymmetry). Scoped to System A only
+     * this pass — System B's own CS:0xEF01/EFA2/EE13-EEB9 mirror is a
+     * disclosed, separate gap (its own DS:0x3cd gate has no located writer
+     * in this port yet; see entity.js). */
+    this.carriedType = -1;
+    this.carriedX = 0;
+    this.carriedY = 0;
+    /* Port-level bookkeeping for the death-time drop (CS:0xE25C-E282, the
+     * DYING branch below): tick() records the request here, once, the same
+     * tick it caches deathCacheX/Y; main.js drains it into popup.js exactly
+     * like it already drains groupsA/groupsB's own reward requests. Not a
+     * DS address of its own — there is no persistent original field to name,
+     * since the original calls CS:0xBF5F directly from inside the death
+     * branch and this port's tick() has no popup instance to call. */
+    this.deathDropId = null;
+    this.deathDropX = 0;
+    this.deathDropY = 0;
     /* CS:0xE251/E256's own one-shot cache — RAW, no bias (unlike System B's
      * write-time `+8`-on-X-only). See DEATH_FRAMES_A's own header for why. */
     this.deathCacheX = null;
@@ -829,10 +1069,14 @@ export class EntityA {
    *   marker records (game/markers.js's own `MarkerList#entries`), for
    *   strategy 2 only — same "goal left untouched if omitted" fallback as
    *   `camera` above.
+   * @param {?object[]} objects  the 200-slot runtime object array
+   *   (objects.js), for strategy 2's own theft attempt only. Omitted (the
+   *   default) skips the steal for this tick, matching every other optional
+   *   arg's "degrade, don't throw" fallback in this method.
    * @returns {?({x:number,y:number,dir:number}|{hazard:true,attackBits:number,n:number,x:number,y:number})}
    *   a muzzle to fire from, a line-hazard spawn request, or null
    */
-  tick(hero, desc, draw, frozen = false, camera = null, markers = null, grid = null) {
+  tick(hero, desc, draw, frozen = false, camera = null, markers = null, grid = null, objects = null) {
     /* Pre-life FSM — see UNKNOWN_sysA_prelife_driver in the file header. */
     if (this.state === EST.WAITING) {
       if (--this.timer <= 0) { this.state = EST.MATERIALISING; this.timer = MATERIALISE_TICKS; }
@@ -879,13 +1123,27 @@ export class EntityA {
         this.deathCacheX = this.x;                            // CS:0xE251 — NO bias
         this.deathCacheY = this.y;                             // CS:0xE256 — NO bias
         this.deathCacheSeq = deathCacheSeqA++;
-        /* CS:0xE25C-E282 (carried-item drop, id via +0xB/-0xC0 bias into
-         * popup.js) and CS:0xE283-E2A9 (the [di+0x19] rank-check / EBB9
-         * group-reset) both hang off this SAME one-shot gate in the
-         * original. Neither is ported: this entity has no carried-item
-         * field at all (steal-and-carry is a disclosed, separate unported
-         * gap — see CLAUDE.md), and fineGate's own header above already
-         * establishes the rank-check is provably unreachable in this port. */
+        /* CS:0xE25C-E282 — the carried-item death-time drop, via popup.js
+         * (CS:0xBF5F), NOT the periodic-drop's CS:0xC041 — a real asymmetry
+         * this project's own decode of the original establishes, not a port
+         * simplification: the original calls bf5f here and c041 in
+         * stepCarriedItem's own drop roll. `id` uses the SAME +0xB/-0xC0
+         * bias both drop sites share; popup.js's own id convention decodes
+         * it identically to C041's. Recorded here, drained by main.js — see
+         * `deathDropId`'s own header in the constructor for why. Uses
+         * carriedX/carriedY (the icon's own eased position), matching
+         * CS:0xE25C/E259's own `ax,bx=[di+0x20]/[di+0x22]` read.
+         * CS:0xE283-E2A9 (the [di+0x19] rank-check / EBB9 group-reset) still
+         * hangs off this SAME one-shot gate in the original and is still
+         * NOT ported — fineGate's own header above already establishes it
+         * is provably unreachable in this port regardless of steal-and-carry. */
+        if (this.carriedType >= 0) {
+          const isWeapon = this.carriedType >= 0xC0;
+          this.deathDropId = isWeapon ? this.carriedType - 0xC0 : this.carriedType + 0xB;
+          this.deathDropX = this.carriedX;
+          this.deathDropY = this.carriedY;
+          this.carriedType = -1;
+        }
       }
       this.frame++;                                          // CS:0xE2AC, unconditional
       if (this.frame >= DEATH_FRAMES_A) {                     // CS:0xE2AF/E2B3
@@ -912,7 +1170,7 @@ export class EntityA {
     } else if (this.strategy === 1) {
       if (camera) strategy1(this, desc, camera, draw);       // CS:0xe9da
     } else if (this.strategy === 2) {
-      if (camera) strategy2(this, markers, camera, draw);    // CS:0xe88c
+      if (camera) strategy2(this, markers, camera, draw, desc, objects);   // CS:0xe88c
     }
 
     /* CS:0xE001's own first act, before stage 2 runs, is a per-tick snapshot

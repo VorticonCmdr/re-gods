@@ -397,3 +397,51 @@ export function allocObject(slots) {
 export function insertSpawned(objects, cats, spawned) {
   return sortForDraw([...objects, spawned], cats);
 }
+
+/**
+ * CS:0xC041-0xC08C — the shared "drop a carried/recovered item back into the
+ * world" allocator. Built on the SAME dead-slot-reuse mechanism as CS:0x38D7
+ * (`allocObject`), not the treasure-burst's push-based alloc — C041 calls
+ * 38D7 directly (`0xC048 call 0x1000:38d7`).
+ *
+ *     C041  ax=worldX bx=worldY cx=recoveredId
+ *     C044  call 0x38d7                    ; -> bp=slot, dx=index; ZF set = full
+ *     C04B  jns 0xc04b                     ; (sign flag from 38D7 survives
+ *                                          ;   the intervening `pop cx`, which
+ *                                          ;   doesn't touch flags)
+ *     C051  cmp cx,0xb / jnl 0xc060        ; id < 0xB -> WEAPON, id+0xC0
+ *     C058  add cx,0xc0
+ *     C060  sub cx,0xb                     ; id >= 0xB -> ORDINARY, id-0xB
+ *     C066  [bp+0]=ax [bp+2]=bx [bp+4]=cx [bp+6]=1
+ *     C08x  SS:0x438+slotIndex := 0xFF     ; arm the fall-physics sentinel
+ *     (full table -> jmp 0xbf7f, a shared bare ret)
+ *
+ * This is the OPPOSITE-direction decode of what every caller computes before
+ * calling in (carriedType+0xB ordinary / carriedType-0xC0 weapon) — the
+ * round-trip is exact: (t+0xB)-0xB=t and (t-0xC0)+0xC0=t.
+ *
+ * ⚠️ Weapons are unreachable via this port's marker producer: stepMarkers
+ * (markers.js:166) skips type>=0xC0, so no marker this port can ever build
+ * names a weapon, and `id<0xB` can never arise from a stolen item's own type
+ * in practice. Implemented anyway for fidelity (a directly-constructed
+ * weapon marker, or a future caller, would still round-trip correctly) —
+ * this branch is not exercised by normal play.
+ *
+ * @param {object[]} slots  the 200-slot object array (dead-slot-reuse)
+ * @param {number} id       the recovered id, EXACTLY as the caller built it
+ *                          (carriedType+0xB ordinary / carriedType-0xC0 weapon)
+ * @param {number} x        world X
+ * @param {number} y        world Y
+ * @returns {object|null}   the slot written, or null on a full table (CS:0xBF7F)
+ */
+export function dropCarriedItem(slots, id, x, y) {
+  const slot = allocObject(slots);
+  if (!slot) return null;                           // CS:0xC04B `jns` fails -> bf7f
+  const type = id < 0xB ? id + 0xC0 : id - 0xB;      // CS:0xC051-0xC060
+  slot.x = x;
+  slot.y = y;
+  slot.type = type;
+  slot.flag6 = 1;                                    // CS:0xC06E
+  slot.fallDirty = -1;                               // SS:0x438+idx := 0xFF
+  return slot;
+}

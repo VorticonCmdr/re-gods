@@ -31,6 +31,7 @@ import { EntityA, CLASS_TABLES_A, spriteForEntityA, rollStrategy,
          SPRITE_BASE_8FRAME, SPRITE_BASE_6FRAME,
          stageAttack, REACH_OFFSETS, DISPLACEMENT_TABLE,
          ZONES, ZONE_SCRATCH, currentZone, strategy1, strategy2,
+         stealAttempt, searchAndSteal, stepCarriedItem,
          EST as ESTA, isDyingA,
          DEATH_SPRITE_BASE_A as ENTA_DEATH_SPRITE_BASE,
          DEATH_FRAMES_A as ENTA_DEATH_FRAMES } from '../game/entity-a.js';
@@ -80,7 +81,8 @@ import { CHEST_MIN, CHEST_MAX, CHEST_KEY_BASE, chestKeyFor, openedType,
 import { expandMapObjects, allocObject, OBJECT_SLOTS, activationBox,
          activateObjects, sortForDraw, insertSpawned, CATEGORY, WEAPON_TYPE_MIN,
          stepObjectFall, isFallEligible, BOUNCE_DELTA, FALL_STEP,
-         WORLD_HEIGHT, STRADDLE_OFFSET, BOUNCE_TERMINAL, ACTIVATION_MARGIN } from '../game/objects.js';
+         WORLD_HEIGHT, STRADDLE_OFFSET, BOUNCE_TERMINAL, ACTIVATION_MARGIN,
+         dropCarriedItem } from '../game/objects.js';
 import { GodsRandom } from '../game/random.js';
 import { CLASS_TABLES, EMPTY_CLASS, HAZARD_CLASS, HAZARD_HANDLERS,
          HAZARD_SPRITE_BASE, POOL_SLOTS, POOL_STRIDE,
@@ -2428,6 +2430,301 @@ export function checkEntityA() {
       members.every((e) => e.state === ESTA.FREE), members.map((e) => e.state).join());
     check('...and the reward predicate STILL holds (FREE counts, same as DYING)',
       rewardFired());
+  }
+
+  /* ── Steal-and-carry, System A only — CS:0xE88C/E90E/E99F/E0C1-E198/
+   * E25C-E282 ────────────────────────────────────────────────────────── */
+  {
+    const cam = { x: 100, y: 50 };
+    /* stealFlagBits reads bits[1:0] DIRECTLY for ordinary types — a flags
+     * word of 1 gives bits=1 (nonzero -> eligible); 0 gives bits=0 (never
+     * eligible, CS:0xE996's own skip). Chosen so the "eligible" and
+     * "ineligible" fixtures below are a single-bit difference, not a guess. */
+    const desc1 = { flags: 0x01 };
+    const desc0 = { flags: 0x00 };
+
+    /* searchAndSteal: exact {type,x,y} match, backward walk, kill+carry. */
+    {
+      const objects = [
+        { x: 10, y: 10, type: 5, flag6: 1, dead: false, slot: 0 },
+        { x: 150, y: 130, type: 34, flag6: 1, dead: false, slot: 1 },   // the real match
+        { x: 150, y: 130, type: 34, flag6: 0, dead: false, slot: 2 },   // same type/pos, flag6=0 -> NOT eligible
+      ];
+      const e = new EntityA({ x: 0, y: 0 });
+      searchAndSteal(e, objects, 34, 150, 130);
+      check('searchAndSteal only matches a LIVE object (flag6 bit0 set), not the coincident dead-flag one',
+        e.carriedType === 34 && e.carriedX === 150 && e.carriedY === 130);
+      check('the stolen object is killed: dead, type 0xffff, flag6 0',
+        objects[1].dead === true && objects[1].type === 0xffff && objects[1].flag6 === 0);
+      check('the coincident flag6=0 record is left completely untouched',
+        objects[2].dead === false && objects[2].type === 34);
+    }
+    {
+      const e = new EntityA({ x: 0, y: 0 });
+      const objects = [{ x: 1, y: 1, type: 9, flag6: 1, dead: false, slot: 0 }];
+      searchAndSteal(e, objects, 34, 150, 130);
+      check('searchAndSteal is a silent no-op when nothing matches',
+        e.carriedType === -1 && objects[0].dead === false);
+    }
+    {
+      const e = new EntityA({ x: 0, y: 0 });
+      const objects = [{ x: 150, y: 130, type: 34, flag6: 1, dead: true, slot: 0 }];
+      searchAndSteal(e, objects, 34, 150, 130);
+      check('a record marked dead (JS-level `dead:true`) never matches, even with matching type/x/y',
+        e.carriedType === -1);
+    }
+    {
+      const e2 = new EntityA({ x: 0, y: 0 });
+      const objects2 = [{ x: 150, y: 130, type: 0xffff, flag6: 1, dead: false, slot: 0 }];
+      searchAndSteal(e2, objects2, 34, 150, 130);
+      check('a record with type 0xffff (dead-type sentinel) is skipped even with flag6 set and dead:false',
+        e2.carriedType === -1);
+    }
+
+    /* stealAttempt: proximity box + eligibility gate, first match only. */
+    {
+      const markerNear = { x: 40, y: 30, type: 34 };   // world (140,80) — within 48x48 of entityX/Y
+      const objects = [{ x: 140, y: 80, type: 34, flag6: 1, dead: false, slot: 0 }];
+      const e = new EntityA({ x: 148, y: 88 });
+      stealAttempt(e, [markerNear], desc1, cam, objects);
+      check('an eligible, proximate marker steals its matching object',
+        e.carriedType === 34 && e.carriedX === 140 && e.carriedY === 80);
+    }
+    {
+      const markerNear = { x: 40, y: 30, type: 34 };
+      const objects = [{ x: 140, y: 80, type: 34, flag6: 1, dead: false, slot: 0 }];
+      const e = new EntityA({ x: 148, y: 88 });
+      stealAttempt(e, [markerNear], desc0, cam, objects);
+      check('flags=0x00 makes stealFlagBits 0 for every ordinary type -> no theft at all',
+        e.carriedType === -1 && objects[0].dead === false);
+    }
+    {
+      const markerFar = { x: 500, y: 500, type: 34 };   // world (600,550) — far from any entity below
+      const objects = [{ x: 600, y: 550, type: 34, flag6: 1, dead: false, slot: 0 }];
+      const e = new EntityA({ x: 0, y: 0 });
+      stealAttempt(e, [markerFar], desc1, cam, objects);
+      check('an eligible but out-of-range marker is skipped (48x48 proximity box)',
+        e.carriedType === -1 && objects[0].dead === false);
+    }
+    {
+      const e = new EntityA({ x: 148, y: 88 });
+      e.carriedType = 5;   // already carrying
+      const marker = { x: 40, y: 30, type: 34 };
+      const objects = [{ x: 140, y: 80, type: 34, flag6: 1, dead: false, slot: 0 }];
+      stealAttempt(e, [marker], desc1, cam, objects);
+      check('an already-carrying entity never attempts a second theft',
+        e.carriedType === 5 && objects[0].dead === false);
+    }
+    {
+      const e = new EntityA({ x: 148, y: 88 });
+      stealAttempt(e, [], desc1, cam, []);
+      check('an empty marker list is a silent no-op, not a throw',
+        e.carriedType === -1);
+    }
+
+    /* The round-trip through the REAL marker producer, not a hand-built
+     * marker. Every fixture above hand-constructs `{x, y, type}` so that
+     * `marker.x + camera.x` already equals the object's own world X — that
+     * never exercises the actual coordinate contract. `stepMarkers` writes
+     * SCREEN coordinates as `o.x - cam.x` (markers.js CS:0x15F1/0x162E);
+     * `stealAttempt` reconstructs world coordinates as `marker.x + camera.x`
+     * (CS:0xE90E) and `searchAndSteal` then demands an EXACT match against
+     * the object's own world position. The two only agree when both calls
+     * run against the SAME camera snapshot — true today because main.js
+     * calls `stepMarkers` and `stealAttempt` in the same tick against the
+     * same `cam.snapX/snapY`, but nothing in either function's own signature
+     * enforces that. This is the one assertion that would fail if a future
+     * change moved either call site relative to the camera snapshot. */
+    {
+      const cats = new Uint8Array(64);
+      cats[34] = 0;                                    // category 0 < 3 -> eligible
+      const objects = [{ x: 140, y: 80, type: 34, flag6: 1, dead: false, slot: 0 }];
+      const markerList = new MarkerList();
+      stepMarkers(objects, cats, markerList, cam);      // the SAME `cam` stealAttempt uses below
+      check('stepMarkers, run against real object data, records one screen-relative marker',
+        markerList.entries.length === 1
+        && markerList.entries[0].x === 140 - cam.x
+        && markerList.entries[0].y === 80 - cam.y
+        && markerList.entries[0].type === 34);
+
+      const e = new EntityA({ x: 148, y: 88 });          // within 48x48 of world (140,80)
+      stealAttempt(e, markerList.entries, desc1, cam, objects);
+      check('stealAttempt, fed the REAL stepMarkers() output under the SAME camera, steals the object',
+        e.carriedType === 34 && e.carriedX === 140 && e.carriedY === 80
+        && objects[0].dead === true);
+    }
+
+    /* strategy2 wiring: bail on carrying, else set the goal then steal. */
+    {
+      const marker = { x: 40, y: 30, type: 34 };
+      const objects = [{ x: 140, y: 80, type: 34, flag6: 1, dead: false, slot: 0 }];
+      const e = new EntityA({ x: 148, y: 88 });
+      strategy2(e, [marker], cam, () => 0, desc1, objects);
+      check('strategy2 both sets the goal AND attempts the theft in one call',
+        e.goalX === marker.x + cam.x && e.goalY === marker.y + cam.y
+        && e.carriedType === 34, `goal=${e.goalX},${e.goalY} carried=${e.carriedType}`);
+    }
+    {
+      const e = new EntityA({ x: 148, y: 88 });
+      e.carriedType = 7;
+      e.goalX = 999; e.goalY = 999;
+      const marker = { x: 40, y: 30, type: 34 };
+      const objects = [{ x: 140, y: 80, type: 34, flag6: 1, dead: false, slot: 0 }];
+      strategy2(e, [marker], cam, () => 0, desc1, objects);
+      check('CS:0xE88C\'s own carrying-bail (degenerate half): the goal is left untouched and nothing is stolen',
+        e.goalX === 999 && e.goalY === 999 && e.carriedType === 7 && objects[0].dead === false);
+    }
+    check('strategy2 without an `objects` argument still behaves exactly as before this pass (no throw, no steal)',
+      (() => {
+        const e = new EntityA({ x: 0, y: 0 });
+        strategy2(e, [{ x: 50, y: 30, type: 10 }], cam, () => 0);
+        return e.carriedType === -1;
+      })());
+
+    /* stepCarriedItem: ease, then the 3-way drop-roll (0/never/roll). */
+    {
+      const e = new EntityA({ x: 100, y: 100 });
+      check('not carrying -> null, no ease', stepCarriedItem(e, desc1, () => 0) === null);
+    }
+    {
+      const e = new EntityA({ x: 100, y: 100 });
+      e.carriedType = 34;   // ordinary, ineligible for drop entirely
+      e.carriedX = 0; e.carriedY = 0;
+      const NEVER_DROP = { flags: 0x02 };   // ordinary bits[1:0] == 2 -> CS:0xE149, never
+      const r = stepCarriedItem(e, NEVER_DROP, () => 0);
+      check('EASE still runs even when the drop roll says never: halves the remaining distance',
+        e.carriedX === (100 + 8) >> 1 && e.carriedY === (100 + 24) >> 1,
+        `carried=${e.carriedX},${e.carriedY}`);
+      check('flags&3===2 (ordinary) never drops, whatever rand() returns',
+        r === null && e.carriedType === 34);
+    }
+    {
+      const e = new EntityA({ x: 100, y: 100 });
+      e.carriedType = 34;
+      e.carriedX = 108; e.carriedY = 124;   // already eased to the target — ease is a no-op this tick
+      const ALWAYS_DROP = { flags: 0x00 };   // ordinary bits[1:0] == 0 -> drop now
+      const r = stepCarriedItem(e, ALWAYS_DROP, () => 1);   // rand never consulted for bits===0
+      check('flags&3===0 (ordinary) drops immediately: id = carriedType + 0xB',
+        r && r.id === 34 + 0xb && r.x === 108 && r.y === 124, JSON.stringify(r));
+      check('a completed drop clears carriedType back to "not carrying"',
+        e.carriedType === -1);
+    }
+    {
+      const e = new EntityA({ x: 100, y: 100 });
+      e.carriedType = 0xc5;   // weapon range (>=0xC0)
+      e.carriedX = 108; e.carriedY = 124;
+      const WEAPON_NEVER = { flags: 0x08 };   // flags & 0xC === 8 -> never (weapon)
+      check('flags&0xC===8 (weapon) never drops',
+        stepCarriedItem(e, WEAPON_NEVER, () => 0) === null && e.carriedType === 0xc5);
+      const WEAPON_ALWAYS = { flags: 0x00 };   // flags & 0xC === 0 -> drop now (weapon)
+      const r = stepCarriedItem(e, WEAPON_ALWAYS, () => 1);
+      check('flags&0xC===0 (weapon) drops immediately: id = carriedType - 0xC0',
+        r && r.id === 0xc5 - 0xc0, JSON.stringify(r));
+    }
+    {
+      /* the 1-in-128 roll: bits neither 0 nor "never" -> gated on rand()&0x7f===0 */
+      const eRollFail = new EntityA({ x: 100, y: 100 });
+      eRollFail.carriedType = 34; eRollFail.carriedX = 108; eRollFail.carriedY = 124;
+      const ROLL_GATED = { flags: 0x01 };   // ordinary bits[1:0] == 1 -> roll-gated
+      check('ordinary flags&3===1 (roll-gated): a nonzero draw refuses the drop',
+        stepCarriedItem(eRollFail, ROLL_GATED, () => 1) === null
+        && eRollFail.carriedType === 34);
+      const eRollPass = new EntityA({ x: 100, y: 100 });
+      eRollPass.carriedType = 34; eRollPass.carriedX = 108; eRollPass.carriedY = 124;
+      check('...but a draw of exactly 0 lets it through (rand()&0x7f===0)',
+        stepCarriedItem(eRollPass, ROLL_GATED, () => 0) !== null
+        && eRollPass.carriedType === -1);
+    }
+
+    /* death-time drop: recorded once, at the frame===-1 tick, via
+     * deathDropId/X/Y — the periodic drop's OWN id/position convention
+     * (+0xB/-0xC0), but drained by popup.js, not dropCarriedItem/C041. */
+    {
+      const e = new EntityA({ x: 200, y: 300, hp: 5 });
+      e.state = ESTA.DYING; e.frame = -1;
+      e.carriedType = 40;         // ordinary
+      e.carriedX = 205; e.carriedY = 310;
+      e.tick({ x: 0, y: 0 }, desc1, () => 0, false);
+      check('the DYING branch\'s frame===-1 tick records a death-time drop request',
+        e.deathDropId === 40 + 0xb && e.deathDropX === 205 && e.deathDropY === 310,
+        JSON.stringify({ id: e.deathDropId, x: e.deathDropX, y: e.deathDropY }));
+      check('the carried item is consumed by the death-time drop (no longer carrying)',
+        e.carriedType === -1);
+
+      const e2 = new EntityA({ x: 0, y: 0, hp: 5 });
+      e2.state = ESTA.DYING; e2.frame = -1;
+      e2.tick({ x: 0, y: 0 }, desc1, () => 0, false);
+      check('an entity carrying nothing at death records no drop request',
+        e2.deathDropId === null);
+    }
+
+    /* dropCarriedItem's id round-trip, exercised end to end through popup.js's
+     * own busy-slot divert — see checkPopup for the direct objects.js test. */
+    {
+      const objects = expandMapObjects([]);
+      const dropped = dropCarriedItem(objects, 34 + 0xb, 300, 400);
+      check('dropCarriedItem round-trips the ordinary +0xB bias back to the original type',
+        dropped && dropped.type === 34 && dropped.x === 300 && dropped.y === 400
+        && dropped.flag6 === 1 && dropped.fallDirty === -1, JSON.stringify(dropped));
+      const dropped2 = dropCarriedItem(objects, 0xc5 - 0xc0, 300, 400);
+      check('dropCarriedItem round-trips the weapon -0xC0 bias back to the original type',
+        dropped2 && dropped2.type === 0xc5);
+    }
+    check('dropCarriedItem returns null on a table with no dead slot to reuse',
+      dropCarriedItem([{ x: 0, y: 0, type: 5, flag6: 1, dead: false }], 34 + 0xb, 0, 0) === null);
+
+    /* Never BOTH a periodic drop AND a death-time drop for the same carried
+     * item, reproducing main.js's own per-tick ordering rather than calling
+     * stepCarriedItem/tick() in isolation. main.js's real sequence per tick
+     * is: e.tick(...) runs first (sees the entity's state as of the START
+     * of this tick); THEN, only `if (e.alive)`, stepCarriedItem() may roll a
+     * drop; contact damage (stepCreatureDamage) that would transition the
+     * entity to DYING runs AFTER both, at the end of the frame — so a kill
+     * this tick can only ever be observed by tick()'s own DYING branch on
+     * the FOLLOWING tick, once stepCarriedItem has already had its one
+     * chance to drop (or not) while the entity was still genuinely alive.
+     * carriedType is a single mutually-exclusive flag cleared by whichever
+     * drop fires first, so this is provably a non-issue given that ordering
+     * — this test pins the ordering itself so a future reshuffle of
+     * main.js's per-tick sequence cannot silently reintroduce a double
+     * drop. */
+    {
+      // Case A: the periodic roll succeeds on the "alive" tick -> the item
+      // is gone by the time the entity dies; the death branch must not
+      // re-drop it.
+      const e = new EntityA({ x: 100, y: 100, hp: 5 });
+      e.carriedType = 34; e.carriedX = 108; e.carriedY = 124;
+      const ALWAYS_DROP = { flags: 0x00 };
+      // tick 1 (main.js order): e.tick() runs first (state still alive,
+      // no-op for carry) — omitted here, it does not touch carriedType —
+      // then, gated on e.alive, stepCarriedItem rolls.
+      const periodic = stepCarriedItem(e, ALWAYS_DROP, () => 0);
+      check('case A: the periodic drop fires while genuinely alive',
+        periodic !== null && e.carriedType === -1);
+      // end of tick 1: contact damage kills the entity (simulating
+      // stepCreatureDamage, which runs AFTER stepCarriedItem in main.js).
+      e.state = ESTA.DYING; e.frame = -1;
+      // tick 2: tick()'s own DYING branch now runs for the first time.
+      e.tick({ x: 0, y: 0 }, desc1, () => 0, false);
+      check('case A: the death-time drop does NOT also fire — carriedType was already cleared',
+        e.deathDropId === null);
+    }
+    {
+      // Case B: the periodic roll refuses on the "alive" tick -> the item
+      // is still carried when the entity dies; the death branch is the
+      // ONLY drop, and it must still fire (this is the disclosed
+      // popup-vs-C041 asymmetry, not a second missed drop).
+      const e = new EntityA({ x: 100, y: 100, hp: 5 });
+      e.carriedType = 34; e.carriedX = 108; e.carriedY = 124;
+      const NEVER_DROP = { flags: 0x02 };
+      const periodic = stepCarriedItem(e, NEVER_DROP, () => 0);
+      check('case B: the periodic drop refuses while alive (flags&3===2)',
+        periodic === null && e.carriedType === 34);
+      e.state = ESTA.DYING; e.frame = -1;
+      e.tick({ x: 0, y: 0 }, desc1, () => 0, false);
+      check('case B: the death-time drop fires exactly once, since the periodic one never did',
+        e.deathDropId === 34 + 0xb && e.carriedType === -1);
+    }
   }
 
   return results;
@@ -6881,6 +7178,37 @@ export async function checkWeaponsProjectiles(fetchRaw) {
         `where graphics export 32's three-band partition puts it`);
     }
 
+    {
+      /* The same z-order rule, exercised through dropCarriedItem/
+       * insertSpawned — the actual pair main.js's own steal-and-carry
+       * `dropCarriedIntoWorld` closure calls (CLAUDE.md's own "Steal-and-
+       * carry, System A" section), not just the settled-loot allocator
+       * above. A comparator bug specific to a freshly-dropped object's own
+       * shape (flag6:1, fallDirty:-1) rather than a settled-loot object's
+       * shape would only show up here.
+       *
+       * main.js's own `level.drawObjects` (main.js:178) is built as
+       * `sortForDraw(map.objects.filter(o => !isDeadType(o.type)), cats)` —
+       * every dead-type slot is filtered OUT at load, unlike the original's
+       * fixed 200-slot table which ships with real gaps. So in THIS port,
+       * allocObject can only ever find a reusable slot after something has
+       * actually died in play (e.g. searchAndSteal's own `o.dead = true`
+       * kill) — reproduced here rather than assumed. */
+      const m = parseMap(dclDecompress(await fetchRaw('game/PLEV4B.MAP')).data);
+      const ordered = sortForDraw(m.objects.filter((o) => !isDeadType(o.type)), cats);
+      const killedIndex = 5;
+      ordered[killedIndex].dead = true;   // simulate an earlier in-play kill
+      const dropped = dropCarriedItem(ordered, 34 + 0xb, 0, 0);   // ordinary type 34
+      check('dropCarriedItem reuses a slot killed earlier in play, in a real level array',
+        dropped === ordered[killedIndex]);
+      const withoutDropped = ordered.filter((o) => o !== dropped);
+      const reranked = insertSpawned(withoutDropped, cats, dropped);
+      const lastWeapon = (a) => a.reduce((k, o, i) => (o.type >= 0xc0 ? i : k), -1);
+      check(`a periodic-drop object re-ranks BEHIND the weapon pickups too, same as settled loot`,
+        reranked.indexOf(dropped) < lastWeapon(reranked),
+        `dropped at ${reranked.indexOf(dropped)}, last weapon at ${lastWeapon(reranked)}`);
+    }
+
     check(`the inventory survives a level change — only 2 clear sites`,
       INVENTORY_CLEAR_SITES.length === 2
         && INVENTORY_CLEAR_SITES[0] === 0x0498 && INVENTORY_CLEAR_SITES[1] === 0x8d80,
@@ -9674,15 +10002,31 @@ export function checkPopup() {
     check('spawn() records the world position', p.x === 100 && p.y === 200);
   }
 
-  /* single-slot busy/free semantics — a second spawn() while active is dropped */
+  /* single-slot busy/free semantics — a second spawn() while active is
+   * dropped UNLESS `objects` is supplied, in which case it diverts to
+   * CS:0xC041 (objects.js's dropCarriedItem) instead of being lost. */
   {
     const p = new Popup();
     p.spawn(100, 200, 0x2d);
     const second = p.spawn(999, 999, 0x15);
-    check('a second spawn() while busy is refused (CS:0xBF6B jmp 0xc041 — diverted, not modelled here)',
+    check('a second spawn() while busy, with no `objects` supplied, is simply refused',
       second === false);
     check('the busy slot keeps its ORIGINAL position, not the refused request\'s',
       p.x === 100 && p.y === 200);
+  }
+
+  /* CS:0xBF6B `jmp 0xc041` — the busy-slot divert, now modelled. */
+  {
+    const p = new Popup();
+    p.spawn(100, 200, 0x2d);
+    const slots = expandMapObjects([]);   // all 200 dead, ready to reuse
+    const second = p.spawn(500, 600, 0x2c, slots);   // id 0x2c -> type 0x21 (33)
+    check('a second spawn() while busy, WITH `objects`, still returns false',
+      second === false);
+    check('...but diverts to dropCarriedItem: a live object materializes at the new position',
+      slots.some((o) => !o.dead && o.x === 500 && o.y === 600 && o.type === 0x2c - 0xb));
+    check('the busy slot itself is untouched by the divert',
+      p.x === 100 && p.y === 200 && p.itemType === 0x2d - 0xb);
   }
 
   /* CS:0xBF87-92: y += POPUP_VY every tick */

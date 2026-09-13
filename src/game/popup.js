@@ -37,14 +37,17 @@
  * is a disclosed SAFETY VALVE against an eternal floating icon, not a
  * decoded mechanism; flagged rather than presented as proven.
  *
- * NOT MODELLED: a second `spawn()` call while the slot is busy diverts, in
- * the original, to the "steal-and-carry" object-respawn routine (`CS:0xC041`
- * — drop a REAL, solid object back into the world). That mechanic is not
- * ported anywhere in this project (steal-and-carry itself is unported), so
- * this module's own `spawn()` simply drops the new request when busy — an
- * honest simplification, not a silent behavioural change from a modelled
- * original path.
+ * THE BUSY-SLOT DIVERT, CS:0xBF6B — CLOSED. A second `spawn()` call while
+ * the slot is busy diverts, in the original, straight to `CS:0xC041` — the
+ * SAME "drop a real, solid object back into the world" allocator
+ * steal-and-carry's own periodic/death-time drops use (`objects.js`'s
+ * `dropCarriedItem`). Wired here as an OPTIONAL 4th argument (`objects`):
+ * every existing caller that doesn't pass one keeps the old "drop the
+ * request" behaviour, since C041 needs the live 200-slot runtime array this
+ * module has no reference to on its own.
  */
+
+import { dropCarriedItem } from './objects.js';
 
 export const POPUP_VY = -6;                 // CS:0xBF7B, the seeded Y-velocity
 export const POPUP_SPRITE_BASE = 170;        // the object-sprite formula, `170 + type`
@@ -60,10 +63,15 @@ export class Popup {
 
   /** CS:0xBF5F/0xBF64. `id` is the raw popup id (already checked non-negative
    *  by the caller). Returns false if the slot was already busy — the
-   *  caller's own reward is simply lost, matching the original's "consumed
-   *  either way" semantics for the group-elimination trigger this feeds. */
-  spawn(worldX, worldY, id) {
-    if (this.active) return false;                          // CS:0xBF64 `js`
+   *  caller's own reward is simply lost UNLESS `objects` (the 200-slot
+   *  runtime array, objects.js) is supplied, in which case a busy slot
+   *  diverts to `dropCarriedItem` instead (CS:0xBF6B `jmp c041`), matching
+   *  the original exactly rather than losing the item. */
+  spawn(worldX, worldY, id, objects) {
+    if (this.active) {
+      if (objects) dropCarriedItem(objects, id, worldX, worldY);   // CS:0xBF6B
+      return false;                                          // CS:0xBF64 `js`
+    }
     this.active = true;
     this.x = worldX;
     this.y = worldY;

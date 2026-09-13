@@ -27,7 +27,7 @@ import { buildDescriptorMap, GROUP_STEMS, HERO_DESCRIPTOR_MAX } from './formats/
 import { spriteForType, parseObjectCategories, sortForDraw, isDeadType,
          isUnstamped, OBJECT_SLOTS, activationBox,
          activateObjects, insertSpawned,
-         stepObjectFall, isFallEligible } from './game/objects.js';
+         stepObjectFall, isFallEligible, dropCarriedItem } from './game/objects.js';
 import { parseObjectRecords, Score, Purse, TreasureBurst, INVENTORY_EMPTY,
          CHEST_MIN, CHEST_MAX, chestKeyFor } from './game/treasure.js';
 import { CONSUMABLES, WEAPON_ARCS, INVULN_TICKS_SPAWN } from './game/consumables.js';
@@ -39,7 +39,7 @@ import { parseGroupsB, parseGroupsA, GroupSlots, spriteForEntity, MAX_ENTITIES,
 import { EntityB, MODE, MODE_TABLE, groundBelow, isDying, EST,
 DEATH_SPRITE_BASE, DEATH_FRAMES } from './game/entity.js';
 import { EntityA, CLASS_TABLES_A, spriteForEntityA, EST as ESTA,
-isDyingA, DEATH_SPRITE_BASE_A, DEATH_FRAMES_A } from './game/entity-a.js';
+isDyingA, DEATH_SPRITE_BASE_A, DEATH_FRAMES_A, stepCarriedItem } from './game/entity-a.js';
 import { VERDICT_NONE } from './game/pathfind.js';
 import { runSearch } from './game/pathfind-producers.js';
 import { GodsRandom } from './game/random.js';
@@ -1059,16 +1059,30 @@ async function main() {
         }
       }
       runSpawnsA();
+      /* CS:0xC041, via objects.js's dropCarriedItem — steal-and-carry's own
+       * periodic and death-time drops both land here. Re-ranks the object
+       * array on a successful drop, same reason as the treasure-burst loot
+       * settle below: allocObject reuses a dead slot in place, but this
+       * port's own draw order is a one-time sort at load, not a per-frame
+       * partition like the original's export 32. */
+      const dropCarriedIntoWorld = (id, x, y) => {
+        const dropped = dropCarriedItem(level.drawObjects, id, x, y);
+        if (dropped) {
+          level.drawObjects = insertSpawned(
+            level.drawObjects.filter((o) => o !== dropped), level.cats, dropped);
+        }
+      };
       /* System A's own pipeline, CS:0xe001 — all six stages, per entity.
        * camera/markers unlock strategies 1/2 (CS:0xe9da/0xe88c); grid unlocks
-       * stage 3's attack/leap (CS:0xe487). All three are optional on tick()'s
+       * stage 3's attack/leap (CS:0xe487); the object array unlocks strategy
+       * 2's own theft attempt (CS:0xE90E). All four are optional on tick()'s
        * own signature, so this call is the only thing that actually arms
        * them — see entity-a.js's header for what each one does. */
       for (const e of enemiesA) {
         const muzzle = e.tick(
           { x: player.x, y: player.y }, e.desc,
           () => rng.next(), fx.freeze > 0,
-          { x: cam.snapX, y: cam.snapY }, markerList.entries, grid);
+          { x: cam.snapX, y: cam.snapY }, markerList.entries, grid, level.drawObjects);
         if (muzzle && muzzle.hazard) {
           /* CS:0xE5E4 — attackBits 1 throws at a jittered point near the
            * hero; 2 or 3 throw at the hero's exact position, muzzle +0x10 X. */
@@ -1082,6 +1096,24 @@ async function main() {
         } else if (muzzle) {
           firedByA++;
           shots.fire(muzzle.x, muzzle.y, muzzle.dir, { x: cam.snapX, y: cam.snapY });
+        }
+        /* CS:0xE0C1-E198 — the carried-icon ease + probabilistic periodic
+         * drop, a separate call site from tick()'s own six-stage pipeline
+         * (entity-a.js's file header explains why) — only for a genuinely
+         * ALIVE entity, matching the original's own alive-branch placement. */
+        if (e.alive) {
+          const carried = stepCarriedItem(e, e.desc, () => rng.next());
+          if (carried) dropCarriedIntoWorld(carried.id, carried.x, carried.y);
+        }
+        /* CS:0xE25C-E282 — the one-shot death-time drop, recorded by tick()'s
+         * own DYING branch (once, on the frame===-1 tick) and drained here
+         * via popup.js (CS:0xBF5F), NOT dropCarriedIntoWorld/C041 — the
+         * original genuinely calls the two different routines from these two
+         * different sites. `level.drawObjects` arms popup's own busy-slot
+         * divert to C041, closing that module's previously-disclosed gap. */
+        if (e.deathDropId !== null) {
+          popup.spawn(e.deathDropX, e.deathDropY, e.deathDropId, level.drawObjects);
+          e.deathDropId = null;
         }
       }
       /* CS:0x0285 — contact, then the damage-grid scan, with contact winning.
@@ -1142,7 +1174,7 @@ async function main() {
            * and both states are only reachable through a frame===-1 tick
            * that writes the cache — so every member has one, always. */
           const src = g.members.reduce((a, b) => (b.deathCacheSeq > a.deathCacheSeq ? b : a));
-          popup.spawn(src.deathCacheX, src.deathCacheY, g.desc.rewardId);
+          popup.spawn(src.deathCacheX, src.deathCacheY, g.desc.rewardId, level.drawObjects);
         }
       }
       /* `UNKNOWN_sysA_0x1f4_elimination_detector` — System-A's OWN, separate
@@ -1162,7 +1194,7 @@ async function main() {
         g.rewardGiven = true;
         if (g.desc.rewardId >= 0) {
           const src = g.members.reduce((a, b) => (b.deathCacheSeq > a.deathCacheSeq ? b : a));
-          popup.spawn(src.deathCacheX + 8, src.deathCacheY + 8, g.desc.rewardId);
+          popup.spawn(src.deathCacheX + 8, src.deathCacheY + 8, g.desc.rewardId, level.drawObjects);
         }
       }
       /* Drain selector2.js's own group-elimination rewards (`CS:0xAED0`-
@@ -1170,7 +1202,7 @@ async function main() {
        * correctly but grown forever and never rendered. */
       for (const r of selectorTwo.rewards) {
         const id = r.itemType !== null ? r.itemType + 0xb : r.popupValue;
-        popup.spawn(r.x, r.y, id);
+        popup.spawn(r.x, r.y, id, level.drawObjects);
       }
       selectorTwo.rewards.length = 0;
       popup.step();
