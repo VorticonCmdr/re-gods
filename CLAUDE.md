@@ -852,7 +852,31 @@ f02a  call 0x1000:efe7      ; a small helper, read below
 f02d  jmp  0x1000:ee00      ; UNCONDITIONAL -> the SAME draw call the alive branch uses (-> CALL 0x3569)
 ```
 
-So the earlier framing — *"`0xf02a` is unread, so a port should stop drawing a dying creature"* — is **wrong, and the opposite of what the bytes do**: a dying System-B entity is never skipped from the draw. It falls straight into the identical `CALL 0x3569` the live path takes, using whatever `[di+0x4]` ("frame", already documented as becoming the death-sequence counter post-death) currently holds, run through the ordinary `sprite = class_base + MODE_ANIM[mode] + frame` formula this document already has for `CS:0xf0ae`. A port that special-cases "stop drawing on death" diverges from the original, which relies on the death-sequence counter (not a skip) to produce the death animation's frames through the normal draw path.
+So the earlier framing — *"`0xf02a` is unread, so a port should stop drawing a dying creature"* — is **wrong, and the opposite of what the bytes do**: a dying System-B entity is never skipped from the draw. It falls straight into the identical `CALL 0x3569` the live path takes, run through **whatever sprite formula the caller staged into `[0x4]`/`[0x6]`/`[0x8]` before the jump** — see the correction immediately below for what that formula actually is; it is not the ordinary one every other reading of `CS:0xf0ae` uses. A port that special-cases "stop drawing on death" diverges from the original, which relies on the death-sequence counter (not a skip) to produce the death animation's frames through the normal draw path.
+
+⚠️⚠️ **CORRECTION, a later session — `CS:0xF02A` and the real fade (`CS:0xF030`) are TWO DIFFERENT DRAWS, and only the first uses "the ordinary formula"; the fade itself does not.** A fresh `disassemble_bytes` of `CS:0xF030`–`0xF0AB` (not a re-read of this section's own prior summary) settles it precisely, and corrects a claim that had stood uncorrected for a full session and was carried into a port as a result:
+
+```
+ff20  cmp word[di+8],-2 / jz ff4b        ; -2 = waiting
+ff26  cmp word[di+8],-3 / jz ff2f        ; -3 = materialising-countdown/reactivate
+ff2c  jmp f030                            ; ANY OTHER NEGATIVE (i.e. the DYING sentinel, -1) -> the fade
+
+f030  inc word[0x1f4]                     ; a per-GROUP dying tally, not the entity's own frame
+f034  cmp word[di+4],0 / jns f06e          ; [di+4] still NEGATIVE (i.e. exactly -1, the kill-tick value
+                                           ;   CS:0xFFBF seeded) -> ONE-SHOT: cache position, maybe drop
+                                           ;   a per-kill popup via CS:0xBF5F using [di+0x10] -- then fall
+                                           ;   through to f06e regardless
+f06e  inc word[di+4]                      ; UNCONDITIONAL every f030 call
+f071  cmp word[di+4],7 / jl f084          ; still < 7 -> draw the fade frame
+f077    [di+8]:=0 ; [di+6]:=0 ; jmp ed72   ; >= 7 -> FINALISE, no draw this tick
+f084  ax=[di]-[0xa] ; bx=[di+2]-[0xc]      ; world -> screen (identical to the alive path)
+f091  cx = [di+4]                          ; the frame counter, now 0..6
+f094  cx += 0x6c                           ; <-- A FLAT CONSTANT, NOT a class_table[cls] lookup
+f097  [0x4]=ax ; [0x6]=bx ; [0x8]=cx
+f0a5  call 0x1000:3569                     ; the SAME draw call the alive branch uses
+```
+
+So **only** `[0x4]`/`[0x6]`/`[0x8]` differ between the two draws — the `CALL 0x3569` is genuinely shared, exactly as the paragraph above says — but the sprite value staged into `[0x8]` is `0x6c + [di+4]` for the fade (frames 0..6, the universal `0x6c`-base death-cloud range this document already documents for the world-2 nest, the ce64 creature, the world-1 statue and the hero's own death burst), **not** `class_base + MODE_ANIM[mode] + frame`. That ordinary formula genuinely is what `CS:0xF02A` uses (`jmp 0x1000:ee00`, the alive path's own draw prologue, reached only on the exact tick contact kills the entity — `[di+4]` is still `-1` at that point, one below the entity's current `animBase`) — so the "ordinary formula" claim was correct for `F02A` specifically, but this section's own prose generalised it to the WHOLE death sequence, which is wrong for every tick after the first. `[di+4]` is not merely "the death-sequence counter" in the abstract; it is a **negative-starting, then-0..6-counting** state variable whose sign gates the one-shot popup and whose magnitude (once non-negative) selects a `0x6c`-based sprite, finalising the entity at exactly 7. `gods-web`'s `entity.js` now ports this precisely (`DEATH_SPRITE_BASE = 0x6c`, `DEATH_FRAMES = 7`), with the kill-tick's own `F02A`-style draw left to the render pass (which already has `mode`/`cls` in scope and naturally sees `frame === -1` before `tick()` ever runs the fade, since this port's own contact code runs after its per-entity `tick()` loop each frame). The per-kill popup (`CS:0xBF5F` via `[di+0x10]`) remains unported — no popup-rendering module exists in this project yet, the same disclosed gap `selector2.js`'s own group-elimination reward already carries.
 
 `CS:0xEFE7` itself (the helper called first) reads a byte at `[SI+1]`, halves it (`SHR 1`), adds 1, divides by 10 (`DIV BL, BL=0xa`), and packs the quotient/remainder into a nibble pair (`SHL AL,1 ×4` then `OR AL,BL`) — the same divide-by-10, pack-two-digits shape this document's own BCD score routine (`CS:0x1950`) uses. `[SI]` here is not the entity pointer `DI` (which stays reserved for the draw call) — `UNKNOWN_efe7_source` narrows to exactly what `SI` points at and what the packed byte feeds; plausibly a per-kill score/popup award (consistent with, but not full confirmation of, this document's existing `[WF]` note that "kills award score by the same path as contact kills").
 
