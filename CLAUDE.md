@@ -1597,6 +1597,62 @@ Multi-lever puzzles are real — a census of the 756 live trigger records finds 
 
 Trigger actions cannot set levers — `DS:0xa5f8` is written only by the player toggle — so lever puzzles cannot chain into one another.
 
+### The lever/switch toggle, `CS:0x1045`-`0x10D6` — full trace, and a correction `[PROVEN]`
+
+⚠️ **Correction to the paragraph above: it is not a "player-overlap handler".** `CS:0x1045` is reached from exactly one place, `CS:0x49F2`, inside player **state 26 (idle)**'s own fire dispatch (`CS:0x49EA test byte[0x382],0x80`) — see *Which states can fire a weapon*, above, which already names this but had not traced the routine's own body past the `xor` at `0x10C5`. The hero must be standing still (not walking, jumping, falling, or on a ladder) and holding FIRE; walking into a lever does nothing at all. Read in full this pass, including its two previously-untraced callees:
+
+```
+1045  cmp byte[0x346],0 / jz 104f     ; DEBOUNCE LATCH, identical shape to the
+104c    jmp 10dc (return)             ;   weapon fire latch DS:0x351: cleared
+                                      ;   every tick fire is NOT held (CS:0x49F9
+                                      ;   mov byte[0x346],0), set the instant this
+1059  cmp byte[0x3a2],0 / jns 10dc    ;   scan is even attempted (0x1060), whether
+1060  mov byte[0x346],1              ;   or not it finds anything to toggle
+                                      ; DS:0x3a2 >= 0 -> a delayed animated toggle
+                                      ;   is already in progress -> bail (see below)
+1065  si=0x8314 ; cx=0xc8             ; walk all 200 live object records
+106b    cmp word[si+6],0 / jz next     ; +6 (flag6) must be nonzero — on screen
+1071    cmp word[si+4],0 / js next      ; +4 (type) must be live
+1087    cmp descriptor(type).category,3 / jnz next   ; CATEGORY 3 ONLY
+1094    call 0x115b                     ; lever-table lookup — below
+1099    or dx,dx / js next               ; NOT a real lever -> skip
+109d    call 0x10dd                      ; hero-proximity box — below
+10a0    jc next                          ; too far -> skip
+10a2..10b8  sprite in {0x120,0x122,0x124,0xe8}?  -> arm the delayed animation
+10c5    else: xor byte[obj.type],1  AND  xor byte[lever.type],1   ; BOTH structures
+10ce    play sfx 0x62b
+10d6    ret                              ; ONE toggle per press — no loop-continue
+```
+
+`CS:0x115b` (previously unread) is a linear search of the 64-entry `DS:0xa5f8` lever table for an EXACT `{x,y}` match against the candidate object, using `DX`'s sign as the found/not-found flag (the loop's own countdown register, left non-negative on a match, driven to `−1` by the unconditional `dec dx` on every failed attempt through all 64 records):
+
+```
+115b  si=0xa5f8 ; dx=0x3f(63)
+1161  cmp ax,[si] / jnz 116a ; cmp bx,[si+2] / jz 1170   ; {x,y} match -> RET (dx unchanged, >= 0)
+116a  si+=6 ; dec dx ; jns 1161                            ; next record
+1170  ret                                                    ; exhausted -> dx = -1
+```
+
+`CS:0x10dd` (previously unread) is the hero-proximity box — WORLD space, and genuinely asymmetric on both axes:
+
+```
+10df  bx=heroWorldX ; ax=objWorldX+4
+10e6  cmp bx,ax / jg reject          ; heroX >  objX+4   -> reject
+10ea  bx+=0x18 ; cmp bx,ax / jl reject  ; heroX+24 < objX+4 -> reject
+                                      ; => heroX in [objX-20, objX+4]
+10f4  bx=heroWorldY ; ax=objWorldY+0x10
+10fb  cmp bx,ax / jg reject          ; heroY >  objY+16  -> reject
+10ff  bx+=0x30 ; cmp bx,ax / jl reject  ; heroY+48 < objY+16 -> reject
+                                      ; => heroY in [objY-32, objY+16]
+1106  clc / ret                       ; accept
+```
+
+Both operands share `X` in screen space (camera cancels — equivalent to world space) but the caller keeps `Y` in world space throughout this part of the object walk for category>=3 objects (see `UNKNOWN_ss432_indirect`, above), which is why no camera term appears on the Y side.
+
+**The four special sprites — `0x120`/`0x122`/`0x124`/`0xe8` (POBJECTS types 118/120/122/62) — get a delayed, animated toggle instead of the instant `xor`**, already documented above under `UNKNOWN_lever_special_types`'s own `FUN_1000_1d01` trace, now cross-referenced from the trigger side rather than the draw side: `CS:0x10BA` arms it (`[0x20e]:=`the object, `[0x3a2]:=0`), and the draw routine advances `DS:0x3a2` once per FRAME (not once per press) through the per-world 5-entry table at `DS:0xe01e`, toggling both the object AND the lever-table record at phase 3 of 5, re-arming (idle) after phase 5. **Placed 18 times across the 8 shipped maps** (5/4/2/2/0/3/0/2 — types 118, 62, 62, 62, none, 120, none, 122 respectively), a small but real mechanic, previously known only as a draw-side animation with no traced trigger.
+
+**Ported in the sibling `gods-web` repo** as `game/levers.js`, verified live in the browser: a real idle+FIRE press flips an ordinary lever's sprite (a visible orange handle appearing/disappearing), end to end through the actual input pipeline, not just a unit test.
+
 ## `GAME.EXE` memory layout `[STATIC]`
 
 Ghidra (`x86:LE:16:Real Mode`, 415 functions):
@@ -4771,6 +4827,68 @@ So the mechanism this document had recorded only as "`DS:0x8014` is shared by wo
 ### What category 4 is, from the data side
 
 Types **50, 73, 96, 97, 115, 117, 130** are category 4, identically in all four `POBJECTS` files. **Six of the seven have an empty name and an empty description**; the exception is type 50, named `"spike"`. That fits: categories 0–3 are potion / treasure / keys / levers — all things the hero picks up and all named — while category 4 holds things that are *done to* the hero. A category-4 object is also rejected by the walk-in pickup path (`CS:0x17E6 jg` sends category ≥ 2 away), so it never needs text. `POBJECTS` categories 4 and 5 remain `UNKNOWN` as enums, but this is what 4 looks like.
+
+### The retracting spike hazard — types 50/117/130, `CS:0x1B72`/`0x1AF6` `[PROVEN]`
+
+Undocumented before this pass: the paragraph above named all seven category-4 types and stopped once the two already-known members (the world-2 nest, type 115, and the world-3 `ce64` creature, type 96, both below) were matched. Reading `CS:0x1B5D`-`0x1B6F`'s own sprite dispatch (`170+type`, since these are ordinary stamped map objects) past those two turns up a third, previously-unchased mechanism, shared by three of the remaining five types:
+
+```
+1b5d  cmp cx,0x11f / jz 1b72     ; type 117 -> the SHARED animated body
+1b63  cmp cx,0x12c / jz 1af6     ; type 130 -> its OWN, simpler body
+1b69  cmp cx,0xdc  / jz 1b72     ; type  50 ("spike") -> the SAME shared body
+1b6f  jmp 1c77                   ; else -> ce64/nest/etc (below)
+```
+
+**Shipped census** (re-derived from this project's own 8 maps): type 50 places **13/13/11/11** across worlds 1-2 (48 total — the single most common category-4 object in the game); type 117 places **4** times, world 3B only; type 130 places **9/8** across world 4 (17 total). Type 73, the only category-4 type with zero placements anywhere, is not chased further.
+
+**The retract/extend motion is a GLOBAL ping-pong counter, `DS:0x39b`**, shared by every type-50/117 object in a level at once — they animate in lockstep, not independently:
+
+```
+CS:0x1447  inc byte[0x39b] / and byte[0x39b],0x1f   ; 0..31, once per tick (the
+                                                     ;   SAME per-object-pass
+                                                     ;   function, FUN_1000_1432,
+                                                     ;   that stepPickups already
+                                                     ;   drives in the gods-web port)
+CS:0x1B83  dl=[0x39b] ; test dl,0x10
+           if SET:   dl &= 0xef ; result = 15 - dl     (16..31 -> 15..0)
+           if CLEAR: dl &= 0xef ; result = dl           ( 0..15 ->  0..15)
+```
+
+— a 0..15..0 triangle wave over 32 ticks (~2.1s at 15Hz), verified by direct computation over all 32 raw values.
+
+The hazard's own "tip" Y (world space) is `obj.y + 15 - pingpong` (`CS:0x1BA3`-`0x1BA8`: `+0x1f`, `-pingpong`, `-0x10`). The BASE sprite (`170+type`) draws 16px below that (`CS:0x1BE1 add bx,0x10` undoes the `-0x10` for the DRAW only, not the hitbox test — `objY+31-pingpong`); the OVERLAY sprite draws back at the tip Y (`CS:0x1C10 sub word[0x6],0x10`) — the overlay is the part that visually reaches toward the hero.
+
+**THE HITBOX**, `CS:0x1BAB`-`0x1BD8` — X genuinely cancels the camera (both operands get `-camX`); Y is compared directly, because this whole walk keeps category>=3/4 objects' Y in world space (see `UNKNOWN_ss432_indirect`, above):
+
+```
+heroX in [objX - 24, objX + 8]
+heroY in [tipY  - 40, tipY]
+```
+
+`CS:0x1BD1 cmp word[0x172],0 / jnz reject ; CS:0x1BD8 sub word[0x192],2` — **a flat 2 HEALTH TARGET (`DS:0x192`) EVERY TICK** the hero overlaps and is not invulnerable. There is no debounce, no one-touch-and-consume, and this path **never goes through the shared `CS:0xac59`/`CS:0xa9e4` contact routine** every creature in this game uses — it is a genuinely different threat model: a hero who lingers takes 2 damage per 15Hz tick (30/s), enough to run a full 24-point health bar to zero in well under a second.
+
+**The overlay sprite** is a SECOND, per-type animation, on its own global counter, drawn 16px above the base sprite (branching on the ORIGINAL sprite id, not the just-computed draw position):
+
+```
+type 50  (0xdc):  DS:0x39c, wraps mod 4 (AND 0x3)   -> table DS:0xdffe
+                    {220, 313, 314, 315}   (170+50, then 3 more frames)
+type 117 (0x11f): DS:0x39f, wraps mod 6 (AND, CMP 6) -> table DS:0xe006
+                    {287, 416, 417, 418, 419, 420}   (170+117, then 5 more)
+```
+
+Both tables read live (`read_memory("1ffd:dffe", 36)`); `DS:0xe012` (type 130's own table, below) sits immediately after `DS:0xe006`'s 6 words, and `DS:0xe01e` (the just-documented special-lever animation table) sits immediately after THAT — three tables end to end with zero slack, a three-way boundary cross-check.
+
+**Type 130 — `CS:0x1AF6`-`0x1B58` — is its own, simpler body**: no ping-pong on the hitbox at all (fixed at `obj.y + 16`), a single sprite from its own 6-entry table (`DS:0xe012`, SHARING `DS:0x39f` with type 117's own overlay counter — the two are read independently since type 130 has no ordinary/overlay split of its own):
+
+```
+{300, 421, 422, 423, 424, 425}   (170+130, then 5 more frames)
+```
+
+Its hitbox, `CS:0x1B12`-`0x1B41` (screen-space X — both operands share one camera-relative frame, equivalent to world space exactly like the shared body above): `heroX in [objX-20, objX+20]`, `heroY in [objY-40, objY+24]`. Same flat -2 health, same invulnerability gate, same total absence of debounce.
+
+⚠️ **A trap this project's own port caught before it landed**: `CS:0x1B0B push bx` / `CS:0x1B46 pop bx` brackets the `+0x10` used for type 130's hitbox test — the sprite itself draws at the object's own PLAIN `(x, y)`, never at `(x, y+16)`. A port that reuses the mutated hitbox coordinate for the draw call renders the sprite 16px too low.
+
+**Ported in the sibling `gods-web` repo** as `game/spikes.js`, verified live in the browser: the two-part (base+overlay) sprite renders correctly as a hanging spike, and standing a hero inside the box drained a full 24-point health target to 0 in under a second, exactly as the undebounced-damage reading predicts.
 
 ### `pobjects-cat-4-5` — category 5 census `[PROVEN, enum meaning still open]`
 
