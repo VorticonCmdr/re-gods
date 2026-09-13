@@ -73,8 +73,13 @@ export function stepHeroFrame({ input, arsenal, grid, player, map, cam,
                                cats = null, health = null, treasure = null,
                                burst = null, alloc = null, starburst = null,
                                blocks = null, debris = null, tock = 1,
-                               inventory = null }) {
+                               inventory = null, levers = null,
+                               leverToggle = null }) {
   arsenal.latchTick(input.fire);                                    // 019D
+  /* CS:0x49F9 — the SAME "one action per press" shape as the weapon latch
+   * above, cleared every tick fire is not held. Unconditional, regardless
+   * of the hero's state, exactly like arsenal's own latch clear. */
+  if (leverToggle) leverToggle.latchTick(input.fire);
   grid.clear();                                                     // 01CC
   /* CS:0x0206 -> CS:0x1432, the object pass. Weapon pickup lives here, and it
    * runs BEFORE the projectile step — so a weapon collected this tick has its
@@ -110,12 +115,34 @@ export function stepHeroFrame({ input, arsenal, grid, player, map, cam,
   /* CROUCH + FIRE, CS:0x4B1A -> CS:0x6069 — the key scan needs the SAME live
    * object array and category table the pickup walk above just used, plus
    * the 4-slot inventory (DS:0x17e). `pickup.js` documents why the scan is
-   * cheap to re-run every tick unconditionally. */
-  const pickupCtx = objects ? { objects, cats, inventory } : null;
+   * cheap to re-run every tick unconditionally. `levers`/`leverToggle` feed
+   * IDLE+FIRE's own lever scan (CS:0x1045, game/levers.js) the same way. */
+  const pickupCtx = objects ? { objects, cats, inventory, levers, leverToggle } : null;
+  /* ⚠️ ORDER MATTERS. CS:0x0206's object-draw pass (where CS:0x1D67's own
+   * `inc [0x3a2]` lives) runs BEFORE CS:0x0254's player dispatch (where
+   * CS:0x10BE's `[0x3a2]:=0` arms it) in the ORIGINAL's own per-tick order —
+   * so the arming tick's OWN draw pass still shows the object's ordinary,
+   * pre-animation sprite, and table[0] first appears on the NEXT tick.
+   * This port's draw pass instead runs once, in main.js's render closure,
+   * AFTER this whole logic step returns — there is no way to give that one
+   * render call two different answers depending on whether `player.tick()`
+   * (below) has run yet within the SAME tick. Stepping BEFORE `player.tick()`
+   * is the closer of the two orderings: verified by simulation, it reproduces
+   * the exact 5-sprite sequence and the exact toggle-at-index-3 timing the
+   * disassembly requires, at the cost of two small, disclosed shifts neither
+   * of which changes what is shown — the animation's first frame (table[0])
+   * is visible one tick EARLIER (on the arming tick itself, instead of the
+   * next one), and correspondingly one extra tick shows the (already
+   * correctly toggled) ordinary sprite at the end before the object goes
+   * fully idle. The alternative order (step AFTER player.tick()) is worse:
+   * it advances a freshly-armed animation before its own first render ever
+   * runs, which SKIPS table[0] outright rather than merely shifting it. */
+  if (leverToggle) leverToggle.step();
   player.tick(map, input, arsenal, tock, pickupCtx);                // 0254
   return { projectiles, emitted: player.emitted, picked: picked.taken,
            consumed: picked.consumed || [], treasures: picked.treasures || [],
-           loot, burstFx, blockFx, debrisFx, keyCollected: player.keyCollected };
+           loot, burstFx, blockFx, debrisFx, keyCollected: player.keyCollected,
+           leverToggled: player.leverToggled };
 }
 
 /**

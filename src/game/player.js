@@ -345,6 +345,7 @@ export class Player {
     this.phase = 0;               // DS:0x36b (CL), sign-extended as a byte
     this.footstep = false;        // set on the ticks the original plays SFX 0x0e
     this.keyCollected = null;     // {type, slot} on the tick CS:0x60F0 fires
+    this.leverToggled = null;     // the object toggled/armed this tick, CS:0x1045
 
     /* ── The FIRE overlay ───────────────────────────────────────────────
      * The eight firing states are NOT a fifth entry in `ST`. They carry their
@@ -410,17 +411,20 @@ export class Player {
    *        leaves the gate open, so a caller that doesn't thread the real
    *        toggle through (tests, tools) climbs at the pre-existing rate
    *        rather than silently halving it.
-   * @param {?{objects:Array, cats:Array, inventory:Array}} pickup  the live
-   *        map objects, the category table, and the 4-slot inventory —
-   *        everything `_crouch`'s key scan (CS:0x6069) needs. `null` is a
-   *        valid caller (tests, tools): crouch entry/exit still works, only
-   *        the scan itself becomes a no-op.
+   * @param {?{objects:Array, cats:Array, inventory:Array, levers:?Array,
+   *        leverToggle:?object}} pickup  the live map objects, the category
+   *        table, and the 4-slot inventory — everything `_crouch`'s key scan
+   *        (CS:0x6069) needs. `levers`/`leverToggle` additionally feed idle's
+   *        own fire dispatch (CS:0x1045, game/levers.js). `null` is a valid
+   *        caller (tests, tools): crouch entry/exit and idle both still work,
+   *        only the scans themselves become a no-op.
    */
   tick(map, input, fire = null, tock = 1, pickup = null) {
     this.footstep = false;
     this.climbStep = false;
     this.emitted = null;
     this.keyCollected = null;
+    this.leverToggled = null;
     if (this.fireState >= 0) { this._fireTick(map, input, fire); return; }
     switch (this.state) {
       case ST.GROUND: this._ground(map, input, fire, pickup); break;
@@ -596,15 +600,26 @@ export class Player {
 
   _ground(map, input, fire, pickup) {
     const moving = input.left || input.right;
-    /* ⚠️ ONLY THE WALK HANDLERS FIRE. State 26 (idle) tests the same bit at
-     * CS:0x49EA and calls CS:0x1045 — the object-pickup walk over DS:0x8314 —
-     * so a stationary hero with fire held picks things up instead of shooting.
-     * The test sits at CS:0x5A64 (state 0) and CS:0x5CA8 (state 1), BEFORE the
-     * X step at CS:0x5A84 / 0x5CCB, and success `jmp`s straight past it: the
-     * entry tick does not move, and neither does any tick of state 5/6. */
+    /* ⚠️ EVERY GROUND STATE HAS ITS OWN FIRE TEST, and each one means
+     * something different — see hero-fire.js's own header. State 0/1's own
+     * test (CS:0x5A64 / CS:0x5CA8) sits BEFORE the X step and checks ONLY the
+     * fire bit, not whether its own direction key is still held — so it also
+     * fires from the "locked stopped pose" below (released without UP), not
+     * only while actively walking. State 26's own test (CS:0x49EA) instead
+     * calls CS:0x1045 — the LEVER/SWITCH toggle (game/levers.js), corrected
+     * away from "object pickup" by pickup.js. A stationary hero with fire
+     * held throws a switch; pickup itself has no fire gate at all. */
     if (moving) {
       this.facing = input.right ? +1 : -1;
       if (this._tryFire(this.facing > 0 ? 5 : 6, input, fire)) return;
+    } else if (this.stateIndex === S.WALK_L || this.stateIndex === S.WALK_R) {
+      this.facing = this.stateIndex === S.WALK_L ? -1 : +1;
+      if (this._tryFire(this.facing > 0 ? 5 : 6, input, fire)) return;
+    } else if (this.stateIndex === S.IDLE && input.fire &&
+               pickup && pickup.leverToggle) {
+      pickup.leverToggle.tick(pickup.objects, pickup.cats, pickup.levers,
+                               { x: this.x, y: this.y });
+      this.leverToggled = pickup.leverToggle.lastToggle;
     }
     if (input.left)  this._walk(map, -1);
     if (input.right) this._walk(map, +1);

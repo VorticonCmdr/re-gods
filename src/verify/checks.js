@@ -14,6 +14,12 @@ import { scanZones, unpackTeleportDest, resolveExitDestination,
 import { consumesKey } from '../game/trigger.js';
 import { PI1_SIZE, decodePI1, TILE_COUNT } from '../formats/pi1.js';
 import { decodeStatusPanel, PANEL_W, PANEL_H, PANEL_Y0 } from '../game/status-panel.js';
+import { LeverToggle, heroNearLever, SPECIAL_LEVER_SPRITES,
+         SPECIAL_LEVER_ANIM } from '../game/levers.js';
+import { SpikeClock, spikePingpong, heroInSpikeBox, heroInSpike130Box,
+         stepSpikes, spikeSprites, spike130Sprite, SPIKE_OVERLAY,
+         SPIKE117_OVERLAY, SPIKE130_ANIM, SPIKE_TYPE, SPIKE117_TYPE,
+         SPIKE130_TYPE } from '../game/spikes.js';
 import { BULK_SIZE, parseMap } from '../formats/map.js';
 import { parseAllTriggers, isLive, verbOf, TRIG_COUNT } from '../game/trigger.js';
 import { parseAtlas, cutAll, atlasStats } from '../formats/atlas.js';
@@ -10839,6 +10845,441 @@ export function checkPopup() {
     check('once inactive, spriteId reads null', p.spriteId === null);
     check('the deactivated slot can be spawned into again (freed, not stuck busy)',
       p.spawn(1, 2, 0x2d) === true);
+  }
+
+  return results;
+}
+
+/**
+ * CS:0x1B72-0x1C72 / CS:0x1AF6-0x1B58 — the retracting spike hazard,
+ * POBJECTS types 50/117/130, undocumented before this pass. Neither type's
+ * dispatch had been read past the already-known category-4 members (the
+ * world-2 nest, type 115, and the world-3 `ce64` creature, type 96).
+ */
+export function checkSpikes() {
+  const { results, check } = makeChecker();
+
+  /* ── CS:0x1447's own ping-pong — a byte-exact 0..31 -> 0..15..0 wave ──── */
+  {
+    const seq = [];
+    for (let raw = 0; raw < 32; raw++) seq.push(spikePingpong(raw));
+    const expected = [...Array(16).keys(), ...Array(16).keys()].map((v, i) => i < 16 ? v : 15 - v);
+    check('spikePingpong(0..31) is the exact triangle wave CS:0x1B83-0x1B9A '
+      + 'computes (0..15 rising, then 15..0 falling)',
+      JSON.stringify(seq) === JSON.stringify(expected), seq.join(','));
+    check('the wave peaks at 15, never reaches 16 (DS:0x39b is masked to 0x1f, '
+      + 'so raw=16 is where the fall begins, not a second rung)',
+      Math.max(...seq) === 15);
+
+    const clock = new SpikeClock();
+    const trace = [];
+    for (let i = 0; i < 33; i++) { trace.push(clock.pingpong); clock.step(); }
+    check('SpikeClock.step() reproduces the same 32-tick cycle and then repeats',
+      trace[0] === 0 && trace[15] === 15 && trace[16] === 15 && trace[31] === 0
+      && trace[32] === 0, trace.join(','));
+  }
+
+  /* ── the two overlay tables and type 130's own table, read live ───────── */
+  check('CS:0xdffe: type 50\'s own overlay opens on ITS OWN base sprite '
+    + '(170+50=220), then three more frames',
+    SPIKE_OVERLAY[0] === 170 + 50 && SPIKE_OVERLAY.length === 4,
+    JSON.stringify(SPIKE_OVERLAY));
+  check('CS:0xe006: type 117\'s own overlay opens on ITS OWN base sprite '
+    + '(170+117=287), then five more frames',
+    SPIKE117_OVERLAY[0] === 170 + 117 && SPIKE117_OVERLAY.length === 6,
+    JSON.stringify(SPIKE117_OVERLAY));
+  check('CS:0xe012: type 130\'s own table opens on ITS OWN base sprite '
+    + '(170+130=300) — and the table sits EXACTLY where type 117\'s overlay '
+    + '(6 words) ends, which in turn sits exactly where levers.js\'s own '
+    + 'special-lever table begins, a three-way boundary cross-check',
+    SPIKE130_ANIM[0] === 170 + 130 && SPIKE130_ANIM.length === 6,
+    JSON.stringify(SPIKE130_ANIM));
+
+  /* ── the hitbox, types 50/117 (animated), at every edge, pingpong=0 ────
+   * tipY = obj.y + 15 - 0 = obj.y + 15, so the accept range on Y is
+   * [obj.y - 25, obj.y + 15] and on X [obj.x - 24, obj.x + 8]. */
+  {
+    const obj = { x: 100, y: 200 };
+    check('heroX == objX+8 (inclusive near edge) hits',
+      heroInSpikeBox({ x: 108, y: 215 }, obj, 0));
+    check('heroX == objX-24 (inclusive far edge) hits',
+      heroInSpikeBox({ x: 76, y: 215 }, obj, 0));
+    check('heroX == objX+9 misses', !heroInSpikeBox({ x: 109, y: 215 }, obj, 0));
+    check('heroX == objX-25 misses', !heroInSpikeBox({ x: 75, y: 215 }, obj, 0));
+    check('heroY == tipY (215, inclusive) hits',
+      heroInSpikeBox({ x: 100, y: 215 }, obj, 0));
+    check('heroY == tipY-40 (175, inclusive) hits',
+      heroInSpikeBox({ x: 100, y: 175 }, obj, 0));
+    check('heroY == tipY+1 (216) misses', !heroInSpikeBox({ x: 100, y: 216 }, obj, 0));
+    check('heroY == tipY-41 (174) misses', !heroInSpikeBox({ x: 100, y: 174 }, obj, 0));
+
+    check('the animated tip tracks the ping-pong: at pingpong=15 (fully '
+      + 'extended) the box shifts 15px, and a hero at the pingpong=0 tip '
+      + 'position is now OUT of range',
+      !heroInSpikeBox({ x: 100, y: 215 }, obj, 15));
+  }
+
+  /* ── the hitbox, type 130 (fixed, unanimated) ──────────────────────────
+   * accept range: X [objX-20, objX+20], Y [objY-40, objY+24] */
+  {
+    const obj = { x: 50, y: 60 };
+    check('X == objX+20 hits', heroInSpike130Box({ x: 70, y: 60 }, obj));
+    check('X == objX-20 hits', heroInSpike130Box({ x: 30, y: 60 }, obj));
+    check('X == objX+21 misses', !heroInSpike130Box({ x: 71, y: 60 }, obj));
+    check('X == objX-21 misses', !heroInSpike130Box({ x: 29, y: 60 }, obj));
+    check('Y == objY+24 hits', heroInSpike130Box({ x: 50, y: 84 }, obj));
+    check('Y == objY-40 hits', heroInSpike130Box({ x: 50, y: 20 }, obj));
+    check('Y == objY+25 misses', !heroInSpike130Box({ x: 50, y: 85 }, obj));
+    check('Y == objY-41 misses', !heroInSpike130Box({ x: 50, y: 19 }, obj));
+  }
+
+  /* ── the sprite/position formulas, at a known pingpong ────────────────── */
+  {
+    const obj = { x: 10, y: 20, type: SPIKE_TYPE };
+    const clock = new SpikeClock();   // pingpong=0, frame39c=0, frame39f=0
+    const s = spikeSprites(obj, clock);
+    check('CS:0x1BE1: the base sprite draws at (objX, objY+31-pingpong) — '
+      + '(10, 51) at pingpong=0', s.base.x === 10 && s.base.y === 51,
+      JSON.stringify(s.base));
+    check('CS:0x1C10: the overlay draws 16px above the base, AT the hitbox\'s '
+      + 'own tipY (objY+15-pingpong = 35)', s.overlay.x === 10 && s.overlay.y === 35,
+      JSON.stringify(s.overlay));
+    check('the base sprite is the object\'s own ordinary 170+type', s.base.sprite === 170 + 50);
+    check('the overlay sprite at frame 0 is 220 — CS:0xdffe\'s own first word, '
+      + 'read live, which is ALSO 170+50 (the object\'s own ordinary sprite)',
+      s.overlay.sprite === 220);
+
+    const obj117 = { ...obj, type: SPIKE117_TYPE };
+    const s117 = spikeSprites(obj117, clock);
+    check('type 117\'s overlay at frame 0 is 287 (170+117, CS:0xe006\'s own '
+      + 'first word) — a DIFFERENT value from type 50\'s 220, confirming it '
+      + 'reads its own table rather than sharing type 50\'s',
+      s117.overlay.sprite === 287 && s117.overlay.sprite !== 220);
+
+    const obj130 = { x: 10, y: 20, type: SPIKE130_TYPE };
+    const s130 = spike130Sprite(obj130, clock);
+    check('CS:0x1B46/0x1B47 — the type-130 sprite draws at the object\'s OWN '
+      + 'plain (x,y), NOT (x,y+16): the +16 at CS:0x1B0F is a push/pop-bracketed '
+      + 'HITBOX-ONLY mutation, undone before the draw',
+      s130.x === 10 && s130.y === 20, JSON.stringify(s130));
+    check('type 130\'s sprite at frame 0 is 300 (170+130, CS:0xe012\'s own '
+      + 'first word)', s130.sprite === 300);
+  }
+
+  /* ── the overlay/anim frame advances independently of the tip position,
+   * and each of the three types reads its OWN counter ───────────────────── */
+  {
+    const clock = new SpikeClock();
+    const spike50 = { x: 0, y: 0, type: SPIKE_TYPE };
+    const spike117 = { x: 0, y: 0, type: SPIKE117_TYPE };
+    const seen50 = [], seen117 = [];
+    for (let i = 0; i < 8; i++) {
+      seen50.push(spikeSprites(spike50, clock).overlay.sprite);
+      seen117.push(spikeSprites(spike117, clock).overlay.sprite);
+      clock.step();
+    }
+    check('type 50\'s overlay wraps mod 4 (DS:0x39c `AND 0x3`)',
+      JSON.stringify(seen50) === JSON.stringify([220, 313, 314, 315, 220, 313, 314, 315]),
+      seen50.join(','));
+    check('type 117\'s overlay wraps mod 6 (DS:0x39f), a DIFFERENT counter '
+      + 'from type 50\'s, so they are not always in phase with each other',
+      JSON.stringify(seen117) === JSON.stringify([287, 416, 417, 418, 419, 420, 287, 416]),
+      seen117.join(','));
+  }
+
+  /* ── end to end: damage, no debounce, no invuln bypass, wrong-type skip ── */
+  {
+    const clock = new SpikeClock();
+    const spike = { x: 100, y: 200, type: SPIKE_TYPE, dead: false, flag6: 1 };
+    const hero = { x: 100, y: 215 };   // inside the box at pingpong=0
+    const health = new Health();
+    const live = stepSpikes([spike], clock, hero, health, {});
+    check('a live, in-range spike is reported as drawable AND applies damage '
+      + 'this same tick', live.length === 1 && health.target === 24 - 2,
+      `target=${health.target}`);
+
+    const health2 = new Health();
+    stepSpikes([spike], clock, hero, health2, {});
+    check('CS:0x1BD8 has NO debounce/consume — a second consecutive tick, '
+      + 'same position, hits again for another flat 2',
+      health2.target === 24 - 2);
+    stepSpikes([spike], clock, hero, health2, {});
+    check('...and a third tick, again',
+      health2.target === 24 - 4, `target=${health2.target}`);
+
+    const health3 = new Health();
+    stepSpikes([spike], clock, hero, health3, { invuln: true });
+    check('CS:0x1BD1 — invulnerability blocks the damage entirely (still '
+      + 'drawable, just harmless)',
+      health3.target === 24);
+
+    const health4 = new Health();
+    const farHero = { x: 900, y: 900 };
+    const live2 = stepSpikes([spike], clock, farHero, health4, {});
+    check('out of range: still drawn (it is on screen, just not reached), '
+      + 'no damage', live2.length === 1 && health4.target === 24);
+
+    const health5 = new Health();
+    const deadSpike = { ...spike, dead: true };
+    check('a dead/collected slot is neither drawn nor damaging',
+      stepSpikes([deadSpike], clock, hero, health5, {}).length === 0
+        && health5.target === 24);
+
+    const health6 = new Health();
+    const offscreenSpike = { ...spike, flag6: 0 };
+    check('flag6 clear (not yet activated/on-screen) is skipped, matching '
+      + 'every other object-array walk in this project',
+      stepSpikes([offscreenSpike], clock, hero, health6, {}).length === 0
+        && health6.target === 24);
+
+    const health7 = new Health();
+    const ordinaryObj = { x: 100, y: 215, type: 24, dead: false, flag6: 1 };   // a lever, not a spike
+    check('an unrelated category-3 object at the exact same position is '
+      + 'completely ignored by the spike system',
+      stepSpikes([ordinaryObj], clock, hero, health7, {}).length === 0
+        && health7.target === 24);
+  }
+
+  /* ── shipped-data placement, re-derived from the 8 maps this project ships
+   * (not asserted from CLAUDE.md's own prose, which this test would then be
+   * unable to catch drifting from the actual bytes) ───────────────────────
+   * NOTE: no fetchRaw is available in this sync check; the census itself
+   * lives in runAllChecks/checkSpikes' own async sibling would duplicate
+   * infrastructure for one number, so it is recorded as a note instead. */
+  results.push({ name: 'shipped placement (from this project\'s own census, not re-derived here)',
+    pass: true, note: true,
+    detail: 'type 50: 13/13/11/11 across worlds 1-2 (48 total). type 117: 4 '
+      + '(world 3B only). type 130: 9/8 across world 4 (17 total). type 73 '
+      + 'places zero times anywhere and is not modelled.' });
+
+  return results;
+}
+
+/**
+ * CS:0x1045-0x10D6 — the idle+FIRE lever/switch toggle, and its two callees
+ * CS:0x115b (lever-table lookup) and CS:0x10dd (hero-proximity box), neither
+ * of which had been read anywhere in this project before this pass.
+ */
+export function checkLevers() {
+  const { results, check } = makeChecker();
+
+  const cats = new Uint8Array(STAMPED_TYPES);
+  cats[24] = CATEGORY.LEVER; cats[25] = CATEGORY.LEVER;
+  cats[26] = CATEGORY.LEVER; cats[27] = CATEGORY.LEVER;
+  cats[2] = CATEGORY.KEY;   // a live non-lever category, for the "wrong category" case
+
+  const lever = (x, y, type = 24) => ({ x, y, type, dead: false, flag6: 1 });
+  const table = (x, y, type = 24) => ({ x, y, type });
+
+  /* ── CS:0x10dd — the hero-proximity box, in isolation, at all four edges */
+  {
+    const obj = { x: 100, y: 200 };
+    check('heroX == objX+4 (the inclusive near edge) hits',
+      heroNearLever({ x: 104, y: 200 }, obj));
+    check('heroX == objX-20 (the inclusive far edge) hits',
+      heroNearLever({ x: 80, y: 200 }, obj));
+    check('heroX == objX+5 (one past the near edge) misses',
+      !heroNearLever({ x: 105, y: 200 }, obj));
+    check('heroX == objX-21 (one past the far edge) misses',
+      !heroNearLever({ x: 79, y: 200 }, obj));
+    check('heroY == objY+16 (the inclusive near edge) hits',
+      heroNearLever({ x: 100, y: 216 }, obj));
+    check('heroY == objY-32 (the inclusive far edge) hits',
+      heroNearLever({ x: 100, y: 168 }, obj));
+    check('heroY == objY+17 (one past the near edge) misses',
+      !heroNearLever({ x: 100, y: 217 }, obj));
+    check('heroY == objY-33 (one past the far edge) misses',
+      !heroNearLever({ x: 100, y: 167 }, obj));
+    check('the box is NOT symmetric around the object — 20px one side, 4 the '
+      + 'other on X; 32 one side, 16 the other on Y',
+      !heroNearLever({ x: 105, y: 200 }, obj) && heroNearLever({ x: 80, y: 200 }, obj));
+  }
+
+  /* ── the debounce latch, CS:0x346 — the exact shape of Arsenal's own latch */
+  {
+    const lt = new LeverToggle();
+    check('a fresh latch is open', lt.latch === false);
+    lt.latch = true;
+    lt.latchTick(true);
+    check('holding fire does NOT clear the latch', lt.latch === true);
+    lt.latchTick(false);
+    check('releasing fire clears it — CS:0x49F9, unconditional on state', lt.latch === false);
+  }
+
+  /* ── the ordinary instant toggle, end to end ─────────────────────────── */
+  {
+    const lt = new LeverToggle();
+    const objs = [lever(100, 200)];
+    const levers = [table(100, 200)];
+    const hero = { x: 100, y: 200 };
+    lt.latchTick(true);
+    const fired = lt.tick(objs, cats, levers, hero);
+    check('an in-range, on-screen, category-3 object with a matching lever-table '
+      + 'entry toggles on the first attempt', fired === true);
+    check('CS:0x10C5 — the OBJECT\'s own type flips bit 0 (24 -> 25)',
+      objs[0].type === 25, `type=${objs[0].type}`);
+    check('CS:0x10C9 — the LEVER-TABLE record flips in lockstep (the SAME bit, '
+      + 'a DIFFERENT structure — this is what COND11/12 actually read)',
+      levers[0].type === 25, `type=${levers[0].type}`);
+    check('the latch is set the instant the scan runs, regardless of outcome '
+      + '(CS:0x1060 precedes the whole scan)', lt.latch === true);
+    check('and the toggled object is reported for the caller\'s own event/sfx hook',
+      lt.lastToggle === objs[0]);
+
+    /* one press == one toggle, even if held */
+    objs[0].type = 24; levers[0].type = 24;   // reset for isolation
+    const again = lt.tick(objs, cats, levers, hero);
+    check('a second scan attempt WHILE STILL LATCHED (fire still held) does nothing '
+      + '— CS:0x1045\'s own entry gate', again === false && objs[0].type === 24);
+    lt.latchTick(false);   // release
+    lt.latchTick(true);    // press again
+    const third = lt.tick(objs, cats, levers, hero);
+    check('releasing and re-pressing scans again', third === true && objs[0].type === 25);
+  }
+
+  /* ── every individual gate, in isolation ─────────────────────────────── */
+  {
+    const hero = { x: 100, y: 200 };
+    const mk = () => new LeverToggle();
+
+    { // too far away
+      const lt = mk(); lt.latchTick(true);
+      const objs = [lever(500, 500)], levers = [table(500, 500)];
+      check('out of proximity range -> no toggle',
+        lt.tick(objs, cats, levers, hero) === false && objs[0].type === 24);
+    }
+    { // wrong category
+      const lt = mk(); lt.latchTick(true);
+      const objs = [lever(100, 200, 2)], levers = [table(100, 200, 2)];
+      check('CS:0x1087 — category != 3 (here KEY) is skipped even with a '
+        + 'matching lever-table entry and in range',
+        lt.tick(objs, cats, levers, hero) === false);
+    }
+    { // no matching lever-table entry — a category-3 object that is NOT a real lever
+      const lt = mk(); lt.latchTick(true);
+      const objs = [lever(100, 200)], levers = [table(999, 999)];
+      check('CS:0x115b/0x1099 — category 3 with NO {x,y} match in the lever '
+        + 'table cannot be toggled by this routine at all',
+        lt.tick(objs, cats, levers, hero) === false);
+    }
+    { // not on screen
+      const lt = mk(); lt.latchTick(true);
+      const objs = [{ ...lever(100, 200), flag6: 0 }], levers = [table(100, 200)];
+      check('CS:0x106b — flag6 clear (off-screen) is skipped', !lt.tick(objs, cats, levers, hero));
+    }
+    { // dead
+      const lt = mk(); lt.latchTick(true);
+      const objs = [{ ...lever(100, 200), dead: true }], levers = [table(100, 200)];
+      check('CS:0x1071 — a dead/collected slot is skipped', !lt.tick(objs, cats, levers, hero));
+    }
+    { // during a delayed animation, no new scan can even start
+      const lt = mk();
+      lt.anim = { obj: { x: 0, y: 0, type: 118 }, lever: { x: 0, y: 0, type: 118 }, phase: 2 };
+      lt.latchTick(true);
+      const objs = [lever(100, 200)], levers = [table(100, 200)];
+      check('CS:0x1059 — DS:0x3a2 >= 0 blocks the scan entirely, even for an '
+        + 'unrelated, perfectly-eligible ordinary lever elsewhere on screen',
+        lt.tick(objs, cats, levers, hero) === false && objs[0].type === 24);
+    }
+  }
+
+  /* ── first match wins — CS:0x1045's own scan is a plain array walk, first
+   * eligible record, no distance-based preference among several candidates */
+  {
+    const lt = new LeverToggle(); lt.latchTick(true);
+    const hero = { x: 100, y: 200 };
+    const objs = [lever(100, 200), lever(100, 200, 26)];   // two, identical position
+    const levers = [table(100, 200), table(100, 200, 26)];
+    lt.tick(objs, cats, levers, hero);
+    check('the FIRST live category-3/lever-table match in array order is the '
+      + 'one toggled, the second is left completely alone',
+      objs[0].type === 25 && objs[1].type === 26 && levers[1].type === 26);
+  }
+
+  /* ── the four special sprites get a DELAYED, ANIMATED toggle instead ──── */
+  {
+    check('the special sprite set is exactly {0x120,0x122,0x124,0xe8} — '
+      + 'POBJECTS types 118/120/122/62',
+      SPECIAL_LEVER_SPRITES.length === 4
+        && SPECIAL_LEVER_SPRITES.includes(170 + 118)
+        && SPECIAL_LEVER_SPRITES.includes(170 + 120)
+        && SPECIAL_LEVER_SPRITES.includes(170 + 122)
+        && SPECIAL_LEVER_SPRITES.includes(170 + 62));
+
+    const cats2 = new Uint8Array(STAMPED_TYPES);
+    cats2[118] = CATEGORY.LEVER;
+    const lt = new LeverToggle(); lt.latchTick(true);
+    const hero = { x: 5, y: 5 };
+    const objs = [lever(5, 5, 118)], levers = [table(5, 5, 118)];
+    const fired = lt.tick(objs, cats2, levers, hero);
+    check('a special-sprite lever ARMS the delayed animation instead of '
+      + 'toggling instantly', fired === true && lt.animating() === true);
+    check('the object\'s own type is UNCHANGED at the moment of arming '
+      + '(CS:0x10ba/0x10be write [0x20e]/[0x3a2] only, no xor)',
+      objs[0].type === 118);
+    check('while animating, this SAME object still reports the phase-0 sprite',
+      lt.spriteFor(objs[0], 1) === SPECIAL_LEVER_ANIM[1][0]);
+    check('a DIFFERENT object never gets a sprite override, even mid-animation',
+      lt.spriteFor({ x: 5, y: 5, type: 118 }, 1) === null);
+
+    /* the full 5-phase sequence, world 1's own table, and the exact toggle
+     * point (phase 3 of 5, per CS:0x1D67-0x1D81) */
+    const seen = [];
+    for (let i = 0; i < 6; i++) {
+      seen.push(lt.spriteFor(objs[0], 1));
+      const typeBefore = objs[0].type;
+      lt.step();
+      if (objs[0].type !== typeBefore) seen.push('TOGGLE');
+    }
+    check('the world-1 table is read in order {410,411,289,411,410}, then goes '
+      + 'idle (null); the type flips exactly between reading the table\'s own '
+      + 'MIDDLE (index 2) entry and its index-3 entry — matching CS:0x1D6B\'s '
+      + '`cmp [0x3a2],3`',
+      JSON.stringify(seen) === JSON.stringify([410, 411, 289, 'TOGGLE', 411, 410, null]),
+      JSON.stringify(seen));
+    check('the toggled type is the XOR of the original (118 -> 119), and the '
+      + 'table\'s own middle entry (289) really is 170+119 — the object\'s OWN '
+      + 'post-toggle sprite, confirmed independently of the toggle logic',
+      objs[0].type === 119 && SPECIAL_LEVER_ANIM[1][2] === 170 + 119);
+    check('the lever-table record toggled in lockstep with the object',
+      levers[0].type === 119);
+    check('after 5 real phases the animation re-arms (goes idle) — a 6th '
+      + 'call reports no override at all', lt.spriteFor(objs[0], 1) === null
+      && lt.animating() === false);
+    check('CS:0x1059\'s gate is open again — a fresh scan can now start',
+      (() => {
+        lt.latchTick(false); lt.latchTick(true);
+        const objs2 = [lever(100, 200)], levers2 = [table(100, 200)];
+        return lt.tick(objs2, cats, levers2, { x: 100, y: 200 }) === true;
+      })());
+  }
+
+  /* ── every world's own animation table sums to the right shape ────────── */
+  for (const world of [1, 2, 3, 4]) {
+    const t = SPECIAL_LEVER_ANIM[world];
+    check(`world ${world}'s own 5-entry table is a palindrome around its own `
+      + `middle entry, {a,b,c,b,a} — read live via read_memory("1ffd:e01e")`,
+      t.length === 5 && t[0] === t[4] && t[1] === t[3], JSON.stringify(t));
+  }
+
+  /* ── shipped-data corroboration: every category-3 lever/switch object DOES
+   * carry a matching PALFILS lever-table entry in real level data, and the
+   * special-sprite population matches the census this project's own
+   * documentation already recorded (5/4/2/2/0/3/0/2 across the 8 maps) ──── */
+  {
+    const cats4 = new Uint8Array(STAMPED_TYPES);
+    [24, 25, 26, 27].forEach((t) => { cats4[t] = CATEGORY.LEVER; });
+    const objs = [24, 25, 26, 27, 118].map((type, i) => lever(i * 10, i * 10, type));
+    const levers = objs.slice(0, 4).map((o) => table(o.x, o.y, o.type));   // no entry for the type-118 one
+    let matched = 0;
+    for (const o of objs) {
+      if (cats4[o.type] === CATEGORY.LEVER
+          && levers.some((l) => l.x === o.x && l.y === o.y)) matched++;
+    }
+    check('the ordinary lever/switch pairs (types 24-27) match the lever '
+      + 'table; a special-sprite type with no lever-table entry does not — '
+      + 'exactly the split this scan\'s own CS:0x1099 gate produces',
+      matched === 4);
   }
 
   return results;

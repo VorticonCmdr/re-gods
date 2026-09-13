@@ -249,6 +249,20 @@ for (const r of checkPopup()) {
   console.log(line(r));
 }
 
+console.log('\n  idle+FIRE lever/switch toggle (CS:0x1045/0x115b/0x10dd):');
+const { checkLevers } = await import('../src/verify/checks.js');
+for (const r of checkLevers()) {
+  if (!r.pass && !r.note) bad++;
+  console.log(line(r));
+}
+
+console.log('\n  the retracting spike hazard (CS:0x1B72/0x1AF6, types 50/117/130):');
+const { checkSpikes } = await import('../src/verify/checks.js');
+for (const r of checkSpikes()) {
+  if (!r.pass && !r.note) bad++;
+  console.log(line(r));
+}
+
 console.log('\n  System-A spawn chain and strategy census:');
 const { checkSpawnA } = await import('../src/verify/checks.js');
 for (const r of await checkSpawnA(fetchRaw)) {

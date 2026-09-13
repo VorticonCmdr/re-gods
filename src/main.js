@@ -17,7 +17,7 @@ import { Player, ST } from './game/player.js';
 import { runAllChecks, checkDescriptorAnchors, checkHeroSprites,
          checkSelectorsAndObjects, checkSpawn, checkEntityB, checkEntityA, checkSpawnA,
          checkWeaponsProjectiles, checkTriggerActions,
-         checkZones, checkPopup } from './verify/checks.js';
+         checkZones, checkPopup, checkLevers, checkSpikes } from './verify/checks.js';
 import { EventRunner, parsePalfils, palfilsNameFor } from './game/events.js';
 import { makeActionContext, makeGates, DOOR_TILES,
          ACTION_NAMES } from './game/trigger-actions.js';
@@ -46,6 +46,9 @@ import { VERDICT_NONE } from './game/pathfind.js';
 import { runSearch } from './game/pathfind-producers.js';
 import { GodsRandom } from './game/random.js';
 import { decodeStatusPanel, PANEL_Y0 as STATUS_PANEL_Y0 } from './game/status-panel.js';
+import { LeverToggle } from './game/levers.js';
+import { SpikeClock, stepSpikes, spikeSprites, spike130Sprite,
+         SPIKE_TYPE, SPIKE117_TYPE, SPIKE130_TYPE } from './game/spikes.js';
 /* Contact and the grid scan are reached through game/frame.js, which owns the
  * order they must run in — see the note there. */
 import { Health, HEALTH_MAX, attackHero } from './game/combat.js';
@@ -313,7 +316,8 @@ async function main() {
       Promise.resolve(checkEntityB()), checkWeaponsProjectiles(fetchRaw),
     checkTriggerActions(fetchRaw), checkZones(fetchRaw),
     Promise.resolve(checkEntityA()), checkSpawnA(fetchRaw),
-    Promise.resolve(checkPopup()),
+    Promise.resolve(checkPopup()), Promise.resolve(checkLevers()),
+    Promise.resolve(checkSpikes()),
     ]) results.push(...await g);
     renderChecks(results);
     const mh = $('messages');
@@ -442,6 +446,7 @@ async function main() {
   let lastNestFx = [], lastShotsFx = null, lastDebrisFx = [], lastLineHazardFx = null;
   let lastBroodFx = [], lastStatueFx = [], lastCe64Fx = [], lastSpitFx = [], lastSelectorTwoFx = [];
   let lastPatFx = [];
+  let lastSpikeFx = [];
   /* CS:0x0495-0x04A1 — the real boot state: all 4 slots empty. Keys now
    * enter through CROUCH + FIRE (CS:0x6069 -> game/pickup.js's `scanForKey`/
    * `collectKey`, wired into Player._crouch), so this no longer needs a
@@ -515,6 +520,16 @@ async function main() {
    * (game/statue.js). Populated from the CURRENT level's own plane A once
    * `levelInfo` exists, below, and again on every level switch. */
   let statues = new Statues();
+  /* CS:0x1045 — idle+FIRE's own lever/switch toggle (game/levers.js). ONE
+   * instance for the whole session, matching the original's own persistent
+   * globals (DS:0x346/0x3a2) — not reset on a level switch, since neither is
+   * ever reset by the level-load routine either. */
+  const leverToggle = new LeverToggle();
+  /* CS:0x1447 — the retracting-spike hazard's shared animation clock
+   * (game/spikes.js). Also a session-persistent global (DS:0x39b/0x39c/
+   * 0x39f are never reset on level load), so every spike across every level
+   * this session visits shares one continuous phase. */
+  const spikeClock = new SpikeClock();
   /* CS:0x7F0D — the world-3 DS:0xce64 creature and its "spit" sub-projectile
    * (game/ce64.js). Unlike nest.js/statue.js this module calls combat.js
    * directly, so main.js just hands it the real health/grid/decodeTag rather
@@ -835,6 +850,11 @@ async function main() {
         treasure: { values: level.objValues, inventory, purse, score, burst },
         starburst, blocks, debris,
         burst, tock, inventory,
+        /* CS:0x1045 — idle+FIRE's own lever/switch toggle (game/levers.js).
+         * `level.palfils.levers` is the SAME parsed PALFILS window `events.js`
+         * already reads for COND11/12; `leverToggle` mutates it in place, so
+         * a level's own trigger conditions see the flip on the very next tick. */
+        levers: level.palfils.levers, leverToggle,
         /* CS:0x38D7 — first-fit over the 200-slot runtime array. `drawObjects`
          * already excludes the map's dead slots, so the headroom here is
          * 200 minus what is live, which is the same number the original has. */
@@ -872,6 +892,13 @@ async function main() {
       if (fr.keyCollected) {
         $('event').textContent =
           `key ${fr.keyCollected.type} collected (slot ${fr.keyCollected.slot})`;
+      }
+      /* IDLE + FIRE, CS:0x1045 -> game/levers.js's `LeverToggle`. */
+      if (fr.leverToggled) {
+        const on = leverToggle.animating() || (fr.leverToggled.type & 1);
+        $('event').textContent =
+          `lever/switch type ${fr.leverToggled.type} ${on ? 'ON' : 'OFF'}` +
+          (leverToggle.animating() ? ' (animating)' : '');
       }
       if (fr.loot.settled.length) {
         lastBlockFx = fr.blockFx || [];
@@ -1010,6 +1037,14 @@ async function main() {
       lastSpitFx = ce64Spits.step(
         camNow, { x: player.x, y: player.y, state: player.stateIndex }, fx.freeze,
         health, grid, decodeTag, ce64Opts).drawn;
+
+      /* CS:0x1447/0x1B72/0x1AF6 — the retracting spike hazard (types
+       * 50/117/130, game/spikes.js). Undebounced flat damage, so it does NOT
+       * route through the shared attackHero/creatureScansGrid contact path
+       * every creature in this file uses — it applies straight to `health`. */
+      spikeClock.step();
+      lastSpikeFx = stepSpikes(level.drawObjects, spikeClock,
+        { x: player.x, y: player.y }, health, { invuln: fx.invuln > 0 });
 
       /* CS:0xAD88/0xAD0D — the selector-2 stationary shooting turrets
        * (game/selector2.js). `fire`/`spawnHazard` route into the SAME
@@ -1313,9 +1348,20 @@ async function main() {
          * word; CS:0x9000 then tests the SIGN, not equality with 0xFFFF. A
          * collected object stops being drawn from that tick on. */
         if (o.dead) continue;
+        /* CS:0x1B5D/0x1B63/0x1B69 — the retracting-spike hazard dispatches
+         * these three sprite ids to its OWN draw (below), never the ordinary
+         * `170+type` single-blit path: types 50/117 need a base+overlay
+         * pair at an animated offset, and type 130 shares one animation
+         * counter with 117's own overlay. See game/spikes.js. */
+        if (o.type === SPIKE_TYPE || o.type === SPIKE117_TYPE
+            || o.type === SPIKE130_TYPE) continue;
         const sx = o.x - camX, sy = o.y - camY;
         if (sx < -64 || sy < -64 || sx > SCREEN_W || sy > SCREEN_H) continue;
-        const oid = spriteForType(o.type);
+        /* CS:0x1D0E-0x1D86 — while a delayed special-lever toggle is
+         * animating on THIS object, its sprite comes from the per-world
+         * table (game/levers.js), not the ordinary `170+type` formula. */
+        const leverSprite = leverToggle.spriteFor(o, level.world);
+        const oid = leverSprite ?? spriteForType(o.type);
         const of_ = hero && hero.frames[oid];
         if (of_ && !isUnstamped(o.type)) {
           renderer.blitSprite(of_, sx, sy);
@@ -1324,6 +1370,23 @@ async function main() {
            * covers — zero such objects ship. Marked, never guessed. */
           unstamped++;
           renderer.strokeRect(sx - 2, sy - 2, 5, 5, 14);
+        }
+      }
+
+      /* The retracting spike hazard (game/spikes.js). `lastSpikeFx` is the
+       * set of live type-50/117/130 objects `stepSpikes` already applied
+       * damage for this tick — drawing from that list, not `drawObjects`
+       * directly, keeps the draw and the damage/animation state in sync. */
+      for (const o of lastSpikeFx) {
+        const draw = (o.type === SPIKE130_TYPE)
+          ? [spike130Sprite(o, spikeClock)]
+          : (() => { const s = spikeSprites(o, spikeClock); return [s.base, s.overlay]; })();
+        for (const d of draw) {
+          const sx = d.x - camX, sy = d.y - camY;
+          if (sx < -64 || sy < -64 || sx > SCREEN_W || sy > SCREEN_H) continue;
+          const sf = hero && hero.frames[d.sprite];
+          if (sf) renderer.blitSprite(sf, sx, sy);
+          else renderer.strokeRect(sx - 2, sy - 2, 5, 5, 14);
         }
       }
 
@@ -1588,6 +1651,7 @@ async function main() {
         ` · ${ce64Creatures.live} ce64 · ${ce64Spits.count} spits · ${selectorTwo.live} sel2` +
         ` · ${patGroups.live} pat` +
         ` · ${shots.live} shots · ${lineHazards.live} hazards · ${debris.live} debris` +
+        ` · ${lastSpikeFx.length} spikes` +
         ` · hp ${health.bar}/${health.target > HEALTH_MAX ? HEALTH_MAX : health.target}`        + (health.dead ? ' DEAD' : '') +
         ` · money ${purse.total} · score ${score.value}` +
         ` · lives ${fx.lives}` +
