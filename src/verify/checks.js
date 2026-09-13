@@ -153,7 +153,7 @@ import { Starburst, BURST_TEMPLATE, PARTICLES_PER_BURST, SLOTS,
 import { JUMP_ARC_END, JUMP_ARC_EXIT, fireGuardBefore,
          fireGuardAfter } from '../game/fire-states.js';
 import { Player, ST, S as PS, JUMP_ARC_EARLY_LAND_CURSOR,
-         WALK_STEP } from '../game/player.js';
+         WALK_STEP, fallDamageFor, FALL_DAMAGE_THRESHOLD } from '../game/player.js';
 import { CELL_SOLID, CELL_CLIMBABLE, MAP_COLS as MC, attrAt } from '../formats/map.js';
 import { parseWeapons, allocateShots, MAX_SUBSLOTS, WEAPON_SLOTS, tagFor,
          WEAPON_COUNT, PINNED_08, PINNED_SPRITE, PINNED_SPRITE2,
@@ -5338,6 +5338,69 @@ export async function checkWeaponsProjectiles(fetchRaw) {
       'one map row away from the row the landing check itself used, so the ' +
       'hero immediately falls, drops a pixel, and lands again — the reported ' +
       'idle/fall flicker');
+  }
+
+  /* ── fall damage, CS:0x4C39-0x4C4A/0x4CB0-0x4CC1 ─────────────────────────
+   * fallDamageFor was previously dead: DS:0x176 accumulated every fall tick
+   * (already ported) but nothing ever converted it into health damage. */
+  {
+    check(`fallDamageFor: no damage at or under the 20-tick threshold`,
+      fallDamageFor(0) === 0 && fallDamageFor(FALL_DAMAGE_THRESHOLD) === 0
+      && fallDamageFor(10) === 0);
+    check(`fallDamageFor: half the excess past the threshold (CS:0x4C48 \`shr ax,1\`)`,
+      fallDamageFor(FALL_DAMAGE_THRESHOLD + 1) === 0   // (1)>>1 == 0, not a false positive
+      && fallDamageFor(FALL_DAMAGE_THRESHOLD + 2) === 1
+      && fallDamageFor(FALL_DAMAGE_THRESHOLD + 10) === 5
+      && fallDamageFor(60) === (60 - FALL_DAMAGE_THRESHOLD) >> 1);
+
+    /* A deep pit — floor far below a MUCH lower row than flatMap()'s own,
+     * so the hero accumulates well past 20 fall ticks before landing. */
+    const deepMap = (() => {
+      const n = MC * 64;
+      const planeB = new Uint8Array(n);
+      const floorRow = 50;
+      for (let c = 0; c < MC; c++) planeB[floorRow * MC + c] = CELL_SOLID;
+      return { planeA: new Uint8Array(n), planeB, widthPx: 4096, heightPx: 1024,
+               floorRow };
+    })();
+    const runToGround = (health) => {
+      const p = new Player(2 * 32, 0);
+      for (let i = 0; i < 200 && p.state !== ST.GROUND; i++) {
+        p.tick(deepMap, IN(), null, 1, null, health);
+      }
+      return p;
+    };
+
+    let dealt = 0;
+    const health = { invulnerable: false, hurt: (n) => { dealt += n; } };
+    const p1 = runToGround(health);
+    check(`a deep fall damages health on landing, matching fallDamageFor(fallDamage at landing)`,
+      p1.state === ST.GROUND && dealt > 0 && dealt === fallDamageFor(p1.fallDamage),
+      `dealt=${dealt}, fallDamage=${p1.fallDamage}`);
+
+    let invulnDealt = 0;
+    const invulnHealth = { invulnerable: true, hurt: (n) => { invulnDealt += n; } };
+    const p2 = runToGround(invulnHealth);
+    check(`invulnerability (CS:0x172) skips fall-landing damage entirely, same gate as every other source`,
+      p2.state === ST.GROUND && invulnDealt === 0);
+
+    check(`a null health argument is a valid caller — no crash, no damage`,
+      (() => { const p = runToGround(null); return p.state === ST.GROUND; })());
+
+    /* The fall+fire family (states 22/23) runs the byte-identical formula at
+     * its own address (CS:0x4D3E-0x4D4F) — confirmed via fresh disassembly,
+     * not assumed from the plain _fall() case. */
+    const a3 = new Arsenal(w1); a3.equip(0, 0);
+    let fireDealt = 0;
+    const fireHealth = { invulnerable: false, hurt: (n) => { fireDealt += n; } };
+    const p3 = new Player(2 * 32, 0);
+    p3.tick(deepMap, IN(), a3, 1, null, fireHealth);        // -> ST.FALL first
+    for (let i = 0; i < 200 && p3.state !== ST.GROUND; i++) {
+      p3.tick(deepMap, IN({ fire: true }), a3, 1, null, fireHealth);
+    }
+    check(`the fall+fire tick applies the SAME fall-damage formula on landing`,
+      p3.state === ST.GROUND && fireDealt > 0,
+      `fireDealt=${fireDealt}`);
   }
 
   /* ── the JUMP arc has its OWN early-landing check — this port had none at

@@ -66,6 +66,8 @@ export const ENEMY_SHOTS_AT = 0x02ba;
  * @param {number} [tock=1] DS:0x36c, the every-other-frame toggle CS:0x0172
  *   flips with `not`. Threaded straight to `player.tick` — see there for why
  *   it defaults to always-open rather than 0.
+ * @param {boolean} [invuln=false] CS:0x172 — gates fall-landing damage the
+ *   same way it gates every other damage source in this project.
  * @returns {{projectiles:object, emitted:?object}}
  */
 export function stepHeroFrame({ input, arsenal, grid, player, map, cam,
@@ -74,7 +76,7 @@ export function stepHeroFrame({ input, arsenal, grid, player, map, cam,
                                burst = null, alloc = null, starburst = null,
                                blocks = null, debris = null, tock = 1,
                                inventory = null, levers = null,
-                               leverToggle = null }) {
+                               leverToggle = null, invuln = false }) {
   arsenal.latchTick(input.fire);                                    // 019D
   /* CS:0x49F9 — the SAME "one action per press" shape as the weapon latch
    * above, cleared every tick fire is not held. Unconditional, regardless
@@ -138,7 +140,12 @@ export function stepHeroFrame({ input, arsenal, grid, player, map, cam,
    * it advances a freshly-armed animation before its own first render ever
    * runs, which SKIPS table[0] outright rather than merely shifting it. */
   if (leverToggle) leverToggle.step();
-  player.tick(map, input, arsenal, tock, pickupCtx);                // 0254
+  /* CS:0x4C39-0x4C4A etc. — fall-landing damage needs both the health
+   * target (to subtract from) and the invulnerability flag (CS:0x172),
+   * threaded as one small object matching the {invulnerable, hurt} shape
+   * this project already uses at every other combat.js consumer site. */
+  const healthApi = health ? { invulnerable: invuln, hurt: (n) => health.damage(n) } : null;
+  player.tick(map, input, arsenal, tock, pickupCtx, healthApi);      // 0254
   return { projectiles, emitted: player.emitted, picked: picked.taken,
            consumed: picked.consumed || [], treasures: picked.treasures || [],
            loot, burstFx, blockFx, debrisFx, keyCollected: player.keyCollected,

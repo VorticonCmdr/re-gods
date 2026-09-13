@@ -68,6 +68,28 @@ export const GRAVITY_STEP  = 1;    // per tick
 export const FALL_VMAX     = 10;   // clamp on DS:0x1b2
 export const FALL_BASE     = 4;    // dY = FALL_BASE + v
 export const AIR_STEPS_MAX = 3;    // DS:0x345 budget
+
+/**
+ * CS:0x4C39-0x4C4A (state 11, fall right) / CS:0x4CB0-0x4CC1 (state 12, fall
+ * left) / CS:0x4D3E-0x4D4F (the fall+fire tick, both facings share one body)
+ * — all THREE fall-landing sites run the byte-identical sequence, confirmed
+ * by fresh `disassemble_bytes` reads at all three addresses this pass:
+ *     ax = word[0x176]              ; fallDamage, the accumulated-ticks
+ *     ax -= 0x14                    ;   counter this port already tracks
+ *     jle skip                      ; <= 20 ticks of fall -> no damage at all
+ *     cmp word[0x172],0 / jnz skip  ; invulnerable -> no damage either
+ *     shr ax,1                      ; half the EXCESS over the threshold
+ *     sub word[0x192],ax            ; off the health TARGET, not the bar
+ * A fall under ~1.3s (20 ticks at 15Hz) costs nothing; longer falls cost
+ * half of however many ticks past that. `DS:0x176` was already tracked
+ * (incremented every fall tick, reset on landing/state-entry) but nothing
+ * ever converted it to damage — this closes that gap.
+ */
+export const FALL_DAMAGE_THRESHOLD = 0x14;
+export function fallDamageFor(fallDamage) {
+  const excess = (fallDamage || 0) - FALL_DAMAGE_THRESHOLD;
+  return excess > 0 ? excess >> 1 : 0;
+}
 /* CS:0x4F49 (state 8, jump left) / CS:0x5148 (state 9, jump right) —
  * `cmp byte [0x358],0x16 / jl <skip>`. Once the jump-arc cursor reaches this
  * value, the handler probes solidThreeBelow BEFORE reading that tick's arc
@@ -418,18 +440,23 @@ export class Player {
    *        own fire dispatch (CS:0x1045, game/levers.js). `null` is a valid
    *        caller (tests, tools): crouch entry/exit and idle both still work,
    *        only the scans themselves become a no-op.
+   * @param {?{invulnerable:boolean, hurt:Function}} health  CS:0x172/0x192,
+   *        threaded only into `_fall`/`_fireTick`'s fall branch for landing
+   *        damage (`fallDamageFor`, above) — no other state ever costs
+   *        health on its own. `null` is a valid caller (tests, tools): the
+   *        fall physics run identically, landing simply never damages.
    */
-  tick(map, input, fire = null, tock = 1, pickup = null) {
+  tick(map, input, fire = null, tock = 1, pickup = null, health = null) {
     this.footstep = false;
     this.climbStep = false;
     this.emitted = null;
     this.keyCollected = null;
     this.leverToggled = null;
-    if (this.fireState >= 0) { this._fireTick(map, input, fire); return; }
+    if (this.fireState >= 0) { this._fireTick(map, input, fire, health); return; }
     switch (this.state) {
       case ST.GROUND: this._ground(map, input, fire, pickup); break;
       case ST.JUMP:   this._jump(map, input, fire);   break;
-      case ST.FALL:   this._fall(map, input, fire);   break;
+      case ST.FALL:   this._fall(map, input, fire, health); break;
       case ST.CLIMB:  this._climb(map, input, fire, tock); break;
       case ST.CROUCH: this._crouch(input, pickup);    break;
     }
@@ -470,8 +497,10 @@ export class Player {
     return true;
   }
 
-  /** One tick inside a firing state. */
-  _fireTick(map, input, fire) {
+  /** One tick inside a firing state.
+   * @param {?{invulnerable:boolean, hurt:Function}} health  see `tick`'s own
+   *        doc — threaded only into the fall+fire family's landing branch. */
+  _fireTick(map, input, fire, health = null) {
     const id = this.fireState;
     const st = FIRE_STATES[id];
     const flag = this.flag356;
@@ -533,6 +562,13 @@ export class Player {
         this.state = ST.GROUND;
         this.fallV = 0; this.airSteps = 0;
         this.fireState = -1; this.pendingAlloc = null;
+        /* CS:0x4D3E-0x4D4F — the fall+fire tick's OWN copy of the byte-
+         * identical fallDamageFor formula (see the plain `_fall`'s own
+         * citation for the fresh-disassembly confirmation). */
+        if (health) {
+          const dmg = fallDamageFor(this.fallDamage);
+          if (dmg > 0 && !health.invulnerable) health.hurt(dmg);
+        }
         this.stateIndex = S.IDLE; this.phase = 0; this.renderPhase = 0;
         return;
       }
@@ -862,7 +898,7 @@ export class Player {
     if (this.jumpCursor >= JUMP_ARC_END) this._enterFall();
   }
 
-  _fall(map, input, fire) {
+  _fall(map, input, fire, health = null) {
     /* CS:0x4DD5 (state 11) / CS:0x4D6B (state 12) — the fall step moves Y
      * FIRST: dY = 4 + fallV (gravity already applied), THEN air-steering may
      * move X (CS:0x48D4, budget of 3 steps of 4 px), and ONLY THEN is
@@ -896,11 +932,23 @@ export class Player {
       this.state = ST.GROUND;
       this.fallV = 0;
       this.airSteps = 0;
-      /* Landing is its own state pair in the original (16 right / 17 left,
-       * which bleed the fall-damage accumulator off at 4 per tick) but the
-       * transition into and out of them is not ported, so the port goes
-       * straight to idle rather than showing a landing frame it cannot time
-       * correctly. UNKNOWN_landing_duration. */
+      /* CS:0x4C39-0x4C4A / 0x4CB0-0x4CC1 — fallDamageFor, above. */
+      if (health) {
+        const dmg = fallDamageFor(this.fallDamage);
+        if (dmg > 0 && !health.invulnerable) health.hurt(dmg);
+      }
+      /* ⚠️ CORRECTION: an earlier revision of this comment claimed landing is
+       * "its own state pair (16 right / 17 left) which bleed the fall-damage
+       * accumulator off at 4 per tick" — unverified speculation, and this
+       * pass's own fresh disassembly of the landing sites found no such
+       * per-tick bleed; the damage above is a single, one-shot subtraction.
+       * What genuinely remains open: states 16/17 do exist in the original
+       * (their bodies snap Y and play the landing sound the same way this
+       * branch does), but whether they persist as a distinct one-tick pose
+       * reached via the state dispatcher, or whether that snap+sound code is
+       * only ever run inline from a landing branch like this one, was not
+       * conclusively traced this pass. This port goes straight to idle
+       * rather than asserting a landing-pose mechanism it hasn't verified. */
       this.stateIndex = S.IDLE;
       this.phase = 0;
       return;

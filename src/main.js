@@ -850,8 +850,9 @@ async function main() {
         /* CS:0x0206 — the object pass. `drawObjects` is the same array the
          * renderer walks, so collecting one removes it from the frame too. */
         objects: level.drawObjects, bar: health.bar,
-        cats: level.cats, health, effects: { ...fx, starburst,
-                                             hero: { x: player.x, y: player.y } },
+        cats: level.cats, health, invuln: fx.invuln > 0,
+        effects: { ...fx, starburst,
+                   hero: { x: player.x, y: player.y } },
         treasure: { values: level.objValues, inventory, purse, score, burst },
         starburst, blocks, debris,
         burst, tock, inventory,
