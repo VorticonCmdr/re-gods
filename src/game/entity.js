@@ -12,11 +12,51 @@
  *   Hop (modes 4/5) IS ported — see _hop, CS:0xf316/0xf3ee.
  *   Hunting lives in pathfind.js / pathfind-producers.js and contact damage
  *   in combat.js; both are wired. Firing IS ported — see fireB below.
- *   What is still NOT here:
- *     - The DEATH sequence. Contact sets state -1 (see isDying below) and the
- *       original branches to CS:0xf02a, which is unread.
- *       UNKNOWN_creature_death_anim — the port stops drawing instead.
- *     - The group-clear reward drop.
+ *
+ *   ⚠️⚠️ CORRECTION, a later session — THE DEATH SEQUENCE IS NOW PORTED, and
+ *   it disproves CLAUDE.md's own prior "CLOSED" note that a dying entity
+ *   draws through the SAME class_base+MODE_ANIM+frame formula the alive path
+ *   uses. A fresh `disassemble_bytes` of CS:0xF030-0xF0AB (not a re-read of
+ *   the earlier summary) shows two DIFFERENT things share only the draw CALL
+ *   (`CALL 0x1000:3569`), not the sprite formula:
+ *     - CS:0xF02A (`call efe7 ; jmp ee00`) — reached from CS:0xEDF7, inside
+ *       FUN_1000_edb8's own tail, on the EXACT tick contact just killed the
+ *       entity (state/frame both just set to -1 by CS:0xFFBF, and this same
+ *       per-entity pass hasn't reached the death state machine yet this
+ *       tick) — draws via the ORDINARY alive-path formula (class_base +
+ *       MODE_ANIM[mode] + frame), with frame still at -1, one below the
+ *       entity's current animBase. This port's own contact code
+ *       (combat.js/frame.js) already sets `entity.frame = -1` on kill,
+ *       matching CS:0xFFBF exactly, and since contact runs AFTER this port's
+ *       own `tick()` loop for the same game-loop tick, the render pass for
+ *       THAT frame naturally sees frame=-1 before `tick()` ever processes
+ *       the DYING state — reproducing this branch's timing without any
+ *       special-casing needed in `tick()` itself.
+ *     - CS:0xF030 (reached from CS:0xFF20's `jmp f030` on every SUBSEQUENT
+ *       tick, once CS:0xED64's per-loop-entry check finds state already
+ *       negative) is the actual fade: `INC word[0x1f4]` (a per-group tally,
+ *       not ported — this project has no per-group dying counter consumer
+ *       yet), a ONE-SHOT `CMP [di+4],0/JNS` gate (fires only while frame is
+ *       still negative, i.e. exactly once, on the FIRST f030 pass) that
+ *       caches world position into DS:0x202/0x204 and — if a carried-item
+ *       field at `[di+0x10]` is non-negative — drops a per-kill popup via
+ *       CS:0xBF5F (NOT ported: this port has no popup-rendering module, nor
+ *       a carried-item field on EntityB, matching selector2.js's own
+ *       identical, already-disclosed gap for its group-elimination reward),
+ *       then UNCONDITIONALLY `INC [di+4]` and — while `< 7` — draws
+ *       `sprite = 0x6c + [di+4]` (CS:0xF091-F094, a flat constant, NOT a
+ *       class-table lookup) through the SAME `CALL 0x1000:3569`. At `>= 7`
+ *       it finalises without drawing: `[di+8]:=0, [di+6]:=0`.
+ *   So the fade proper (frames 0..6, 7 ticks) uses the UNIVERSAL `0x6c`-base
+ *   death-cloud sprite range this project already documents for the world-2
+ *   nest, the ce64 creature, the world-1 statue and the hero's own death
+ *   burst — not the entity's own sprite class at all. `isDying`/`DEATH_*`
+ *   below implement exactly this: `tick()` runs the CS:0xF030 state machine
+ *   whenever `state === DYING`, and the one-tick `frame === -1` case (the
+ *   CS:0xF02A draw) is left to the render pass, which already has `mode`
+ *   and `cls` in scope for the ordinary sprite formula — see main.js.
+ *   Group-clear/per-kill reward popups remain unported (mechanism only,
+ *   same disclosed gap as selector2.js).
  *
  * THE MODE TABLE — DS:0xdbe0, 8 x {u16 handler, u16 anim_base}
  *   Note the field order is the REVERSE of the player's table at DS:0xd818,
@@ -195,13 +235,15 @@ export const EST = { FREE: 0, DYING: -1, WAITING: -2, MATERIALISING: -3 };
 
 /* DYING is written by the contact routine, not by this module: CS:0xac59
  * stores 0xFFFF into the strength word and CS:0xffb4 writes it straight back
- * into +0x08. The per-frame driver then branches on it — CS:0xedf7
- * `cmp word [di+0x8],0 / jns 0xee00` sends a live entity to the draw call and
- * a negative one to CS:0xf02a instead. That death path has not been read
- * (UNKNOWN_creature_death_anim), so this port stops drawing a dying creature
- * rather than rendering it with the frame -1 the kill leaves behind. */
+ * into +0x08 (this port's own combat.js/frame.js already do this, plus the
+ * matching `entity.frame = -1`, CS:0xFFBF). `tick()`'s own DYING branch below
+ * runs CS:0xF030's fade for every tick AFTER the kill tick; the kill tick
+ * itself (frame still -1) is drawn by the render pass using the ordinary
+ * sprite formula — see the file header's correction for the full trace. */
 export const isDying = (e) => e.state === EST.DYING;
 export const MATERIALISE_TICKS = 5;    // CS:0xff7f `mov word [di+0x6],5`
+export const DEATH_SPRITE_BASE = 0x6c;   // CS:0xF094 `add cx,0x6c` — a flat constant, not a class lookup
+export const DEATH_FRAMES = 7;           // CS:0xF071 `cmp word[di+4],0x7`
 
 export class EntityB {
   constructor({ x, y, mode = MODE.WALK_L, speed = 9, hp = 1, cls = 0, delay = 0 }) {
@@ -255,7 +297,19 @@ export class EntityB {
       if (--this.timer <= 0) { this.state = this.hp; this.timer = 0; }
       return null;
     }
-    if (this.state <= 0) return null;          // dying or free
+    /* CS:0xFF20's `jmp f030` arm — every tick AFTER the kill tick (the kill
+     * tick itself leaves state/frame at -1/-1 and is drawn by the render
+     * pass via the ordinary formula; see the file header). The one-shot gate
+     * at CS:0xF034 (position-cache + per-kill popup, only while frame is
+     * still negative) is not ported — no popup-rendering module exists yet. */
+    if (this.state === EST.DYING) {
+      this.frame++;                                       // CS:0xF06E
+      if (this.frame >= DEATH_FRAMES) {                    // CS:0xF071/F075
+        this.state = EST.FREE; this.delay = 0;             // CS:0xF077/F07C
+      }
+      return null;
+    }
+    if (this.state <= 0) return null;          // free
 
     /* CS:0xE659 runs BEFORE the mode dispatch for System B (unlike System A's
      * stage 6, which runs last) — see fireB's own header. */

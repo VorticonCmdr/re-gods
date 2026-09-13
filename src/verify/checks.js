@@ -20,8 +20,10 @@ import { buildDescriptorMap, GROUP_STEMS, PLAYER_ANIM_BASE, HERO_DESCRIPTOR_MAX 
 import { STATE_INFO, STATE_TABLE, spriteFor, NON_RENDERING_STATES, jumpPhase,
          LADDER_JUMP_PHASE } from '../game/states.js';
 import { emittableStates } from '../game/player.js';
-import { MODE, MODE_TABLE, EntityB, hopDelta, hopCursorNext,
-         groundBelow, onScreen, fireB } from '../game/entity.js';
+import { MODE, MODE_TABLE, EntityB, hopDelta, hopCursorNext, EST,
+         groundBelow, onScreen, fireB, isDying,
+         DEATH_SPRITE_BASE as ENTB_DEATH_SPRITE_BASE,
+         DEATH_FRAMES as ENTB_DEATH_FRAMES } from '../game/entity.js';
 import { parseGroupsB, parseGroupsA, GroupSlots, spriteForEntity, CLASS_TABLES_B,
          CREATURE_DESCRIPTOR_BASE, MAX_ENTITIES } from '../game/spawn.js';
 import { EntityA, CLASS_TABLES_A, spriteForEntityA, rollStrategy,
@@ -1821,6 +1823,40 @@ export function checkEntityB() {
     hazardB && hazardB.hazard === true && hazardB.attackBits === 1 &&
     hazardB.n === 6 && hazardB.x === 10 && hazardB.y === 20,
     JSON.stringify(hazardB));
+
+  /* CS:0xF030's death fade — a REGRESSION GUARD for a real bug an advisor
+   * review caught: this port previously just stopped drawing a dying
+   * entity for good (CLAUDE.md's own "CLOSED" note for this mechanism was
+   * itself wrong — see entity.js's file header for the fresh
+   * disassemble_bytes trace). The kill tick itself (frame still -1, set by
+   * combat.js/frame.js matching CS:0xFFBF) is the render pass's job, not
+   * tick()'s — this only covers tick()'s own CS:0xF030 state machine. */
+  {
+    const planeBd = new Uint8Array(128 * 64);
+    const d = new EntityB({ x: 0, y: 0, mode: MODE.WALK_L });
+    d.state = EST.DYING; d.frame = -1;          // CS:0xFFBF's own kill-tick values
+    check('a killed entity is DYING, not silently freed',
+      isDying(d) && d.state === EST.DYING);
+
+    const frames = [];
+    for (let i = 0; i < ENTB_DEATH_FRAMES; i++) {
+      d.tick(planeBd);
+      frames.push(d.frame);
+      check(`CS:0xF06E/F071: tick ${i} keeps the entity DYING while frame < ${ENTB_DEATH_FRAMES}`,
+        isDying(d), `frame=${d.frame} state=${d.state}`);
+    }
+    check(`CS:0xF06E: frame counts 0..${ENTB_DEATH_FRAMES - 1} across exactly ${ENTB_DEATH_FRAMES} ticks`,
+      frames.join() === Array.from({ length: ENTB_DEATH_FRAMES }, (_, i) => i).join(),
+      frames.join());
+    check(`CS:0xF091-F094: the fade sprite base is the FLAT ${ENTB_DEATH_SPRITE_BASE.toString(16)} constant, not a class-table lookup`,
+      ENTB_DEATH_SPRITE_BASE === 0x6c);
+
+    d.tick(planeBd);   // the ENTB_DEATH_FRAMES-th tick — CS:0xF075's `jl` is NOT taken
+    check('CS:0xF077/F07C: the entity finalises to FREE, not stuck dying forever',
+      d.state === EST.FREE && !isDying(d), `state=${d.state}`);
+    check('CS:0xF07C: the stagger/delay field is also cleared on finalise',
+      d.delay === 0);
+  }
 
   return results;
 }

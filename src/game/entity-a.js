@@ -28,44 +28,33 @@
  *
  *   Strategy 1 (CS:0xe9da, the weighted min-cost ZONE search — formerly "the
  *   deepest-undecoded piece of this system") and strategy 2 (CS:0xe88c,
- *   marker-seek, now that game/markers.js exists) are BOTH implemented this
- *   session — see `strategy1`/`strategy2` below — and wired into the stage-1
- *   dispatch inside `tick()`. ⚠️ BUT `tick()`'s one real caller (main.js) does
- *   not yet pass the `camera`/`markers` arguments either needs, so in the
- *   ACTUAL running port they still leave the entity's goal untouched today —
- *   exactly the pre-this-session behaviour, unchanged until a future
- *   integration pass updates that call site. `tick()`'s own JSDoc documents
- *   the exact fallback. Stage 2 then finds the entity already at its
- *   spawn-point goal, decays velocity to zero, and it sits still — the
- *   original's own no-goal behaviour, not an invented one.
+ *   marker-seek, now that game/markers.js exists) are BOTH implemented — see
+ *   `strategy1`/`strategy2` below — and wired into the stage-1 dispatch
+ *   inside `tick()`. ⚠️⚠️ CORRECTION, a later session: this section previously
+ *   said main.js's one real call site didn't pass the `camera`/`markers`
+ *   arguments either needs, leaving the goal untouched. That integration pass
+ *   has since landed — main.js now calls `tick()` with a real snapped camera
+ *   (`{x: cam.snapX, y: cam.snapY}`) and `markerList.entries` — so strategies
+ *   1 and 2 are LIVE in the running port, not just implemented-but-dormant.
  *
  *   MEASURED, not guessed: using the real nibble/weight roll formula
  *   (CS:0xe748) against all 74 live shipped System-A descriptors (PALFILS
  *   +0xD58, all 8 files), the expected effective-strategy share is
- *   strategy 0 ~43%, strategy 1 ~31%, strategy 2 ~26%. So under this port,
- *   AS ACTUALLY WIRED TODAY, roughly HALF of spawned System-A entities
- *   visibly stand still — strategies 1/2 being implemented in this file does
- *   not change that measurement until main.js is updated to call `tick()`
- *   with a camera and a marker list. That is reported by the verify suite,
- *   not hidden.
+ *   strategy 0 ~43%, strategy 1 ~31%, strategy 2 ~26%. Now that main.js
+ *   passes camera/markers, that ~57% (strategies 1+2) actually pick and
+ *   pursue a goal rather than standing still — the verify suite's own
+ *   "measured EFFECTIVE strategy share" note should be re-read against the
+ *   current call site rather than the pre-integration figure.
  *
  * WHAT IS NOT PORTED
- *   - Stage 3's OWN CALL SITE. The attack/leap mechanism itself (CS:0xe487 ->
- *     FUN_1000_e4e2's 48-entry two-ring reach scan) is implemented this
- *     session as `stageAttack`, exported below with its own extensive header
- *     — but it is deliberately NOT invoked from `tick()`. It needs a
- *     collision.js DamageGrid (the same grid every projectile/creature
- *     contact test already shares) and the snapped camera, neither of which
- *     `tick()` currently receives from main.js. `tick()`'s own inline comment
- *     between its stageAccelerate and stageSpeedClamp calls marks exactly
- *     where a future integration pass inserts the call, and this file's
- *     `tick()` already takes the one other prerequisite step for it — a
- *     `prevVx`/`prevVy` snapshot of the entity's velocity taken immediately
- *     before stage 2 runs, so stage 3 can blend onto the PRE-stage-2 value
- *     rather than stage 2's own output. Until that integration pass, System-A
- *     entities still never attack. UNKNOWN_sysA_attack_not_wired (narrowed
- *     down from UNKNOWN_sysA_attack_not_ported — the mechanism itself is no
- *     longer the gap, only its wiring is).
+ *   ⚠️⚠️ CORRECTION, a later session: stage 3's attack/leap (`stageAttack`,
+ *   CS:0xe487 -> FUN_1000_e4e2's 48-entry two-ring reach scan) was
+ *   implemented but deliberately left unwired from `tick()`, pending a
+ *   collision.js DamageGrid and the snapped camera from main.js. Both have
+ *   since been threaded through — main.js's `e.tick(...)` call now passes a
+ *   real `camera` and `grid`, and `tick()`'s own body calls `stageAttack`
+ *   whenever both are present (see `tick()` below). System-A entities DO now
+ *   attack in the live port. `UNKNOWN_sysA_attack_not_wired` is CLOSED.
  *   - The per-group "how many members may reroll their strategy this tick"
  *     throttle (a bitmask at [bp+0x14]/DS:0x3c4, plus a [si+0xa]-vs-random
  *     gate) that CS:0xe6e4 applies before the nibble/weight roll. This port
@@ -757,10 +746,9 @@ export class EntityA {
     this.goalFresh = false;
     /* CS:0xE001's own pre-stage-2 velocity snapshot, captured by `tick()`
      * immediately before it calls `stageAccelerate`, specifically so stage 3
-     * (`stageAttack`, not yet wired into `tick()` — see the file header) can
+     * (`stageAttack`, now wired into `tick()` — see the file header) can
      * blend its own steering delta onto the velocity as it stood BEFORE
-     * stage 2 ran, not stage 2's own output. Unused until that wiring
-     * lands; harmless to keep current in the meantime. */
+     * stage 2 ran, not stage 2's own output. */
     this.prevVx = 0;
     this.prevVy = 0;
   }
@@ -778,11 +766,13 @@ export class EntityA {
    * @param {() => number} draw  the shared random-table reader, DS:0x3836
    * @param {boolean} frozen  DS:0x2fa, "freezes aliens"
    * @param {?{x:number,y:number}} camera  the snapped scroll origin,
-   *   DS:0xa/0xc. REQUIRED for strategies 1/2 to do anything at all; omitted
-   *   (the default) reproduces this port's PRE-this-session behaviour of
-   *   leaving the goal untouched for those two strategies. ⚠️ The one real
-   *   call site (main.js) does not pass this yet — a documented integration
-   *   gap, not an oversight; see the file header.
+   *   DS:0xa/0xc. REQUIRED for strategies 1/2 to do anything at all, and
+   *   (together with `grid`) for stage 3's attack/leap; omitted (the
+   *   default) falls back to leaving the goal untouched for those two
+   *   strategies and skipping the attack, matching the original's own
+   *   off-screen-entity behaviour. main.js's real call site passes a live
+   *   snapped camera, so this default only matters for callers that omit it
+   *   deliberately (e.g. tests isolating one stage).
    * @param {?Array<{x:number,y:number,type:number}>} markers  screen-relative
    *   marker records (game/markers.js's own `MarkerList#entries`), for
    *   strategy 2 only — same "goal left untouched if omitted" fallback as
@@ -824,11 +814,8 @@ export class EntityA {
 
     /* CS:0xE001's own first act, before stage 2 runs, is a per-tick snapshot
      * of this entity's velocity — taken specifically so stage 3 (CS:0xe487,
-     * `stageAttack` above, NOT called from this pipeline yet) can blend its
-     * own steering delta onto the PRE-stage-2 value rather than stage 2's
-     * own output. Captured here unconditionally — harmless while nothing
-     * reads it yet — so a future pass wiring `stageAttack` in does not also
-     * need to find and patch this exact spot. */
+     * `stageAttack` above) can blend its own steering delta onto the
+     * PRE-stage-2 value rather than stage 2's own output. */
     this.prevVx = this.vx;
     this.prevVy = this.vy;
 
@@ -838,8 +825,9 @@ export class EntityA {
      * stageSpeedClamp, exactly where CS:0xE001 itself sequences it. Needs the
      * shared collision.js DamageGrid every projectile/creature contact test
      * already stamps, and the snapped camera; both are optional here so a
-     * caller that has not wired them (yet) degrades to the pre-stage-3
-     * behaviour rather than throwing. stageAttack already mutates
+     * caller that omits them (e.g. a test isolating an earlier stage)
+     * degrades to the pre-stage-3 behaviour rather than throwing — main.js's
+     * own call site passes both. stageAttack already mutates
      * this.vx/vy/stepCap/arrivedFine directly — nothing further to do with
      * its return value except optional telemetry. `this.prevVx`/`this.prevVy`
      * were captured above for exactly this call. */

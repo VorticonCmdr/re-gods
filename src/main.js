@@ -36,7 +36,8 @@ import { Destructibles } from './game/destructible.js';
 import { resetWeaponArc, setWeaponArc, projectileSprite } from './game/projectiles.js';
 import { parseGroupsB, parseGroupsA, GroupSlots, spriteForEntity, MAX_ENTITIES,
          CREATURE_DESCRIPTOR_BASE } from './game/spawn.js';
-import { EntityB, MODE, MODE_TABLE, groundBelow, isDying } from './game/entity.js';
+import { EntityB, MODE, MODE_TABLE, groundBelow, isDying,
+DEATH_SPRITE_BASE, DEATH_FRAMES } from './game/entity.js';
 import { EntityA, CLASS_TABLES_A, spriteForEntityA } from './game/entity-a.js';
 import { VERDICT_NONE } from './game/pathfind.js';
 import { runSearch } from './game/pathfind-producers.js';
@@ -1165,13 +1166,30 @@ async function main() {
       /* ENEMIES — sprite = class_base + MODE_ANIM[mode] + frame (CS:0xf0ae).
        * Drawn before the hero, matching the original's draw order. */
       for (const e of enemies) {
-        /* CS:0xedf7 routes a negative state to the death path instead of the
-         * draw call. That path is unread, so a dying creature is dropped from
-         * the frame and counted, not drawn with its kill-frame of -1. */
-        if (isDying(e)) { dying++; continue; }
         if (e.state === 0 || e.state === -2) continue;   // free / not yet visible
         const sx = e.x - camX, sy = e.y - camY;
         if (sx < -64 || sy < -64 || sx > SCREEN_W || sy > SCREEN_H) continue;
+        if (isDying(e)) {
+          /* ⚠️⚠️ CORRECTION, a later session — entity.js's own header traces
+           * CS:0xF02A/0xF030 to the byte: the kill tick itself (frame still
+           * -1, before tick()'s own DYING branch has run) draws via the
+           * ORDINARY formula below with frame=-1; every later tick draws
+           * DEATH_SPRITE_BASE + frame (0..6) through the SAME blitter, not
+           * the class-table lookup. Both share this one draw call. */
+          dying++;
+          if (e.frame < 0) {
+            const eid = spriteForEntity(level.world, e.cls, e.mode, e.frame,
+                                        MODE_TABLE.map((m) => m.animBase));
+            const ef = eid !== null && hero && hero.frames[eid];
+            if (ef && eid >= CREATURE_DESCRIPTOR_BASE) renderer.blitSprite(ef, sx, sy);
+            else { outOfRange++; renderer.strokeRect(sx, sy, 24, 24, 12); }
+          } else if (e.frame < DEATH_FRAMES) {
+            const df = hero && hero.frames[DEATH_SPRITE_BASE + e.frame];
+            if (df) renderer.blitSprite(df, sx, sy);
+            else { outOfRange++; renderer.strokeRect(sx, sy, 24, 24, 12); }
+          }
+          continue;
+        }
         const eid = spriteForEntity(level.world, e.cls, e.mode, e.frame,
                                     MODE_TABLE.map((m) => m.animBase));
         const ef = eid !== null && hero && hero.frames[eid];
