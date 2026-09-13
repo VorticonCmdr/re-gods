@@ -124,6 +124,38 @@
  * would plausibly end the whole game rather than advance a level) but no
  * consumer of either field was located this pass, so neither is asserted as
  * "score bonus" or anything else — see EXIT_DESTINATIONS below.
+ *
+ * A LATER PASS (see Gods/CLAUDE.md's own `UNKNOWN_level_exit_destination`
+ * section) traced [0x178]'s OTHER writer and the record layout further, and
+ * both findings matter for anyone tempted to derive world/sublevel advance
+ * from this data:
+ *
+ *   1. FUN_1000_8c34 (level load) ALSO writes [0x178], from a DIFFERENT,
+ *      WORLD-indexed table at DS:0xe674 (word[0xe674 + (world-1)*2]) — NOT
+ *      this file's own arg-indexed DS:0xe67c table. DS:0xe674's own last 4
+ *      words are byte-identical to DS:0xe67c's 4 pointers, so the two tables
+ *      are adjacent, not the same, in memory.
+ *   2. Each record actually carries a THIRD field this file doesn't parse
+ *      yet, at +0x1e (a u16, read by CS:0x6553's own score-tally screen as a
+ *      bit-dispatch selector — bits 11/6/1 only, via CS:0x694d -> mostly
+ *      CS:0x6992, a per-level-runtime-pool reset with no [0x42]/[0x43]
+ *      write). LEVEL ONE/TWO read +0x1e=0x0502, LEVEL THREE=0x0702, GAME=0.
+ *   3. Records are NOT fixed-size. A raw 204-byte read starting at 0xe6ea
+ *      shows LEVEL ONE is 36 bytes (an extra +0x22=0xFFFF trailer word) while
+ *      the records after it (a "WORLD ONE" record at EXACTLY 0xe674's own
+ *      world-2 pointer, then "WORLD TWO", then two blank-text records) are
+ *      34 bytes each — landing EXACTLY on 0xe796 (LEVEL TWO, this file's own
+ *      arg-3 pointer) after 3 more 34-byte steps. So 0xe674 and 0xe67c point
+ *      into ONE SHARED, non-uniform-stride record stream, not two
+ *      independent tables.
+ *   4. That non-uniformity REFUTES the obvious reading of CS:0x6557's own
+ *      `ADD word[0x178],0x22` as "walk to the next record": from a 36-byte
+ *      LEVEL record, +0x22 (34) lands 2 bytes short of the true next record.
+ *      So world/sublevel advance is NOT a simple cursor-through-this-array
+ *      rule, and this file's EXIT_DESTINATIONS/nextLevelKey placeholder
+ *      should not be "fixed" using it. See CLAUDE.md for the full trace,
+ *      the exhaustive (still negative) [0x42]/[0x43] write-site search, and
+ *      what remains open.
  */
 
 import { ZONE_TELEPORT, ZONE_EXIT } from './trigger-actions.js';
