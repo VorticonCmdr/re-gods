@@ -8509,6 +8509,77 @@ export function checkSelectorTwo() {
     check('b5e9: frame!=0 advances exactly on the tock===0 tick', e4.frame === 2, e4.frame);
   }
 
+  /* (f2) A REGRESSION GUARD for two real bugs an advisor review caught in
+   * this same pass, on the shared 32x32 `handlerA` body — the MAJORITY
+   * family across every world, per CLAUDE.md's own live-read class table —
+   * which none of (d)/(d2)/(f)/(g)/(i)/(j) exercises, since every one of
+   * them drives a 'b60e'/'b5e9'/'b144'/'b2c7' class instead:
+   *   1. The call site passed only `entity` to `handlerA_32x32`, never
+   *      `slot` — so `entity.spriteBase` (a field that has never existed;
+   *      spriteBase lives on the SLOT) was `undefined`, and the sprite was
+   *      NaN for every 32x32-classed entity in the game.
+   *   2. The facing term was coded as `*8`; a fresh `disassemble_bytes` of
+   *      CS:0xB796-B7A4 gives `CX+=facing` (once, unshifted) THEN
+   *      `DX:=facing<<3` THEN `CX+=DX` — net `facing*9`, not `facing*8`.
+   * Uses the LITERAL 462 (world1 classIndex 0's own spriteBase, per
+   * CLAUDE.md's own live `read_memory` table), not
+   * `CLASS_TABLES_B[1][0].base`, so this cannot degrade into a tautology
+   * against the very table it is meant to catch a regression in. */
+  {
+    const grid = new DamageGrid();
+    const health = new Health();
+    const farHero = { x: 100000, y: 100000, state: 0 };
+    const missDecode = () => { throw new Error('must not be called on an empty grid cell'); };
+    const cam = { x: 0, y: 0 };
+    const noop = () => {};
+
+    const pool = new SelectorTwoSpawns();
+    const desc = { index: 0, spawnX: 2000, spawnY: 900, entityFacing: 0, drawStyle: 0,
+      staggerStep: 0, entityCount: 1, entityState0: 99, classIndex: 0,
+      facingSelect: 0, reloadByte: 0, rewardItemId: 0xff, live: true };
+    check('spawn() against the real CLASS_TABLES_B[1][0] (world1 idx0, 32x32/b03c, base 462)',
+      pool.spawn(desc, 1) === true);
+
+    pool.step(cam, farHero, 0, health, grid, missDecode, 0, noop, noop, {});   // materialise-only
+    const e = pool.slots[0].entities[0];
+    check('materialise: facing seeded from entityFacing(0), frame starts at 0',
+      e.facing === 0 && e.frame === 0, JSON.stringify(e));
+
+    const r = pool.step(cam, farHero, 0, health, grid, missDecode, 0, noop, noop, {});
+    check('CS:0xB725-B7A6, facing===0: drawn sprite is the LITERAL 462 + frame, not NaN '
+      + '(the entity-vs-slot argument bug)',
+      r.drawn.length === 1 && r.drawn[0].sprite === 462 + e.frame, JSON.stringify(r.drawn));
+
+    const pool2 = new SelectorTwoSpawns();
+    const desc2 = { ...desc, entityFacing: 1 };
+    check('spawn() with entityFacing=1', pool2.spawn(desc2, 1) === true);
+    pool2.step(cam, farHero, 0, health, grid, missDecode, 0, noop, noop, {});   // materialise-only
+    const e2 = pool2.slots[0].entities[0];
+    const r2 = pool2.step(cam, farHero, 0, health, grid, missDecode, 0, noop, noop, {});
+    check('CS:0xB79A/B79C-B7A2: facing!=0 adds facing+facing*8 = *9 net, not *8',
+      r2.drawn[0].sprite === 462 + e2.frame + 9, JSON.stringify(r2.drawn));
+
+    const pool3 = new SelectorTwoSpawns();
+    check('spawn() for the tock-polarity check', pool3.spawn({ ...desc }, 1) === true);
+    pool3.step(cam, farHero, 0, health, grid, missDecode, 0, noop, noop, {});   // materialise-only
+    const e3 = pool3.slots[0].entities[0];
+    const r3a = pool3.step(cam, farHero, 0, health, grid, missDecode, 0, noop, noop, {});   // tock byte===0 -> skip (CS:0xB73B JZ taken)
+    check('CS:0xB736-B73B: tock===0 (the byte reads 0) does NOT advance the 8-frame cycle',
+      e3.frame === 0 && r3a.drawn[0].sprite === 462, JSON.stringify(r3a.drawn));
+    const r3b = pool3.step(cam, farHero, 0, health, grid, missDecode, 1, noop, noop, {});   // tock byte!==0 -> advance
+    /* A LITERAL 463 (462 + frame(1) + facing(0)*9), not `462 + e3.frame` —
+     * that self-adjusting form would pass even if `+ frame` were dropped
+     * from the sprite formula entirely, since blocks above never advance
+     * frame off 0. This pins the actual number the increment-then-read
+     * order (stepAnim8 runs before handlerA_32x32 in #stepAlive) produces:
+     * the sprite for THIS tick already reflects the frame this SAME tick
+     * just advanced to, per CS:0xB725-B7A6's own mutate-then-fall-through
+     * shape (confirmed by a fresh disassemble_bytes, not assumed by
+     * analogy with CS:0xB144's differently-shaped gate). */
+    check('CS:0xB73D-B741: tock!==0 DOES advance, and the SAME tick draws the post-advance frame',
+      e3.frame === 1 && r3b.drawn[0].sprite === 463, JSON.stringify(r3b.drawn));
+  }
+
   /* (g) Full lifecycle through the real pool: materialise -> stagger ->
    * fire -> cull-vs-contact -> kill -> score -> dying fade -> elimination
    * reward -> slot free. */

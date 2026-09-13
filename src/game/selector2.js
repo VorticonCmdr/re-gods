@@ -397,16 +397,66 @@ export function stepHandlerB03C(entity, slot, world) {
  * own hardcoded sprite base (already captured as `slot.spriteBase`, per
  * `CLASS_TABLES_B`) then jump into this ONE shared body. An 8-frame,
  * tock-gated (`DS:0x36c`) animation cycle; sprite = `spriteBase + frame +
- * facing*8` (`CS:0xB796`'s own shared tail). See the file header for what
- * this does NOT model (the wall/hero-visibility facing flip) — confirmed by
+ * facing*9` (`CS:0xB796`'s own shared tail — see `handlerA_32x32`'s own
+ * header for the fresh byte-level trace; an earlier pass of this file said
+ * `facing*8`, which is wrong by one). See the file header for what this
+ * does NOT model (the wall/hero-visibility facing flip) — confirmed by
  * reading the entire body that no x/y write exists anywhere in it.
  */
-function handlerA_32x32(entity) {
-  return entity.spriteBase + entity.frame + (entity.facing !== 0 ? 8 : 0);
+function handlerA_32x32(entity, slot) {
+  /* ⚠️ `entity.facing * 9`, NOT `facing !== 0 ? 9 : 0` — CS:0xB79A/B7A2 add
+   * the RAW word twice (`CX += DX` then `CX += DX<<3`), not a boolean. This
+   * matters because `entity.facing` is `entityFacing` verbatim (sign-
+   * extended from the class descriptor's own raw `+0x04` byte, `checks.js`'s
+   * own (a)-section proves a 0xFF byte parses to `-1`) with no runtime
+   * normalisation — the wall/hero-visibility facing-flip that would XOR it
+   * back toward 0/1 in the original is deliberately NOT ported (see the file
+   * header). Writing the boolean form would be byte-exact only for classes
+   * whose descriptor `+0x04` happens to be exactly 0 or 1. */
+  return slot.spriteBase + entity.frame + entity.facing * 9;
 }
 
+/**
+ * ⚠️⚠️ CORRECTION, a later session — this function had TWO bugs, caught by
+ * a fresh advisor review and confirmed against a fresh `disassemble_bytes`
+ * of `CS:0xB725`-`0xB7A6` (not merely re-read from memory of the earlier
+ * disassembly):
+ *   1. This function's own caller passed only `entity`, never `slot` — so
+ *      `entity.spriteBase` (a field that has never existed; spriteBase lives
+ *      on the SLOT, per `handlerA_b144`/`handlerA_b2c7`'s own `slot.spriteBase`
+ *      convention) was `undefined`, and every 32x32 class — the MAJORITY
+ *      family across every world, per the file header — drew sprite `NaN`.
+ *      No test caught it because (d)/(d2)/(f)/(g)/(i)/(j) never drive a
+ *      '32x32' class through the pool itself, only through table-content
+ *      assertions or other families.
+ *   2. The facing term is `*9`, not `*8`. `CS:0xB797-B7A4`, read fresh:
+ *      `DX := [DI+0xa]` (facing) / `CX += DX` (facing added ONCE, before any
+ *      shift) / `DX <<= 1` x3 (`DX := facing*8`) / `CX += DX` / `CX += BP`
+ *      (spriteBase). Net: `spriteBase + frame + facing + facing*8 =
+ *      spriteBase + frame + facing*9`. CLAUDE.md's own prose ("sprite =
+ *      class_base + frame + facing*8") carried the same off-by-one and has
+ *      been corrected alongside this fix.
+ */
 function stepAnim8(entity, tock) {
-  if (tock === 0) entity.frame = (entity.frame + 1) & 7;   // CS:0xB725-B73E
+  /* ⚠️⚠️ CORRECTION — the gate polarity was backwards. Fresh
+   * `disassemble_bytes` of `CS:0xB736-B744`: `CMP byte[0x36c],0 / JZ 0xb796`
+   * — the increment block (`INC CX / AND CX,7 / MOV [DI+4],CX`) is SKIPPED
+   * when the byte is 0 and runs only when it is NONZERO, the identical
+   * byte-verified shape `statue.js` already documents for its own,
+   * independent `CS:0x7C4B` read (`tock===1` is the byte-verified polarity
+   * for a `cmp byte[0x36c],0/jz<skip>` shape; `nest.js`'s own `tock===0` is a
+   * DIFFERENT, independently-correct site — polarity is per-instruction, not
+   * global, exactly as `statue.js`'s own header already warns). An earlier
+   * draft of this port used `tock === 0`, inverting which of every pair of
+   * ticks this 8-frame cycle actually advances on.
+   *
+   * NOT MODELLED: `CS:0xB729-B734`'s own overflow guard (`frame > 7` ->
+   * force `CX:=8` for the sprite calc and decrement the STORED byte back to
+   * 7). `entity.frame` here can never exceed 7 — `AND CX,7` on every
+   * advance and a materialise-time seed of 0 both keep it in `[0,7]` — so
+   * this branch is provably unreachable from this port's own state machine,
+   * flagged rather than silently dropped. */
+  if (tock !== 0) entity.frame = (entity.frame + 1) & 7;   // CS:0xB725-B73E
 }
 
 /**
@@ -643,7 +693,7 @@ export class SelectorTwoSpawns {
       sprite = handlerA_b5e9(e, tock);
     } else if (slot.handlerA === '32x32') {
       stepAnim8(e, tock);
-      sprite = handlerA_32x32(e);
+      sprite = handlerA_32x32(e, slot);
     } else if (slot.handlerA === 'b144') {
       const r = handlerA_b144(e, slot, tock);
       sprite = r.sprite;
