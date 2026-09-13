@@ -40,10 +40,14 @@
  *       still negative, i.e. exactly once, on the FIRST f030 pass) that
  *       caches world position into DS:0x202/0x204 and — if a carried-item
  *       field at `[di+0x10]` is non-negative — drops a per-kill popup via
- *       CS:0xBF5F (NOT ported: this port has no popup-rendering module, nor
- *       a carried-item field on EntityB, matching selector2.js's own
- *       identical, already-disclosed gap for its group-elimination reward),
- *       then UNCONDITIONALLY `INC [di+4]` and — while `< 7` — draws
+ *       CS:0xBF5F. The PER-KILL popup (keyed on the entity's own carried-item
+ *       field, unrelated to the group descriptor's own +0x10) is NOT ported —
+ *       no carried-item field exists on EntityB, same disclosed steal-and-
+ *       carry gap as elsewhere in this project. The position CACHE itself
+ *       (`[0x202]`/`[0x204]`, `deathCacheX/Y` below) IS ported and feeds
+ *       main.js's own System-B group-elimination reward (popup.js,
+ *       `UNKNOWN_f030_item_drop`) — the actual per-GROUP mechanism this gate
+ *       exists for. Then UNCONDITIONALLY `INC [di+4]` and — while `< 7` — draws
  *       `sprite = 0x6c + [di+4]` (CS:0xF091-F094, a flat constant, NOT a
  *       class-table lookup) through the SAME `CALL 0x1000:3569`. At `>= 7`
  *       it finalises without drawing: `[di+8]:=0, [di+6]:=0`.
@@ -55,8 +59,10 @@
  *   whenever `state === DYING`, and the one-tick `frame === -1` case (the
  *   CS:0xF02A draw) is left to the render pass, which already has `mode`
  *   and `cls` in scope for the ordinary sprite formula — see main.js.
- *   Group-clear/per-kill reward popups remain unported (mechanism only,
- *   same disclosed gap as selector2.js).
+ *   ⚠️⚠️ CORRECTION, a later session — the GROUP-clear reward popup IS now
+ *   ported (`deathCacheX/Y`/`deathCacheSeq` above, drained by main.js into
+ *   popup.js). The PER-KILL popup (entity's own carried-item field) remains
+ *   unported — same disclosed steal-and-carry gap as selector2.js.
  *
  * THE MODE TABLE — DS:0xdbe0, 8 x {u16 handler, u16 anim_base}
  *   Note the field order is the REVERSE of the player's table at DS:0xd818,
@@ -245,6 +251,19 @@ export const MATERIALISE_TICKS = 5;    // CS:0xff7f `mov word [di+0x6],5`
 export const DEATH_SPRITE_BASE = 0x6c;   // CS:0xF094 `add cx,0x6c` — a flat constant, not a class lookup
 export const DEATH_FRAMES = 7;           // CS:0xF071 `cmp word[di+4],0x7`
 
+/* CS:0xF034/F03A-F042's own ONE-SHOT gate: `cmp word[di+4],0 / jns` fires
+ * only while frame is still -1 (the kill tick's own value), so the cache
+ * write below happens exactly once per entity, on the FIRST tick() call that
+ * observes DYING. `deathSeq` is this port's own tie-break for the group-
+ * reward code (main.js): DS:0x202/0x204 is a single shared scratch pair the
+ * original overwrites every time ANY entity's cache fires, so "whichever
+ * member's cache is freshest" is what CS:0xED84 actually reads. A monotonic
+ * counter reproduces "freshest" without needing a real shared scratch pair
+ * that could be cross-contaminated by entities from OTHER groups ticking in
+ * the same pass (this port ticks all of `enemies` in one flat loop, not
+ * per-group like CS:0xed38). */
+let deathCacheSeq = 0;
+
 export class EntityB {
   constructor({ x, y, mode = MODE.WALK_L, speed = 9, hp = 1, cls = 0, delay = 0 }) {
     this.x = x;             // +0x00
@@ -259,6 +278,9 @@ export class EntityB {
     this.hp = hp;               // descriptor +0x01
     this.timer = delay;         // +0x06, the per-entity stagger
     this.reloadTimer = 0;       // +0xe — CS:0xe659's per-entity fire/reload timer
+    this.deathCacheX = null;    // CS:0xF03A-F042, +8 baked in — see the note above EntityB
+    this.deathCacheY = null;
+    this.deathCacheSeq = -1;
   }
 
   get alive() { return this.state > 0; }
@@ -300,9 +322,18 @@ export class EntityB {
     /* CS:0xFF20's `jmp f030` arm — every tick AFTER the kill tick (the kill
      * tick itself leaves state/frame at -1/-1 and is drawn by the render
      * pass via the ordinary formula; see the file header). The one-shot gate
-     * at CS:0xF034 (position-cache + per-kill popup, only while frame is
-     * still negative) is not ported — no popup-rendering module exists yet. */
+     * at CS:0xF034 (position-cache, only while frame is still negative) IS
+     * ported below — main.js's own group-elimination reward reads it. The
+     * per-kill carried-item popup that shares this same gate (`[di+0x10]`,
+     * an ENTITY field, unrelated to the group descriptor's own +0x10 the
+     * reward reads) is NOT ported — same disclosed steal-and-carry gap as
+     * elsewhere in this project. */
     if (this.state === EST.DYING) {
+      if (this.frame === -1) {                            // CS:0xF034 `jns`
+        this.deathCacheX = this.x + 8;                     // CS:0xED84 `ax += 8`
+        this.deathCacheY = this.y;                          // Y untouched — System-B only
+        this.deathCacheSeq = deathCacheSeq++;
+      }
       this.frame++;                                       // CS:0xF06E
       if (this.frame >= DEATH_FRAMES) {                    // CS:0xF071/F075
         this.state = EST.FREE; this.delay = 0;             // CS:0xF077/F07C

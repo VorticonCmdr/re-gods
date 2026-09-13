@@ -36,7 +36,7 @@ import { Destructibles } from './game/destructible.js';
 import { resetWeaponArc, setWeaponArc, projectileSprite } from './game/projectiles.js';
 import { parseGroupsB, parseGroupsA, GroupSlots, spriteForEntity, MAX_ENTITIES,
          CREATURE_DESCRIPTOR_BASE } from './game/spawn.js';
-import { EntityB, MODE, MODE_TABLE, groundBelow, isDying,
+import { EntityB, MODE, MODE_TABLE, groundBelow, isDying, EST,
 DEATH_SPRITE_BASE, DEATH_FRAMES } from './game/entity.js';
 import { EntityA, CLASS_TABLES_A, spriteForEntityA } from './game/entity-a.js';
 import { VERDICT_NONE } from './game/pathfind.js';
@@ -1087,19 +1087,47 @@ async function main() {
         invuln: fx.invuln > 0 ? 1 : 0,
       }).killed;
       /* `UNKNOWN_f030_item_drop` — System-B's own per-GROUP elimination
-       * reward, checked right after contact so a kill this SAME tick can
-       * satisfy it (matching CS:0xEDAA/0xEDA6's own placement inside the
-       * per-group loop, run every tick regardless of whether anything died
-       * this tick). `state <= 0` (dead OR dying) matches the original's
-       * `(dead+dying) === count` test exactly, since this port's DYING
-       * sentinel never advances past a single -1 value while fading. */
+       * reward. CS:0xED78-ED80 sums `[0x3c3]` (state===0, dead) + `[0x1f4]`
+       * (state<0 and NOT -2/-3, i.e. DYING) and compares to the descriptor's
+       * own entity count — a LIVE per-tick recount, not a latch, so this is
+       * `.every(...)` here too rather than a monotonic flag.
+       * ⚠️ Correction to an earlier revision of this block, caught by
+       * advisor() review before this was declared done: `state <= 0` is
+       * WRONG — EST.WAITING (-2) and EST.MATERIALISING (-3) both satisfy
+       * `<= 0`, so a freshly-spawned group (every member still waiting to
+       * materialise) would have satisfied this the SAME tick runSpawns()
+       * populated `members`, firing the reward at spawn rather than at
+       * elimination. The original's own ff20 dispatch explicitly routes -2
+       * and -3 away from the dying tally, so only FREE (0) and DYING (-1)
+       * may count — exactly EST.FREE/EST.DYING here.
+       * One acknowledged, disclosed timing gap: on the ORIGINAL, an entity
+       * killed by THIS tick's own contact test is still mid-pass through the
+       * "alive" branch and does not reach ff20/f030 until the FOLLOWING
+       * tick, so a same-tick kill cannot complete a group until one tick
+       * later. This port's flat (not per-group) entity loop makes that
+       * one-tick deferral awkward to reproduce exactly, so a kill via
+       * stepCreatureDamage (run once per tick, after every entity's own
+       * tick()) can complete a group on the SAME tick here — a disclosed,
+       * at-most-one-frame-early popup, not a mechanism error. */
       for (const g of groupsB) {
         if (g.rewardGiven) continue;
-        if (!g.members.every((e) => e.state <= 0)) continue;
+        if (!g.members.every((e) => e.state === EST.FREE || e.state === EST.DYING)) continue;
         g.rewardGiven = true;
         if (g.desc.rewardId >= 0) {
-          const last = g.members[g.members.length - 1];
-          popup.spawn(last.x, last.y, g.desc.rewardId);
+          /* CS:0xED84: the position is DS:0x202/0x204 — a shared scratch pair
+           * the original overwrites every time ANY member's own CS:0xF034
+           * one-shot gate fires, so the reward lands wherever the group's
+           * OWN most-recently-cached member died, not simply the last one in
+           * spawn order. `deathCacheSeq` (entity.js) reproduces "freshest"
+           * without a real shared scratch pair, since this port ticks all
+           * groups' entities in one flat loop rather than per-group. */
+          const cached = g.members.filter((e) => e.deathCacheSeq >= 0);
+          const src = cached.length
+            ? cached.reduce((a, b) => (b.deathCacheSeq > a.deathCacheSeq ? b : a))
+            : g.members[g.members.length - 1];
+          const x = cached.length ? src.deathCacheX : src.x;
+          const y = cached.length ? src.deathCacheY : src.y;
+          popup.spawn(x, y, g.desc.rewardId);
         }
       }
       /* Drain selector2.js's own group-elimination rewards (`CS:0xAED0`-

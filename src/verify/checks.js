@@ -1859,6 +1859,54 @@ export function checkEntityB() {
       d.delay === 0);
   }
 
+  /* CS:0xF034's own one-shot position cache (`deathCacheX/Y/Seq`), which
+   * feeds main.js's own System-B group-elimination reward (popup.js).
+   * A REGRESSION GUARD for a second, more serious bug the SAME advisor
+   * review caught: a fresh entity's `state` is EST.WAITING (-2), and
+   * `-2 <= 0` is true — so main.js's own group-completion check must NOT be
+   * `state <= 0`, or a group would satisfy "all dead/dying" the instant it
+   * spawns, before a single entity has even ticked once. */
+  {
+    const fresh = new EntityB({ x: 10, y: 20, mode: MODE.WALK_L });
+    check('a freshly-spawned entity is WAITING (-2), which satisfies `state <= 0` '
+      + '— the exact trap that made an earlier revision of the group-reward check fire at spawn',
+      fresh.state === EST.WAITING && fresh.state <= 0, `state=${fresh.state}`);
+    check('...and MATERIALISING (-3) also satisfies `state <= 0`',
+      EST.MATERIALISING <= 0);
+    check('the cache is UNSET before any entity has died',
+      fresh.deathCacheSeq === -1 && fresh.deathCacheX === null);
+
+    const planeBc = new Uint8Array(128 * 64);
+    const killed = new EntityB({ x: 100, y: 50, mode: MODE.WALK_L });
+    killed.state = EST.DYING; killed.frame = -1;
+    killed.tick(planeBc);
+    check('CS:0xF034/F03A-F042: the kill-tick (frame still -1 at entry) caches the position',
+      killed.deathCacheX === 108 && killed.deathCacheY === 50 && killed.deathCacheSeq >= 0,
+      `x=${killed.deathCacheX} y=${killed.deathCacheY} seq=${killed.deathCacheSeq}`);
+    check('CS:0xED84: the cache adds +8 to X ONLY, Y is untouched',
+      killed.deathCacheX === killed.x + 8 && killed.deathCacheY === killed.y);
+
+    const seqAfterFirst = killed.deathCacheSeq;
+    for (let i = 0; i < ENTB_DEATH_FRAMES; i++) killed.tick(planeBc);
+    check('CS:0xF034 is a ONE-SHOT gate — the cache does not move once frame leaves -1',
+      killed.deathCacheSeq === seqAfterFirst && killed.deathCacheX === 108);
+
+    /* Two entities dying in the SAME tick: the LATER one processed must win
+     * the shared "freshest" tie-break, matching CS:0xED84 reading whichever
+     * member's CS:0xF034 gate fired most recently — this is what lets
+     * main.js pick "the group's own last-died member" without a real
+     * shared scratch pair (see entity.js's own header note). */
+    const first = new EntityB({ x: 0, y: 0 });
+    first.state = EST.DYING; first.frame = -1;
+    const second = new EntityB({ x: 200, y: 200 });
+    second.state = EST.DYING; second.frame = -1;
+    first.tick(planeBc);
+    second.tick(planeBc);
+    check('the entity ticked SECOND has the higher deathCacheSeq (it cached most recently)',
+      second.deathCacheSeq > first.deathCacheSeq,
+      `first=${first.deathCacheSeq} second=${second.deathCacheSeq}`);
+  }
+
   return results;
 }
 
@@ -2227,12 +2275,20 @@ export async function checkSpawn(fetchRaw) {
     detail: `${[...speeds].sort((a, b) => a - b).join(',')} — step delay is 10 - v, so higher is faster`,
   });
   /* CS:0xED94's own BE i16 reward id, re-derived from raw bytes independent
-   * of parseGroupsB itself: a discriminating value, since the sign bit and
-   * the 0xB threshold both matter for how main.js's own group-tracking
-   * interprets it (see popup.js's header for the id encoding). */
+   * of parseGroupsB itself. CLAUDE.md's own `UNKNOWN_sysB_reward_ids` census
+   * (decompressing all 8 PALFILS files and reading +0x10 directly) found
+   * EXACTLY this closed set across every world — a wrong sign-handling or
+   * off-by-one field offset lands outside it immediately, which is what
+   * makes this a real assertion rather than a restatement of whatever
+   * parseGroupsB happens to compute. */
+  const DOCUMENTED_REWARD_IDS = new Set([-1, 0, 6, 11, 17, 18, 21, 22, 46, 56, 112, 135, 136]);
+  const rewardIdsSorted = [...rewardIds].sort((a, b) => a - b);
+  check(`every live descriptor's +0x10 reward id matches CLAUDE.md's own shipped-data census`,
+    rewardIdsSorted.every((id) => DOCUMENTED_REWARD_IDS.has(id)),
+    `got {${rewardIdsSorted.join(',')}}`);
   results.push({
     name: `descriptor +0x10 reward ids in shipped data`, note: true, pass: true,
-    detail: `${[...rewardIds].sort((a, b) => a - b).join(',')} — negative = no reward, `
+    detail: `${rewardIdsSorted.join(',')} — negative = no reward, `
       + `< 0xB a plain numeric popup (undecoded, not rendered), >= 0xB a POBJECTS type`,
   });
 
@@ -9441,6 +9497,29 @@ export function checkPopup() {
     check('id=0x2d (the world-2 nest\'s own jewel reward, POBJECTS type 34) '
       + 'yields spriteId = 170 + 34 = 204',
       p2.itemType === 0x2d - 0xb && p2.spriteId === POPUP_SPRITE_BASE + (0x2d - 0xb), p2.spriteId);
+  }
+
+  /* Does the resolved sprite land inside the ALREADY-VALIDATED object-atlas
+   * range, or does main.js's own `hero.frames[pid]` lookup silently miss and
+   * fall back to the debug strokeRect (checkSelectorsAndObjects's own
+   * `outside` counter is what first established `[OBJECT_SPRITE_BASE, 449]`
+   * as real, resolvable object-atlas sprites — not asserted again here, only
+   * relied on). Every id>=0xB value CLAUDE.md's own shipped-data census
+   * found (UNKNOWN_sysB_reward_ids) is checked, not just the one nest id
+   * already covered above. */
+  {
+    const REAL_ITEM_IDS = [0x0b, 0x11, 0x12, 0x15, 0x16, 0x2e, 0x38, 0x70, 0x87, 0x88];
+    const outOfRange = REAL_ITEM_IDS.filter((id) => {
+      const p = new Popup();
+      p.spawn(0, 0, id);
+      return p.spriteId < POPUP_SPRITE_BASE || p.spriteId > 449;
+    });
+    check('POPUP_SPRITE_BASE is 170, the same object-sprite base CLAUDE.md '
+      + 'documents throughout (`170 + type`) — not an independently chosen constant',
+      POPUP_SPRITE_BASE === 170);
+    check('every documented id>=0xB reward resolves inside the ALREADY-VALIDATED '
+      + `object atlas range [${OBJECT_SPRITE_BASE}, 449]`,
+      outOfRange.length === 0, `out of range: ${JSON.stringify(outOfRange)}`);
   }
 
   /* off-screen cull — a disclosed safety valve (UNKNOWN_popup_cull), not a
