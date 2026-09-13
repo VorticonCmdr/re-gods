@@ -1034,6 +1034,9 @@ async function main() {
         nestContact, statueScanGrid, tock);
       score.add(statueResult.score);
       lastStatueFx = statueResult.drawn;
+      /* CS:0xBF5F — the awakened statue's own kill award, drained into the
+       * SAME single-slot popup every other reward source shares. */
+      for (const p of statueResult.popups) popup.spawn(p.x, p.y, p.id, level.drawObjects);
 
       /* CS:0x7F0D — the world-3 DS:0xce64 creature and its "spit". Neither
        * module needs injected callbacks (see ce64.js's own header for why it

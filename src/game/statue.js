@@ -235,12 +235,9 @@ export const DEATH_FRAMES = 17;
 export const LIVE_BOX = Object.freeze({ w: 32, h: 32 });
 
 /** CS:0xBF5F (the shared popup spawner) and CS:0x0C8B (the shared BCD score
- *  entry, dl=5 -> 5*100). ⚠️ CORRECTION: `popup.js` now exists and IS drained
- *  by main.js for the nest/selector2/System-A/B group rewards — but NOT for
- *  this module's own `step()`-returned `popups` array, which main.js reads
- *  only for `.drawn`/`.score` and silently drops `.popups`. A real, narrow,
- *  still-open gap: wire `statueResult.popups` into the shared `popup.js`
- *  instance the same way `selectorTwo.rewards` already is. */
+ *  entry, dl=5 -> 5*100). `popup.js` is drained by main.js for this module's
+ *  own `step()`-returned `popups` array (WORLD coords) the same way it is
+ *  for the nest/selector2/System-A/B group rewards. */
 export const KILL_POPUP_ID = 16;
 export const KILL_SCORE = 500;
 
@@ -404,7 +401,9 @@ export class Statues {
    * @returns {{drawn:Array<{x,y,sprite}>, popups:Array<{id,x,y}>,
    *            killed:number, score:number}} `killed`/`score` are THIS
    *   TICK's counts, not running totals (see `this.killed`/`this.score` for
-   *   those).
+   *   those). `popups` entries are WORLD coords (matching `popup.js`'s own
+   *   `spawn(worldX, worldY, id, objects)`), same convention as every other
+   *   reward source's own `popup.spawn` call site in main.js.
    */
   step(cam, hero, freezeTimer, contact, scanGrid, tock) {
     const drawn = [];
@@ -412,7 +411,7 @@ export class Statues {
     let killedNow = 0, scoreNow = 0;
 
     const kill = (s) => {
-      const p = { id: KILL_POPUP_ID, x: s.x - cam.x, y: s.y - cam.y };  // CS:0xBF5F
+      const p = { id: KILL_POPUP_ID, x: s.x, y: s.y };                  // CS:0xBF5F, WORLD coords
       popups.push(p);
       this.popups.push({ id: KILL_POPUP_ID, x: s.x, y: s.y });          // WORLD coords, lifetime
       scoreNow += KILL_SCORE;                                            // CS:0x0C8B, dl=5

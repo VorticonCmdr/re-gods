@@ -9064,6 +9064,20 @@ export function checkStatue() {
     check('running totals (killed/score) accumulate onto the instance too',
       killedByContact.killed === 1 && killedByContact.score === 500);
 
+    /* The returned popups array carries WORLD coords (matching popup.js's
+     * own spawn(worldX, worldY, ...) and every other reward source's call
+     * site) — NOT screen coords. A nonzero camera offset is the
+     * discriminator: a screen-coord bug would shift x/y by -cam.x/-cam.y.
+     * (pos<=target ratchets stepX/Y by +1 even at zero distance — steerStep's
+     * own documented shape — so the popup lands at 501,301, one tick's step
+     * past the seeded 500,300, not exactly on it.) */
+    const killedWithCamera = new Statues();
+    Object.assign(killedWithCamera.slots[0], { x: 500, y: 300, state: 10, stepX: 0, stepY: 0, phase: 0 });
+    const rCam = killedWithCamera.step({ x: 100, y: 40 }, { x: 500, y: 300 }, 0, hitContact, null, 0);
+    check('the kill popup carries WORLD coords, unaffected by the camera offset',
+      rCam.popups[0].x === 501 && rCam.popups[0].y === 301,
+      JSON.stringify(rCam.popups));
+
     const killedByWeapon = new Statues();
     Object.assign(killedByWeapon.slots[0], { x: 0, y: 0, state: 10, stepX: 0, stepY: 0, phase: 0 });
     const scanKills = (entity) => { entity.state = -1; return { killed: true }; };
