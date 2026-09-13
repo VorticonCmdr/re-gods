@@ -179,6 +179,8 @@ import { SLOT_STRIDE, PROJECTILE_SIZE, GROUP_STRIDE, GROUP_ENTRIES,
          axeWallAt, spawnAxeVolley,
          HUNTER_VEL_CLAMP, HUNTER_TARGET_BIAS, HUNTER_CULL, hunterSteerAxis,
          stepHunter, stepHunterArray, HUNTER_NO_TARGET_AT,
+         spawnHunterVolley, stepHunterCoast, HUNTER_COAST_SENTINEL,
+         HUNTER_COAST_TICK, HUNTER_COAST_REAIM_AT,
          FUSE_START, FUSE_EXPLODE, BOMB_FRAGMENTS, BOMB_SPRITE_BASE,
          BOMB_BOUNCE, BOMB_GRAVITY_CAP, stepTimeBomb,
          PROJECTILE_VELOCITY, setWeaponArc, resetWeaponArc,
@@ -5029,6 +5031,84 @@ export async function checkWeaponsProjectiles(fetchRaw) {
       'CS:0x9FB3-0x9FC6 skip straight to the loop tail, never touching the ' +
       "tag — a hunter shot that leaves the screen keeps flying and can " +
       'come back, unlike the common mover\'s cull which despawns');
+  }
+
+  /* ── UNKNOWN_hunter_ballistic_launch — CLOSED, now ported ────────────────
+   * The 3-shot fan spawns with a NEGATIVE tag (spawnHunterVolley) and coasts
+   * ballistically, decaying to zero, before a fixed 12-tick delay flips it
+   * to homing — CLAUDE.md's own UNKNOWN_hunter_coast_reaim closure is what
+   * unblocked this: the "cycling" re-aim threshold is a hardcoded constant,
+   * not a genuine cycle. */
+  {
+    const st = { count: 1, base: 1 };
+    const { entries } = spawnHunterVolley(st, 11, 19, 100, 100);   // right
+    check(`spawnHunterVolley writes NEGATIVE tags — the ballistic-launch entry point`,
+      entries.length === 1 && entries[0].tag === -19 && entries[0].dir === 0x0b00,
+      'CS:0x9A82-0x9A99: `neg dx` then `dec dx` per entry — a fresh hunter ' +
+      'shot must take the CS:0x9E9E coast arm on tick 1, not the search');
+
+    /* stepHunterCoast: position moves BEFORE decay (using the PRE-decay
+     * velocity), then the velocity is damped toward zero by exactly 1 per
+     * axis per tick. */
+    const p = { tag: -19, x: 0, y: 0, dir: 0x0b00 };       // vx=+11, vy=0
+    const flipped1 = stepHunterCoast(p);
+    check(`the coast phase moves first, using the PRE-decay velocity, then decays by 1/axis`,
+      !flipped1 && p.x === 11 && p.y === 0
+      && unpackHunterVel(p.dir).vx === 10 && unpackHunterVel(p.dir).vy === 0,
+      `x=${p.x} y=${p.y} dir=0x${p.dir.toString(16)}`);
+
+    /* Drive a (small) velocity all the way to zero and confirm the SENTINEL
+     * is written explicitly (0xf00), not the "natural" repack of (0,0). */
+    const p2 = { tag: -19, x: 0, y: 0, dir: ((2 & 0xff) << 8) | (0xff & 0xff) };  // vx=+2, vy=-1
+    stepHunterCoast(p2);   // vx 2->1, vy -1->0
+    check(`still decaying after one tick (vx=1, vy=0)`,
+      p2.dir !== HUNTER_COAST_SENTINEL && unpackHunterVel(p2.dir).vx === 1);
+    stepHunterCoast(p2);   // vx 1->0, vy already 0 -> BOTH zero -> sentinel
+    check(`reaching (0,0) writes the LITERAL sentinel 0xf00, not a repacked (0,0)`,
+      p2.dir === HUNTER_COAST_SENTINEL && HUNTER_COAST_SENTINEL === 0xf00,
+      `dir=0x${p2.dir.toString(16)}`);
+
+    /* Once at the sentinel, the counter climbs by HUNTER_COAST_TICK (0x100)
+     * every tick with NO further motion, for exactly 12 ticks, then flips. */
+    const p3 = { tag: -19, x: 50, y: 50, dir: HUNTER_COAST_SENTINEL };
+    let flipTick = -1;
+    for (let i = 0; i < 20 && flipTick < 0; i++) {
+      if (stepHunterCoast(p3)) flipTick = i;
+    }
+    check(`the re-aim delay is exactly 12 ticks (0.8s @ 15Hz) — a FIXED constant, not cyclic`,
+      flipTick === (HUNTER_COAST_REAIM_AT - HUNTER_COAST_SENTINEL) / HUNTER_COAST_TICK - 1
+      && flipTick === 11,
+      `flipped on tick index ${flipTick}; the counter starts AT the sentinel and needs ` +
+      `(0x1b00-0xf00)/0x100 = 12 additions to reach 0x1b00, so the 12th call (index 11) flips`);
+    check(`the flip resets dir to 0 and negates tag positive — no motion applied on the flip tick`,
+      p3.tag === 19 && p3.dir === 0 && p3.x === 50 && p3.y === 50,
+      'CS:0x9E94 `[di+6]=0` / CS:0x9E99 `neg word[di]` — position untouched, ' +
+      'matching "search from next tick"');
+
+    /* End to end through stepHunterArray: a freshly spawned (negative-tag)
+     * hunter shot coasts, is drawn/stamped WHILE coasting (the shared tail),
+     * then — once decayed and the delay elapses — flips and starts homing. */
+    {
+      const grid2 = new DamageGrid();
+      const huntWeapon2 = { breaksTerrain: false, drawStyle: 0 };
+      const spawned = spawnHunterVolley({ count: 1, base: 1 }, 11, 19, 160, 96).entries[0];
+      const area = [spawned];
+      const targets = [{ x: 160, y: 96, key: 5 }];
+      let sawCoastStamp = false, tickOfFlip = -1;
+      for (let i = 0; i < 60 && tickOfFlip < 0; i++) {
+        const r = stepHunterArray(area, { count: 1, base: 1 }, targets, { x: 0, y: 0 },
+          { grid: grid2, weapon: huntWeapon2, planeB: null, debris: null });
+        if (r.coasting > 0 && r.stamped > 0) sawCoastStamp = true;
+        if (r.reAimed > 0) tickOfFlip = i;
+      }
+      check(`a coasting hunter shot is drawn/stamped through the SAME shared tail as a homing one`,
+        sawCoastStamp,
+        'CS:0x9EEC/0x9EF4 both fall through to 0x9fa3, the cull+stamp code the ' +
+        'search+steer arm also uses — a coasting shot is not invisible');
+      check(`the shot eventually flips to homing and stepHunterArray reports it via reAimed`,
+        tickOfFlip >= 0 && area[0].tag > 0,
+        `flipped at outer tick ${tickOfFlip}, final tag=${area[0].tag}`);
+    }
   }
 
   /* ── mover 5: the magic axe bounces ───────────────────────────────────── */

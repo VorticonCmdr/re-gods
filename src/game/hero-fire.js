@@ -60,9 +60,9 @@
 
 import { WEAPON_SLOTS, MAX_SUBSLOTS, tagFor, allocateShots, armWeapon,
          reloadWorld } from './weapons.js';
-import { spawnVolley, spawnAxeVolley, stepProjectiles, stepHunterArray,
-         stepMagicAxe, axeWallAt, newAxeState, DECODED_HANDLERS,
-         NULL_HANDLERS, AREA_ENTRIES, ENTRIES_REACHABLE, GROUP_ENTRIES,
+import { spawnVolley, spawnAxeVolley, spawnHunterVolley, stepProjectiles,
+         stepHunterArray, stepMagicAxe, axeWallAt, newAxeState,
+         DECODED_HANDLERS, NULL_HANDLERS, AREA_ENTRIES, ENTRIES_REACHABLE, GROUP_ENTRIES,
          muzzle } from './projectiles.js';
 
 /** CS:0x9130/0x9137/0x913E all compare a slot word against 8 — the hunter.
@@ -173,6 +173,8 @@ export class Arsenal {
      * equipped (frame.js only populates it then). */
     this.targets = [];
     this.noTarget = 0;               // CS:0xA00D — shots that found nothing
+    this.coasting = 0;                // CS:0x9E9E — hunter shots in ballistic-launch
+    this.reAimed = 0;                 // CS:0x9E99 — hunter shots that flipped to homing this tick
   }
 
   /** CS:0x9115 — a NEW pickup re-bases the count, so the volley drops to one. */
@@ -236,8 +238,11 @@ export class Arsenal {
       const m = muzzle({ x: heroX, y: heroY }, right,
                        { slot: a.slot, sel: this.altSelect, alt: null });
       const isAxe = handler === 14 || handler === 15;
+      const isHunter = handler === 10 || handler === 11;
       const { entries, states, facing } = isAxe
         ? spawnAxeVolley(s.st, handler, a.tag, m.x, m.y)
+        : isHunter
+        ? spawnHunterVolley(s.st, handler, a.tag, m.x, m.y)
         : spawnVolley(s.st, handler, a.tag, m.x, m.y);
       /* CS:0x98EA (right handlers) / CS:0x9935 (left) — the spawn handler
        * ITSELF writes weapon +0x0e every time it fires, which is what lets
@@ -283,6 +288,8 @@ export class Arsenal {
         moved += r.moved;
         this.stamped += r.stamped;
         this.noTarget += r.noTarget;
+        this.coasting += r.coasting;
+        this.reAimed += r.reAimed;
         continue;
       }
       if (s.weapon === MAGIC_AXE_WEAPON) {

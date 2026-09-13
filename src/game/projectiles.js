@@ -205,6 +205,31 @@ export function spawnVolley(st, handler, tag, x, y) {
 }
 
 /**
+ * CS:0x9A82 (right) / CS:0x9ACA (left) — the hunter's OWN spawn, distinct
+ * from `spawnVolley` in exactly one respect: the tag is written NEGATIVE
+ * from birth (`neg dx` then `dec dx` per entry, CS:0x9A84/0x9A8E/0x9AA3/
+ * 0x9AB6 etc.), which is what routes a fresh shot into the ballistic-
+ * launch/coast phase (`stepHunterCoast`, below) on its very first tick
+ * instead of the search+steer path — `CS:0x9EFA`'s own dispatch reads a
+ * negative tag as "not yet homing". Everything else (muzzle, dirs table,
+ * volley count) is identical to `spawnVolley`.
+ * @returns {{entries:Array, facing:number}}
+ */
+export function spawnHunterVolley(st, handler, tag, x, y) {
+  const h = HANDLERS[handler];
+  if (!h || (handler !== 10 && handler !== 11)) {
+    throw new Error(`spawnHunterVolley called with non-hunter handler ${handler}`);
+  }
+  const px = (x + h.dx) & 0xffff;
+  const py = (y + h.dy) & 0xffff;
+  const entries = [];
+  for (let i = 0; i < volleySize(st); i++) {
+    entries.push({ tag: -((tag + i) & 0xffff), x: px, y: py, dir: h.dirs[i] });
+  }
+  return { entries, facing: h.facing };
+}
+
+/**
  * CS:0x9b15 (right) / CS:0x9bc1 (left) — the magic axe's own spawn, which
  * ALSO seeds a `{vx, vy, life}` state record per entry (see `stepMagicAxe`).
  * `vy` is read from the LIVE `PROJECTILE_VELOCITY` table (the weapon-arc
@@ -696,9 +721,10 @@ export function stepFireball(area, cam, wobble, opts = {}) {
  * The turn rate is another use of the pickup count:
  *   9F12  dx = [si+8] - [si+6] - 2      ; extras - 2
  *   9F1B  clamp to [1, 2]
- * so a more-upgraded hunter turns faster. UNKNOWN_hunter_turn — the steering
- * arithmetic past CS:0x9f5b is not read, so this port models the target
- * selection and the packed-velocity decode but not the turn itself.
+ * so a more-upgraded hunter turns faster. ⚠️ CORRECTION: `UNKNOWN_hunter_turn`
+ * is CLOSED (see the steering section further down this file) — the steering
+ * arithmetic past CS:0x9f5b IS ported, as `hunterSteerAxis`/`stepHunter`/
+ * `stepHunterArray`, not just the target selection and velocity decode.
  */
 export const TARGET_LIST_DS = 0x8c52;
 export const TARGET_LIST_START = 0x8c54;
@@ -1033,22 +1059,66 @@ export function stepTimeBomb(p, state, cam, wallAt) {
  * TRANSIENT, "ballistic launch" phase — the 3-shot fan flies its initial
  * spread and decays before homing takes over.
  *
- * ⚠️ `UNKNOWN_hunter_ballistic_launch` — NOT PORTED, DELIBERATELY. `0x9E74`
- * onward (reached when the dispatch's OTHER branch, `cmp cx,0xf00 / jge`,
- * finds the packed dir word already at-or-past the sentinel) layers a
- * cyclic re-aim/cooldown counter on top of this that was not fully traced
- * with confidence — a `dl`-cycling threshold computed from `(dl+2)&3`
- * shifted and XCHG'd into a comparison against the incrementing `[di+6]`
- * high byte, whose exact intent is not established. Rather than port a
- * mechanism this project does not yet trust its own reading of, this port's
- * hunter SKIPS the ballistic launch and drag-decay phase entirely and
- * begins homing from the muzzle on tick 1: it uses the ordinary
- * `spawnVolley()` path (positive, incrementing tag, like every other
- * weapon) rather than the original spawn handler's `neg`/`dec` sequence.
- * The gameplay difference is a missing few-tick "spread then converge"
- * flourish at the muzzle; homing itself, the target search (with the
- * max-key correction above) and the stamp are otherwise faithful.
+ * ── `UNKNOWN_hunter_ballistic_launch` — CLOSED, and now PORTED ────────────
+ *
+ * The re-aim/cooldown counter this file previously distrusted its own
+ * reading of turned out to be a FIXED delay, not a cyclic one — CLAUDE.md's
+ * own later `UNKNOWN_hunter_coast_reaim` closure traces it to the byte: the
+ * `dl`-cycling input is a hardcoded literal 9 at this mover's own dispatch
+ * entry (`CS:0x9EF7 mov cx,0x9`), never anything else, so `(dl+2)&3` always
+ * evaluates to the same constant and the "cycling" framing was an artefact
+ * of reading a general-purpose delay helper's shape without noticing its one
+ * caller never varies the input. Fresh `disassemble_bytes` reads of
+ * `CS:0x9E74`-`0x9E9B` (the counter/flip) and `CS:0x9E9E`-`0x9EF4` (the
+ * decay) this pass confirm the exact sequence, byte for byte:
+ *
+ *   9E9E  ax=[di+2] bx=[di+4] cx=[di+6]        ; position, packed velocity
+ *   9EA8  cmp cx,0xf00 / jge 0x9e74             ; AT the sentinel -> the counter (below)
+ *   9EAE..9EBB  unpack cx=vx (HIGH), dx=vy (LOW), sign-extended
+ *   9EBE  ax += cx  ; 9EC0  bx += dx            ; move FIRST, using PRE-decay velocity
+ *   9EC2-9EDA  cl = decay(vx) ; dl = decay(vy)  ; toward 0 by 1, per axis (drag)
+ *   9EDC  [di+2]=ax [di+4]=bx [di+7]=cl [di+6]=dl   ; write back position + decayed vel
+ *   9EE8  cl|dl == 0 ? [di+6] := 0xf00 : (fall through, still coasting)   ; the sentinel
+ *
+ *   9E74  cx += 0x100 ; [di+6] = cx             ; the re-aim counter, +0x100/tick
+ *   9E8D  cmp cx,0x1b00 / jge 0x9e94            ; 12 ticks past the sentinel (0.8s @ 15Hz)
+ *   9E94  [di+6] = 0 ; neg word[di]             ; REACHED -> dir reset to 0, tag flips
+ *
+ * Both the decay branch and the flip branch fall through to the SAME tail
+ * (`0x9fa3`, the cull+stamp code) as the ordinary steer path — a coasting
+ * hunter shot is drawn and stamps the damage grid exactly like a homing one,
+ * it just isn't steered yet. `stepHunterArray` below now dispatches on the
+ * tag's sign every tick, matching the original's own `CS:0x9EFA` gate.
  */
+export const HUNTER_COAST_SENTINEL = 0xf00;         // CS:0x9EEF/0x9EA8
+export const HUNTER_COAST_TICK = 0x100;             // CS:0x9E74 `add cx,0x100`
+export const HUNTER_COAST_REAIM_AT = 0x1b00;        // CS:0x9E8D — 12 ticks past the sentinel
+const signed16 = (v) => (v << 16) >> 16;
+const decayToZero = (v) => (v > 0 ? v - 1 : v < 0 ? v + 1 : 0);   // CS:0x9EC2-0x9EDA
+
+/**
+ * One tick of the hunter's ballistic-launch/coast phase (`p.tag < 0`).
+ * @returns {boolean} true the ONE tick the tag flips positive — no motion or
+ *   drag applies on that same tick (CS:0x9E94's own "search from next tick").
+ */
+export function stepHunterCoast(p) {
+  const dir = signed16(p.dir);
+  if (dir >= HUNTER_COAST_SENTINEL) {                       // CS:0x9EA8
+    const next = dir + HUNTER_COAST_TICK;                    // CS:0x9E74
+    if (next < HUNTER_COAST_REAIM_AT) { p.dir = next & 0xffff; return false; }   // CS:0x9E8D
+    p.dir = 0;                                                // CS:0x9E94
+    p.tag = -p.tag;                                           // CS:0x9E99
+    return true;
+  }
+  const vel = unpackHunterVel(p.dir);
+  p.x = (p.x + vel.vx) | 0;                                   // CS:0x9EBE
+  p.y = (p.y + vel.vy) | 0;                                   // CS:0x9EC0
+  const vx = decayToZero(vel.vx), vy = decayToZero(vel.vy);
+  p.dir = (vx === 0 && vy === 0)
+    ? HUNTER_COAST_SENTINEL                                    // CS:0x9EEF
+    : (((vx & 0xff) << 8) | (vy & 0xff)) & 0xffff;              // CS:0x9EE2/0x9EE5
+  return false;
+}
 export const HUNTER_VEL_CLAMP = 6;        // CS:0x9f6a / 0x9f74
 export const HUNTER_TARGET_BIAS = 6;      // CS:0x9f55 / 0x9f5b
 export const HUNTER_CULL = { xMin: -16, yMin: -16, xMax: 320, yMax: 192 };
@@ -1102,8 +1172,12 @@ export function stepHunter(p, target, rate) {
 export const HUNTER_NO_TARGET_AT = 0xa00d;
 
 /**
- * CS:0x9EF7's outer walk, simplified per the note above (search+steer every
- * live tick — no ballistic launch/coast phase).
+ * CS:0x9EF7's outer walk. Dispatches on the tag's sign exactly like
+ * `CS:0x9EFA`: negative -> `stepHunterCoast` (the ballistic-launch/coast
+ * phase, above); positive -> the ordinary search+steer. BOTH arms fall
+ * through to the SAME cull+stamp tail (`0x9fa3` in the original), since a
+ * coasting shot is still drawn and still stamps the damage grid — it just
+ * hasn't started homing yet.
  *
  * @param {Array} area     the 9-slot projectile area (this weapon's own)
  * @param {{count:number, base:number}} st  for the turn rate
@@ -1113,11 +1187,40 @@ export const HUNTER_NO_TARGET_AT = 0xa00d;
  */
 export function stepHunterArray(area, st, targets, cam, opts = {}) {
   const { grid = null, weapon = null, planeB = null, debris = null } = opts;
-  let moved = 0, stamped = 0, noTarget = 0;
+  let moved = 0, stamped = 0, noTarget = 0, coasting = 0, reAimed = 0;
   const rate = hunterTurnRate(st);
+  /* CS:0x9FA3 onward — the cull+stamp tail, shared by the coast and the
+   * search+steer arms alike. CS:0x9FC8's own tag-sign-normalise dance
+   * (negate, stamp, negate back) is why `Math.abs(p.tag)` is what reaches
+   * the grid: the SIGN stays whatever `stepHunterCoast`/the dispatch above
+   * just left it at, only the MAGNITUDE (the real 1..27 weapon-slot tag)
+   * is ever meaningful to the shared damage grid. */
+  const cullAndStamp = (p) => {
+    const sx = p.x - cam.x, sy = p.y - cam.y;
+    if (sx <= HUNTER_CULL.xMin || sy <= HUNTER_CULL.yMin
+        || sx >= HUNTER_CULL.xMax || sy >= HUNTER_CULL.yMax) return;  // CS:0x9FB3-9FC6 — skip, NOT despawn
+    if (!grid || !weapon) return;
+    const style = DRAW_STYLES[weapon.drawStyle];
+    if (!style) return;
+    if (style.stamp === 'terrain2x2' && weapon.breaksTerrain && planeB) {
+      const wx = (p.x + 8) & ~0x1f, wy = (p.y + 8) & ~0xf;
+      if (planeB[(wy >> 4) * 128 + (wx >> 5)] === 1) { p.tag = 0; return; }
+    }
+    const sy2 = style.at === 0x9d19 ? sy - 0x10 : sy;
+    const tag = Math.abs(p.tag);                        // CS:0x9FC8's neg/stamp/neg-back
+    const ok = style.stamp === '3x3'
+      ? grid.stamp3x3(sx, sy2, tag)
+      : grid.stamp2x2(sx, sy2, tag);
+    if (ok) stamped++;
+  };
   for (let i = 0; i < MOVER_WALK; i++) {
     const p = area[i];
     if (!p || p.tag === 0) continue;                    // CS:0x9EFA
+    if (p.tag < 0) {                                      // CS:0x9EFA `js 0x9e9e`
+      if (stepHunterCoast(p)) reAimed++; else coasting++;
+      cullAndStamp(p);
+      continue;
+    }
     const target = pickTarget(targets);
     if (!target) {                                       // CS:0x9F0A -> 0xA00D
       if (debris) {
@@ -1130,21 +1233,7 @@ export function stepHunterArray(area, st, targets, cam, opts = {}) {
     }
     stepHunter(p, target, rate);                          // CS:0x9F12-0x9FA0
     moved++;
-    const sx = p.x - cam.x, sy = p.y - cam.y;
-    if (sx <= HUNTER_CULL.xMin || sy <= HUNTER_CULL.yMin
-        || sx >= HUNTER_CULL.xMax || sy >= HUNTER_CULL.yMax) continue;  // CS:0x9FB3-9FC6 — skip stamp+draw, NOT despawn
-    if (!grid || !weapon) continue;
-    const style = DRAW_STYLES[weapon.drawStyle];
-    if (!style) continue;
-    if (style.stamp === 'terrain2x2' && weapon.breaksTerrain && planeB) {
-      const wx = (p.x + 8) & ~0x1f, wy = (p.y + 8) & ~0xf;
-      if (planeB[(wy >> 4) * 128 + (wx >> 5)] === 1) { p.tag = 0; continue; }
-    }
-    const sy2 = style.at === 0x9d19 ? sy - 0x10 : sy;
-    const ok = style.stamp === '3x3'
-      ? grid.stamp3x3(sx, sy2, p.tag)
-      : grid.stamp2x2(sx, sy2, p.tag);
-    if (ok) stamped++;
+    cullAndStamp(p);
   }
-  return { moved, stamped, noTarget };
+  return { moved, stamped, noTarget, coasting, reAimed };
 }
