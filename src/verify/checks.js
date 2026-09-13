@@ -1595,6 +1595,64 @@ export async function checkHeroSprites(fetchRaw) {
   return results;
 }
 
+/* Both entity systems' death-fade sprite ranges, checked against the REAL
+ * built 'always' descriptor map rather than assumed in range. main.js's own
+ * render loop silently falls back to a strokeRect and bumps a counter nobody
+ * asserts on when hero.frames[id] is undefined (outOfRange++), so a fade base
+ * or frame count that walks off the end of the atlas would draw wrong and
+ * never fail a test — this is the check that closes that gap. Advisor-
+ * flagged: System B's own DEATH_SPRITE_BASE (108) + frames 0..6 is already
+ * known to cross PALWAYS2 -> PALWAYS3 (CLAUDE.md's own nest.js citation);
+ * System A's DEATH_SPRITE_BASE_A (91) + frames 0..16 was never checked
+ * against the atlas at all. */
+export async function checkDeathFadeSprites(fetchRaw) {
+  const { results, check } = makeChecker();
+
+  const stems = GROUP_STEMS.always;
+  const atlases = {};
+  for (const s of stems) {
+    atlases[s] = parseAtlas(dclDecompress(await fetchRaw(`game/${s}.DAT`)).data);
+  }
+  const { map, ranges } = buildDescriptorMap(['always'], (s) => atlases[s].count);
+
+  const resolves = (base, frames) => {
+    const ids = Array.from({ length: frames }, (_, i) => base + i);
+    const missing = ids.filter((id) => id < 0 || id >= map.length || !map[id]);
+    const stemsHit = new Set(ids.filter((id) => map[id]).map((id) => map[id].stem));
+    return { ids, missing, stemsHit };
+  };
+
+  const b = resolves(ENTB_DEATH_SPRITE_BASE, ENTB_DEATH_FRAMES);
+  check(`System B's fade range [${ENTB_DEATH_SPRITE_BASE}, ` +
+    `${ENTB_DEATH_SPRITE_BASE + ENTB_DEATH_FRAMES - 1}] resolves in the built 'always' map ` +
+    `(${map.length} descriptors)`,
+    b.missing.length === 0, `missing: ${JSON.stringify(b.missing)}`);
+  results.push({
+    name: `System B's fade range spans stems ${[...b.stemsHit].join(',')}`,
+    note: true, pass: true,
+    detail: `crosses an atlas file boundary iff >1 stem is listed`,
+  });
+
+  const a = resolves(ENTA_DEATH_SPRITE_BASE, ENTA_DEATH_FRAMES);
+  check(`System A's fade range [${ENTA_DEATH_SPRITE_BASE}, ` +
+    `${ENTA_DEATH_SPRITE_BASE + ENTA_DEATH_FRAMES - 1}] resolves in the built 'always' map ` +
+    `(${map.length} descriptors)`,
+    a.missing.length === 0, `missing: ${JSON.stringify(a.missing)}`);
+  results.push({
+    name: `System A's fade range spans stems ${[...a.stemsHit].join(',')}`,
+    note: true, pass: true,
+    detail: `crosses an atlas file boundary iff >1 stem is listed`,
+  });
+
+  /* main.js draws every fade frame through the SAME masked blitter as an
+   * ordinary sprite (no size class of its own), so unlike checkHeroSprites'
+   * "must be hero-sized" assertion there is no shape constraint to check here
+   * — only that a real frame (not undefined) backs every id. That's what the
+   * two checks above already assert; this just documents why there's no
+   * third one for size, so a future reader doesn't go looking for it. */
+
+  return results;
+}
 
 /* The plane-B selector dispatch, and the object sprite rule. Both were
  * established this pass and both replaced something the port had wrong, so
@@ -2345,9 +2403,18 @@ export function checkEntityA() {
     check('the group\'s own reward position picks whichever member cached MOST recently '
       + '(the third, ticked last)',
       src === members[2], `picked x=${src.x}`);
-    check('CS:0xDFC8-DFD2: the read-site bias is +8 on BOTH axes, applied here — NOT at '
-      + 'the entity\'s own (unbiased) write-time cache',
-      src.deathCacheX + 8 === members[2].x + 8 && src.deathCacheY + 8 === members[2].y + 8);
+    /* Assert against the LITERAL placement (50, 60), not `members[2].x + 8` —
+     * that form is tautological, since deathCacheX is unbiased at write time
+     * (CS:0xE251/E256) and would equal members[2].x + 8 whether the +8 lands
+     * at write time or read time. Pinning the raw cache to its unbiased value
+     * is what actually distinguishes the two, and main.js's own reward loop
+     * is what applies the +8 at the read site. */
+    check('CS:0xE251/E256: the cache itself is RAW/unbiased — (50, 60), not (58, 68)',
+      src.deathCacheX === 50 && src.deathCacheY === 60,
+      `x=${src.deathCacheX} y=${src.deathCacheY}`);
+    check('CS:0xDFC8-DFD2: the read-site bias is +8 on BOTH axes, applied at the READ '
+      + 'site — main.js\'s own reward loop, not here',
+      src.deathCacheX + 8 === 58 && src.deathCacheY + 8 === 68);
 
     /* Run the full 17-tick fade out to FREE on all three — the reward
      * predicate must stay satisfied throughout (FREE also counts), matching

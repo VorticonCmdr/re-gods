@@ -165,6 +165,13 @@ for (const r of await checkHeroSprites(fetchRaw)) {
   console.log(line(r));
 }
 
+console.log('\n  death-fade sprite ranges (both entity systems, against the real atlas):');
+const { checkDeathFadeSprites } = await import('../src/verify/checks.js');
+for (const r of await checkDeathFadeSprites(fetchRaw)) {
+  if (!r.pass && !r.note) bad++;
+  console.log(line(r));
+}
+
 console.log('\n  plane-B selectors and object sprites:');
 const { checkSelectorsAndObjects } = await import('../src/verify/checks.js');
 for (const r of await checkSelectorsAndObjects(fetchRaw)) {

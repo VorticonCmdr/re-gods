@@ -848,12 +848,33 @@ export class EntityA {
      * comparison at all (⚠️ CORRECTS an earlier revision of CLAUDE.md's own
      * UNKNOWN_sysA_dormant_respawn section, which read this branch as
      * "state <= -4" — the actual bytes are `cmp -2/jz` then `cmp -3/jz` then
-     * a bare `jmp`, matching ANY other value, -1 included). Since WAITING/
-     * MATERIALISING are already handled above and this port never produces
-     * the original's separate dormant/reawaken -2/-3 (a genuinely different,
-     * unported mechanism that happens to reuse the same two state VALUES —
-     * see CLAUDE.md), every negative state that reaches here is DYING. */
-    if (this.state < 0) {
+     * a bare `jmp`, matching ANY other value, -1 included).
+     *
+     * ⚠️ In the ORIGINAL, that unconditional jmp is reached by literally any
+     * non -2/-3 negative, because -2/-3 there mean dormant/reawaken (a live
+     * entity parked mid-life) — a DIFFERENT mechanism this port never
+     * produces (see CLAUDE.md's own disclosure). In THIS port, -2/-3 are
+     * instead WAITING/MATERIALISING (pre-life, handled above) — a genuine
+     * value collision between the two unrelated mechanisms.
+     *
+     * Checked whether combat.js can actually hand this branch anything other
+     * than -1: it can't. Both combat paths FORCE the state to exactly -1 on
+     * any kill — combat.js:461 (`if (killed) entity.state = -1;`) for the
+     * weapon-vs-creature grid scan, and attackHero's own `strengthOut`
+     * (either the unchanged input or a forced -1) for hero-contact — which
+     * mirrors CS:0xABA7 `mov bp,0xffff`, itself reached from BOTH the `js`
+     * and `jz` arms of the original's own <=0 test (CLAUDE.md's own
+     * "The death path forces BP negative" — [PROVEN]). So no live path here
+     * ever produces -2/-3 for an already-alive entity; the WAITING/
+     * MATERIALISING checks above would intercept them first regardless.
+     *
+     * Still test EST.DYING by exact equality rather than `state < 0`: it
+     * matches entity.js's own convention and isDyingA above, and it keeps
+     * this branch honest (falling through to the FREE/DYING catch-all below,
+     * not the pre-life FSM) if combat.js's forcing is ever relaxed —
+     * defense-in-depth against a value collision, not a fix for a reachable
+     * bug. */
+    if (this.state === EST.DYING) {
       if (this.frame === -1) {                              // CS:0xE24F `jns`
         this.deathCacheX = this.x;                            // CS:0xE251 — NO bias
         this.deathCacheY = this.y;                             // CS:0xE256 — NO bias
@@ -872,7 +893,7 @@ export class EntityA {
       }
       return null;
     }
-    if (this.state === EST.FREE) return null;
+    if (this.state <= 0) return null;
 
     /* Stage 0 preamble, CS:0xe006-0xe00f: decrement, floor at 1. */
     if (--this.stepCap < 1) this.stepCap = 1;
