@@ -106,7 +106,7 @@ import { SelectorTwoSpawns, parseClasses as parseSelectorTwoClasses,
          culled as selectorTwoCulled, scoreForState0, stepHandlerB as selectorTwoHandlerB,
          stepHandlerB03C as selectorTwoHandlerB03C,
          DEATH_FRAMES as SEL2_DEATH_FRAMES,
-         DEATH_SPRITE_BASE as SEL2_DEATH_SPRITE_BASE } from '../game/selector2.js';
+         DEATH_SPRITE_BASE as SEL2_DEATH_SPRITE_BASE, stepPace32x32 } from '../game/selector2.js';
 import { RockSettlePool, RockBurstPool } from '../game/rockfall.js';
 import { HERO_SHOTS_AT, ENEMY_SHOTS_AT } from '../game/frame.js';
 import { Nests, aimAt, broodCount, signed16,
@@ -9524,6 +9524,149 @@ export function checkSelectorTwo() {
      * analogy with CS:0xB144's differently-shaped gate). */
     check('CS:0xB73D-B741: tock!==0 DOES advance, and the SAME tick draws the post-advance frame',
       e3.frame === 1 && r3b.drawn[0].sprite === 463, JSON.stringify(r3b.drawn));
+  }
+
+  /* (f3) `stepPace32x32` — CS:0xB744-B7EB, the pace-and-turn mechanism an
+   * advisor review found missing from the 32x32 shared body (the file
+   * header's own correction, and `handlerA_32x32`'s). Direct unit tests
+   * against the exported function first, so a failure here points straight
+   * at the mechanism rather than at pool wiring; a short integration check
+   * through the real pool (via `opts.planeB`) follows to confirm the wiring
+   * itself. All probes use `entity.y = 0` so `cellIndexXY`'s own row term is
+   * zero and the column arithmetic stays legible. */
+  {
+    const mkPlaneB = () => new Uint8Array(600);   // covers every offset used below with room to spare
+    /* The same `((x&0xFFE0)>>5) + ((y&0xFFF0)>>4)*128` formula `stepPace32x32`'s
+     * own (unexported) `cellIndexXY` uses — reproduced here, not imported, so
+     * this test independently re-derives the expected offset rather than
+     * trivially agreeing with whatever the implementation already computes. */
+    const cellIndexXYForTest = (x, y) => ((x & 0xffe0) >> 5) + ((y & 0xfff0) >> 4) * 128;
+
+    // tock===0: the shared CS:0xB736/B73B gate — no movement, no facing change, at all.
+    {
+      const e = { x: 36, y: 0, facing: 0 };
+      stepPace32x32(e, 0, mkPlaneB());
+      check('CS:0xB736/B73B: tock===0 moves nothing and flips nothing',
+        e.x === 36 && e.facing === 0, JSON.stringify(e));
+    }
+
+    // No planeB at all: X still commits unconditionally; the probe is skipped, not thrown.
+    {
+      const e = { x: 36, y: 0, facing: 0 };
+      stepPace32x32(e, 1, undefined);
+      check('no planeB: X still commits (CS:0xB74A is unconditional) and nothing throws',
+        e.x === 32 && e.facing === 0, JSON.stringify(e));
+    }
+
+    // Misaligned newX: the probe is gated on (newX & 0x1f) === 0 (CS:0xB74F/B778) — skip it
+    // even with a wall sitting right there, but STILL commit the unconditional X step.
+    {
+      const e = { x: 20, y: 0, facing: 0 };           // newX = 16, 16 & 0x1f = 16 != 0
+      const planeB = mkPlaneB();
+      planeB[cellIndexXYForTest(16, 0) - 1] = 1;        // a "wall" that must NOT be seen this tick
+      stepPace32x32(e, 1, planeB);
+      check('CS:0xB74F/B778: misaligned newX skips the probe entirely, but X still commits',
+        e.x === 16 && e.facing === 0, JSON.stringify(e));
+    }
+
+    // Aligned, LEFT-facing, wall at row0 (CS:0xB757/B75B) -> flip.
+    {
+      const e = { x: 36, y: 0, facing: 0 };            // newX = 32, aligned
+      const planeB = mkPlaneB();
+      const si = cellIndexXYForTest(32, 0) - 1;          // CS:0xB757 [SI-1], one column left
+      planeB[si] = 1;
+      stepPace32x32(e, 1, planeB);
+      check('CS:0xB757/B75B: row0 solid ahead flips a left-facing entity',
+        e.x === 32 && e.facing === 1, JSON.stringify(e));
+    }
+
+    // Aligned, LEFT-facing, wall at row1 only (CS:0xB75D/B761) -> flip.
+    {
+      const e = { x: 36, y: 0, facing: 0 };
+      const planeB = mkPlaneB();
+      const si = cellIndexXYForTest(32, 0) - 1;
+      planeB[si + 0x80] = 1;                             // CS:0xB75D [SI+0x7f] -> one row down from SI-1
+      stepPace32x32(e, 1, planeB);
+      check('CS:0xB75D/B761: row1 solid ahead ALSO flips (not just row0)',
+        e.facing === 1, JSON.stringify(e));
+    }
+
+    // Aligned, LEFT-facing, open ledge at row2 (rows 0/1 clear, row2 NOT solid) -> flip.
+    // CS:0xB763/B768 inverts polarity for this one row: NOT solid triggers the flip.
+    {
+      const e = { x: 36, y: 0, facing: 0 };
+      const planeB = mkPlaneB();                          // all zero -> row2 already "not solid"
+      stepPace32x32(e, 1, planeB);
+      check('CS:0xB763/B768: an open ledge at row2 (not row0/row1 walls) ALSO flips',
+        e.facing === 1, JSON.stringify(e));
+    }
+
+    // Aligned, LEFT-facing, clear path AND solid ground ahead (row2 solid, rows0/1 clear)
+    // -> the one case that does NOT flip.
+    {
+      const e = { x: 36, y: 0, facing: 0 };
+      const planeB = mkPlaneB();
+      const si = cellIndexXYForTest(32, 0) - 1;
+      planeB[si + 0x100] = 1;                             // CS:0xB763 [SI+0xff] solid -> no flip
+      stepPace32x32(e, 1, planeB);
+      check('CS:0xB757-B768: clear wall/ceiling + solid ground ahead does NOT flip',
+        e.x === 32 && e.facing === 0, JSON.stringify(e));
+    }
+
+    // The RIGHT-facing mirror uses [SI+1]/[SI+0x81]/[SI+0x101] (CS:0xB780-B78D), not the
+    // LEFT block's own -1/+0x7f/+0xff — this is the exact off-by-one this pass corrected
+    // once already while writing the port; pin it so it cannot silently regress.
+    {
+      const e = { x: 28, y: 0, facing: 1 };              // newX = 32, aligned
+      const planeB = mkPlaneB();
+      const si = cellIndexXYForTest(32, 0) + 1;            // CS:0xB780 [SI+1], one column right
+      planeB[si] = 1;
+      stepPace32x32(e, 1, planeB);
+      check('CS:0xB780/B784: right-facing wall probe uses column+1, row0 solid flips',
+        e.x === 32 && e.facing === 0, JSON.stringify(e));
+    }
+    {
+      const e = { x: 28, y: 0, facing: 1 };
+      const planeB = mkPlaneB();
+      const si = cellIndexXYForTest(32, 0) + 1;
+      planeB[si + 0x100] = 1;                              // solid ground ahead -> no flip
+      stepPace32x32(e, 1, planeB);
+      check('CS:0xB78D/B792: right-facing solid ground ahead (row2) does NOT flip',
+        e.x === 32 && e.facing === 1, JSON.stringify(e));
+    }
+
+    // Integration: the real pool, through `opts.planeB`, on a genuine 32x32 class
+    // (world1 idx0, per (f2) above). Confirms #stepAlive actually wires tock/planeB
+    // through to stepPace32x32 rather than only the direct unit tests above.
+    {
+      const grid = new DamageGrid();
+      const health = new Health();
+      const farHero = { x: 100000, y: 100000, state: 0 };
+      const missDecode = () => { throw new Error('must not be called on an empty grid cell'); };
+      const cam = { x: 0, y: 0 };
+      const noop = () => {};
+
+      const pool = new SelectorTwoSpawns();
+      const desc = { index: 0, spawnX: 2000, spawnY: 0, entityFacing: 0, drawStyle: 0,
+        staggerStep: 0, entityCount: 1, entityState0: 99, classIndex: 0,
+        facingSelect: 0, reloadByte: 0, rewardItemId: 0xff, live: true };
+      pool.spawn(desc, 1);
+      pool.step(cam, farHero, 0, health, grid, missDecode, 0, noop, noop, {});   // materialise-only
+      const e = pool.slots[0].entities[0];
+      const planeB = mkPlaneB();
+      pool.step(cam, farHero, 0, health, grid, missDecode, 1, noop, noop, { planeB });
+      check('integration: opts.planeB reaches stepPace32x32 through #stepAlive (X moved)',
+        e.x === 1996, e.x);
+      check('integration: with no opts.planeB at all, X still moves (probe just never runs)',
+        (() => {
+          const pool2 = new SelectorTwoSpawns();
+          pool2.spawn({ ...desc }, 1);
+          pool2.step(cam, farHero, 0, health, grid, missDecode, 0, noop, noop, {});
+          const e2 = pool2.slots[0].entities[0];
+          pool2.step(cam, farHero, 0, health, grid, missDecode, 1, noop, noop, {});
+          return e2.x === 1996;
+        })());
+    }
   }
 
   /* (g) Full lifecycle through the real pool: materialise -> stagger ->

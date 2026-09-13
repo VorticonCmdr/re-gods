@@ -166,17 +166,25 @@
  *     `KILL_POPUP_ID`/`KILL_SCORE` constants carry the identical note). The
  *     MECHANISM (which item type would drop, and when) is fully modelled —
  *     see `rewards` below — for a future pass to wire into rendering.
- *   - The 32x32 shared body's own wall-avoidance/hero-visibility FACING
- *     FLIP (`CS:0xB744-B7FE`: probe plane-B at the entity's own wall side,
- *     and separately at the hero's own tile column, flipping `facing` when
- *     either probe finds open space). Both probes need a terrain/`map`
- *     object this system's `step()` does not currently receive (only
- *     camera/hero/health/damage-grid are threaded through) — `facing` is
- *     therefore modelled as fixed at whatever `entityFacing` the class
- *     descriptor seeds, never flipped at runtime. Confirmed by reading the
- *     ENTIRE shared body that no `[di+0]`/`[di+2]` (x/y) write exists
- *     anywhere in it — these are genuinely stationary, not roamers, so the
- *     gap is purely cosmetic (which way the sprite faces), not positional.
+ *   - ⚠️⚠️ CORRECTION, a later session — THE ENTITIES DO MOVE, and this bullet
+ *     was wrong about both the mechanism and the stakes. An advisor review
+ *     flagged this claim as SAMPLED: it names only `handlerA_b60e`/
+ *     `handlerA_b5e9` as read for x/y writes, never the 32x32 shared body —
+ *     the MAJORITY family across every world, including world 1's own
+ *     classIndex 2/3, spawned within a few hundred px of the world-1 hero
+ *     spawn point. A fresh `disassemble_bytes` of `CS:0xB725`-`0xB800`
+ *     settles it: "no `[di+0]`/`[di+2]` write anywhere in the shared body"
+ *     is technically true (the body itself never writes those fields) but
+ *     misses that its CALLER (`FUN_1000_ad88`, decompiled: `*puVar11 =
+ *     uVar5; puVar11[1] = uVar9;`) commits the body's own RETURN VALUE (AX)
+ *     into the entity's X field every tock!=0 tick, while Y is explicitly
+ *     restored from a value saved before the handler call — the same
+ *     "trust the summary, not the bytes" trap this file's own `facing*9`
+ *     fix (see `stepAnim8`'s header) already caught once in this exact
+ *     function. See `handlerA_32x32`'s own header for the full mechanism
+ *     (a 4px pace per tock tick, turning at walls/ledges) and what remains
+ *     unported (a second, `facingSelect`-gated hero-column flip whose exit
+ *     loop was not confidently resolved from the bytes).
  *   - The `RockBurstPool`'s own ground-probe-based landing and its
  *     recursive 3-piece SHATTER on landing (`CS:0xB38F`, table
  *     `DS:0xdf5c`, not read this pass) — see `rockfall.js`'s own header.
@@ -409,11 +417,74 @@ function handlerA_32x32(entity, slot) {
    * matters because `entity.facing` is `entityFacing` verbatim (sign-
    * extended from the class descriptor's own raw `+0x04` byte, `checks.js`'s
    * own (a)-section proves a 0xFF byte parses to `-1`) with no runtime
-   * normalisation — the wall/hero-visibility facing-flip that would XOR it
-   * back toward 0/1 in the original is deliberately NOT ported (see the file
-   * header). Writing the boolean form would be byte-exact only for classes
-   * whose descriptor `+0x04` happens to be exactly 0 or 1. */
+   * normalisation — `stepPace32x32`'s own `XOR facing,1` (the ported wall-
+   * flip) only ever produces 0/1, but a class whose seeded `entityFacing`
+   * itself starts outside {0,1} would render outside its own 18-slot range
+   * until the first flip corrects it, exactly matching the original's own
+   * uncorrected behaviour (nothing in `CS:0xB744`-`B7FE` normalises the
+   * seeded byte either). Writing the boolean form would be byte-exact only
+   * for classes whose descriptor `+0x04` happens to be exactly 0 or 1. */
   return slot.spriteBase + entity.frame + entity.facing * 9;
+}
+
+/** `((x & 0xFFE0) >> 5) + ((y & 0xFFF0) >> 4) * 128` — the same normalised
+ *  (no `0x5004` base) plane-B index every other module in this project uses;
+ *  see `entity.js`'s own `cellIndex`, not duplicated here as an import to
+ *  keep this module's own dependency list unchanged. */
+const cellIndexXY = (x, y) => ((x & 0xffe0) >> 5) + ((y & 0xfff0) >> 4) * 128;
+
+/**
+ * CS:0xB744-B7EB — the 32x32 shared body's own PACE-AND-TURN step, run once
+ * per tock!=0 tick (the SAME gate `stepAnim8` uses, `CS:0xB736/B73B`),
+ * BEFORE the sprite formula above. See `handlerA_32x32`'s own header for why
+ * this exists — an advisor-flagged correction to this file's own prior
+ * "these are genuinely stationary" claim.
+ *
+ * The step (`CS:0xB74A`-`B771` facing==0 / `CS:0xB773`-`B794` facing!=0) is
+ * UNCONDITIONAL: `entity.x` moves 4px in the current facing direction every
+ * qualifying tick, committed by the ORIGINAL's own caller regardless of
+ * whether the wall probe below even runs. Only the PROBE is gated, on
+ * `(newX & 0x1f) === 0` — i.e. one in every 8 steps, the tick the new X
+ * lands on a tile boundary.
+ *
+ * The probe (`CS:0xB757`-`B768` left / `CS:0xB780`-`B78D` right) is the
+ * IDENTICAL 3-cell, one-column-over shape this project already documents
+ * for the hero's own left-wall probe (`entity.js`'s header on
+ * `groundUnderCell`'s sibling, and `player.js`'s own `[si-1]/[si+0x7f]/
+ * [si+0xff]`): the column ONE TILE FURTHER in the facing direction, at the
+ * entity's own 3-row height. Flip (`XOR [di+0xa],1`, `CS:0xB76D`) when
+ * EITHER of the top two rows is solid, OR the bottom row is NOT solid (an
+ * open ledge ahead) — a combined wall-ahead / floor-ahead check, not a
+ * uniform "any solid blocks" rule.
+ *
+ * NOT PORTED: a second, `facingSelect`-gated flip toward the hero's own
+ * tile column (`CS:0xB7A9`-`B834`), reached only when the wall/ledge probe
+ * above does not already flip. Its own exit condition repeatedly decrements
+ * the entry-time SLOT pointer and compares it against a freshly computed
+ * plane-B pointer (`CS:0xB7C7`-`B7D0`, looped at `CS:0xB7E3`) — two operands
+ * in memory regions too far apart (`~0x5004+` vs `~0xaec0+`) to plausibly
+ * become equal by single-byte decrements in any bounded iteration count.
+ * Read fresh, twice, and still not confidently resolved — flagged rather
+ * than guessed. Omitting it means a `facingSelect` class paces and turns at
+ * walls/ledges correctly but never additionally turns to face the hero.
+ */
+export function stepPace32x32(entity, tock, planeB) {
+  if (tock === 0) return;                                         // CS:0xB736/B73B — the shared tock gate
+  const dir = entity.facing === 0 ? -1 : 1;                       // CS:0xB744 facing==0 -> LEFT
+  const newX = entity.x + dir * 4;                                // CS:0xB74A/B773 — always committed
+  if (planeB && (newX & 0x1f) === 0) {                            // CS:0xB74F/B778 — probe once per 8 steps
+    const base = cellIndexXY(newX, entity.y);
+    let flip;
+    if (dir < 0) {                                                // CS:0xB757-B768, LEFT: column base-1
+      const si = base - 1;
+      flip = planeB[si] === 1 || planeB[si + 0x80] === 1 || planeB[si + 0x100] !== 1;
+    } else {                                                       // CS:0xB780-B78D, RIGHT: column base+1
+      const si = base + 1;
+      flip = planeB[si] === 1 || planeB[si + 0x80] === 1 || planeB[si + 0x100] !== 1;
+    }
+    if (flip) entity.facing ^= 1;                                 // CS:0xB76D
+  }
+  entity.x = newX;                                                // committed unconditionally either way
 }
 
 /**
@@ -612,7 +683,10 @@ export class SelectorTwoSpawns {
    * hero.y+6, n)` directly (NOT `spawnJittered`/`spawnAtHero` — see
    * `stepHandlerB`'s own header for why neither pre-built helper matches
    * CS:0xDBC6's exact, unjittered target and already-computed muzzle).
-   * @param {{invuln?:boolean, score?:{add:(n:number)=>void}, debris?:object}} [opts]
+   * @param {{invuln?:boolean, score?:{add:(n:number)=>void}, debris?:object,
+   *   planeB?:Uint8Array}} [opts] `opts.planeB` feeds `stepPace32x32`'s own
+   *   wall/ledge probe (CS:0xB744-B7EB) — omit it and the 32x32 family still
+   *   paces (X always commits), it just never turns around.
    */
   step(cam, hero, freezeTimer, health, grid, decodeTag, tock, fire, spawnHazard, opts = {}) {
     const drawn = [];
@@ -693,6 +767,7 @@ export class SelectorTwoSpawns {
       sprite = handlerA_b5e9(e, tock);
     } else if (slot.handlerA === '32x32') {
       stepAnim8(e, tock);
+      stepPace32x32(e, tock, opts.planeB);          // CS:0xB744-B7EB — see the file header's correction
       sprite = handlerA_32x32(e, slot);
     } else if (slot.handlerA === 'b144') {
       const r = handlerA_b144(e, slot, tock);

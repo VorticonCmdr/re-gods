@@ -1005,7 +1005,7 @@ async function main() {
         health, grid, decodeTag, tock,
         (wx, wy, vx, cam) => shots.fire(wx, wy, vx, cam),
         (wx, wy, n, cam) => lineHazards.spawn(wx, wy, player.x + 8, player.y + 6, n),
-        { invuln: fx.invuln > 0, score, debris }).drawn;
+        { invuln: fx.invuln > 0, score, debris, planeB: level.map.planeB }).drawn;
 
       /* CS:0xB987 — the PGOD0x.PAT scripted objects (game/pat-objects.js).
        * Reuses the SAME `shots`/`lineHazards` pools every other emitter in
