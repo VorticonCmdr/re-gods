@@ -645,10 +645,12 @@ export function stepCarriedItem(entity, desc, rand) {
   // not the entity's own (x, y) — System A's icon visibly trails the entity
   // by up to half the remaining distance each tick, so a drop can land
   // noticeably behind where the entity currently stands. System B does the
-  // OPPOSITE: CS:0xEEBA recomputes the carried icon's screen position fresh
-  // every frame from a fixed per-class attach-point offset (a rigid attach,
-  // not an eased trail), so its own drop — unported, System B out of scope
-  // this pass — would use the entity's own current position instead.
+  // OPPOSITE on BOTH counts: CS:0xEEBA recomputes the carried icon's screen
+  // position fresh every frame from a fixed per-class attach-point offset (a
+  // rigid attach, not an eased trail) via carryOffsetB, AND its own drop
+  // uses a third, separate raw (entity.x+8, entity.y) point rather than that
+  // attach position — see entity.js's stepCarriedItemB and CLAUDE.md's own
+  // "Steal-and-carry, System B" section for the three-position breakdown.
   const x = entity.carriedX, y = entity.carriedY;
   entity.carriedType = -1;                               // [di+0x10] = 0xffff
   return { id, x, y };
@@ -1020,11 +1022,10 @@ export class EntityA {
      * [di+0x20]/[di+0x22]. Negative = carrying nothing, the same convention
      * `state`/`strategy` already use in this file. carriedX/Y are the
      * carried icon's OWN eased position (System A eases toward the entity;
-     * System B, unported, rigidly attaches instead — see CLAUDE.md's
-     * "steal-and-carry" section for the asymmetry). Scoped to System A only
-     * this pass — System B's own CS:0xEF01/EFA2/EE13-EEB9 mirror is a
-     * disclosed, separate gap (its own DS:0x3cd gate has no located writer
-     * in this port yet; see entity.js). */
+     * System B rigidly attaches instead via carryOffsetB, with no easing —
+     * see CLAUDE.md's "Steal-and-carry, System B" section and entity.js's
+     * own stealAttemptB/carryOffsetB/stepCarriedItemB for that mirror,
+     * ported in full). */
     this.carriedType = -1;
     this.carriedX = 0;
     this.carriedY = 0;
