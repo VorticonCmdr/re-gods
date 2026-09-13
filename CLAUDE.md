@@ -1784,6 +1784,57 @@ So `FUN_1000_3506`, the first time it runs, loads the **small-font sprite atlas*
 
 `ax = ([0x134] − 0x1e00) >> 3` converts an absolute value into a **sprite-descriptor index** — `0x1e00` is this document's own already-documented sprite-descriptor arena base (`DS:0x0e`, set to `0x1e00` at `CS:0x294b`; also the weapon sprite-index base `di = 0x1e00 + val*8`), and `>> 3` divides by the 8-byte descriptor stride. So `DS:0x134` most plausibly holds an absolute descriptor address (out of export 22's own return, or a scratch the loader leaves behind) and `DS:0x138` ends up holding the `smallfnt` group's own **base descriptor index** — needed by any caller that must turn a font character into a sprite id.
 
+### PSTATUS.PI1 / PSTAT3.PI1 — the in-game status panel, and the rest of `DS:0x38a`'s progression `[PROVEN]`
+
+Neither file appeared anywhere in this document before this pass — not in Table 1 Block B's own partial enumeration, not in the disk manifest listing, nowhere. Found by a clean-byte grep of `GAME.EXE` for ASCII `"stat"`: two logical names and their `P`-prefixed Table 2 entries.
+
+```
+1ffd:eab6  "status.pi1"     Table 2: "pstatus.pi1"   disk id 1        (the boot disk)
+1ffd:eb1b  "stat3.pi1"      Table 2: "pstat3.pi1"    disk ids 2, 3    (both world data disks)
+```
+
+Both decompress to a genuine 32034-byte DEGAS image (resolution word 0, a proper ST 3-bit palette) whose only non-blank content is rows 160–199 — the rest is uniformly colour 0. That is the exact 40-row HUD band this document's own `UNKNOWN_playfield_height` closure already proved live via a raw DOSBox framebuffer capture, corroborated here from the asset side.
+
+**`status.pi1` loads once, at boot**, `CS:0x2a01`, called from `FUN_1000_2882` (`CS:0x28E0`) — the same already-documented function that loads the `always` sprite atlas via export 22 as the very first thing `GAME.EXE`'s `entry` does. Its body:
+
+```
+2a01  mov dx,0xeab6                 ; "status.pi1"
+2a09  mov ax,0x351b / mov es,ax     ; ES:BX = the shared DCL staging buffer (SAME segment backscr.pi1 uses)
+2a0e  sub bx,bx
+2a10  call 0x1000:257e              ; the shared DCL loader — decompress the raw file
+2a13  call 0x1000:2a32              ; mov bp,0x52ca / jmp 2a2e -> graphics EXPORT 30 ("GC reset")
+2a16  push ds
+2a17  mov ax,0xac7a / mov es,ax     ; ES:DI = the CONVERTED destination — no other reference to
+2a1c  sub di,di                     ;   this segment exists anywhere else in the image
+2a1e  mov ax,0x351b / mov ds,ax
+2a23  mov si,0x6422                 ; 0x22 (2-byte res word + 32-byte palette) + 160*160
+2a26  call 0x1000:2a2b              ; mov bp,0x52ce / jmp 2a2e -> graphics EXPORT 31
+                                    ;   ("ST-interleaved -> VGA planar, contiguous, no pad")
+2a29  pop ds
+2a2a  ret
+```
+
+`0x6422 − 0x22 = 0x6400 = 160 × 160` (`ST_ROW_BYTES`) — `SI` lands exactly on the start of the 320×200 image's row 160 in ST 4-plane encoding, so export 31 only ever converts the bottom 40 rows. "Contiguous, no pad" (as opposed to export 3's full-screen, 44-byte-padded conversion used for `backscr.pi1` above) matches a tight 320×40 result with no virtual-scanline slack — a routine seemingly built for exactly this one job. Export 30 ("GC reset") running immediately before a raw planar write, with no masked-blit export (1/2) or DAC-install export (7/8/9) anywhere nearby, is consistent with this landing as a direct VRAM overwrite rather than a stored-then-blitted sprite.
+
+**`stat3.pi1` loads once, the first time the real per-tick game loop runs.** `FUN_1000_0524` — a large function whose own body is a near-verbatim match of this document's already-documented per-tick call order (`FUN_1000_9455` the projectile step, `FUN_1000_0dff` the health-bar chase, `FUN_1000_ed15` the System-B entity walk, the `CS:0x35ad` frame-sync tail, …) — opens with a one-time gate:
+
+```
+0529  cmp byte [0x38a],0x2 / jnz 0x533   ; already run once? -> skip straight into the loop body
+...
+0596  mov byte [0x38a],0x2                ; latch set — BEFORE the load, never cleared again
+05a0  mov dx,0xeb1b                       ; "stat3.pi1"
+05a3  call 0x1000:2a09                    ; the SAME shared body above, entered PAST 2a01's own
+                                          ;   `mov dx,0xeab6` — DX is already pointed at stat3
+```
+
+So `stat3.pi1` decompresses into the identical staging buffer (`0x351b:0`) and converts into the identical destination (`0xac7a:0`) as `status.pi1` — **`PSTAT3` physically overwrites `PSTATUS` at runtime.** Since this latch is set once per process and is never reset by any restart path (the "new game" reset embedded later in this same function clears world/health/weapon-slots/inventory but never touches `DS:0x38a`), the overwrite is permanent for the rest of the session. `PSTATUS` is visible only in the window between `GAME.EXE` boot and the first time this main loop executes — title screen, hiscores, "ENTER A PASSWORD" — and `PSTAT3` is what a player sees for the entire rest of the game from the moment real gameplay begins. This also completes the `DS:0x38a` progression the sibling `UNKNOWN_fun_3506_dispatch` closure above only had the tail of: `0 → 2` here (stat3 loads) `→ 3` in `FUN_1000_3506` (smallfnt loads) — three ordered one-shot stages of the same boot/first-frame loading sequence, not three unrelated latches.
+
+**Neither load site is followed by a DAC-install call**, and the two files' own embedded palettes corroborate that the game never installs one for this asset: `PSTATUS.PI1`'s palette words 2–15 (`0112 0223 0334 0445 0556 0777 0300 0421 0532 0643 0754 0032 0770 0000`) are byte-identical to `PLEVEL1A.PI1`'s own words 2–15, differing only in the two low, level-specific accent slots every level palette also varies independently. So the panel's indices are drawn through whichever level palette happens to already be active — measured live in the `gods-web` port, which re-tints the identical panel bitmap correctly across worlds 1 and 4 with no special-casing at all, exactly as this reading predicts.
+
+**Rendered, the two images are pixel-identical everywhere except one 89×29 region** (x 226–314, y 160–188 of the full frame): `PSTATUS` shows an amber circular icon beside a horizontal track; `PSTAT3` shows a skull icon beside a small digit tile. Everything else — a left-hand weapon/item alcove, a portrait frame, a row of empty pillar-flanked slots, a black health-bar trough spanning the full width, an ornate stone border — is shared. `UNKNOWN_status_panel_right_icon` — what that region represents, and whether it is itself later overdrawn by something dynamic, is not established; only its bounding box and the fact that it differs between the two shipped files.
+
+**Not traced this pass**: the dynamic elements drawn on top of this static frame each tick (the health-bar fill into the black trough, score/weapon-slot/key-icon digits and sprites) — this pass only chased the frame's own load/convert path, which is the only part `gods-web`'s new `game/status-panel.js` ports.
+
 **`UNKNOWN_export22_call_args` — largely CLOSED: the trailing three parameters are OUTPUT/chained state, threaded across multiple export-22 calls `[STATIC]`.** The clinching site is `FUN_1000_2882` (`CS:0x2882`–`0x28D7`), export 22's **first-ever caller** in the whole binary — called exactly once, from `entry` (`CS:0x006c`), i.e. unconditionally at `GAME.EXE` startup, before any level or screen logic runs:
 
 ```
