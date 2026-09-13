@@ -138,6 +138,14 @@ export function parseGroupsB(buf) {
       speed:   b[0x0b],                       // step delay = 10 - speed
       hopUnlock:  b[0x0c],
       budget:     b[0x0d],
+      /* CS:0xED94's own `MOV CX,word[SI+0x10] / XCHG CH,CL` (BE -> native) —
+       * the GROUP-ELIMINATION reward id, `UNKNOWN_f030_item_drop`. Negative
+       * = no reward; `< 0xB` a plain numeric popup (CS:0xC004, not decoded
+       * to sprite level by this project — see popup.js's own header for
+       * what this port does and does not render); `>= 0xB` a POBJECTS type,
+       * `id - 0xB`. Fires once the WHOLE group is dead-or-dying, at
+       * whichever entity died last — see main.js's own group tracking. */
+      rewardId: signWord((b[0x10] << 8) | b[0x11]),
       tileX:   b[0x12],
       tileY:   b[0x13],
       stagger: b[0x14],
@@ -146,6 +154,8 @@ export function parseGroupsB(buf) {
   }
   return out;
 }
+
+const signWord = (w) => (w & 0x8000 ? w - 0x10000 : w);
 
 /* THE SPRITE CLASS TABLES live in GAME.EXE, not in any shipped asset, so they
  * are transcribed here the same way the player state table and the jump arc

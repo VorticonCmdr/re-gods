@@ -121,6 +121,7 @@ import { Brood, broodFacingOffset, BROOD_SEED_FALL_SUBSTATE, BROOD_BOX,
          DEATH_DRAW_OFFSET } from '../game/nest.js';
 import { Debris, SLOTS as DBG_SLOTS, STRIDE as DBG_STRIDE, LIFETIME_TICKS,
          SPRITE_FIRST, SPRITE_LAST, EXPIRE_AT } from '../game/debris.js';
+import { Popup, POPUP_VY, POPUP_SPRITE_BASE, POPUP_OFFSCREEN_CULL } from '../game/popup.js';
 import { Destructibles, DESTRUCTIBLE_TILE, MIN_WORLD, MACE_INDEX, MACE_BONUS,
          QUEUE_SLOTS, RESTORE_SLOTS, BREAK_FRAMES, SPRITE_BASE_DS,
          SPRITE_BASE_VALUE, blockDamage, hitsToBreak,
@@ -2188,6 +2189,7 @@ export async function checkSpawn(fetchRaw) {
 
   let live = 0, refs = 0, badRef = 0, outOfMap = 0, overCount = 0;
   const counts = new Set(), speeds = new Set(), perFile = [];
+  const rewardIds = new Set();
   for (const k of keys) {
     const buf = dclDecompress(await fetchRaw(`game/${palfilsNameFor(k)}`)).data;
     const groups = parseGroupsB(buf);
@@ -2196,6 +2198,7 @@ export async function checkSpawn(fetchRaw) {
       if (!g.live) continue;
       live++; n++;
       counts.add(g.count); speeds.add(g.speed);
+      rewardIds.add(g.rewardId);
       if (g.count > MAX_ENTITIES) overCount++;
       if (g.tileX < 1 || g.tileX > 126 || g.tileY < 1 || g.tileY > 60) outOfMap++;
     }
@@ -2222,6 +2225,15 @@ export async function checkSpawn(fetchRaw) {
   results.push({
     name: `descriptor +0x0b speeds in shipped data`, note: true, pass: true,
     detail: `${[...speeds].sort((a, b) => a - b).join(',')} — step delay is 10 - v, so higher is faster`,
+  });
+  /* CS:0xED94's own BE i16 reward id, re-derived from raw bytes independent
+   * of parseGroupsB itself: a discriminating value, since the sign bit and
+   * the 0xB threshold both matter for how main.js's own group-tracking
+   * interprets it (see popup.js's header for the id encoding). */
+  results.push({
+    name: `descriptor +0x10 reward ids in shipped data`, note: true, pass: true,
+    detail: `${[...rewardIds].sort((a, b) => a - b).join(',')} — negative = no reward, `
+      + `< 0xB a plain numeric popup (undecoded, not rendered), >= 0xB a POBJECTS type`,
   });
 
   /* Sprite composition: every (class, mode, frame) a level can produce must
@@ -9362,6 +9374,87 @@ export async function checkPatObjects(fetchRaw) {
       check('fully retired after DEATH_RETIRE_AT frames (key back to 0, the ordinary retire sentinel)',
         sub.key === 0);
     }
+  }
+
+  return results;
+}
+
+/* Popup — the single-slot floating item-icon effect, CS:0xBF5F/0xBF80.
+ * See game/popup.js's own header for the full CLAUDE.md citation trail. */
+export function checkPopup() {
+  const { results, check } = makeChecker();
+
+  {
+    const p = new Popup();
+    check('inactive at construction: spriteId is null', p.spriteId === null);
+    check('spawn() succeeds on a free slot (CS:0xBF64 js -> not busy)',
+      p.spawn(100, 200, 0x2d) === true);
+    check('spawn() records the world position', p.x === 100 && p.y === 200);
+  }
+
+  /* single-slot busy/free semantics — a second spawn() while active is dropped */
+  {
+    const p = new Popup();
+    p.spawn(100, 200, 0x2d);
+    const second = p.spawn(999, 999, 0x15);
+    check('a second spawn() while busy is refused (CS:0xBF6B jmp 0xc041 — diverted, not modelled here)',
+      second === false);
+    check('the busy slot keeps its ORIGINAL position, not the refused request\'s',
+      p.x === 100 && p.y === 200);
+  }
+
+  /* CS:0xBF87-92: y += POPUP_VY every tick */
+  {
+    const p = new Popup();
+    p.spawn(0, 0, 0x2d);
+    p.step();
+    check('step() applies CS:0xBF7B\'s seeded Y-velocity of -6 exactly once',
+      p.y === POPUP_VY, p.y);
+    p.step();
+    check('a second step() accumulates: y == -12', p.y === 2 * POPUP_VY, p.y);
+  }
+
+  /* CS:0xBF96: id < 0xB -> the undecoded plain-numeric branch, never rendered */
+  {
+    const p = new Popup();
+    p.spawn(0, 0, 0);
+    check('id=0 (< 0xB) yields itemType=null (CS:0xC004, "not chased further")',
+      p.itemType === null);
+    check('...and therefore spriteId=null — this port does not render the numeric branch',
+      p.spriteId === null);
+
+    const p2 = new Popup();
+    p2.spawn(0, 0, 0xa);
+    check('id=0xa (still < 0xB, the boundary) also yields itemType=null',
+      p2.itemType === null && p2.spriteId === null);
+  }
+
+  /* CS:0xBF9B/BFAB: id >= 0xB -> POBJECTS icon, sprite = 170 + (id - 0xB) */
+  {
+    const p = new Popup();
+    p.spawn(0, 0, 0xb);
+    check('id=0xb (the boundary) yields itemType=0, spriteId=POPUP_SPRITE_BASE',
+      p.itemType === 0 && p.spriteId === POPUP_SPRITE_BASE, p.spriteId);
+
+    const p2 = new Popup();
+    p2.spawn(0, 0, 0x2d);
+    check('id=0x2d (the world-2 nest\'s own jewel reward, POBJECTS type 34) '
+      + 'yields spriteId = 170 + 34 = 204',
+      p2.itemType === 0x2d - 0xb && p2.spriteId === POPUP_SPRITE_BASE + (0x2d - 0xb), p2.spriteId);
+  }
+
+  /* off-screen cull — a disclosed safety valve (UNKNOWN_popup_cull), not a
+   * decoded mechanism, but it must actually deactivate and free the slot. */
+  {
+    const p = new Popup();
+    p.spawn(0, 0, 0x2d);
+    let ticks = 0;
+    while (p.active && ticks < 1000) { p.step(); ticks++; }
+    check('the popup eventually deactivates once it drifts far enough off-screen',
+      p.active === false, `ticks=${ticks}`);
+    check('once inactive, spriteId reads null', p.spriteId === null);
+    check('the deactivated slot can be spawned into again (freed, not stuck busy)',
+      p.spawn(1, 2, 0x2d) === true);
   }
 
   return results;

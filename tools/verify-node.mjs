@@ -235,6 +235,13 @@ for (const r of await checkPatObjects(fetchRaw)) {
   console.log(line(r));
 }
 
+console.log('\n  the group-elimination reward popup (CS:0xBF5F/0xBF80):');
+const { checkPopup } = await import('../src/verify/checks.js');
+for (const r of checkPopup()) {
+  if (!r.pass && !r.note) bad++;
+  console.log(line(r));
+}
+
 console.log('\n  System-A spawn chain and strategy census:');
 const { checkSpawnA } = await import('../src/verify/checks.js');
 for (const r of await checkSpawnA(fetchRaw)) {

@@ -17,7 +17,7 @@ import { Player, ST } from './game/player.js';
 import { runAllChecks, checkDescriptorAnchors, checkHeroSprites,
          checkSelectorsAndObjects, checkSpawn, checkEntityB, checkEntityA, checkSpawnA,
          checkWeaponsProjectiles, checkTriggerActions,
-         checkZones } from './verify/checks.js';
+         checkZones, checkPopup } from './verify/checks.js';
 import { EventRunner, parsePalfils, palfilsNameFor } from './game/events.js';
 import { makeActionContext, makeGates, DOOR_TILES,
          ACTION_NAMES } from './game/trigger-actions.js';
@@ -54,6 +54,7 @@ import { SelectorTwoSpawns, parseClasses as parseSelectorTwoClasses } from './ga
 import { PatGroups, parsePatDirectory, parsePatSpawnDescriptor } from './game/pat-objects.js';
 import { MarkerList, stepMarkers } from './game/markers.js';
 import { Debris } from './game/debris.js';
+import { Popup } from './game/popup.js';
 import { Arsenal, spawnableWeapons } from './game/hero-fire.js';
 import { stepHeroFrame, stepCreatureDamage } from './game/frame.js';
 import { DamageGrid, damageForTag } from './game/collision.js';
@@ -300,6 +301,7 @@ async function main() {
       Promise.resolve(checkEntityB()), checkWeaponsProjectiles(fetchRaw),
     checkTriggerActions(fetchRaw), checkZones(fetchRaw),
     Promise.resolve(checkEntityA()), checkSpawnA(fetchRaw),
+    Promise.resolve(checkPopup()),
     ]) results.push(...await g);
     renderChecks(results);
     const mh = $('messages');
@@ -446,6 +448,22 @@ async function main() {
   let enemies = [];
   let slotsA = new GroupSlots();
   let enemiesA = [];
+  /* CS:0xBF5F/0xBF80 — the single-slot floating item-icon popup (game/
+   * popup.js). Feeds selector2.js's own already-computed `rewards` array
+   * (previously grown forever and never drained) and, below, System-B's own
+   * per-GROUP elimination reward (`UNKNOWN_f030_item_drop`, descriptor
+   * +0x10, spawn.js's `rewardId`) — both were fully decoded but had no
+   * rendering module before this pass. */
+  let popup = new Popup();
+  /* Per-GROUP tracking for System-B's own elimination reward — NOT provided
+   * by GroupSlots (which only tracks activation, never per-entity
+   * membership or completion). Each entry mirrors the ORIGINAL's own
+   * group-runtime "reward already given" latch (CS:0xEDAA/0xEDA6): fires
+   * once every member is dead-or-dying (`state <= 0`, matching the
+   * original's `(dead+dying) === count` test — this port's simple DYING
+   * sentinel makes the two equivalent), at whichever member's own (frozen,
+   * post-death) position happens to be read last. */
+  let groupsB = [];
   /* Stage 6 (CS:0xe659) is ported and now wired end to end for BOTH entity
    * systems: the reload timer, facing test and muzzle computation feed the
    * shared EnemyShots array below, the same one the nest creature fires
@@ -549,13 +567,20 @@ async function main() {
       const onGround = groundBelow(level.map.planeB, x, y);
       const mode = ((d.flags >> 9) & 1) + (onGround ? 0 : 2);
       let delay = 0;
+      const members = [];
       for (let i = 0; i < n; i++) {
-        enemies.push(Object.assign(
+        const e = Object.assign(
           new EntityB({ x, y, mode, speed: d.speed, hp: d.hp || 1,
                         cls: d.cls, delay }),
-          { desc: d }));      // the pathfinder reads +0x08/+0x09/+0x0c/+0x0d
+          { desc: d });      // the pathfinder reads +0x08/+0x09/+0x0c/+0x0d
+        enemies.push(e);
+        members.push(e);
         delay += d.stagger;
       }
+      /* CS:0xEDAA/0xEDA6 — this batch's own "reward already given" latch,
+       * tracked here since GroupSlots has no per-entity membership of its
+       * own. See spawn.js's `rewardId` and the file-header note on `popup`. */
+      groupsB.push({ desc: d, members, rewardGiven: false });
       slot.state = 1;
     }
   };
@@ -622,6 +647,7 @@ async function main() {
       slots = new GroupSlots(); enemies = []; clamped = 0; firedByB = 0;
       slotsA = new GroupSlots(); enemiesA = []; clampedA = 0; firedByA = 0;
       firedHazardsByA = 0; firedHazardsByB = 0;
+      groupsB = []; popup = new Popup();
       rng = new GodsRandom(1);
       nests = new Nests(level.world, rng); shots = new EnemyShots(); tock = 0;
       lineHazards = new LineHazards();
@@ -1060,6 +1086,31 @@ async function main() {
          * touches. Both the shield potion and spawn protection feed it. */
         invuln: fx.invuln > 0 ? 1 : 0,
       }).killed;
+      /* `UNKNOWN_f030_item_drop` — System-B's own per-GROUP elimination
+       * reward, checked right after contact so a kill this SAME tick can
+       * satisfy it (matching CS:0xEDAA/0xEDA6's own placement inside the
+       * per-group loop, run every tick regardless of whether anything died
+       * this tick). `state <= 0` (dead OR dying) matches the original's
+       * `(dead+dying) === count` test exactly, since this port's DYING
+       * sentinel never advances past a single -1 value while fading. */
+      for (const g of groupsB) {
+        if (g.rewardGiven) continue;
+        if (!g.members.every((e) => e.state <= 0)) continue;
+        g.rewardGiven = true;
+        if (g.desc.rewardId >= 0) {
+          const last = g.members[g.members.length - 1];
+          popup.spawn(last.x, last.y, g.desc.rewardId);
+        }
+      }
+      /* Drain selector2.js's own group-elimination rewards (`CS:0xAED0`-
+       * `0xAF0F`) into the SAME single-slot popup — previously computed
+       * correctly but grown forever and never rendered. */
+      for (const r of selectorTwo.rewards) {
+        const id = r.itemType !== null ? r.itemType + 0xb : r.popupValue;
+        popup.spawn(r.x, r.y, id);
+      }
+      selectorTwo.rewards.length = 0;
+      popup.step();
       /* CS:0x02BA — enemy shots move and hit, AFTER every emitter that can
        * fire one this tick (the nest at 0x0282, the entities at 0x0285), so
        * unlike the hero's own shots (which step BEFORE the player emits) an
@@ -1228,6 +1279,21 @@ async function main() {
         const bf = hero && hero.frames[d.sprite];
         if (bf) renderer.blitSprite(bf, d.x, d.y);
         else { outOfRange++; renderer.strokeRect(d.x, d.y, 16, 12, 13); }
+      }
+
+      /* THE GROUP-ELIMINATION REWARD POPUP — CS:0xBF5F/0xBF80, one shared
+       * single slot fed by both System-B's own +0x10 reward and selector2.js's
+       * own group-clear reward (see game/popup.js's header). `spriteId` is
+       * null for the undecoded plain-numeric-id branch — this port draws
+       * nothing for that case rather than guess a digit rendering. */
+      {
+        const pid = popup.spriteId;
+        if (pid !== null) {
+          const px = popup.x - camX, py = popup.y - camY;
+          const pf = hero && hero.frames[pid];
+          if (pf) renderer.blitSprite(pf, px, py);
+          else { outOfRange++; renderer.strokeRect(px, py, 16, 16, 15); }
+        }
       }
 
       /* THE WORLD-1 SUBLEVEL-B AWAKENED STATUE — CS:0x7B68/0x7C4B/0x7C7C,
