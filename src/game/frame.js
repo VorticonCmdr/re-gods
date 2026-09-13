@@ -72,7 +72,8 @@ export function stepHeroFrame({ input, arsenal, grid, player, map, cam,
                                world = 1, objects = null, bar = 1,
                                cats = null, health = null, treasure = null,
                                burst = null, alloc = null, starburst = null,
-                               blocks = null, debris = null, tock = 1 }) {
+                               blocks = null, debris = null, tock = 1,
+                               inventory = null }) {
   arsenal.latchTick(input.fire);                                    // 019D
   grid.clear();                                                     // 01CC
   /* CS:0x0206 -> CS:0x1432, the object pass. Weapon pickup lives here, and it
@@ -106,10 +107,15 @@ export function stepHeroFrame({ input, arsenal, grid, player, map, cam,
    * the next one. */
   const burstFx = starburst ? starburst.step(cam, grid) : null;     // 0212
   const debrisFx = debris ? debris.step(cam) : [];
-  player.tick(map, input, arsenal, tock);                           // 0254
+  /* CROUCH + FIRE, CS:0x4B1A -> CS:0x6069 — the key scan needs the SAME live
+   * object array and category table the pickup walk above just used, plus
+   * the 4-slot inventory (DS:0x17e). `pickup.js` documents why the scan is
+   * cheap to re-run every tick unconditionally. */
+  const pickupCtx = objects ? { objects, cats, inventory } : null;
+  player.tick(map, input, arsenal, tock, pickupCtx);                // 0254
   return { projectiles, emitted: player.emitted, picked: picked.taken,
            consumed: picked.consumed || [], treasures: picked.treasures || [],
-           loot, burstFx, blockFx, debrisFx };
+           loot, burstFx, blockFx, debrisFx, keyCollected: player.keyCollected };
 }
 
 /**

@@ -48,7 +48,7 @@
 
 import { armWeapon, pickUpAgain } from './weapons.js';
 import { isDeadType, CATEGORY } from './objects.js';
-import { collectTreasure } from './treasure.js';
+import { collectTreasure, INVENTORY_EMPTY, INVENTORY_SLOTS } from './treasure.js';
 import { CONSUMABLES, WIRED, NOT_WIRED_REASON,
          applyConsumable } from './consumables.js';
 
@@ -294,6 +294,140 @@ export function stepPickups(objects, hero, arsenal, bar = 1,
                     sfx: PICKUP_SFX });
   }
   return { taken, consumed, treasures };
+}
+
+/* ── Keys (category 2) — CROUCH + FIRE, CS:0x6069 `[PROVEN]` ────────────────
+ *
+ * This is the gap the honesty note above names directly: keys are never
+ * picked up by walking into them (CS:0x17E6 `jg` sends category >= 2 away
+ * with `stc`, and neither caller of `stepPickups` turns that into a pickup).
+ * The real control is CROUCH (player states 18/19) + FIRE, reached from
+ * CS:0x4B1A/0x4B4F/0x4B8F/0x4BC4 -> CS:0x6069.
+ *
+ * ── THE HOT POINT, shared with CS:0x5B38 below ───────────────────────────
+ * CS:0x6078/0x607B: `ax = heroX + 0x10 ; bx = heroY + 0x28` — the SAME two
+ * constants CS:0x5B38 (the crouch-entry precondition) adds to the same pair
+ * of registers, confirmed by disassembling both fresh, not assumed from one.
+ *
+ * ── THE SCAN, CS:0x6082-0x60E2 ────────────────────────────────────────────
+ *     6082  cmp [si+4],0 / js next        ; dead slot
+ *     6088  cmp [si+6],0 / jz next        ; not on screen
+ *     608E  bp = [si]-4   ; cmp ax,bp / jl next     ; hotX <  objX-4  -> reject
+ *     6097  bp += 0x18    ; cmp ax,bp / jg next     ; hotX >  objX+20 -> reject
+ *     609E  bp = [si+2]-0xc ; cmp bx,bp / jl next   ; hotY <  objY-12 -> reject
+ *     60A8  bp += 0x1c    ; cmp bx,bp / jle MATCH   ; hotY <= objY+16 -> MATCH
+ *
+ * ⚠️ INCLUSIVE ON ALL FOUR SIDES (`jl`/`jg`/`jle` at the tested corner), unlike
+ * CS:0x5B38's crouch-entry check below, which is EXCLUSIVE on all four
+ * (strict `<`/`>`, CS:0x5b5f/0x5b71 `jge`/`jle` REJECT, CS:0x5b77 `jg` ACCEPT).
+ * Same box geometry — read fresh off both disassemblies — different boundary.
+ *
+ * ⚠️ THE WEAPON-ABORT-SCAN QUIRK, CS:0x60C3-0x60CA: once a MATCH's own type is
+ * >= 0xC0 (a weapon), the scan does not skip it and keep looking — it ABORTS
+ * THE WHOLE SCAN (`pop cx / jmp 0x5e9b`), with no pickup and no message. A
+ * weapon sitting in the crouch hot point's box (it can: the box is wider than
+ * the walk-in pickup window) makes a key later in scan order unreachable that
+ * tick. Below 0xC0, the category table decides: `!= 2` just continues the
+ * loop (CS:0x60D4 `jnz next`) — only category 2 exactly is ever taken.
+ *
+ * ⚠️ ONLY THE FIRST MATCH IS EVER CONSUMED. The object is marked dead THE
+ * INSTANT it matches (CS:0x60D8/0x60DD), before FIRE is even tested — then,
+ * if FIRE is NOT held, CS:0x60EB-0x60F3 PUTS IT BACK (`[si+4]=dx` restores the
+ * type, `[si+6]=1` restores on-screen) and the scan ends there either way.
+ * Crouching over a key without holding fire never advances to a second
+ * candidate; it just leaves that one exactly as it was.
+ *
+ * ── THE INVENTORY WRITE — a DELIBERATE SUBSTITUTION, not a bug-for-bug port ─
+ * CS:0x6100-0x610D: `di = 0x17e + [0x366]*2 ; [di] = type` — the key is
+ * stored into DS:0x366's CURRENT VALUE, the SAME player-controlled slot-
+ * selector cursor the (unported) 4-slot inventory panel cycles with
+ * CS:0x612F/0x6134/0x615F. There is NO search for an empty slot anywhere in
+ * this routine: the original always overwrites whichever slot the cursor is
+ * parked on, seeded to 3 at boot (CS:0x048D `mov al,0x3` / CS:0x048F
+ * `mov [0x366],al`, confirmed fresh).
+ *
+ * This port has no slot-selector UI — that panel is the disclosed cosmetic
+ * cut this project already lists — so reproducing "always overwrite slot 3"
+ * verbatim would mean a SECOND key of ANY kind permanently overwrites the
+ * first with no way to move the cursor away first: strictly worse than the
+ * bug actually reported ("can't collect and use keys at all"). `collectKey`
+ * below substitutes first-empty-slot, falling back to the same slot 3 the
+ * original boots into once every slot already holds a key. Because
+ * `collectTreasure` (treasure.js) already matches a held key by VALUE across
+ * all 4 slots rather than by position, this substitution cannot change
+ * whether a key that IS collected later unlocks its chest — only which slot
+ * (if any) a full inventory evicts.
+ */
+
+/** CS:0x6078/0x607B and CS:0x5B3B/0x5B3E — shared by the key scan and the
+ *  crouch-entry precondition below. */
+export function keyHotPoint(hero) {
+  return { x: hero.x + 0x10, y: hero.y + 0x28 };
+}
+
+/**
+ * The shared box shape, `[objX-4, objX+20] x [objY-12, objY+16]`.
+ * @param {boolean} inclusive CS:0x6069 tests `<=`/`>=` at both far corners
+ *   (true); CS:0x5B38 tests strict `<`/`>` on all four (false).
+ */
+function hotPointHitsBox(obj, hot, inclusive) {
+  const minX = obj.x - 4, maxX = minX + 0x18;
+  const minY = obj.y - 12, maxY = minY + 0x1c;
+  if (inclusive) {
+    return hot.x >= minX && hot.x <= maxX && hot.y >= minY && hot.y <= maxY;
+  }
+  return hot.x > minX && hot.x < maxX && hot.y > minY && hot.y < maxY;
+}
+
+/**
+ * CS:0x5B38 — "is anything at all near the crouch hot point", called with
+ * PRIORITY over the ladder-descend check from the walk states' own DOWN
+ * handling (CS:0x598a `call 0x5b38 / jc <crouch>`, ahead of any map read).
+ * No category filter — any live, on-screen object counts.
+ */
+export function objectNearHotPoint(objects, hero) {
+  const hot = keyHotPoint(hero);
+  for (const o of objects) {
+    /* `o.dead` is this port's own live/dead flag (set by every collector —
+     * `collectTreasure`, `pickUpWeapon`, this module's own `_crouch` caller);
+     * `isDeadType` is the CS:0x9000 sign test on a STATIC type value. Check
+     * both, exactly as `stepPickups` above does. */
+    if (o.dead || isDeadType(o.type)) continue;   // CS:0x5b44 `js`
+    if (!o.flag6) continue;                       // CS:0x5b4a `jz`
+    if (hotPointHitsBox(o, hot, false)) return true;
+  }
+  return false;
+}
+
+/**
+ * CS:0x6069's scan loop only — the crouch state's own gate (does the hero
+ * hold FIRE this tick) is the CALLER's job, exactly as `_tryFire` already
+ * separates entry from allocation elsewhere in this port.
+ * @returns {?object} the first matching key object, or null.
+ */
+export function scanForKey(objects, cats, hero) {
+  const hot = keyHotPoint(hero);
+  for (const o of objects) {
+    if (o.dead || isDeadType(o.type)) continue;   // CS:0x6086 `js`
+    if (!o.flag6) continue;                       // CS:0x608c `jz`
+    if (!hotPointHitsBox(o, hot, true)) continue;
+    if (o.type >= WEAPON_CMP) return null;     // CS:0x60C7 — ABORT, not skip
+    if (cats[o.type] !== CATEGORY.KEY) continue;   // CS:0x60CF `jnz next`
+    return o;
+  }
+  return null;
+}
+
+/**
+ * CS:0x6100-0x610D, SUBSTITUTED — see the module doc above for why. First
+ * empty slot; CS:0x048F's own boot value (3, the last slot) if none is free.
+ * @returns {number} the slot index written.
+ */
+export function collectKey(inventory, type) {
+  let slot = inventory.findIndex((v) => v === INVENTORY_EMPTY);
+  if (slot < 0) slot = INVENTORY_SLOTS - 1;
+  inventory[slot] = type;
+  return slot;
 }
 
 /* ── The attract-mode demo grants itself weapons — do NOT read that as the

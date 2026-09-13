@@ -28,8 +28,8 @@ import { spriteForType, parseObjectCategories, sortForDraw, isDeadType,
          isUnstamped, OBJECT_SLOTS, activationBox,
          activateObjects, insertSpawned,
          stepObjectFall, isFallEligible, dropCarriedItem } from './game/objects.js';
-import { parseObjectRecords, Score, Purse, TreasureBurst, INVENTORY_EMPTY,
-         CHEST_MIN, CHEST_MAX, chestKeyFor } from './game/treasure.js';
+import { parseObjectRecords, Score, Purse, TreasureBurst,
+         INVENTORY_EMPTY } from './game/treasure.js';
 import { CONSUMABLES, WEAPON_ARCS, INVULN_TICKS_SPAWN } from './game/consumables.js';
 import { Starburst, SPRITE_BASE as SB_SPRITE } from './game/starburst.js';
 import { Destructibles } from './game/destructible.js';
@@ -426,14 +426,11 @@ async function main() {
   let lastNestFx = [], lastShotsFx = null, lastDebrisFx = [], lastLineHazardFx = null;
   let lastBroodFx = [], lastStatueFx = [], lastCe64Fx = [], lastSpitFx = [], lastSelectorTwoFx = [];
   let lastPatFx = [];
-  /* ⚠️ DEV SEED, exactly like the weapon picker above. The original puts a
-   * "chest key" in DS:0x17e only through CROUCH + FIRE (CS:0x6069), which
-   * this port does not implement — so with a truthful empty inventory the
-   * chest branch would be unreachable in the running build and the burst
-   * would be dead code. The three keys are seeded and the status line says
-   * so. Nothing else reads this array. */
-  let inventory = [chestKeyFor(CHEST_MIN), chestKeyFor(CHEST_MIN + 2),
-                   chestKeyFor(CHEST_MIN + 4), INVENTORY_EMPTY];
+  /* CS:0x0495-0x04A1 — the real boot state: all 4 slots empty. Keys now
+   * enter through CROUCH + FIRE (CS:0x6069 -> game/pickup.js's `scanForKey`/
+   * `collectKey`, wired into Player._crouch), so this no longer needs a
+   * dev-seed to keep the chest-unlock branch reachable. */
+  let inventory = [INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY];
   /* Executing the verbs needs the inventory and the weapon slots, so the
    * context is attached here rather than beside the EventRunner. */
   events.actionCtx = buildActionCtx(level, inventory, arsenal);
@@ -821,7 +818,7 @@ async function main() {
                                              hero: { x: player.x, y: player.y } },
         treasure: { values: level.objValues, inventory, purse, score, burst },
         starburst, blocks, debris,
-        burst, tock,
+        burst, tock, inventory,
         /* CS:0x38D7 — first-fit over the 200-slot runtime array. `drawObjects`
          * already excludes the map's dead slots, so the headroom here is
          * 200 minus what is live, which is the same number the original has. */
@@ -854,6 +851,11 @@ async function main() {
         } else if (t.outcome === 'locked') {
           $('event').textContent = `locked chest — needs key ${t.needsKey}`;
         }
+      }
+      /* CROUCH + FIRE, CS:0x6069 -> game/pickup.js's `scanForKey`/`collectKey`. */
+      if (fr.keyCollected) {
+        $('event').textContent =
+          `key ${fr.keyCollected.type} collected (slot ${fr.keyCollected.slot})`;
       }
       if (fr.loot.settled.length) {
         lastBlockFx = fr.blockFx || [];
@@ -1577,7 +1579,7 @@ async function main() {
            ` (${starburst.bursts} bursts, ${starburst.chained} chained,` +
            ` ${sbStamps} stamps)` : '') +
         (fx.shop ? ' · SHOP (state machine suspended)' : '') +
-        ` · chests ${opened} (keys dev-seeded)` +
+        ` · chests ${opened} · keys [${inventory.map((v) => v === INVENTORY_EMPTY ? '-' : v).join(',')}]` +
         (lootLanded ? ` · ${lootLanded} loot landed` : '') +
         (burst.stranded ? ` · ${burst.stranded} loot STRANDED (object table full)` : '') +
         (slots.lostActivations ? ` · ${slots.lostActivations} activations lost (all slots busy)` : '');

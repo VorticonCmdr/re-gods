@@ -62,7 +62,8 @@ import { Arsenal, spawnableWeapons, FIRE_CAPABLE_STATES, LEVER_STATES,
          INVENTORY_STATES } from '../game/hero-fire.js';
 import { pickUpWeapon, chooseSlot, heroTouches, stepPickups, PICKUP_BOX,
          isWeaponPickup, weaponIndexOf, FIREBALL,
-         consumableRank } from '../game/pickup.js';
+         consumableRank, keyHotPoint, objectNearHotPoint, scanForKey,
+         collectKey } from '../game/pickup.js';
 import { CONSUMABLES, WIRED, WEAPON_ARCS, NOT_WIRED_REASON, applyConsumable,
          INVULN_TICKS_POTION, INVULN_TICKS_SPAWN, INVULN_SPAWN_DEDUCTION,
          FREEZE_TICKS, GIANT_JUMP_TICKS, POWER_POTION_STEPS, MSG_CLEAR_394,
@@ -78,7 +79,7 @@ import { CHEST_MIN, CHEST_MAX, CHEST_KEY_BASE, chestKeyFor, openedType,
          burstTypes, burstTypesAligned, BURST_TABLE, BURST_TABLE_DS,
          BURST_ALIGNED_DS, BURST_STRIDE_WORDS, BURST_AUTHORED_WORDS,
          BURST_COUNT, BURST_VY_CAP, CHEST_SFX, TREASURE_SFX,
-         INVENTORY_CLEAR_SITES, INVENTORY_EMPTY, CHEST_KEY_CENSUS,
+         INVENTORY_CLEAR_SITES, INVENTORY_EMPTY, CHEST_KEY_CENSUS, INVENTORY_SLOTS,
          OBJ_NAME_OFF, OBJ_NAME_MAX, OBJ_DESC_OFF, OBJ_DESC_MAX,
          OBJ_RECORD_SIZE } from '../game/treasure.js';
 import { expandMapObjects, allocObject, OBJECT_SLOTS, activationBox,
@@ -7507,18 +7508,183 @@ export async function checkWeaponsProjectiles(fetchRaw) {
       'forward exactly as weapons do — which is what makes the census above ' +
       'a question about authoring rather than about the code');
 
-    results.push({
-      name: 'keys are NOT picked up by walking into them', note: true, pass: true,
-      detail: 'CS:0x17E6 `jg 0x17c2` sends category >= 2 to an `stc` return ' +
-        'while every other exit is `clc` — and neither call site treats that ' +
-        'as "collected" (CS:0x168E ignores the flag; CS:0x170D reads it inside ' +
-        'a routine reached only for sprite 0x118). Keys go in through CROUCH + ' +
-        'FIRE: CS:0x4B1A/0x4B4F/0x4B8F/0x4BC4 -> CS:0x6069 scans the same 200 ' +
-        'records against the hero hot point (X+16, Y+40), requires `[si+6] != ' +
-        '0` and `category == 2` exactly, and stores the TYPE into DS:0x17e + ' +
-        '[0x366]*2 — with the not-held branch at CS:0x60F0 PUTTING IT BACK. ' +
-        'Not ported; the chest branch is tested against a synthetic inventory.',
-    });
+    check(`keys are NOT picked up by walking into them (CS:0x17E6 \`jg\`)`,
+      (() => {
+        const cats = new Uint8Array(256); cats[21] = CATEGORY.KEY;
+        const key = { x: 100, y: 100, type: 21, dead: false, flag6: 1 };
+        const { taken, consumed } = stepPickups([key], { x: 100, y: 100 },
+          { slots: [{ weapon: -1 }, { weapon: -1 }, { weapon: -1 }] }, 1, { cats });
+        return !key.dead && taken.length === 0 && consumed.length === 0;
+      })(),
+      'CS:0x17E6 `jg 0x17c2` sends category >= 2 to an `stc` return while ' +
+      'every other exit is `clc`, and neither caller of `stepPickups` turns ' +
+      'that into a pickup — a category-2 object standing exactly on the ' +
+      'hero must survive the walk-in pass untouched.');
+
+    /* ── CROUCH + FIRE, CS:0x6069 -> pickup.js's scanForKey/collectKey ────── */
+    {
+      const hero = { x: 100, y: 200 };
+      const hot = keyHotPoint(hero);
+      check('keyHotPoint is (heroX+0x10, heroY+0x28) — CS:0x6078/0x607B',
+        hot.x === hero.x + 0x10 && hot.y === hero.y + 0x28);
+
+      const cats = new Uint8Array(256); cats[21] = CATEGORY.KEY;
+
+      /* CS:0x5B38's box is EXCLUSIVE on all four sides. Placing an object so
+       * the hot point lands EXACTLY on its minX (objX-4 == hotX) must miss;
+       * one pixel further in must hit. Read fresh off CS:0x5b5b `jge reject`
+       * and CS:0x5b77 `jg ACCEPT` this session — not carried from an older,
+       * looser "inclusive" note. */
+      const onMinX = { x: hot.x + 4, y: hot.y, type: 5, dead: false, flag6: 1 };
+      const oneIn  = { x: hot.x + 3, y: hot.y, type: 5, dead: false, flag6: 1 };
+      check('objectNearHotPoint (CS:0x5B38) is EXCLUSIVE at the near edge',
+        !objectNearHotPoint([onMinX], hero) && objectNearHotPoint([oneIn], hero));
+      check('objectNearHotPoint ignores category — ANY live, on-screen object counts',
+        objectNearHotPoint([{ ...oneIn, type: 0 }], hero));
+      check('objectNearHotPoint skips a dead slot',
+        !objectNearHotPoint([{ ...oneIn, type: 0x8005 }], hero));
+      check('objectNearHotPoint skips an off-screen object (flag6 == 0)',
+        !objectNearHotPoint([{ ...oneIn, flag6: 0 }], hero));
+
+      /* CS:0x6069's own box is INCLUSIVE on all four sides — CS:0x609a `jg
+       * reject` (so `<=` passes) and CS:0x60ab `jle MATCH` (so `<=` matches),
+       * the opposite boundary treatment from CS:0x5B38 above despite the
+       * identical geometry. */
+      /* maxY = objY + 0x10 (0x1c added to a base of objY-12) — the boundary
+       * is objY = hotY - 0x10, one pixel past it objY = hotY - 0x11. */
+      const onMaxY = { x: hot.x, y: hot.y - 0x10, type: 21, dead: false, flag6: 1 };
+      check('scanForKey (CS:0x6069) is INCLUSIVE at the far edge',
+        scanForKey([onMaxY], cats, hero) === onMaxY);
+      const oneOut = { x: hot.x, y: hot.y - 0x11, type: 21, dead: false, flag6: 1 };
+      check('...and still rejects one pixel past it',
+        scanForKey([oneOut], cats, hero) === null);
+
+      check('scanForKey skips a non-key category in the box, keeps scanning',
+        scanForKey([{ ...oneIn, type: 5 }, { ...oneIn, type: 21 }], cats, hero)?.type === 21);
+
+      /* CS:0x60C3-0x60CA — a type >= 0xC0 (weapon) inside the box does not
+       * get skipped like an ordinary category mismatch; it ABORTS THE WHOLE
+       * SCAN, so a real key later in scan order becomes unreachable. */
+      const weapon = { ...oneIn, type: 0xc0 };
+      const realKey = { ...oneIn, type: 21 };
+      check('scanForKey ABORTS on a weapon in the box (CS:0x60C7) — does not skip it',
+        scanForKey([weapon, realKey], cats, hero) === null,
+        'a real key placed AFTER a weapon in scan order must be unreachable ' +
+        'this tick, not merely lower-priority');
+      check('...but the SAME key with no weapon ahead of it in scan order is found',
+        scanForKey([realKey, weapon], cats, hero) === realKey);
+
+      check('scanForKey returns the FIRST match, not the last',
+        scanForKey([{ ...oneIn, type: 21 }, { ...oneIn, type: 22 }], cats, hero)?.type === 21);
+      check('scanForKey skips dead and off-screen candidates',
+        scanForKey([{ ...oneIn, type: 21, dead: true }, { ...oneIn, type: 21, flag6: 0 }],
+                   cats, hero) === null);
+
+      /* collectKey — SUBSTITUTED behaviour, see the module doc in pickup.js:
+       * first empty slot, falling back to CS:0x048F's own boot slot (3). */
+      const inv1 = [INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY];
+      check('collectKey fills the FIRST empty slot',
+        collectKey(inv1, 21) === 0 && inv1[0] === 21);
+      const inv2 = [5, INVENTORY_EMPTY, 7, INVENTORY_EMPTY];
+      check('collectKey skips already-occupied slots',
+        collectKey(inv2, 21) === 1 && inv2[1] === 21);
+      const inv3 = [5, 6, 7, 8];
+      check(`collectKey falls back to slot ${INVENTORY_SLOTS - 1} (CS:0x048F's boot value) when full`,
+        collectKey(inv3, 21) === INVENTORY_SLOTS - 1
+          && inv3[INVENTORY_SLOTS - 1] === 21 && inv3[0] === 5);
+    }
+
+    /* ── A full Player, crouch entry -> scan/collect -> exit, end to end ──── */
+    {
+      const MAP_COLS = 128, N = MAP_COLS * 64;
+      const planeB = new Uint8Array(N);
+      for (let c = 0; c < MAP_COLS; c++) planeB[12 * MAP_COLS + c] = 1;   // a floor
+      const map = { planeA: new Uint8Array(N), planeB, widthPx: 4096, heightPx: 1024 };
+      const I = (o = {}) => ({ left: false, right: false, up: false, down: false, fire: false, ...o });
+      const cats = new Uint8Array(256); cats[21] = CATEGORY.KEY;
+
+      const freshHero = () => {
+        const p = new Player(2 * 32, 9 * 16);
+        for (let i = 0; i < 4; i++) p.tick(map, I());        // settle
+        for (let i = 0; i < 6; i++) p.tick(map, I({ right: true }));
+        return p;
+      };
+
+      {
+        const p = freshHero();
+        const hot = keyHotPoint(p);
+        const key = { x: hot.x, y: hot.y - 0x10, type: 21, dead: false, flag6: 1 };
+        const inventory = [INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY];
+        const pickup = { objects: [key], cats, inventory };
+
+        p.tick(map, I({ right: true, down: true }), null, 1, pickup);
+        check('crouch entry lands on the facing-specific state (18=right)',
+          p.state === ST.CROUCH && p.stateIndex === PS.CROUCH_R);
+
+        p.tick(map, I({ down: true }), null, 1, pickup);
+        check('crouching with FIRE released does NOT collect the key',
+          p.keyCollected === null && !key.dead && inventory[0] === INVENTORY_EMPTY);
+
+        p.tick(map, I({ down: true, fire: true }), null, 1, pickup);
+        check('crouch + FIRE collects the key (CS:0x60F0/0x6100-0x610D)',
+          p.keyCollected && p.keyCollected.type === 21 && p.keyCollected.slot === 0
+            && key.dead === true && inventory[0] === 21);
+
+        p.tick(map, I({ right: true }), null, 1, pickup);
+        check('releasing DOWN does not stand up immediately (CS:0x4B00-0x4B02 delay)',
+          p.state === ST.CROUCH);
+        p.tick(map, I({ right: true }), null, 1, pickup);
+        check('...and stands up into WALK_R on the second release tick (CS:0x4B07)',
+          p.state === ST.GROUND && p.stateIndex === PS.WALK_R);
+      }
+
+      {
+        /* Mirror: crouch LEFT, and confirm walking away without FIRE never
+         * consumes the object even though the scan keeps finding it. */
+        const p = freshHero();
+        for (let i = 0; i < 10; i++) p.tick(map, I({ left: true }));
+        const hot = keyHotPoint(p);
+        const key = { x: hot.x, y: hot.y - 0x10, type: 22, dead: false, flag6: 1 };
+        const inventory = [INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY];
+        const pickup = { objects: [key], cats: (() => { const c = new Uint8Array(256); c[22] = CATEGORY.KEY; return c; })(), inventory };
+        p.tick(map, I({ left: true, down: true }), null, 1, pickup);
+        check('crouch entry facing left lands on state 19',
+          p.stateIndex === PS.CROUCH_L);
+        for (let i = 0; i < 5; i++) p.tick(map, I({ down: true }), null, 1, pickup);
+        check('five ticks crouching without FIRE never collects it',
+          !key.dead && inventory.every((v) => v === INVENTORY_EMPTY));
+      }
+
+      {
+        /* CS:0x598a `call 0x5b38 / jc` — an object near the crouch hot point
+         * has PRIORITY over the ladder-descend check, even when a real ladder
+         * sits right there. Force ST.GROUND directly rather than settling
+         * through `_fall`, so this test needs no floor at all — both branches
+         * under test `return` before the final `solidThreeBelow` check ever
+         * runs. Column 2 is climbable at row 12 (3 rows below y=144), which
+         * `_walk`'s own -4 px step (moving left, run BEFORE the down-check)
+         * reaches via the col+1 branch from a starting x of 64. */
+        const ladderMap = { planeA: new Uint8Array(N), planeB: new Uint8Array(N), widthPx: 4096, heightPx: 1024 };
+        for (let r = 4; r < 16; r++) ladderMap.planeB[r * MAP_COLS + 2] = 2;   // CELL_CLIMBABLE
+        const forceGround = () => {
+          const q = new Player(2 * 32, 9 * 16);
+          q.state = ST.GROUND; q.stateIndex = PS.WALK_L; q.facing = -1;
+          return q;
+        };
+        const sanity = forceGround();
+        sanity.tick(ladderMap, I({ left: true, down: true }), null, 1, null);
+        check('sanity: with no nearby object, down+moving descends the ladder',
+          sanity.state === ST.CLIMB);
+
+        const p = forceGround();
+        const hot = keyHotPoint({ x: 2 * 32 - WALK_STEP, y: 9 * 16 });   // post-`_walk` position
+        const nearby = { x: hot.x, y: hot.y, type: 0, dead: false, flag6: 1 };
+        p.tick(ladderMap, I({ left: true, down: true }), null, 1, { objects: [nearby], cats, inventory: [] });
+        check('...but an object near the hot point sends the hero to CROUCH instead',
+          p.state === ST.CROUCH);
+      }
+
+    }
   }
 
   results.push({
@@ -7553,12 +7719,16 @@ export async function checkWeaponsProjectiles(fetchRaw) {
       'and PLEV1A alone places ten of them. TREASURE now works end to end: ' +
       'ordinary pickups pay POBJECTS +6 into the money total and value>>3 ' +
       'into the BCD score, and a chest opens against its key and throws ten ' +
-      'items out that land as real objects. Still absent: KEYS, which the ' +
-      'original does not collect by walking either (crouch + fire, CS:0x6069 ' +
-      '— so a chest is only openable in this build with a seeded inventory); ' +
-      'the 40-entry destructible-tile queue at DS:0xd0c6; UNKNOWN_tag_fd; the ' +
-      'per-projectile animation frame; and UNKNOWN_DS_0168 — which now has ' +
-      'four behaviours and still no meaning.',
+      'items out that land as real objects. KEYS now work too: CROUCH + ' +
+      'FIRE (CS:0x6069, player.js\'s `_crouch` -> pickup.js\'s `scanForKey`/ ' +
+      '`collectKey`) scans the same hot point the original does and stores ' +
+      'into the first empty inventory slot — a disclosed substitution for ' +
+      'the original\'s single player-controlled slot cursor (DS:0x366), which ' +
+      'this port has no UI for. The inventory boots genuinely empty (CS:0x0495 ' +
+      '-0x04A1), no dev-seed. Still absent: the 40-entry destructible-tile ' +
+      'queue at DS:0xd0c6; UNKNOWN_tag_fd; the per-projectile animation ' +
+      'frame; and UNKNOWN_DS_0168 — which now has four behaviours and still ' +
+      'no meaning.',
   });
 
   /* ── Object fall physics — CS:0x1511-0x1631 ───────────────────────────

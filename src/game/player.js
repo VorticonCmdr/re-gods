@@ -54,6 +54,7 @@ import { WALK_CYCLE, WALK_FOOTSTEP_PHASES, jumpPhase,
 import { FIRE_STATES, ENTRY, fireTick, fireAnimOffset, fireGuardBefore,
          fireGuardAfter, JUMP_ARC_STEP, JUMP_ARC_END,
          JUMP_ARC_EXIT } from './fire-states.js';
+import { objectNearHotPoint, scanForKey, collectKey } from './pickup.js';
 
 /* DS:0xd922 — the 23-entry jump delta table, verbatim.
  * 4 ticks of wind-up, 32 px rise, apex, 32 px descent; exactly symmetric. */
@@ -92,7 +93,8 @@ export const CLIMB_EVERY_OTHER_TICK = true;
  * the counter is > 2) before a sideways dismount is even attempted. */
 export const DISMOUNT_HOLD_TICKS = 3;
 
-export const ST = { GROUND: 'ground', JUMP: 'jump', FALL: 'fall', CLIMB: 'climb' };
+export const ST = { GROUND: 'ground', JUMP: 'jump', FALL: 'fall', CLIMB: 'climb',
+                     CROUCH: 'crouch' };
 
 /* Original state indices this port emits. See states.js for the proofs. */
 export const S = {
@@ -101,8 +103,52 @@ export const S = {
   FALL_L: 11, FALL_R: 12,
   CLIMB: 14,
   ARRIVAL: 4,   // CS:0x1022 — one of state 4's three named entrants
+  CROUCH_R: 18, CROUCH_L: 19,
   IDLE: 26,
 };
+
+/* CS:0x4AE0 (state 18, crouch RIGHT) / CS:0x4B55 (state 19, crouch LEFT),
+ * disassembled fresh:
+ *
+ *     4AE0  test [0x382],0x2 (DOWN) / jnz 4B11    ; DOWN held -> keep crouching
+ *       [DOWN NOT held -- the release/exit path:]
+ *     4AE7  (drop whatever the selected inventory slot holds -- CS:0x61A1;
+ *             NOT PORTED, see below)
+ *     4B00  dec cl / js 4B07                       ; count the phase DOWN
+ *     4B04    jmp 5e9b                              ; still >= 0 -> stay, render
+ *     4B07  cl=2 ; [0x377]=1 (WALK_R) ; jmp 5e9b    ; went negative -> EXIT
+ *       [DOWN held, at 4B11:]
+ *     4B11  cl=1                                    ; phase PINNED while crouched
+ *     4B13  [0x354]==0 -> jmp 6069                  ; the key scan
+ *     4B1D  [0x355]==0 -> jmp 6134                  ; slot-cycle preview (UI, cut)
+ *     4B27  FIRE -> jmp 612F                        ; drop/cycle UI (cut)
+ *     4B31  (the same drop-if-occupied check as 4AE7, mid-handler)
+ *     4B48  [0x354]==0 -> jmp 6069                  ; re-check the scan
+ *     4B52  jmp 5e9b
+ *
+ * State 19 (CS:0x4B55-0x4BC7) is the byte-identical mirror, exit to
+ * [0x377]=0 (WALK_L).
+ *
+ * THREE THINGS THIS PORT DOES NOT MODEL, all already-disclosed cuts:
+ *   - `[0x354]`/`[0x355]` are latches that make the original scan at most
+ *     once per crouch session rather than every tick. This port re-scans
+ *     every tick instead (see pickup.js's `scanForKey`) — idempotent unless
+ *     a key is actually collected, so the outcome matches.
+ *   - CS:0x612F/0x6134/0x615F, the 4-slot inventory panel's own cycle-preview
+ *     UI, is not built at all (this project's own disclosed cosmetic cut).
+ *   - CS:0x61A1, "drop whatever the selected slot holds" on crouch exit, is
+ *     not ported. Since `collectTreasure` (treasure.js) matches a held key by
+ *     VALUE across all 4 slots rather than by position, and this port's own
+ *     `collectKey` never evicts a slot the drop-on-exit mechanic would have
+ *     emptied anyway, skipping it cannot make a key that WAS collected fail
+ *     to open its chest — it only means a key is never involuntarily dropped
+ *     back onto the ground.
+ *
+ * WHAT IS PORTED: the phase pin while held, the 2-tick exit-delay countdown
+ * before standing back up (CS:0x4B00-0x4B07 / 0x4B75-0x4B7C), and the scan
+ * itself, gated on FIRE exactly where CS:0x60E4 gates it — at the moment of
+ * collection, not before. */
+export const CROUCH_EXIT_PHASE_START = 1;   // CS:0x4B11/0x4B86 `mov cl,1`
 
 /**
  * Every (stateIndex, phase) pair this port can actually emit, DERIVED by
@@ -153,6 +199,19 @@ export function emittableStates() {
   /* The climb, from a hero placed on the ladder — walking 18 columns to reach
    * it would only pad the run. */
   run(new Player(20 * 32, 9 * 16), [[I(), 2], [I({ up: true }), 12], [I(), 6]]);
+
+  /* Crouch, both facings: walk, press DOWN to enter, hold a couple ticks
+   * (the key scan is a no-op with no `pickup` context here), release and let
+   * the 2-tick exit delay play out before the hero stands back up. */
+  run(new Player(2 * 32, 9 * 16), [
+    [I(), 4],
+    [I({ right: true }), 4],
+    [I({ right: true, down: true }), 3],
+    [I({ right: true }), 3],
+    [I({ left: true }), 4],
+    [I({ left: true, down: true }), 3],
+    [I({ left: true }), 3],
+  ]);
 
   return { pairs: [...seen.values()], map };
 }
@@ -285,6 +344,7 @@ export class Player {
     this.stateIndex = S.FALL_R;   // DS:0x377
     this.phase = 0;               // DS:0x36b (CL), sign-extended as a byte
     this.footstep = false;        // set on the ticks the original plays SFX 0x0e
+    this.keyCollected = null;     // {type, slot} on the tick CS:0x60F0 fires
 
     /* ── The FIRE overlay ───────────────────────────────────────────────
      * The eight firing states are NOT a fifth entry in `ST`. They carry their
@@ -350,17 +410,24 @@ export class Player {
    *        leaves the gate open, so a caller that doesn't thread the real
    *        toggle through (tests, tools) climbs at the pre-existing rate
    *        rather than silently halving it.
+   * @param {?{objects:Array, cats:Array, inventory:Array}} pickup  the live
+   *        map objects, the category table, and the 4-slot inventory —
+   *        everything `_crouch`'s key scan (CS:0x6069) needs. `null` is a
+   *        valid caller (tests, tools): crouch entry/exit still works, only
+   *        the scan itself becomes a no-op.
    */
-  tick(map, input, fire = null, tock = 1) {
+  tick(map, input, fire = null, tock = 1, pickup = null) {
     this.footstep = false;
     this.climbStep = false;
     this.emitted = null;
+    this.keyCollected = null;
     if (this.fireState >= 0) { this._fireTick(map, input, fire); return; }
     switch (this.state) {
-      case ST.GROUND: this._ground(map, input, fire); break;
+      case ST.GROUND: this._ground(map, input, fire, pickup); break;
       case ST.JUMP:   this._jump(map, input, fire);   break;
       case ST.FALL:   this._fall(map, input, fire);   break;
       case ST.CLIMB:  this._climb(map, input, fire, tock); break;
+      case ST.CROUCH: this._crouch(input, pickup);    break;
     }
     if (this.fireState < 0) this.renderPhase = this.phase;
   }
@@ -527,7 +594,7 @@ export class Player {
     return true;
   }
 
-  _ground(map, input, fire) {
+  _ground(map, input, fire, pickup) {
     const moving = input.left || input.right;
     /* ⚠️ ONLY THE WALK HANDLERS FIRE. State 26 (idle) tests the same bit at
      * CS:0x49EA and calls CS:0x1045 — the object-pickup walk over DS:0x8314 —
@@ -604,20 +671,53 @@ export class Player {
      *     for a climbable cell; climb if found.
      *   - UP alone with no climbable cell -> nothing happens this tick
      *     (CS:0x5a64 / CS:0x4a6a `jmp 0x5e9b`) — NOT a jump. */
-    const descendCol = (moving && input.down)
-      ? climbableThreeBelowCol(map, this.x, this.y) : null;
-    if (descendCol !== null) {
-      /* CS:0x59ab (walk-left) / CS:0x5bf3 (walk-right) — descend onto a
-       * ladder three rows (48 px) below, tested before UP is even looked
-       * at. The port's ladder is simplified (see _climb's own note), so
-       * only the state transition and the X snap are reproduced. */
-      this.x = ladderSnapX(this.x, descendCol);
-      this.state = ST.CLIMB;
-      this.stateIndex = S.CLIMB;
-      this.phase = 0;
-      this.ladderPingPong = false;
-      this.dismountHold = 0;
-      this.fromLadder = false;
+    if (moving && input.down) {
+      /* CS:0x598a (walk-left) / CS:0x5bd2 (walk-right) — `call 0x5b38 / jc`
+       * has PRIORITY over the ladder-descend check below: an object sitting
+       * near the crouch hot point sends the hero straight to crouch without
+       * the map ever being consulted. `moving` really is the whole gate —
+       * `get_xrefs_to` on both crouch-entry write sites (CS:0x59e5, 0x5c29)
+       * returns exactly three conditional jumps each, all inside this same
+       * walk-state handler pair, and an exhaustive scan of every
+       * `MOV [0x377],...` in the binary found no register-sourced (computed)
+       * writer anywhere — every one is a literal immediate. Idle+DOWN cannot
+       * reach crouch in the original at all. */
+      const nearObject = pickup ? objectNearHotPoint(pickup.objects, this) : false;
+      const descendCol = nearObject ? null : climbableThreeBelowCol(map, this.x, this.y);
+      /* ⚠️ NOT PORTED, and deliberately: CS:0x59a4-0x59a9 also sends the col+1
+       * (approach-from-the-left) ladder branch to crouch when a horizontal
+       * direction is ALSO held alongside DOWN. In the original that is a real
+       * extra condition, because state 0/1 is PERSISTED — the hero can be
+       * "in walk-left" with LEFT already released. In this port `moving`
+       * (used above as the walk-state proxy) is computed from LIVE input each
+       * tick, so it is impossible to reach this code at all with neither
+       * `input.left` nor `input.right` true — porting that test verbatim
+       * would make the col+1 approach permanently unreachable, silently
+       * turning a rare edge case in the original into a total regression
+       * here. Left as the col-0/col-1 priority from `climbableThreeBelowCol`
+       * alone, which is the part that does not depend on persisted state. */
+      if (descendCol !== null) {
+        /* CS:0x59ab (walk-left) / CS:0x5bf3 (walk-right) — descend onto a
+         * ladder three rows (48 px) below. The port's ladder is simplified
+         * (see _climb's own note), so only the state transition and the X
+         * snap are reproduced. */
+        this.x = ladderSnapX(this.x, descendCol);
+        this.state = ST.CLIMB;
+        this.stateIndex = S.CLIMB;
+        this.phase = 0;
+        this.ladderPingPong = false;
+        this.dismountHold = 0;
+        this.fromLadder = false;
+        return;
+      }
+      /* CS:0x59e5 / CS:0x5c29 — crouch, facing the direction just walked.
+       * `phase` is deliberately left untouched: on the handoff tick it
+       * still renders with the OLD (walk-cycle) value, exactly as the
+       * original's own "destination anim_base, stale cl" convention
+       * (states.js) predicts — `_crouch` pins it to 1 on its own first
+       * tick, CS:0x4B11/0x4B86. */
+      this.state = ST.CROUCH;
+      this.stateIndex = this.facing < 0 ? S.CROUCH_L : S.CROUCH_R;
       return;
     }
     if (input.up) {
@@ -946,5 +1046,46 @@ export class Player {
       if (this.phase >= LADDER_PHASE_MAX) { this.phase = LADDER_PHASE_MAX; this.ladderPingPong = true; this.climbStep = true; }
     }
     this.stateIndex = S.CLIMB;
+  }
+
+  /**
+   * States 18/19 — CS:0x4AE0 / CS:0x4B55. See the module-level comment above
+   * `S.CROUCH_R` for the full disassembly and which pieces are cut.
+   * @param {{down,left,right,fire}} input
+   * @param {?{objects:Array, cats:Array, inventory:Array}} pickup
+   */
+  _crouch(input, pickup) {
+    if (input.down) {
+      /* CS:0x4B11/0x4B86 `mov cl,1` — the animation phase is PINNED while
+       * actively crouching; there is no cycle to advance. */
+      this.phase = CROUCH_EXIT_PHASE_START;
+      /* CS:0x4B13-0x4B1A -> CS:0x6069. Gated on FIRE only at the point of
+       * collection (CS:0x60E4), exactly like the scan itself — not before,
+       * so crouching over a key with fire released still finds it (and
+       * silently leaves it) every tick, matching CS:0x60EB's "put it back". */
+      if (pickup) {
+        const key = scanForKey(pickup.objects, pickup.cats, this);
+        if (key && input.fire) {
+          key.dead = true;                 // CS:0x60D8 `[si+4] = 0xffff`
+          key.flag6 = 0;                   // CS:0x60DD `[si+6] = 0`
+          const slot = collectKey(pickup.inventory, key.type);
+          this.keyCollected = { type: key.type, slot };
+        }
+      }
+      this.stateIndex = this.facing < 0 ? S.CROUCH_L : S.CROUCH_R;
+      return;
+    }
+    /* CS:0x4B00/0x4B02 (right) and CS:0x4B75/0x4B77 (left) — DOWN released:
+     * count the phase DOWN from wherever it stood (CROUCH_EXIT_PHASE_START
+     * on any tick that was still actively crouching) and only stand up once
+     * it goes negative — a 2-tick delay before the transition, not instant. */
+    this.phase -= 1;
+    if (this.phase < 0) {
+      this.state = ST.GROUND;                                  // CS:0x4B07/0x4B7C
+      this.stateIndex = this.facing < 0 ? S.WALK_L : S.WALK_R;  // `[0x377] = 0/1`
+      this.phase = 2;                                           // `mov cl,2`
+      return;
+    }
+    this.stateIndex = this.facing < 0 ? S.CROUCH_L : S.CROUCH_R;
   }
 }
