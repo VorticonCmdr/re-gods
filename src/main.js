@@ -985,6 +985,29 @@ async function main() {
          * calls at CS:0x1012/0x1015 (destructible-block restore; the third
          * still untraced). */
         cam = cameraForSpawn(dest.x, dest.y);
+        /* CS:0x1012 — FUN_1000_de6f, `rep stosb` 0x8e8 (2280) bytes at
+         * SS:0x3768: the System-A entity group-RUNTIME array, 10 slots x
+         * 0xe4 bytes, zeroed wholesale. This was a disclosed gap in
+         * game/zones.js's own header ("this port does not reproduce that
+         * yet"). NOT System B — de6f's own literal base is 0x3768, System
+         * A's runtime; System B's is a different array (SS:0x36b4) that
+         * this instruction never touches, so only System-A creatures are
+         * wiped by a teleport.
+         *
+         * This port has no single runtime array to zero — the equivalent
+         * state is spread across three structures (slotsA: per-slot
+         * activation; groupsA: per-group reward-tracking; enemiesA: the
+         * live entities themselves). Zeroing the original's array means a
+         * System-A group's entities are never walked by CS:0xdf39's own
+         * per-frame loop again — they are not merely frozen, they become
+         * permanently unreachable. Every element of enemiesA is pushed
+         * exactly once, alongside a groupsA record, by runSpawnsA() above —
+         * there is no other producer — so clearing all three together is a
+         * complete and faithful mirror of the original's block-clear, not
+         * an approximation of it. */
+        slotsA = new GroupSlots();
+        groupsA = [];
+        enemiesA = [];
         $('event').textContent = `teleport zone -> (${dest.x}, ${dest.y})`;
       } else if (zoneHit && zoneHit.kind === ZONE_EXIT && !transitioning) {
         const dest = resolveExitDestination(zoneHit.arg);

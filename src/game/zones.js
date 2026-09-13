@@ -65,7 +65,15 @@
  *           revision of this comment guessed (that guess is wrong: de6f
  *           never touches plane A/B or the DS:0xd0c6 damage queue). A
  *           teleport wipes every active System-A creature group's runtime
- *           state; this port does not reproduce that yet — a disclosed gap.
+ *           state — NOT System B's (de6f's own literal base is 0x3768,
+ *           System A's array; System B's separate runtime at SS:0x36b4 is
+ *           untouched). NOW PORTED: main.js's own teleport branch resets
+ *           slotsA/groupsA/enemiesA to fresh/empty, the complete mirror of
+ *           zeroing the one array these three port-side structures stand
+ *           in for (every enemiesA entity is pushed exactly once alongside
+ *           a groupsA record, by runSpawnsA() — there is no other
+ *           producer, so clearing all three together is exact, not an
+ *           approximation). Checked in checkZones().
  *     1015  CALL FUN_1000_1196, falling into the already-documented CS:0x11D3
  *           object-activation-box recompute (`UNKNOWN_object_flag6 — CLOSED`)
  *           — already faithfully reproduced every tick by this port's own

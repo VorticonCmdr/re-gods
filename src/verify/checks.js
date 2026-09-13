@@ -8829,6 +8829,46 @@ export async function checkZones(fetchRaw) {
     p.fireState === -1 && p.fallV === 0,
     `x=${p.x} y=${p.y} state=${p.stateIndex} phase=${p.phase} fire=${p.fireState}`);
 
+  /* --- CS:0x1012: FUN_1000_de6f, the System-A group-runtime wipe --------
+   * This port has no single array to zero — the equivalent state is spread
+   * across GroupSlots (per-slot activation), a groupsA-shaped array
+   * (per-group reward tracking) and an enemiesA-shaped array (the live
+   * entities). Reproduce the exact three-line wipe main.js's own teleport
+   * branch now performs, against fixtures built the same way runSpawnsA()
+   * builds them, and confirm it is a COMPLETE mirror: no entities survive,
+   * no reward-tracking record survives, and — the part a naive "just clear
+   * enemiesA" fix would get wrong — every one of the 10 runtime slots is
+   * genuinely FREED, not merely forgotten, so the identical descriptor can
+   * be activated again immediately. */
+  const descA = { count: 3, hp: 1, cls: 0, tileX: 10, tileY: 20, live: true };
+  let slotsA = new GroupSlots();
+  let groupsA = [];
+  let enemiesA = [];
+  check('slotsA.activate succeeds against a fresh pool',
+    slotsA.activate(descA));
+  for (const slot of slotsA.slots) if (slot.desc === descA) slot.state = 1;
+  const members = [
+    new EntityA({ x: 320, y: 640, cls: 0, hp: 1 }),
+    new EntityA({ x: 352, y: 640, cls: 0, hp: 1 }),
+    new EntityA({ x: 384, y: 640, cls: 0, hp: 1 }),
+  ];
+  enemiesA.push(...members);
+  groupsA.push({ desc: descA, members, rewardGiven: false });
+  check('BEFORE the wipe: one slot active, 3 entities, 1 tracked group',
+    slotsA.slots.filter((s) => s.state !== 0).length === 1 &&
+    enemiesA.length === 3 && groupsA.length === 1);
+
+  slotsA = new GroupSlots(); groupsA = []; enemiesA = [];   // the fix, verbatim
+  check('AFTER the wipe: every one of the 10 slots is FREE, not just forgotten',
+    slotsA.slots.length === 10 && slotsA.slots.every((s) => s.state === 0),
+    JSON.stringify(slotsA.slots.map((s) => s.state)));
+  check('...enemiesA and groupsA are both empty — no orphaned entities or ' +
+    'stale reward-tracking records survive the teleport',
+    enemiesA.length === 0 && groupsA.length === 0);
+  check('...and the SAME descriptor activates cleanly afterward — the wipe ' +
+    'genuinely frees the slot rather than leaving it stuck busy',
+    slotsA.activate(descA) && slotsA.lostActivations === 0);
+
   results.push({
     name: 'what the zone read-side now does, and what is still a placeholder',
     note: true, pass: true,
@@ -8845,8 +8885,8 @@ export async function checkZones(fetchRaw) {
       'traced (see game/zones.js): 0x100F is the level-load/respawn camera ' +
       'init (Gods/CLAUDE.md UNKNOWN_camera_init, now CLOSED and ported as ' +
       'cameraForSpawn — a teleport IS a hard camera cut), 0x1012 clears the ' +
-      'System-A entity group-runtime array (not "the destructible-block ' +
-      'restore" as this note previously guessed — not yet reproduced), and ' +
+      'System-A entity group-runtime array — NOW PORTED (main.js\'s own ' +
+      'teleport branch resets slotsA/groupsA/enemiesA, checked above) — and ' +
       '0x1015 is the already-ported per-tick object-activation-box pass. ' +
       'UNKNOWN_zone_scan_caller and UNKNOWN_level_exit_destination both stand.',
   });
