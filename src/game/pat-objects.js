@@ -301,12 +301,12 @@
  *     pass. A class wired to it (`spriteBase=516`) is skipped by this
  *     module's shoot dispatch — treated as `handlerB: 'unknown'`, animated
  *     but never made to fire, rather than guessed at.
- *   - World 2 and World 3's own System-A class tables (`1ffd:e0e2`,
- *     `1ffd:e18a`) were not read this pass — only World 1 (`e046`) and
- *     World 4 (`e21a`) are transcribed in `CLASS_TABLE_A` below. A class
- *     index used in either unmeasured world resolves to `null` and is
- *     silently inert (spawn.js's own `CLASS_TABLES_B` convention for a
- *     class past what it transcribed), not a guess.
+   *   - ⚠️ CORRECTION: worlds 2/3 are now transcribed too, see `CLASS_TABLE_A`
+ *     below — copied from entity-a.js's own `CLASS_TABLES_A` (the same
+ *     `DS:0x1fe` pointer) and cross-checked byte-for-byte against this
+ *     table's own world 1/4 rows first. A class index past what any world
+ *     transcribes still resolves to `null` and is silently inert (matching
+ *     spawn.js's own `CLASS_TABLES_B` convention), not a guess.
  *   - No `PGOD0{1..4}.PAT` file is vendored into this port's asset
  *     directory (`public/game/` has no `.PAT` files today), so nothing
  *     currently calls `parsePatFile`/`PatGroups.activate` from a real
@@ -437,6 +437,25 @@ export const CLASS_TABLE_A = {
     { spriteBase: 450, w: 32, h: 32, handlerA: 'generic', handlerB: 'bc4b' },
     { spriteBase: 516, w: 32, h: 32, handlerA: 'generic', handlerB: 'unknown' },
     { spriteBase: 456, w: 32, h: 32, handlerA: 'generic', handlerB: 'bc4b' },
+  ],
+  /* Worlds 2/3, transcribed from entity-a.js's own CLASS_TABLES_A (the SAME
+   * DS:0x1fe pointer, cross-checked byte-for-byte against this table's own
+   * world 1/4 rows before trusting it — every field matches). Neither row
+   * set needed a fresh live read: this file's own header census already
+   * covers all 14 live classes across all 4 worlds ("generic, 11 of 14"),
+   * and 11 == 14 minus the 3 already-named specials (world1 idx1 'unknown',
+   * world4 idx2 'attack-state', world4 idx3 'cut-hazard') — so every class
+   * not already special IS the generic walk-cycle/bc4b pair, not a guess. */
+  2: [
+    { spriteBase: 504, w: 32, h: 32, handlerA: 'generic', handlerB: 'bc4b' },
+    { spriteBase: 512, w: 32, h: 32, handlerA: 'generic', handlerB: 'bc4b' },
+    { spriteBase: 504, w: 32, h: 32, handlerA: 'generic', handlerB: 'bc4b' },
+    { spriteBase: 504, w: 32, h: 32, handlerA: 'generic', handlerB: 'bc4b' },
+  ],
+  3: [
+    { spriteBase: 486, w: 32, h: 32, handlerA: 'generic', handlerB: 'bc4b' },
+    { spriteBase: 523, w: 32, h: 32, handlerA: 'generic', handlerB: 'bc4b' },
+    { spriteBase: 486, w: 32, h: 32, handlerA: 'generic', handlerB: 'bc4b' },
   ],
   4: [
     { spriteBase: 496, w: 32, h: 32, handlerA: 'generic', handlerB: 'bc4b' },

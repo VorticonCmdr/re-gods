@@ -10384,6 +10384,18 @@ export async function checkPatObjects(fetchRaw) {
       CLASS_TABLE_A[1]?.[0]?.handlerB === 'bc4b' && CLASS_TABLE_A[1]?.[2]?.handlerB === 'bc4b');
     check('World 1 class 1 is the UN-READ third handler (CS:0xBF58) — animates, never fires, not guessed at',
       CLASS_TABLE_A[1]?.[1]?.handlerB === 'unknown');
+    /* Worlds 2/3, transcribed from entity-a.js's own CLASS_TABLES_A (the
+     * SAME DS:0x1fe pointer) rather than re-read live — cross-checked
+     * against this table's own world 1/4 rows first (byte-identical on
+     * every overlapping field) before trusting the copy. */
+    check('World 2/3 are now transcribed (4 and 3 classes respectively), matching entity-a.js\'s own row counts',
+      CLASS_TABLE_A[2]?.length === 4 && CLASS_TABLE_A[3]?.length === 3);
+    check('every World 2/3 class resolves to the generic walk-cycle/bc4b pair (11-of-14 census, no specials there)',
+      [...CLASS_TABLE_A[2], ...CLASS_TABLE_A[3]].every(
+        (c) => c.handlerA === 'generic' && c.handlerB === 'bc4b'));
+    check('World 2/3 spriteBases match entity-a.js\'s own CLASS_TABLES_A exactly',
+      CLASS_TABLE_A[2].map((c) => c.spriteBase).join(',') === '504,512,504,504'
+      && CLASS_TABLE_A[3].map((c) => c.spriteBase).join(',') === '486,523,486');
   }
 
   /* (f) HOLD_BOX — the exact 4-edge screen-space box CS:0xBA95-0xBAB0 tests,
