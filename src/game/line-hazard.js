@@ -110,44 +110,34 @@
  *      (`nest.js`), immediately after the enemy-shot sprite range (0x45-0x4A)
  *      in the atlas — a discriminating, not decorative, corroboration.
  *
- * ── UNPORTED: the spawning side ───────────────────────────────────────────
+ * ── THE SPAWNING SIDE — CLOSED, a later session ───────────────────────────
  * CLAUDE.md's `CS:0xE659` (the shared System-A/System-B facing-and-fire
- * routine) is only partially ported — `enemy-shots.js` models its ORDINARY
- * fire path for exactly one of its six reachable call sites (the world-2
- * nest). The `attackBits != 0` divert to `CS:0xE5E4` this module implements
- * has NO caller yet in this port's entity AI: nothing in `nest.js`, `sysA.js`
- * or wherever System A/B facing eventually lands calls `spawnJittered`/
- * `spawnExact` below. This module is complete and tested on its own merits
- * (the pool mechanics, proven from the bytes), but wiring real enemies into
- * it is future work — same posture this project already takes with the five
- * other undocumented `enemy-shots.js` emitter pairs.
+ * routine)'s `attackBits != 0` divert to `CS:0xE5E4` is now wired for BOTH
+ * entity systems: `entity-a.js`'s `stageFacingAndFire` (System A, stage 6)
+ * and `entity.js`'s `fireB` (System B) both return `{hazard:true, ...}` on a
+ * nonzero `attackBits`, and `main.js`'s own per-entity loops for both
+ * systems route that straight into `spawnJittered`/`spawnAtHero` below
+ * (counted as `firedHazardsByA`/`firedHazardsByB`).
  *
  * ⚠️ `FUN_1000_b1c2` is `db4e`'s OTHER caller (CS:0xb236, per CLAUDE.md's
- * debris.js note) and is NOT this pool. `UNKNOWN_b1c2` is now CLOSED, and the
- * answer is: DO NOT PORT IT. `FUN_1000_b1c2` (a `DS:0xaccc` "falling rock"
- * pool) and two structurally richer siblings at `DS:0xad1c`/`DS:0xad94`
- * (`FUN_1000_b3ce`/`FUN_1000_b4e7`, gated behind self-modifying `RET` bytes)
- * are the SIXTH proven-cut feature in this project: an exhaustive operand
- * search found no code anywhere that ever seeds a live record into any of
- * the three arrays, and no code that ever flips either sibling's disarm gate
- * back on — `FUN_1000_b3b2` (called once, at level init) explicitly force-
- * writes both gates to `RET` and clears all three arrays, and nothing else
- * touches them. All three share sprite atlas base `0x213` (531) with the
- * ALSO-proven-cut world-4/System-A/class-3 environmental hazard. Porting any
- * of this would render content the original game never showed a player —
- * exactly the outcome this project's own evidence discipline exists to
- * prevent. Left unported, deliberately, with this citation standing in for
- * the empty code that would otherwise look like an oversight.
+ * debris.js note) and is NOT this pool. `UNKNOWN_b1c2`'s "DO NOT PORT IT,
+ * sixth proven-cut feature" reading below was ITSELF corrected in a later
+ * CLAUDE.md session: `CS:0xB144`/`0xB290` (world 2 selector-2 class 2/5/6/7)
+ * and `CS:0xB2C7`/`0xB2F3` (world 3 class 3) — both live in shipped
+ * `PALFILS +0x0718` dispatches — genuinely feed `DS:0xaccc`/`DS:0xad1c`+
+ * `DS:0xad94` and arm their self-modifying `RET` gates; the original
+ * "exhaustive operand search" missed this because both handlers load the
+ * pool base into a register first and write through `[SI+n]`, one
+ * indirection past a literal-address search. Ported as `rockfall.js` (see
+ * its own header for what it still doesn't model — ground-probe landing and
+ * the shatter-into-3 recursion, both needing a `map`/terrain object this
+ * call chain doesn't yet receive).
  *
- * `CS:0xAD88` (the three call sites this note used to point at) is a
- * SEPARATE, LIVE system — the selector-2 spawn driver (`DS:0xaec0`, PALFILS
- * `+0x0718`) — and is also not ported here. Unlike the falling-rock pools it
- * is reachable in shipped data, but it is a fixed-per-class-handler shooter
- * system layered on top of trigger-driven group activation, not a roaming
- * creature, and porting it correctly needs its own `DS:0xdf80`-class-table
- * wiring (handlers `CS:0xB03C`/`CS:0xB670`) that this pass did not do.
- * Tracked as future work, same posture as the five other undocumented
- * `enemy-shots.js` emitter pairs noted above — not silently dropped.
+ * `CS:0xAD88` (the three call sites this note used to point at) — the
+ * selector-2 spawn driver, `DS:0xaec0`, PALFILS `+0x0718` — is also ported
+ * now, as `selector2.js`'s own `handlerA_b03c`/`b670` (and sibling) handler
+ * families, which drain their own fire/hazard output the same way as the
+ * two entity systems above.
  */
 
 export const SLOTS = 20;                 // CS:0xdbd4 `mov bp,0x13` (0..19)

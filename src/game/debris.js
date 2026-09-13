@@ -99,9 +99,11 @@ export const LIFETIME_TICKS = SPRITE_LAST - SPRITE_FIRST + 1;   // 11
  *              every-other-frame toggle the world-2 nest's hatch animation
  *              reads). Reached from FUN_1000_b1c2 (CS:0xb236) and
  *              FUN_1000_dc37 (CS:0xdc2f direct, CS:0xdcc8 via a shared call).
- *              `UNKNOWN_d2be_pool` — an entire unported subsystem (a second
- *              shot-like hazard?), not a wiring gap. Not investigated past
- *              confirming its shape and both callers.
+ *              `UNKNOWN_d2be_pool` — CLOSED, and ported: see `line-hazard.js`,
+ *              whose own header names this exact citation as the token it
+ *              closes. Not a second shot-like hazard — a Bresenham-line
+ *              fragment pool fed by the shared System-A/B facing-and-fire
+ *              routine's `attackBits != 0` divert.
  *
  * ⚠️ ALL THREE (of the ORIGINAL three producer KINDS — A00D/A633/A81A) STORE
  * WORLD COORDINATES; only the caller's convention differs. Pinned by the

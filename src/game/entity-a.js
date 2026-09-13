@@ -947,11 +947,12 @@ export function spriteForEntityA(world, cls, entity, tables) {
  * Read directly from the shipped EXE image this session (12-byte records
  * {u16 base, u16 1, u16 handlerA, u16 w, u16 h, u16 handlerB}, 0xFFFF-
  * terminated) at DS:0xe046 (world 1), 0xe0e2 (world 2), 0xe18a (world 3),
- * 0xe21a (world 4). Handler pointers are recorded for provenance; they are
- * NOT ported (stage 3's attack, `stageAttack` below, isn't WIRED into
- * tick()'s pipeline yet — see the file header — and handlerB's default,
- * 0xbc4b, is a generic "fire toward my last direction of travel" behaviour
- * this port does not model beyond stage 6's own facing/fire).
+ * 0xe21a (world 4). Handler pointers are recorded for provenance; stage 3's
+ * attack (`stageAttack` below) IS now wired into `tick()`'s pipeline — see
+ * the file header's `UNKNOWN_sysA_attack_not_wired` closure. Still not
+ * modelled: handlerB's default, 0xbc4b, a generic "fire toward my last
+ * direction of travel" behaviour this port does not reproduce beyond stage
+ * 6's own facing/fire.
  * Per CLAUDE.md's "which table belongs to which entity system" census, the
  * classes actually REFERENCED by live shipped descriptors are: world 1 -
  * {0,2}; world 2 - {0,2}; world 3 - {0,1,2}; world 4 - {0} only (class 3 in

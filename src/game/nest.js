@@ -807,9 +807,11 @@ export const signed16 = (v) => ((v & 0xffff) ^ 0x8000) - 0x8000;
  * grows over four frames, which then tracks the hero horizontally, fires
  * every 43 ticks at +-5 px/tick, and on death bursts into 3 or 4 broodlings.
  *
- * ── UNKNOWN_nest_shot ────────────────────────────────────────────────────
- * CS:0x2039 (right) and CS:0x1FE7 (left) — what array they write and whether
- * the thing they spawn can damage the hero is not established here.
+ * ── UNKNOWN_nest_shot — CLOSED ───────────────────────────────────────────
+ * CS:0x2039 (right) and CS:0x1FE7 (left) write DS:0x8954, the shared
+ * enemy-shot array — see `enemy-shots.js`'s own header, which models the
+ * whole subsystem (six emitter pairs, one being this nest) and its
+ * hero-damage path.
  *
  * ── UNKNOWN_8014_brood — the walker is CLOSED, ported as `Brood` above ───
  * CS:0x894E's field map, movement, death and facing are all decoded and

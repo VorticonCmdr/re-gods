@@ -1585,8 +1585,10 @@ async function main() {
       }
 
       /* THE LINE-HAZARD POOL — CS:0xdc37/0xdb4e, sprites 75/76. See
-       * game/line-hazard.js; nothing spawns into it yet (above), so this
-       * loop is currently always empty in the running build. */
+       * game/line-hazard.js; fed by both entity systems' attackBits!=0
+       * divert (spawnJittered/spawnAtHero, below) and by selector2.js's own
+       * handlers, so this loop is live whenever a hazard-throwing group is
+       * on screen. */
       if (lastLineHazardFx) for (const d of lastLineHazardFx) {
         const lf = hero && hero.frames[d.sprite];
         if (lf) renderer.blitSprite(lf, d.x, d.y);

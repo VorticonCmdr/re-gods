@@ -226,8 +226,9 @@ export function consumableRank(type, cats) {
  * CS:0x6069, which scans the same 200 records against the hero's hot point
  * (X+16, Y+40) over an inclusive [objX-4, objX+20] x [objY-12, objY+16],
  * requires `[si+6] != 0` (on screen) and `category == 2` exactly, then stores
- * the TYPE into DS:0x17e + [0x366]*2. Not ported; the chest branch is tested
- * against a synthetic inventory instead.
+ * the TYPE into DS:0x17e + [0x366]*2. Now ported: `scanForKey`/`collectKey`
+ * below, wired into `Player._crouch` (player.js) via CROUCH + FIRE, feeding
+ * the hero's real inventory rather than a synthetic one.
  *
  * @param {Array} objects live map objects; a collected one gets `.dead = true`
  * @returns {{taken:Array}}

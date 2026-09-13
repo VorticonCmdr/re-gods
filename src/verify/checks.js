@@ -3968,18 +3968,19 @@ export async function checkSpawnA(fetchRaw) {
   results.push({
     name: 'shipped System-A strategy nibbles (lo, before the weight roll)',
     note: true, pass: true,
-    detail: `0 (chase) ${loHist[0] || 0}, 1 (weighted search, NOT PORTED) ${loHist[1] || 0}, ` +
-      `2 (marker-seek, NOT PORTED) ${loHist[2] || 0}`,
+    detail: `0 (chase) ${loHist[0] || 0}, 1 (weighted search, strategy1) ${loHist[1] || 0}, ` +
+      `2 (marker-seek, strategy2) ${loHist[2] || 0}`,
   });
   const total = live;
   results.push({
     name: 'measured EFFECTIVE strategy share (nibble + weight roll, CS:0xe748)',
     note: true, pass: true,
     detail: `0: ${(share[0] / total * 100).toFixed(1)}%, ` +
-      `1: ${(share[1] / total * 100).toFixed(1)}% (unimplemented -> sits still), ` +
-      `2: ${(share[2] / total * 100).toFixed(1)}% (unimplemented -> sits still) — ` +
-      `so roughly ${((share[1] + share[2]) / total * 100).toFixed(0)}% of spawned System-A ` +
-      'entities visibly stand still under this port, not a small residual.',
+      `1: ${(share[1] / total * 100).toFixed(1)}% (strategy1, ported), ` +
+      `2: ${(share[2] / total * 100).toFixed(1)}% (strategy2, ported) — ` +
+      'CORRECTION: strategy1/strategy2 are both implemented (entity-a.js) and ' +
+      'called from tick() when a camera is supplied; the earlier "unimplemented ' +
+      '-> sits still" framing here was stale.',
   });
 
   /* End-to-end on real level data: a materialised entity whose strategy
@@ -4661,11 +4662,11 @@ export async function checkWeaponsProjectiles(fetchRaw) {
   });
 
   results.push({
-    name: 'the running game still cannot fire', note: true, pass: true,
-    detail: 'FireControl models the latch, the allocate/emit split and the ' +
-      're-fire check, but the eight firing states (5, 6, 20-25) are NOT ported ' +
-      'into the player state machine — UNKNOWN_fire_state_bodies. Until they ' +
-      'are, nothing calls tryFire() in the playable build.',
+    name: 'the running game can now fire', note: true, pass: true,
+    detail: 'CORRECTION: the eight firing states (5, 6, 20-25) ARE ported into ' +
+      'the player state machine (Player._tryFire, called from the walk/jump/' +
+      'fall/ladder handlers) — UNKNOWN_fire_state_bodies is CLOSED and the ' +
+      'earlier "nothing calls tryFire() in the playable build" note above was stale.',
   });
 
   /* ── the move -> stamp link, and the whole chain end to end ──────────── */

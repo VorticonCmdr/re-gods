@@ -94,7 +94,7 @@ export function parseGroupsA(buf) {
       seedPair:   b[0x08],                     // stage 1 strategy nibble pair, CS:0xe748
       seedWeight: b[0x09],                     // stage 1 weight, 7-bit
       speedCap:   signByte(b[0x0b]),           // stage 4 (CS:0xe44d) clamp
-      stepCap:    signByte(b[0x0c]),           // stage 2 (CS:0xe336) steering-step cap partner, also stage 3's (unported) range gate
+      stepCap:    signByte(b[0x0c]),           // stage 2 (CS:0xe336) steering-step cap partner, also stage 3's range gate (stageAttack, entity-a.js — now wired)
       /* Strategy 1's own weight, CS:0xe9de `mov bl,[si+0xd]` — the probability
        * (out of 128) of taking the weighted-max-of-six-scratch-cells branch
        * over the uniform 1..7 reroll. ⚠️ Do NOT confuse this with System-B's
@@ -103,7 +103,7 @@ export function parseGroupsA(buf) {
        * cost budget; A's is this stage-1 weight). */
       zoneWeight: b[0x0d],                     // stage 1 (CS:0xe9de), NOT previously exposed
       extra:      b[0x0e],                     // copied to group-runtime +0x6 at materialise; consumer not traced
-      attackGate: b[0x0f],                     // stage 3 (CS:0xe487) gate — stage 3 is NOT ported
+      attackGate: b[0x0f],                     // stage 3 (CS:0xe487) gate — stageAttack, entity-a.js, wired into tick()
       /* CS:0xDFDB's own `mov cx,word[si+0x10]` (BE -> native, negative =
        * none) — System-A's OWN, separate group-elimination reward id.
        * NOT a duplicate of System-B's rewardId below despite the identical

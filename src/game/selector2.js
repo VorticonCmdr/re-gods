@@ -161,11 +161,12 @@
  * WHAT THIS PORT DOES NOT MODEL:
  *   - The one-shot "spawn flash" visual (see above — matches existing
  *     project precedent for the identical DS:0xac90 pool elsewhere).
- *   - Rendering the elimination-reward's own POPUP ICON: no popup-rendering
- *     module exists in this project yet (checked by grep; `statue.js`'s own
- *     `KILL_POPUP_ID`/`KILL_SCORE` constants carry the identical note). The
- *     MECHANISM (which item type would drop, and when) is fully modelled —
- *     see `rewards` below — for a future pass to wire into rendering.
+ *   - ⚠️ CORRECTION: the popup-rendering gap above is CLOSED. `popup.js`
+ *     exists, and `main.js` drains this slot's own `rewards` array into it
+ *     every tick (`popup.spawn(r.x, r.y, id, level.drawObjects)`), the same
+ *     single popup slot the world-2 nest's and System-A/B's own group-
+ *     elimination rewards share. `statue.js`'s cross-reference to this note
+ *     is stale for the same reason — check it before trusting it too.
  *   - ⚠️⚠️ CORRECTION, a later session — THE ENTITIES DO MOVE, and this bullet
  *     was wrong about both the mechanism and the stakes. An advisor review
  *     flagged this claim as SAMPLED: it names only `handlerA_b60e`/

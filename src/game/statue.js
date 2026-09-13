@@ -235,8 +235,12 @@ export const DEATH_FRAMES = 17;
 export const LIVE_BOX = Object.freeze({ w: 32, h: 32 });
 
 /** CS:0xBF5F (the shared popup spawner) and CS:0x0C8B (the shared BCD score
- *  entry, dl=5 -> 5*100). No popup-rendering module exists in this project
- *  yet (checked by grep) — see the file header's own note on this. */
+ *  entry, dl=5 -> 5*100). ⚠️ CORRECTION: `popup.js` now exists and IS drained
+ *  by main.js for the nest/selector2/System-A/B group rewards — but NOT for
+ *  this module's own `step()`-returned `popups` array, which main.js reads
+ *  only for `.drawn`/`.score` and silently drops `.popups`. A real, narrow,
+ *  still-open gap: wire `statueResult.popups` into the shared `popup.js`
+ *  instance the same way `selectorTwo.rewards` already is. */
 export const KILL_POPUP_ID = 16;
 export const KILL_SCORE = 500;
 
