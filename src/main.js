@@ -37,8 +37,10 @@ import { resetWeaponArc, setWeaponArc, projectileSprite } from './game/projectil
 import { parseGroupsB, parseGroupsA, GroupSlots, spriteForEntity, MAX_ENTITIES,
          CREATURE_DESCRIPTOR_BASE } from './game/spawn.js';
 import { EntityB, MODE, MODE_TABLE, groundBelow, isDying, EST,
-DEATH_SPRITE_BASE, DEATH_FRAMES, stealAttemptB, stepCarriedItemB } from './game/entity.js';
+DEATH_SPRITE_BASE, DEATH_FRAMES, stealAttemptB, stepCarriedItemB,
+groupRewardPosition } from './game/entity.js';
 import { EntityA, CLASS_TABLES_A, spriteForEntityA, EST as ESTA,
+groupRewardPositionA,
 isDyingA, DEATH_SPRITE_BASE_A, DEATH_FRAMES_A, stepCarriedItem } from './game/entity-a.js';
 import { VERDICT_NONE } from './game/pathfind.js';
 import { runSearch } from './game/pathfind-producers.js';
@@ -1194,14 +1196,12 @@ async function main() {
            * the original overwrites every time ANY member's own CS:0xF034
            * one-shot gate fires, so the reward lands wherever the group's
            * OWN most-recently-cached member died, not simply the last one in
-           * spawn order. `deathCacheSeq` (entity.js) reproduces "freshest"
-           * without a real shared scratch pair, since this port ticks all
-           * groups' entities in one flat loop rather than per-group.
-           * Every member is FREE or DYING here (the .every() guard above),
-           * and both states are only reachable through a frame===-1 tick
-           * that writes the cache — so every member has one, always. */
-          const src = g.members.reduce((a, b) => (b.deathCacheSeq > a.deathCacheSeq ? b : a));
-          popup.spawn(src.deathCacheX, src.deathCacheY, g.desc.rewardId, level.drawObjects);
+           * spawn order. See entity.js's own `groupRewardPosition` for the
+           * same-tick-kill race this now guards against (an earlier revision
+           * of this loop read the cache directly and dropped every
+           * entityCount===1 group's reward at (null, null)). */
+          const { x, y } = groupRewardPosition(g.members);
+          popup.spawn(x, y, g.desc.rewardId, level.drawObjects);
         }
       }
       /* `UNKNOWN_sysA_0x1f4_elimination_detector` — System-A's OWN, separate
@@ -1220,8 +1220,12 @@ async function main() {
         if (!g.members.every((e) => e.state === ESTA.FREE || e.state === ESTA.DYING)) continue;
         g.rewardGiven = true;
         if (g.desc.rewardId >= 0) {
-          const src = g.members.reduce((a, b) => (b.deathCacheSeq > a.deathCacheSeq ? b : a));
-          popup.spawn(src.deathCacheX + 8, src.deathCacheY + 8, g.desc.rewardId, level.drawObjects);
+          /* Same same-tick-kill race as groupsB above (see entity.js's own
+           * `groupRewardPosition` header) — entity-a.js's own
+           * `groupRewardPositionA` applies the identical fallback with
+           * System A's own +8-on-both-axes read-site bias. */
+          const { x, y } = groupRewardPositionA(g.members);
+          popup.spawn(x, y, g.desc.rewardId, level.drawObjects);
         }
       }
       /* Drain selector2.js's own group-elimination rewards (`CS:0xAED0`-

@@ -554,6 +554,40 @@ export class EntityB {
 }
 
 /**
+ * Resolve a System-B group's own elimination-reward drop position —
+ * CS:0xED84's own "freshest cached death" read, for main.js's own
+ * `groupsB` reward loop.
+ *
+ * `members` must already all be FREE or DYING (the caller's own `.every()`
+ * guard, matching CS:0xDFC4's dead-plus-dying-equals-count test). Picks
+ * whichever member's `deathCacheSeq` is highest — "most recently cached" —
+ * and applies the SAME +8-on-X-only bias `CS:0xED84` itself bakes in.
+ *
+ * ⚠️ A member killed by THIS SAME game tick's own `stepCreatureDamage` call
+ * has not yet had a chance to run its own `tick()`'s CS:0xF034 gate, which
+ * only fires the NEXT time `tick()` sees it already DYING with `frame===-1`
+ * — one tick after the kill, since `tick()` for this frame already ran
+ * BEFORE `stepCreatureDamage` set `state`/`frame` this same frame. So
+ * `deathCacheSeq` can still read its initial -1 for a freshly-DYING member,
+ * and `deathCacheX/Y` are still `null`. An earlier revision of this project
+ * read "every member is FREE or DYING, and both states are only reachable
+ * through the frame===-1 tick that writes the cache" as proof every member
+ * always has one — that reasoning conflated "the tick death happens" with
+ * "the tick death is first OBSERVED", and it made every `entityCount===1`
+ * group (the common case in shipped level data) drop its reward at
+ * `(null, null)` — invisible, not merely mispositioned. Since a DYING
+ * entity's own x/y never moves (its own DYING branch only advances `frame`),
+ * falling back to the live position with the identical bias produces the
+ * EXACT value the cache would hold one tick later, not an approximation.
+ */
+export function groupRewardPosition(members) {
+  const src = members.reduce((a, b) => (b.deathCacheSeq > a.deathCacheSeq ? b : a));
+  return src.deathCacheSeq < 0
+    ? { x: src.x + 8, y: src.y }
+    : { x: src.deathCacheX, y: src.deathCacheY };
+}
+
+/**
  * CS:0xEF01 — System B's steal-and-carry theft attempt, called for EVERY
  * alive System-B entity, EVERY tick, from main.js — unlike System A's own
  * `strategy2`, this is not tied to the entity's current pathfinder strategy

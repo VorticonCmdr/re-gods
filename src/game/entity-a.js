@@ -186,6 +186,23 @@ export const DEATH_FRAMES_A = 17;          // CS:0xE2AF `cmp word[di+4],0x11`
  * every group's entities in one flat loop, not per-group like CS:0xdf39. */
 let deathCacheSeqA = 0;
 
+/**
+ * Resolve a System-A group's own elimination-reward drop position —
+ * CS:0xDFC8-DFD2's own "freshest cached death" read, for main.js's own
+ * `groupsA` reward loop. Same shape as entity.js's own `groupRewardPosition`
+ * (see that function's header for the full same-tick-kill race this guards
+ * against), but with System A's own bias arrangement: the cache itself is
+ * RAW (no bias at write time, unlike System B's write-time +8-on-X), and
+ * the +8 bias is applied HERE, on BOTH axes, matching CS:0xDFC8/DFD2 exactly
+ * (`ax=[0x202]+8`, `bx=[0x204]+8`).
+ */
+export function groupRewardPositionA(members) {
+  const src = members.reduce((a, b) => (b.deathCacheSeq > a.deathCacheSeq ? b : a));
+  const bx = src.deathCacheSeq < 0 ? src.x : src.deathCacheX;
+  const by = src.deathCacheSeq < 0 ? src.y : src.deathCacheY;
+  return { x: bx + 8, y: by + 8 };
+}
+
 /* ── Stage 1 — CS:0xe6e4, the strategy nibble/weight roll, CS:0xe748 ──────
  * cl = [si+0x8] & 0xf (lo nibble), dl = ([si+0x8] >> 4) & 0xf (hi nibble),
  * bl = [si+0x9] (7-bit weight). rand = draw() & 0x7f. If bl < rand, swap

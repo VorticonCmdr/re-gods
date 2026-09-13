@@ -24,7 +24,8 @@ import { MODE, MODE_TABLE, EntityB, hopDelta, hopCursorNext, EST,
          groundBelow, onScreen, fireB, isDying,
          DEATH_SPRITE_BASE as ENTB_DEATH_SPRITE_BASE,
          DEATH_FRAMES as ENTB_DEATH_FRAMES,
-         stealAttemptB, carryOffsetB, stepCarriedItemB } from '../game/entity.js';
+         stealAttemptB, carryOffsetB, stepCarriedItemB,
+         groupRewardPosition } from '../game/entity.js';
 import { parseGroupsB, parseGroupsA, GroupSlots, spriteForEntity, CLASS_TABLES_B,
          CREATURE_DESCRIPTOR_BASE, MAX_ENTITIES } from '../game/spawn.js';
 import { EntityA, CLASS_TABLES_A, spriteForEntityA, rollStrategy,
@@ -35,7 +36,8 @@ import { EntityA, CLASS_TABLES_A, spriteForEntityA, rollStrategy,
          stealAttempt, searchAndSteal, stepCarriedItem,
          EST as ESTA, isDyingA,
          DEATH_SPRITE_BASE_A as ENTA_DEATH_SPRITE_BASE,
-         DEATH_FRAMES_A as ENTA_DEATH_FRAMES } from '../game/entity-a.js';
+         DEATH_FRAMES_A as ENTA_DEATH_FRAMES,
+         groupRewardPositionA } from '../game/entity-a.js';
 import { SELECTOR_TABLE, SELECTOR_TRIGGER, EVENT_TABLE_OFF, EVENT_COUNT,
          palfilsNameFor, parsePalfils, EventRunner } from '../game/events.js';
 import { GROUP_SLOTS as PAT_GROUP_SLOTS, SUBRECORDS_PER_GROUP, ABSOLUTE_TAG,
@@ -1971,6 +1973,53 @@ export function checkEntityB() {
       `first=${first.deathCacheSeq} second=${second.deathCacheSeq}`);
   }
 
+  /* A REAL BUG, found and fixed this session: `groupRewardPosition` (the
+   * function main.js's own `groupsB` reward loop now calls). Every check
+   * above drives the death cache by calling `.tick()` IMMEDIATELY after
+   * setting `state = DYING; frame = -1` — which is NOT how main.js's own
+   * per-frame ordering works. There, `stepCreatureDamage` (which sets
+   * state/frame on a kill) runs AFTER every entity's own `tick()` call for
+   * that SAME frame, so the entity that dies this frame does not get a
+   * chance to run its own CS:0xF034 cache-write until its NEXT tick — one
+   * frame after main.js's reward loop already ran and (before this fix)
+   * already latched `rewardGiven` using a still-null cache. This is the
+   * common case for shipped data: an `entityCount === 1` group's one member
+   * satisfies "all members FREE or DYING" on the exact tick it dies. */
+  {
+    const justKilled = new EntityB({ x: 300, y: 400 });
+    justKilled.state = EST.DYING; justKilled.frame = -1;   // as stepCreatureDamage just left it
+    check('a same-tick kill has NOT yet cached a position — the pre-fix crash site',
+      justKilled.deathCacheSeq === -1 && justKilled.deathCacheX === null);
+
+    const pos = groupRewardPosition([justKilled]);
+    check('groupRewardPosition falls back to the entity\'s own LIVE (x+8, y) — the exact '
+      + 'value the cache would hold one tick later, since a DYING entity never moves — '
+      + 'instead of (null, null)',
+      pos.x === 308 && pos.y === 400, JSON.stringify(pos));
+
+    /* One tick later the cache DOES populate, and must take over — the
+     * fallback is a bridge for the missing tick, not a replacement. */
+    justKilled.tick(new Uint8Array(128 * 64));
+    const pos2 = groupRewardPosition([justKilled]);
+    check('once the cache populates on the entity\'s own next tick, the SAME formula '
+      + 'reads it instead of falling back again',
+      pos2.x === justKilled.deathCacheX && pos2.y === justKilled.deathCacheY
+      && pos2.x === 308 && pos2.y === 400, JSON.stringify(pos2));
+
+    /* A mixed group: one member already cached (died last tick), one dying
+     * THIS tick with no cache yet. */
+    const diedLastTick = new EntityB({ x: 0, y: 0 });
+    diedLastTick.state = EST.DYING; diedLastTick.frame = -1;
+    diedLastTick.tick(new Uint8Array(128 * 64));   // cache now populated
+    const diedThisTick = new EntityB({ x: 500, y: 600 });
+    diedThisTick.state = EST.DYING; diedThisTick.frame = -1;   // no cache yet
+    const posMixed = groupRewardPosition([diedLastTick, diedThisTick]);
+    check('a mixed group correctly reports the ALREADY-cached member\'s real position '
+      + '(its deathCacheSeq is a real number >= 0, beating the fresh member\'s -1)',
+      posMixed.x === diedLastTick.deathCacheX && posMixed.y === diedLastTick.deathCacheY,
+      JSON.stringify(posMixed));
+  }
+
   /* ── Steal-and-carry, System B — CS:0xEF01/0xEEBA/0xEE06-0xEEB1/
    * 0xF045-0xF068. `stealGate` is genuinely GLOBAL mutable state (matching
    * DS:0x3cd's own one-way, whole-process latch — see pathfind.js's own
@@ -2566,6 +2615,37 @@ export function checkEntityA() {
     check('the entity ticked SECOND has the higher deathCacheSeq (it cached most recently)',
       second.deathCacheSeq > first.deathCacheSeq,
       `first=${first.deathCacheSeq} second=${second.deathCacheSeq}`);
+  }
+
+  /* A REAL BUG, found and fixed this session — System A's own mirror of
+   * `groupRewardPosition`'s bug (see entity.js's own regression test, right
+   * after checkEntityB's identical death-cache block, for the full timing
+   * argument). main.js's `groupsA` reward loop reads the cache the SAME
+   * tick a member's `state` first goes DYING, but that member's own
+   * CS:0xE251/E256 cache-write only runs on ITS NEXT `tick()` call — one
+   * frame after `stepCreatureDamage` (which runs after every entity's own
+   * per-frame `tick()`) set `state`/`frame`. `groupRewardPositionA` must
+   * fall back to the entity's own live position (with the same +8/+8
+   * read-site bias) rather than reading a still-null cache. */
+  {
+    const desc1 = { seedPair: 0, seedWeight: 0, stepCap: 4, speedCap: 4, fireByte: 0, flags: 0 };
+    const justKilled = new EntityA({ x: 300, y: 400, hp: 5 });
+    justKilled.state = ESTA.DYING; justKilled.frame = -1;   // as stepCreatureDamage just left it
+    check('a same-tick kill has NOT yet cached a position — the pre-fix crash site',
+      justKilled.deathCacheSeq === -1 && justKilled.deathCacheX === null);
+
+    const pos = groupRewardPositionA([justKilled]);
+    check('groupRewardPositionA falls back to the entity\'s own LIVE (x+8, y+8) — the '
+      + 'exact value the cache would hold one tick later, since a DYING entity never '
+      + 'moves — instead of (NaN, NaN)',
+      pos.x === 308 && pos.y === 408, JSON.stringify(pos));
+
+    justKilled.tick({ x: 0, y: 0 }, desc1, () => 0, false);   // cache now populates
+    const pos2 = groupRewardPositionA([justKilled]);
+    check('once the cache populates on the entity\'s own next tick, the SAME formula '
+      + 'reads deathCacheX/Y+8 instead of falling back again — still (308, 408)',
+      pos2.x === justKilled.deathCacheX + 8 && pos2.y === justKilled.deathCacheY + 8
+      && pos2.x === 308 && pos2.y === 408, JSON.stringify(pos2));
   }
 
   /* End-to-end regression guard for main.js's own `groupsA` reward-check
@@ -9563,6 +9643,66 @@ export function checkSelectorTwo() {
     check('rewardItemId < 0xB decodes as a plain popupValue, itemType null',
       pool.rewards.length === 1 && pool.rewards[0].popupValue === 6 && pool.rewards[0].itemType === null,
       JSON.stringify(pool.rewards));
+  }
+
+  /* A REAL BUG, found and fixed this session. Block (g) above kills a
+   * TWO-member batch's entities on two SEPARATE ticks, so entity 0's own
+   * `#stepDying` always runs (and caches `lastDyingX/Y`) before entity 1
+   * ever dies — the elimination reward never fires before a real cache
+   * exists. Block (h) above kills its ONE member by jumping straight to
+   * `state = 0` (no death fade at all), so `#stepDying` — the only place
+   * that writes `lastDyingX/Y` — never runs either. Neither exercises the
+   * common shipped case: an `entityCount === 1` batch whose one member is
+   * killed by a REAL hero touch DURING `#stepAlive`'s own `attackHero` call
+   * — `state` goes negative and `dyingCount` reaches the batch count on the
+   * SAME `step()` call, entirely inside `#stepAlive`, so `#stepDying` never
+   * runs for this batch AT ALL before the elimination check fires.
+   *
+   * ⚠️ An earlier draft of this exact test set `entities[0].state = -1`
+   * BEFORE calling `step()` — which is wrong in a way that matters: `step()`
+   * checks `state < 0` at the TOP of its per-entity loop, so a pre-set
+   * negative state is routed straight into the `#stepDying` branch (as if
+   * the entity had ALREADY been dying since a prior tick), which happily
+   * caches `lastDyingX/Y` and made the test pass for the wrong reason —
+   * it never actually exercised the same-tick race at all. The fix is to
+   * let the kill happen THROUGH `#stepAlive`'s own combat call, by
+   * positioning the hero to physically touch the entity. */
+  {
+    const grid = new DamageGrid();
+    const health = new Health();
+    const missDecode = () => { throw new Error('must not be called on an empty grid cell'); };
+    const cam = { x: 0, y: 0 };
+    const noop = () => {};
+
+    const pool = new SelectorTwoSpawns();
+    const desc = { index: 0, spawnX: 700, spawnY: 900, entityFacing: 0, drawStyle: 0,
+      staggerStep: 0, entityCount: 1, entityState0: 1, classIndex: 5,
+      facingSelect: 0, reloadByte: 0, rewardItemId: 22, live: true };
+    check('spawn() for the same-tick-elimination regression', pool.spawn(desc, 1) === true);
+    /* Materialise with the hero FAR away, so the alive branch below runs on
+     * a genuinely fresh, untouched entity — not one already mid-contact. */
+    pool.step(cam, { x: 100000, y: 100000, state: 0 }, 0, health, grid, missDecode, 0, noop, noop, {});
+
+    check('lastDyingX/Y start UNSET (null), not the old (0,0) default — the pre-fix bug '
+      + 'made an unset cache indistinguishable from "died at the world origin"',
+      pool.slots[0].lastDyingX === null && pool.slots[0].lastDyingY === null);
+    check('the entity is genuinely ALIVE (state > 0) before this tick — the kill below '
+      + 'must happen INSIDE the coming step() call, not before it',
+      pool.slots[0].entities[0].state === 1);
+
+    /* A hero sitting inside the entity's own hero-core contact box —
+     * combat.js's own attackHero, called from #stepAlive, kills a 1-HP
+     * turret in one touch (CREATURE_CONTACT_BOX-shaped attacker). */
+    const e0 = pool.slots[0].entities[0];
+    const touchingHero = { x: e0.x - 0x0a, y: e0.y - 0x08, state: 0 };
+    pool.step(cam, touchingHero, 0, health, grid, missDecode, 0, noop, noop, {});
+
+    check('CS:0xAED0-0xAF0F: the reward fires on the SAME tick a lone member is killed '
+      + 'by hero contact (dead+dying already equals the batch count)',
+      pool.eliminated === 1 && pool.rewards.length === 1, JSON.stringify(pool.rewards));
+    check('the reward lands at the entity\'s OWN (spawnX+8, spawnY+8) — NOT the stale '
+      + '(8, 8) an unset lastDyingX/Y used to produce for every entityCount===1 batch',
+      pool.rewards[0].x === 708 && pool.rewards[0].y === 908, JSON.stringify(pool.rewards));
   }
 
   /* (i) world2's b144/b290 rock-drop, exercised end to end through the real

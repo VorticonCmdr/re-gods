@@ -591,7 +591,7 @@ export class SelectorTwoSpawns {
       reloadByte: classDesc.reloadByte,
       facingSelect: classDesc.facingSelect,
       rewardItemId: classDesc.rewardItemId,
-      lastDyingX: 0, lastDyingY: 0,
+      lastDyingX: null, lastDyingY: null,
       materialised: false,
       entities: [],
     };
@@ -760,11 +760,28 @@ export class SelectorTwoSpawns {
 
   /** CS:0xAED0-0xAF0F. Fires once, the tick every entity in the batch first
    *  reaches dead-or-dying; the id is spent (0xFF) whether or not it was
-   *  ever awarded, so a slot can only ever pay out once. */
+   *  ever awarded, so a slot can only ever pay out once.
+   *
+   * ⚠️ CORRECTION: `slot.lastDyingX/Y` is only written by `#stepDying`
+   * (CS:0xAFC1-AFD0), which an entity killed by THIS SAME tick's own
+   * `#stepAlive` call has not reached yet — it goes straight to `dyingCount`
+   * without ever running `#stepDying` on the tick it dies (see `step()`'s
+   * own loop). For any batch whose members all die on one tick — trivially
+   * true for `entityCount === 1`, the common case in shipped data — this
+   * fired with `lastDyingX/Y` still at their unset default, landing the
+   * reward at (8,8) instead of near the kill. Falling back to whichever
+   * entity just died this tick (`frame === -1`) is exact, not approximate:
+   * a DYING entity never moves, so its live x/y already equals what
+   * `#stepDying` would have cached on the next tick. */
   #maybeAwardElimination(slot) {
     if (slot.rewardItemId === 0xff) return;
     this.eliminated++;
-    const x = slot.lastDyingX + 8, y = slot.lastDyingY + 8;     // CS:0xAEEA/0xAEED
+    let bx = slot.lastDyingX, by = slot.lastDyingY;
+    if (bx === null) {
+      const justDied = slot.entities.find((e) => e.frame === -1) || slot.entities[0];
+      bx = justDied.x; by = justDied.y;
+    }
+    const x = bx + 8, y = by + 8;                               // CS:0xAEEA/0xAEED
     const id = slot.rewardItemId;
     this.rewards.push(id < 0xb
       ? { popupValue: id, itemType: null, x, y }
