@@ -70,6 +70,8 @@ import { parseWeapons } from './game/weapons.js';
 import { pickUpWeapon } from './game/pickup.js';
 import { scanZones, unpackTeleportDest, resolveExitDestination,
          ZONE_TELEPORT, ZONE_EXIT } from './game/zones.js';
+import { DeathBurst, findRespawnPosition, loseLife,
+         gameOverPlaceholder } from './game/death.js';
 
 const LEVELS = ['1A','1B','2A','2B','3A','3B','4A','4B'];
 
@@ -433,6 +435,11 @@ async function main() {
    * SHORT one: CS:0x085D calls the same helper then subtracts 170. */
   let fx = { invuln: INVULN_TICKS_SPAWN, freeze: 0, giantJump: 0, lives: 2,
              arc: 0, shop: false, stateMachineSuspended: false };
+  /* CS:0x01BD's own `jmp 0x9bb` (health.dead, combat.js) — game/death.js.
+   * `deathSeq` is non-null for the ~1.2s burst; `gameOverState` is non-null
+   * once the THIRD life is lost (CS:0x093E `js`) and freezes the tick loop
+   * entirely (see the guard at the top of the Clock's update callback). */
+  let deathSeq = null, gameOverState = null, lastDeathBurstFx = [];
   /* CS:0xA461 — the starburst potion's 80-slot particle array. It is a real
    * damage source (tag 0xFC), so it lives beside the projectiles rather than
    * with the cosmetics. */
@@ -735,6 +742,11 @@ async function main() {
        * (the level-start block re-grants the short spawn invulnerability). */
       fx = { ...fx, invuln: INVULN_TICKS_SPAWN, freeze: 0, giantJump: 0,
              arc: 0, shop: false, stateMachineSuspended: false };
+      /* Not the original's own state (there is no "mid-death-sequence level
+       * exit" in the shipped game — the death test and a level-exit trigger
+       * are mutually exclusive events), but defensive: a level switch while
+       * a death/game-over is in flight should not leave a stale one behind. */
+      deathSeq = null; gameOverState = null; lastDeathBurstFx = [];
       resetWeaponArc();
       wireSpawn();
       cam = camInit(spawn);
@@ -747,6 +759,24 @@ async function main() {
     }
   }
 
+  /**
+   * CS:0x0473/CS:0x8DD9 — the full game restart CS:0x914c's own header
+   * comment already names as the ONLY thing that clears the weapon slots,
+   * money, score and inventory (a level change, `switchLevel`, deliberately
+   * carries all four). Reached here on game over (see the death-fork logic
+   * in the tick loop below) via the R key, since this port has no title
+   * screen of its own to route "new game" through — see game/death.js's own
+   * header for why the original's hiscore/attract-mode game-over sequence
+   * itself is not reproduced.
+   */
+  async function fullRestart() {
+    fx.lives = 2;                       // CS:0x8DD9's own starting value
+    purse = new Purse(); score = new Score();          // CS:0x0487/0x8D91
+    inventory = [INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY]; // CS:0x0498/0x8D80
+    deathSeq = null; gameOverState = null; lastDeathBurstFx = [];
+    await switchLevel('1A');            // CS:0x914c's own two callers both fall into world 1
+  }
+
   sel.addEventListener('change', () => { switchLevel(sel.value); });
 
   const input = { left: false, right: false, up: false, down: false, fire: false };
@@ -756,6 +786,10 @@ async function main() {
   };
   addEventListener('keydown', (e) => {
     const k = KEYMAP[e.code]; if (k) { input[k] = true; e.preventDefault(); }
+    /* Not an original-machine control — this port has no title screen to
+     * route "new game" through after CS:0x0943's own game-over sequence
+     * (see fullRestart()'s own header). */
+    if (e.code === 'KeyR' && gameOverState) { e.preventDefault(); fullRestart(); }
   });
   addEventListener('keyup', (e) => {
     const k = KEYMAP[e.code]; if (k) { input[k] = false; e.preventDefault(); }
@@ -793,6 +827,12 @@ async function main() {
   const clock = new Clock(
     () => {
       if (transitioning) return;    // a level load is in flight — hold the frame
+      /* Not modelled from a specific address: the original's own game-over
+       * path (CS:0x0943-0x0993) exits into a title/attract-mode system this
+       * port doesn't have. Freezing the tick loop here is this port's own
+       * substitute for "nothing the player does matters until they restart"
+       * — see fullRestart() and game/death.js's header. */
+      if (gameOverState) return;
       /* Per-tick order is the original's: snapshot the scroll origin, run the
        * state machine, probe plane B, then update the camera (CS:0x023f ->
        * 0x4993 -> 0x5ea0 -> 0x5ea4). Everything drawn this frame uses the
@@ -844,7 +884,14 @@ async function main() {
         if (o.dead || o.type !== CE64_OBJECT_TYPE || !(o.flag6 & 1)) continue;
         if (ce64Creatures.spawn(o.x - cam.snapX, o.y, cam.snapX)) o.dead = true;
       }
-      const fr = stepHeroFrame({
+      /* CS:0x01BD's own `jmp 0x9bb` skips the player state machine entirely
+       * once the hero is dead (game/death.js) — everything else in this
+       * tick (enemies, hazards, projectiles, events) keeps running, matching
+       * the busiest reading of FUN_1000_09bb's own call graph; only the
+       * player's own actions (fire, pickups, block-breaking, levers) stop. */
+      let fr = null;
+      if (!deathSeq) {
+      fr = stepHeroFrame({
         input, arsenal, grid, player,
         map: level.map, cam: { x: cam.snapX, y: cam.snapY }, world: level.world,
         /* CS:0x0206 — the object pass. `drawObjects` is the same array the
@@ -883,10 +930,12 @@ async function main() {
           return s;
         },
       });
+      }
       /* CS:0x6139 (crouch tick) / CS:0x499A->0x1e06 (every other tick) — the
        * panel's own extend/retract highlight animation. Runs unconditionally,
        * same as the draw call itself. */
       inventoryPanel.step(player.state === ST.CROUCH);
+      if (fr) {
       for (const t of fr.treasures) {
         if (t.outcome === 'collected') {
           $('event').textContent = `treasure +${t.value} (score +${t.score})`;
@@ -933,6 +982,14 @@ async function main() {
         /* CS:0x6377 — over-healing is banked into DS:0x168 at 32 a point,
          * not discarded. UNKNOWN_DS_0168, so it is only counted here. */
         if (c.banked) banked += c.banked;
+        /* ⚠️ BUG FIX. CS:0x62EC `inc word [0x224]` — the extra-life potion
+         * (rank 10, type 42). `applyConsumable` was called with a SPREAD
+         * COPY of `fx` (`{...fx, starburst, hero}`), so `state.lives` inside
+         * that handler mutated a throwaway object; the potion incremented a
+         * value nothing ever read back. `c.result.lives` already carries the
+         * new total (consumables.js's own `state.lives = (state.lives??0)+1`
+         * seeds from that same spread copy), so apply it to the REAL fx. */
+        if (c.result && typeof c.result.lives === 'number') fx.lives = c.result.lives;
         $('event').textContent = c.notWired
           ? `"${c.name}" (${c.desc || 'no description'}) — ${c.effect}: ${c.notWired}`
           : c.effect === 'health'
@@ -945,6 +1002,7 @@ async function main() {
         picked++;
         $('event').textContent = `picked up ${WEAPON_NAMES[p.weapon]}` +
           (p.duplicate ? ` (again — count ${p.count})` : ` into slot ${'ABC'[p.slot]}`);
+      }
       }
       /* plane-B cell -> event record -> selector 2 -> trigger evaluator */
       const fired = events.step(player.x, player.y,
@@ -1368,6 +1426,45 @@ async function main() {
       if (fx.invuln > 0) fx.invuln--;
       if (fx.giantJump > 0) fx.giantJump--;
       health.chase();
+      /* CS:0x01BD-0x01C9 (`bar <= 0`, combat.js's `health.dead`) — detected
+       * here, one step later than the original's own per-frame ordering
+       * (which tests the bar BEFORE that frame's player-state-machine call
+       * even runs; this port's `stepHeroFrame` gate above only takes effect
+       * from the NEXT frame on). See game/death.js's own header for the
+       * full CS:0x09BB/0x0930/0x0845 chain this block ports. */
+      if (!deathSeq && !gameOverState && health.dead) {
+        deathSeq = new DeathBurst(player.x - cam.snapX, player.y - cam.snapY);
+        /* `fr` (stepHeroFrame's own per-tick return) is gated off for the
+         * whole burst below, so lastDebrisFx/lastBurstFx/lastBlockFx would
+         * otherwise keep redrawing whatever they held on the tick death was
+         * detected, for all 18 frames of the burst. Clear them here rather
+         * than inside the `if (fr)` block, since that block simply doesn't
+         * run during the burst. */
+        lastDebrisFx = [];
+        lastBurstFx = null;
+        lastBlockFx = [];
+      }
+      if (deathSeq) {
+        const r = deathSeq.tick();
+        lastDeathBurstFx = r.sprites;
+        if (r.done) {
+          deathSeq = null;
+          const { lives, gameOver } = loseLife(fx.lives);   // CS:0x093A/0x093E
+          fx.lives = lives;
+          if (gameOver) {
+            gameOverState = gameOverPlaceholder();
+            $('event').textContent = 'GAME OVER — press R to restart';
+          } else {
+            health.respawn();                                       // CS:0x084B/0x0851
+            const pos = findRespawnPosition(spawn.x, spawn.y, level.map.planeB); // CS:0x0873-0x08BD
+            player.teleportTo(pos.x, pos.y);                         // CS:0x08D6-0x08E6 (state 4)
+            player.fallDamage = 0;                                   // CS:0x08E0, teleportTo doesn't touch this
+            cam = cameraForSpawn(pos.x, pos.y);                      // CS:0x08CC-0x08D3
+            fx.invuln = INVULN_TICKS_SPAWN;                          // CS:0x0860
+            $('event').textContent = `respawned — ${fx.lives} ${fx.lives === 1 ? 'life' : 'lives'} left`;
+          }
+        }
+      }
       cam.update(player.x, player.y, levelInfo);
     },
     () => {
@@ -1633,6 +1730,16 @@ async function main() {
         else { outOfRange++; renderer.strokeRect(d.x, d.y, 4, 4, 8); }
       }
 
+      /* THE HERO'S OWN DEATH BURST — CS:0x0A3B-0x0AA2, game/death.js. Screen-
+       * LOCKED (the original never re-subtracts the camera once seeded), so
+       * these draw at their own stored (x,y) directly, unlike every other
+       * sprite in this loop. */
+      for (const b of lastDeathBurstFx) {
+        const bf = hero && hero.frames[b.sprite];
+        if (bf) renderer.blitSprite(bf, b.x, b.y);
+        else { outOfRange++; renderer.strokeRect(b.x, b.y, 8, 8, 12); }
+      }
+
       /* PROJECTILES. Drawn after the enemies and before the hero. CS:0x9CC9-
        * 0x9CE3: sprite = the weapon's own pinned descriptor (+0x0c, or +0x1e
        * when facing selects the second one) PLUS the weapon's shared current
@@ -1699,6 +1806,8 @@ async function main() {
         ` · hp ${health.bar}/${health.target > HEALTH_MAX ? HEALTH_MAX : health.target}`        + (health.dead ? ' DEAD' : '') +
         ` · money ${purse.total} · score ${score.value}` +
         ` · lives ${fx.lives}` +
+        (deathSeq ? ` · death burst ${deathSeq.counter}/${0x12}` : '') +
+        (gameOverState ? ' · GAME OVER (press R)' : '') +
         (fx.invuln ? ` · INVULN ${fx.invuln}` : '') +
         (fx.freeze ? ` · FROZEN ${fx.freeze}` : '') +
         (fx.giantJump ? ` · giant jump ${fx.giantJump}` : '') +

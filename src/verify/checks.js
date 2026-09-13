@@ -69,6 +69,9 @@ import { Health, HEALTH_MAX, damageFor, attackHero, creatureTouchesHero,
          difficultyScale, DIFFICULTY_MULTIPLIERS, difficultyForgiven,
          DIFFICULTY_PROGRESSION, creatureScansGrid, hitSparkAxis,
          CREATURE_CONTACT_BOX } from '../game/combat.js';
+import { DeathBurst, DEATH_BURST_TEMPLATE, DEATH_BURST_TICKS,
+         DEATH_BURST_SPRITE_BASE, ARRIVAL_ZONE_TABLE, findRespawnPosition,
+         loseLife, gameOverPlaceholder } from '../game/death.js';
 import { Arsenal, spawnableWeapons, FIRE_CAPABLE_STATES, LEVER_STATES,
          INVENTORY_STATES } from '../game/hero-fire.js';
 import { pickUpWeapon, chooseSlot, heroTouches, stepPickups, PICKUP_BOX,
@@ -1724,6 +1727,26 @@ export async function checkDeathFadeSprites(fetchRaw) {
     note: true, pass: true,
     detail: `crosses an atlas file boundary iff >1 stem is listed`,
   });
+
+  /* The hero's OWN death burst (game/death.js) reuses this exact base — 0x5b,
+   * the same "universal death-burst" constant statue.js and entity-a.js also
+   * use — and DeathBurst#tick() only ever computes a sprite for counter
+   * values 0..DEATH_BURST_TICKS-2 (the counter===0x11 tick is silent and
+   * draws nothing, per the class's own header), so the real range it draws
+   * is [BASE, BASE + TICKS - 2], one frame narrower than ENTA's own [BASE,
+   * BASE+16]. Checked here, against the real atlas, rather than assumed from
+   * the shared constant alone — an advisor review flagged this as unverified. */
+  const heroFrames = DEATH_BURST_TICKS - 1;
+  const hb = resolves(DEATH_BURST_SPRITE_BASE, heroFrames);
+  check(`the hero's own death-burst range [${DEATH_BURST_SPRITE_BASE}, ` +
+    `${DEATH_BURST_SPRITE_BASE + heroFrames - 1}] (DEATH_BURST_SPRITE_BASE, ` +
+    `${heroFrames} frames actually drawn) resolves in the built 'always' map ` +
+    `(${map.length} descriptors)`,
+    hb.missing.length === 0, `missing: ${JSON.stringify(hb.missing)}`);
+  check(`the hero's death-burst base is 0x5b (91) — CS:0x0A89 'mov bp,0x5b', ` +
+    `the same literal as System A's own fade base (the documented ` +
+    `"universal death-burst" sprite)`,
+    DEATH_BURST_SPRITE_BASE === 0x5b);
 
   /* main.js draws every fade frame through the SAME masked blitter as an
    * ordinary sprite (no size class of its own), so unlike checkHeroSprites'
@@ -11643,6 +11666,248 @@ export function checkLevers() {
       + 'table; a special-sprite type with no lever-table entry does not — '
       + 'exactly the split this scan\'s own CS:0x1099 gate produces',
       matched === 4);
+  }
+
+  return results;
+}
+
+/**
+ * checkDeath — the hero's death-burst animation (CS:0x09BB/0x0A3B-0x0AA2),
+ * the lives/respawn fork (CS:0x0930-0x0943), and the respawn arrival-tile
+ * search (CS:0x0873-0x08BD, inside FUN_1000_0845). See game/death.js.
+ */
+export function checkDeath() {
+  const { results, check } = makeChecker();
+
+  /* ── Health#dead / Health#respawn ────────────────────────────────────── */
+  {
+    const h = new Health(24, 1);
+    check('a fresh Health is not dead', !h.dead);
+    h.bar = 1;
+    check('bar == 1 is not dead (strict <= 0, not < 1)', !h.dead);
+    h.bar = 0;
+    check('bar == 0 IS dead — CS:0x01C7 jnz/jmp 0x9bb', h.dead);
+    h.bar = -3;
+    check('bar < 0 is dead too', h.dead);
+    h.target = 5; h.bar = -3; h.latch = 1;
+    h.respawn();
+    check('respawn() restores target to 24 (CS:0x084B)', h.target === HEALTH_MAX);
+    check('respawn() restores bar to 1, not 24 — it animates up (CS:0x0851)',
+      h.bar === 1);
+    check('respawn() clears the hurt-sound latch', h.latch === 0);
+    check('a respawned Health is not dead', !h.dead);
+  }
+
+  /* ── loseLife — CS:0x093A `dec word[0x224]` then `js` on the RESULT ──── */
+  {
+    check('2 lives -> 1, not game over', JSON.stringify(loseLife(2)) === JSON.stringify({ lives: 1, gameOver: false }));
+    check('1 life -> 0, still not game over (the THIRD death ends it)',
+      JSON.stringify(loseLife(1)) === JSON.stringify({ lives: 0, gameOver: false }));
+    check('0 lives -> -1, game over', JSON.stringify(loseLife(0)) === JSON.stringify({ lives: -1, gameOver: true }));
+    const go = gameOverPlaceholder();
+    check('gameOverPlaceholder reports something the caller can show',
+      typeof go.message === 'string' && go.canRestart === true);
+  }
+
+  /* ── DeathBurst — the 5-particle template, read directly off DS:0xd752 ── */
+  {
+    check('the template is exactly 5 {vx,vy} pairs, a small upward fan',
+      DEATH_BURST_TEMPLATE.length === 5
+      && JSON.stringify(DEATH_BURST_TEMPLATE) === JSON.stringify([
+        { vx: -5, vy: -5 }, { vx: 0, vy: -5 }, { vx: 5, vy: -5 },
+        { vx: -5, vy: -2 }, { vx: 5, vy: -2 },
+      ]));
+
+    const b = new DeathBurst(100, 200);
+    check('all 5 particles seed at the SAME point (screen X, screen Y + 8) — '
+      + 'CS:0xA55 `add bx,8`, no per-particle position in the template',
+      b.particles.every((p) => p.x === 100 && p.y === 208));
+    check('each particle carries its own template velocity',
+      b.particles[2].vx === 5 && b.particles[2].vy === -5
+      && b.particles[3].vx === -5 && b.particles[3].vy === -2);
+
+    /* tick 0: update runs (counter was 0, not 17), sprite = base+0 */
+    let r = b.tick();
+    check('tick 0 draws all 5 particles at sprite base (0x5b)',
+      r.sprites.length === 5 && r.sprites.every((s) => s.sprite === DEATH_BURST_SPRITE_BASE));
+    check('tick 0 applies the template velocity once (CS:0xA78/0xA7B)',
+      b.particles[1].x === 100 && b.particles[1].y === 208 - 5);   // vx=0, vy=-5
+    check('tick 0 also applies gravity — vy++ AFTER the move (CS:0xA7E)',
+      b.particles[1].vy === -4);
+    check('tick 0 is not done', !r.done);
+
+    const fresh = new DeathBurst(0, 0);
+    for (let i = 0; i < 16; i++) fresh.tick();          // ticks 0..15 -> counter now 16
+    check('after 16 ticks the counter is 16, not yet at the silent tick',
+      fresh.counter === 16);
+    const t16 = fresh.tick();                            // tick counter==16 -> draws sprite base+16
+    check('tick 16 draws at sprite base+16 (0x6b) — the LAST drawn frame',
+      t16.sprites[0].sprite === DEATH_BURST_SPRITE_BASE + 16 && t16.sprites.length === 5);
+    check('counter is now 17, the silent tick', fresh.counter === 0x11);
+    const t17 = fresh.tick();                            // counter==17 -> CS:0xA66 skip
+    check('tick 17 (counter==0x11) draws NOTHING — CS:0xA66 `jz 0xaa4`, not a '
+      + 'port simplification', t17.sprites.length === 0);
+    check('tick 17 IS the one that finishes — counter reaches 18 inside the '
+      + 'silent branch too, so `done` must not be hardcoded false there',
+      t17.done);
+    check('the counter reaches DEATH_BURST_TICKS (18) after exactly 18 tick() '
+      + 'calls', fresh.counter === DEATH_BURST_TICKS);
+
+    /* A second, independent burst run purely to confirm `done` fires on the
+     * transition to 18 and not one call later or earlier. */
+    const b2 = new DeathBurst(0, 0);
+    let doneAt = -1;
+    for (let i = 0; i < 30 && doneAt < 0; i++) { if (b2.tick().done) doneAt = i; }
+    check('done fires on the 18th tick() call (index 17), matching '
+      + 'DEATH_BURST_TICKS', doneAt === DEATH_BURST_TICKS - 1);
+  }
+
+  /* ── The full death->respawn->death cycle, driven exactly as main.js's own
+   * per-tick handler drives it (health.dead detected -> new DeathBurst ->
+   * tick() until done -> loseLife -> respawn+teleport OR game over), not as
+   * four isolated unit calls. An advisor review flagged that no test had
+   * ever run this sequence end to end: `Health#respawn()` sets bar=1 and
+   * target=24, so for the 23 ticks after a respawn the hero is "alive" with
+   * a bar of 1..23 — if anything can knock the bar back to <=0 in that
+   * window, a second DeathBurst starts immediately, and this is the cycle
+   * that would surface it going wrong. */
+  {
+    const MAP_COLS = 128;
+    const emptyPlaneB = new Uint8Array(MAP_COLS * 64);   // no 0xFF anywhere -> always the entry-13 fallback
+    const spawnX = 200, spawnY = 300;
+
+    const h = new Health(24, 24);
+    let lives = 2;
+    let gameOver = false;
+    const respawnLog = [];
+
+    const runOneDeathToRespawnOrGameOver = () => {
+      h.bar = 0;                                    // the trigger: health.dead becomes true
+      check(`cycle: bar<=0 reports dead before life ${lives}'s burst starts`, h.dead);
+      const burst = new DeathBurst(0, 0);
+      let ticks = 0;
+      let done = false;
+      while (!done && ticks < 30) { done = burst.tick().done; ticks++; }
+      check(`cycle: life ${lives}'s burst finishes in exactly ` +
+        `${DEATH_BURST_TICKS} ticks, not more or fewer`, ticks === DEATH_BURST_TICKS);
+      const result = loseLife(lives);               // CS:0x093A/0x093E
+      lives = result.lives;
+      gameOver = result.gameOver;
+      if (gameOver) return;
+      h.respawn();                                  // CS:0x084B/0x0851 -> target=24, bar=1
+      const pos = findRespawnPosition(spawnX, spawnY, emptyPlaneB);
+      respawnLog.push({ lives, pos });
+      check(`cycle: after respawn ${respawnLog.length}, bar is 1 (chases up), ` +
+        'not already dead', h.bar === 1 && !h.dead);
+      check(`cycle: after respawn ${respawnLog.length}, target is back to full`,
+        h.target === HEALTH_MAX);
+    };
+
+    runOneDeathToRespawnOrGameOver();   // lives 2 -> 1
+    check('cycle: first death takes lives from 2 to 1, no game over', lives === 1 && !gameOver);
+    runOneDeathToRespawnOrGameOver();   // lives 1 -> 0
+    check('cycle: second death takes lives from 1 to 0, still no game over '
+      + '(the THIRD death ends it, per CS:0x093A/0x093E)', lives === 0 && !gameOver);
+    runOneDeathToRespawnOrGameOver();   // lives 0 -> -1, game over
+    check('cycle: the third death IS game over', gameOver && lives === -1);
+    check('cycle: only 2 respawns were logged — the game-over death never '
+      + 'calls health.respawn()/findRespawnPosition at all', respawnLog.length === 2);
+    check('cycle: every logged respawn landed at the SAME fallback position '
+      + '(entry 13, the only candidate against an all-zero plane B)',
+      respawnLog.every((r) => r.pos.x === respawnLog[0].pos.x && r.pos.y === respawnLog[0].pos.y));
+
+    /* The window this test exists to probe: respawn leaves bar=1, and 23
+     * ticks of Health#chase() are needed to reach target (24) again. During
+     * that window the hero is "alive" (bar>0) but far from full — bar is
+     * not itself vulnerable to anything in this module (only an explicit
+     * `bar = 0` assignment, as main.js's own damage-application code would
+     * do, can trigger a second death), so a respawn cannot re-trigger death
+     * on its own; confirm that directly rather than merely asserting it. */
+    const h2 = new Health(24, 24);
+    h2.bar = 0;
+    const b3 = new DeathBurst(0, 0);
+    let d3 = false;
+    for (let i = 0; i < DEATH_BURST_TICKS && !d3; i++) d3 = b3.tick().done;
+    h2.respawn();
+    let stillAliveThroughChase = true;
+    for (let i = 0; i < 23; i++) {
+      h2.chase();
+      if (h2.dead) stillAliveThroughChase = false;
+    }
+    check('cycle: respawn -> chase() alone (no further damage) never '
+      + 're-triggers death across the whole 23-tick climb to full health',
+      stillAliveThroughChase && h2.bar === HEALTH_MAX);
+  }
+
+  /* ── ARRIVAL_ZONE_TABLE / findRespawnPosition — CS:0x365a, CS:0x0873 ──── */
+  {
+    check('the arrival-zone table has exactly 14 entries', ARRIVAL_ZONE_TABLE.length === 14);
+    check('entry 0 is "one right" (+1 cell, +32px)',
+      ARRIVAL_ZONE_TABLE[0].offset === 1 && ARRIVAL_ZONE_TABLE[0].dx === 32 && ARRIVAL_ZONE_TABLE[0].dy === 0);
+    check('the last entry is "three rows down, one left" — the CS:0x08AF-'
+      + '0x08B5 fallthrough target when nothing matches',
+      ARRIVAL_ZONE_TABLE[13].offset === 383 && ARRIVAL_ZONE_TABLE[13].dx === -32
+      && ARRIVAL_ZONE_TABLE[13].dy === 48);
+
+    const MAP_COLS = 128;
+    const planeB = new Uint8Array(MAP_COLS * 64);   // all zero: solid=0, "arrival"=0xff nowhere yet
+
+    /* Spawn at (100, 100) rounds (per CS:0x087A/0x0880) to X=(100+16)&~31=96,
+     * Y=(100+8)&~15=96. With no 0xFF cell anywhere, the fallback (entry 13,
+     * -32,+48) must apply. */
+    const spawnX = 100, spawnY = 100;
+    const roundedX = (spawnX + 0x10) & 0xffe0, roundedY = (spawnY + 0x8) & 0xfff0;
+    check('rounds to the tile origin exactly as CS:0x087A-0x0883 does',
+      roundedX === 96 && roundedY === 96);
+    const noMatch = findRespawnPosition(spawnX, spawnY, planeB);
+    check('with no 0xFF cell anywhere, the LAST entry (13) still applies — '
+      + 'CS:0x08AF-0x08B5 falls through unconditionally, it does not return '
+      + 'the raw landing position',
+      noMatch.x === roundedX - 32 && noMatch.y === roundedY + 48);
+
+    /* Now mark the FIRST candidate cell (offset +1, "one right") as 0xFF and
+     * confirm it wins over the fallback. */
+    const baseIdx = (roundedX >> 5) + (roundedY >> 4) * MAP_COLS;
+    const withHit = new Uint8Array(MAP_COLS * 64);
+    withHit[baseIdx + 1] = 0xff;
+    const hit0 = findRespawnPosition(spawnX, spawnY, withHit);
+    check('a 0xFF cell at offset +1 (entry 0) wins: dx=+32, dy=0',
+      hit0.x === roundedX + 32 && hit0.y === roundedY);
+
+    /* Mark BOTH entry 0 and entry 5 as 0xFF — entry 0 must still win, since
+     * the search is FIRST-MATCH, not best-match. */
+    const withTwo = new Uint8Array(MAP_COLS * 64);
+    withTwo[baseIdx + 1] = 0xff;          // entry 0
+    withTwo[baseIdx + 128] = 0xff;        // entry 5
+    const hitFirst = findRespawnPosition(spawnX, spawnY, withTwo);
+    check('when multiple candidates match, the FIRST in table order wins, '
+      + 'not the nearest or any other ordering',
+      hitFirst.x === roundedX + 32 && hitFirst.y === roundedY);
+
+    /* Only entry 5 (index 5, one row down) matches -> that one applies. */
+    const withOnlyFifth = new Uint8Array(MAP_COLS * 64);
+    withOnlyFifth[baseIdx + 128] = 0xff;
+    const hitFifth = findRespawnPosition(spawnX, spawnY, withOnlyFifth);
+    check('entry 5 (one row down, +128) matches when it is the only 0xFF cell',
+      hitFifth.x === roundedX && hitFifth.y === roundedY + 16);
+
+    /* A cell value that is nonzero but NOT exactly 0xFF must NOT match —
+     * this project's own "plane B is not boolean" finding applies here too. */
+    const withWrongValue = new Uint8Array(MAP_COLS * 64);
+    withWrongValue[baseIdx + 1] = 1;   // solid, not the 0xFF arrival marker
+    const wrongVal = findRespawnPosition(spawnX, spawnY, withWrongValue);
+    check('a solid (1) cell at a candidate offset does NOT match — only '
+      + 'EXACTLY 0xFF does (CS:0x08AA `cmp byte[bx+si],0xff`)',
+      wrongVal.x === roundedX - 32 && wrongVal.y === roundedY + 48);   // falls back to entry 13
+
+    /* Out-of-range probe indices (negative or past the array) must not throw
+     * and must simply read as "no match" (0), not crash the search. */
+    const tinyPlaneB = new Uint8Array(4);
+    check('a probe index outside the plane-B array reads as 0 (no match), '
+      + 'never throws', (() => {
+        try { findRespawnPosition(0, 0, tinyPlaneB); return true; }
+        catch { return false; }
+      })());
   }
 
   return results;

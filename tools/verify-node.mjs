@@ -314,6 +314,14 @@ console.log(`  ${clampOk ? 'ok  ' : 'FAIL'}  camera clamps at ${CAM_X_MAX},${CAM
             `(+320 = 4096 world px; +160 = 1024, the backdrop region) — got ${c.x},${c.y}`);
 if (!clampOk) bad++;
 
+console.log('\n  death: the burst, the lives/respawn fork, and the arrival-'
+  + 'tile search (CS:0x09BB/0x0930-0x0943/0x0873-0x08BD):');
+const { checkDeath } = await import('../src/verify/checks.js');
+for (const r of checkDeath()) {
+  if (!r.pass && !r.note) bad++;
+  console.log(line(r));
+}
+
 console.log(`\n${asserts} assertions + ${notes} notes = ${asserts + notes} rows`);
 console.log(`${bad ? `FAILURES: ${bad}` : 'ALL CHECKS PASS'}`);
 process.exit(bad ? 1 : 0);

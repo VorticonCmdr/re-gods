@@ -75,6 +75,25 @@ export class Health {
   damage(n) { this.target -= n; }
 
   /**
+   * CS:0x084B/0x0851, inside FUN_1000_0845 — an ordinary respawn restores
+   * health EXACTLY like a fresh level load: target := 24, bar := 1, so it
+   * animates up over 23 frames rather than popping full. See game/death.js.
+   *
+   * ⚠️ CORRECTION to this project's own earlier prose, which cited
+   * `CS:0x7D26 mov bp,[0x250] / mov [0x192],bp` as "the respawn-restore
+   * slot" this routine reads. Disassembling FUN_1000_0845 in full
+   * (CS:0x0845-0x0926) shows it never touches DS:0x250 anywhere — that
+   * address belongs to some other, still-unidentified restore path (see
+   * the `0x7d6e` reference elsewhere in this project's notes), not ordinary
+   * gameplay respawn.
+   */
+  respawn() {
+    this.target = START_TARGET;    // CS:0x084B
+    this.bar = START_BAR;          // CS:0x0851
+    this.latch = 0;
+  }
+
+  /**
    * One of the five health potions, CS:0x6306 / 0x6327 / 0x6350 / 0x6393 /
    * 0x63B4 — all five are the same nine instructions with a different addend.
    *
