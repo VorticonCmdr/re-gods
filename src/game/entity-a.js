@@ -490,8 +490,15 @@ export function strategy2(entity, markers, camera, rand, desc = null, objects = 
  *  weapon-range types (>=0xC0) read the SAME word shifted right 2, bits
  *  [3:2]. This is a DIFFERENT bit slice from `stageFacingAndFire`'s own
  *  attackBits (bits [5:4] of the same word) — three independent 2-bit
- *  fields packed into one descriptor word. */
-function stealFlagBits(flags, type) {
+ *  fields packed into one descriptor word.
+ *
+ * EXPORTED because System B's own theft attempt (CS:0xEF39-0xEF4C, inside
+ * `FUN_1000_ef01`, entity.js's own `stealAttemptB`) computes the IDENTICAL
+ * formula on the identical bit positions, byte-for-byte — confirmed by a
+ * fresh disassembly of CS:0xEF39-EF4C, not assumed from the System-A shape.
+ * One shared function for both systems rather than two copies that could
+ * drift apart. */
+export function stealFlagBits(flags, type) {
   return type >= 0xC0 ? (flags >> 2) & 3 : flags & 3;
 }
 

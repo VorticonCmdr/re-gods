@@ -355,6 +355,34 @@ export const SEED_STRATEGIES = [
 export const MARKER_MAX = 0x14;          // CS:0xf7ab / 0x1636 — 20
 export const ATTRACT_POTION_TYPE = 0x2d; // CS:0x163d — 45
 
+/* DS:0x3cd — CS:0xF7C9, found by `search_instructions` on the literal
+ * operand `3cd` across the whole program: exactly TWO hits in the entire
+ * image, this write and CS:0xEF01's own reader (`cmp byte[0x3cd],0x2`,
+ * entity.js's own `stealAttemptB` — System B's steal-and-carry gate). No
+ * other writer exists anywhere, confirmed exhaustively rather than assumed.
+ *
+ * CS:0xF7C9 sits at the TAIL of this exact function's own idx===2 branch
+ * (`seedGoals` below, CS:0xF794-0xF7DC — the pathfinder's own "attracts
+ * monsters" marker-seek strategy), immediately after the marker-paint loop
+ * and BEFORE the `painted`/fallback check. So it fires the FIRST time ANY
+ * System-B entity's pathfinder search rolls strategy 2 with a NONEMPTY
+ * marker list (`markers.length > 0`, matching CS:0xF794's own `[0x398]!=0`
+ * test) — regardless of whether any marker actually lands on-grid (that is
+ * the SEPARATE `painted` flag / DS:0x3cf, already modelled in `seedGoals`).
+ *
+ * ⚠️ NEVER RESET. Not by level load, not by a full restart (CS:0x473/
+ * 0x8dd9, the world:=1/money:=0 and score:=0 sites) — the exhaustive search
+ * above found no second writer of any kind. So this is a ONE-WAY, GLOBAL
+ * latch: it starts false (the program's own BSS zero-init), and the FIRST
+ * time any System-B entity anywhere rolls strategy 2 with a live marker
+ * list, `stealAttemptB`'s own gate opens PERMANENTLY for every System-B
+ * entity, in every level, for the rest of the process's life. This is
+ * architecturally different from System A's own steal gate (entity-a.js's
+ * `strategy2`), which is per-entity and re-evaluated every tick from that
+ * entity's own sticky strategy state — System B's gate, once open, does not
+ * care which strategy any given entity is currently running. */
+export const stealGate = { active: false };
+
 /* ── Strategy 3's waypoints, DS:0xdb28 ──────────────────────────────────
  * Four per-world pointers {0xdb30, 0xdb58, 0xdba8, 0xdba8} — WORLDS 3 AND 4
  * SHARE A LIST. Each is `{u16 tileX, i16 tileY}` pairs terminated by a

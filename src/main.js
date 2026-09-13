@@ -37,7 +37,7 @@ import { resetWeaponArc, setWeaponArc, projectileSprite } from './game/projectil
 import { parseGroupsB, parseGroupsA, GroupSlots, spriteForEntity, MAX_ENTITIES,
          CREATURE_DESCRIPTOR_BASE } from './game/spawn.js';
 import { EntityB, MODE, MODE_TABLE, groundBelow, isDying, EST,
-DEATH_SPRITE_BASE, DEATH_FRAMES } from './game/entity.js';
+DEATH_SPRITE_BASE, DEATH_FRAMES, stealAttemptB, stepCarriedItemB } from './game/entity.js';
 import { EntityA, CLASS_TABLES_A, spriteForEntityA, EST as ESTA,
 isDyingA, DEATH_SPRITE_BASE_A, DEATH_FRAMES_A, stepCarriedItem } from './game/entity-a.js';
 import { VERDICT_NONE } from './game/pathfind.js';
@@ -1020,6 +1020,22 @@ async function main() {
         { invuln: fx.invuln > 0, difficulty, rng: () => rng.next(), debris, score });
 
       runSpawns();
+      /* CS:0xC041, via objects.js's dropCarriedItem — steal-and-carry's own
+       * periodic and death-time drops both land here, for BOTH entity
+       * systems (moved above the System-B loop, which now also needs it —
+       * see CS:0xEE61/EEB1/F054/F059, entity.js's own stepCarriedItemB and
+       * the DYING branch). Re-ranks the object array on a successful drop,
+       * same reason as the treasure-burst loot settle below: allocObject
+       * reuses a dead slot in place, but this port's own draw order is a
+       * one-time sort at load, not a per-frame partition like the
+       * original's export 32. */
+      const dropCarriedIntoWorld = (id, x, y) => {
+        const dropped = dropCarriedItem(level.drawObjects, id, x, y);
+        if (dropped) {
+          level.drawObjects = insertSpawned(
+            level.drawObjects.filter((o) => o !== dropped), level.cats, dropped);
+        }
+      };
       /* THE HUNT. CS:0xf11f/0xf1e5 run the pathfinder only from the two walk
        * modes, only on a tile crossing, and only when standing on ground —
        * so the verdict is sticky for a whole tile and an airborne or falling
@@ -1057,21 +1073,32 @@ async function main() {
           firedByB++;
           shots.fire(muzzleB.x, muzzleB.y, muzzleB.dir, { x: cam.snapX, y: cam.snapY });
         }
+        /* Steal-and-carry, System B — CS:0xEF01/0xEE06-0xEEB1. Unlike System
+         * A, this runs for every ALIVE entity every tick regardless of its
+         * own current mode/strategy (entity.js's own file header, point 1) —
+         * the gate is the global `stealGate`, not this entity's strategy.
+         *
+         * ORDERING (load-bearing, invisible from either function alone):
+         * this runs AFTER e.tick() above, which already ran the mode
+         * dispatch (walk/fall/hop) — matching the original, where CS:0xEDDA
+         * sits between the mode handler (CS:0xEDD3) and the contact test
+         * (CS:0xEDF4), so a steal attempt sees the entity's POST-MOVE
+         * position for this tick. stepCreatureDamage (contact) runs later,
+         * after the whole `enemies` loop below, so the steal also sees
+         * PRE-CONTACT state — an entity that is about to take damage this
+         * tick still steals normally. */
+        if (e.alive) {
+          stealAttemptB(e, markerList.entries, e.desc, { x: cam.snapX, y: cam.snapY },
+                         level.drawObjects);
+          const carriedB = stepCarriedItemB(e, e.desc, level.world, () => rng.next());
+          if (carriedB) dropCarriedIntoWorld(carriedB.id, carriedB.x, carriedB.y);
+        }
+        if (e.deathDropId !== null) {
+          popup.spawn(e.deathDropX, e.deathDropY, e.deathDropId, level.drawObjects);
+          e.deathDropId = null;
+        }
       }
       runSpawnsA();
-      /* CS:0xC041, via objects.js's dropCarriedItem — steal-and-carry's own
-       * periodic and death-time drops both land here. Re-ranks the object
-       * array on a successful drop, same reason as the treasure-burst loot
-       * settle below: allocObject reuses a dead slot in place, but this
-       * port's own draw order is a one-time sort at load, not a per-frame
-       * partition like the original's export 32. */
-      const dropCarriedIntoWorld = (id, x, y) => {
-        const dropped = dropCarriedItem(level.drawObjects, id, x, y);
-        if (dropped) {
-          level.drawObjects = insertSpawned(
-            level.drawObjects.filter((o) => o !== dropped), level.cats, dropped);
-        }
-      };
       /* System A's own pipeline, CS:0xe001 — all six stages, per entity.
        * camera/markers unlock strategies 1/2 (CS:0xe9da/0xe88c); grid unlocks
        * stage 3's attack/leap (CS:0xe487); the object array unlocks strategy

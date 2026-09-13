@@ -23,7 +23,8 @@ import { emittableStates } from '../game/player.js';
 import { MODE, MODE_TABLE, EntityB, hopDelta, hopCursorNext, EST,
          groundBelow, onScreen, fireB, isDying,
          DEATH_SPRITE_BASE as ENTB_DEATH_SPRITE_BASE,
-         DEATH_FRAMES as ENTB_DEATH_FRAMES } from '../game/entity.js';
+         DEATH_FRAMES as ENTB_DEATH_FRAMES,
+         stealAttemptB, carryOffsetB, stepCarriedItemB } from '../game/entity.js';
 import { parseGroupsB, parseGroupsA, GroupSlots, spriteForEntity, CLASS_TABLES_B,
          CREATURE_DESCRIPTOR_BASE, MAX_ENTITIES } from '../game/spawn.js';
 import { EntityA, CLASS_TABLES_A, spriteForEntityA, rollStrategy,
@@ -48,7 +49,7 @@ import { VERDICT, REACHABLE_VERDICTS, VERDICT_NONE, verdictAction, applyVerdict,
          OpenList, OPEN_SLOTS, OPEN_LIMIT, GRID_PITCH, GRID_CELLS, GRID_LIMIT,
          GRID_MARGIN, heroCell, entityCell, SEED_STRATEGIES, SEED_WEIGHT_MASK,
          seedStrategy, seedBoxCells, seedColumnCells, gridIndex,
-         WAYPOINTS, MARKER_MAX, ATTRACT_POTION_TYPE } from '../game/pathfind.js';
+         WAYPOINTS, MARKER_MAX, ATTRACT_POTION_TYPE, stealGate } from '../game/pathfind.js';
 import { runSearch, makeState, seedGoals } from '../game/pathfind-producers.js';
 import { MarkerList, stepMarkers, DISTRACT_TYPE } from '../game/markers.js';
 import { Health, HEALTH_MAX, damageFor, attackHero, creatureTouchesHero,
@@ -1968,6 +1969,213 @@ export function checkEntityB() {
     check('the entity ticked SECOND has the higher deathCacheSeq (it cached most recently)',
       second.deathCacheSeq > first.deathCacheSeq,
       `first=${first.deathCacheSeq} second=${second.deathCacheSeq}`);
+  }
+
+  /* ── Steal-and-carry, System B — CS:0xEF01/0xEEBA/0xEE06-0xEEB1/
+   * 0xF045-0xF068. `stealGate` is genuinely GLOBAL mutable state (matching
+   * DS:0x3cd's own one-way, whole-process latch — see pathfind.js's own
+   * header), so this block saves and restores it around itself rather than
+   * assuming a fresh module gives a known starting value, since some other
+   * check function's own `seedGoals` call may already have armed it. */
+  {
+    const savedGateState = stealGate.active;
+    const cam = { x: 100, y: 50 };
+    /* Same fixtures as entity-a.js's own steal-and-carry tests, deliberately
+     * — the eligibility formula is shared verbatim (stealFlagBits, exported
+     * from entity-a.js), so the SAME flags word should behave identically. */
+    const desc1 = { flags: 0x01 };
+
+    /* THE GATE ITSELF: armed by the REAL producer (pathfind-producers.js's
+     * seedGoals), not hand-set — the one assertion that would fail if a
+     * future change moved CS:0xF7C9's own write relative to the paint loop.
+     * `markersOverride: true` forces idx===2 deterministically (the DS:0x399
+     * "attracts monsters" override), matching this project's own established
+     * way of testing strategy 2 without needing to reverse the nibble roll. */
+    {
+      stealGate.active = false;
+      const st = makeState({
+        planeB: new Uint8Array(128 * 64), camX: 0, camY: 0,
+        desc: { seedPair: 0, seedWeight: 0 },
+        markers: [{ x: 10, y: 10, type: 34 }],
+        markersOverride: true,
+      });
+      const idx = seedGoals(st, 500, 500, () => 0);
+      check('CS:0xF7C9: seedGoals idx===2 with a NONEMPTY marker list arms stealGate.active',
+        idx === 2 && stealGate.active === true);
+    }
+
+    /* The gate genuinely GATES — with it closed, an otherwise-eligible and
+     * proximate marker steals nothing. */
+    {
+      stealGate.active = false;
+      const e = new EntityB({ x: 148, y: 88 });
+      const objects = [{ x: 140, y: 80, type: 34, flag6: 1, dead: false, slot: 0 }];
+      stealAttemptB(e, [{ x: 40, y: 30, type: 34 }], desc1, cam, objects);
+      check('stealAttemptB bails outright when stealGate.active is false',
+        e.carriedType === -1 && objects[0].dead === false);
+    }
+
+    /* With the gate open, the SAME 48x48 proximity + eligibility test System
+     * A uses (shared stealFlagBits/searchAndSteal) lets the theft through. */
+    {
+      stealGate.active = true;
+      const e = new EntityB({ x: 148, y: 88 });
+      const objects = [{ x: 140, y: 80, type: 34, flag6: 1, dead: false, slot: 0 }];
+      stealAttemptB(e, [{ x: 40, y: 30, type: 34 }], desc1, cam, objects);
+      check('stealAttemptB steals an eligible+proximate marker once the gate is open',
+        e.carriedType === 34 && e.carriedX === 140 && e.carriedY === 80
+        && objects[0].dead === true);
+    }
+
+    /* CS:0xEF51 — the hint tablet exclusion, SYSTEM B ONLY (System A's own
+     * stealAttempt has no such check, per entity-a.js's own header note). */
+    {
+      stealGate.active = true;
+      const e = new EntityB({ x: 148, y: 88 });
+      const objects = [{ x: 140, y: 80, type: 0x45, flag6: 1, dead: false, slot: 0 }];
+      stealAttemptB(e, [{ x: 40, y: 30, type: 0x45 }], desc1, cam, objects);
+      check('CS:0xEF51: marker.type===0x45 (hint tablet) is excluded even when otherwise eligible+proximate',
+        e.carriedType === -1 && objects[0].dead === false);
+    }
+
+    /* CS:0xEF10 — already carrying bails before the marker walk even starts. */
+    {
+      stealGate.active = true;
+      const e = new EntityB({ x: 148, y: 88 });
+      e.carriedType = 5;
+      const objects = [{ x: 140, y: 80, type: 34, flag6: 1, dead: false, slot: 0 }];
+      stealAttemptB(e, [{ x: 40, y: 30, type: 34 }], desc1, cam, objects);
+      check('an already-carrying entity never attempts a second theft',
+        e.carriedType === 5 && objects[0].dead === false);
+    }
+    check('an empty marker list is a silent no-op, not a throw',
+      (() => {
+        stealGate.active = true;
+        const e = new EntityB({ x: 148, y: 88 });
+        stealAttemptB(e, [], desc1, cam, []);
+        return e.carriedType === -1;
+      })());
+
+    /* carryOffsetB — DS:0xdc00, read live via read_memory, not decompiled.
+     * World 2/4 class 0 both base at a KNOWN CLASS_TABLES_B entry, so the
+     * index into the offset table is pinned exactly. */
+    {
+      const off = carryOffsetB(2, 0, 450);   // world2 class0 base=450, idx 0
+      check('carryOffsetB world 2, idx 0, matches DS:0xdc00 verbatim',
+        off.dx === 20 && off.dy === 25, JSON.stringify(off));
+    }
+    {
+      const off = carryOffsetB(4, 0, 450 + 9);   // world4 class0 base=450, idx 9
+      check('carryOffsetB world 4, idx 9, reads a signed-negative dx (-4, 9)',
+        off.dx === -4 && off.dy === 9, JSON.stringify(off));
+    }
+    {
+      const off = carryOffsetB(1, 0, 462);   // world1 class0 base=462, idx 0
+      check('carryOffsetB world 1 falls back to {0,0} — CS:0xEEDA-EEE1 zero-extends '
+        + '(world-2) instead of sign-extending it, landing far outside the real table',
+        off.dx === 0 && off.dy === 0, JSON.stringify(off));
+    }
+    check('carryOffsetB clamps a computed index past the table to {0,0} rather than reading garbage',
+      (() => { const off = carryOffsetB(2, 0, 450 + 25); return off.dx === 0 && off.dy === 0; })());
+
+    /* stepCarriedItemB: the attach-offset draw position ALWAYS recomputes,
+     * independent of whether the drop roll fires this tick — and the drop
+     * position is a THIRD, different point from both. */
+    {
+      const e = new EntityB({ x: 100, y: 100, mode: MODE.WALK_L, cls: 0 });
+      check('stepCarriedItemB: not carrying -> null, no side effect',
+        stepCarriedItemB(e, desc1, 2, () => 0) === null && e.carriedX === 0);
+    }
+    {
+      const e = new EntityB({ x: 100, y: 100, mode: MODE.WALK_L, cls: 0 });
+      e.carriedType = 34;
+      const NEVER = { flags: 0x02 };
+      const r = stepCarriedItemB(e, NEVER, 2, () => 0);
+      check('the RIGID attach draw position recomputes even when the drop refuses (world2/cls0/idx0 -> +20,+25)',
+        e.carriedX === 120 && e.carriedY === 125 && r === null,
+        `carried=${e.carriedX},${e.carriedY}`);
+    }
+    {
+      const e = new EntityB({ x: 100, y: 100, mode: MODE.WALK_L, cls: 0 });
+      e.carriedType = 34;
+      const ALWAYS = { flags: 0x00 };
+      const r = stepCarriedItemB(e, ALWAYS, 2, () => 1);   // rand never consulted for bits===0
+      check('the DROP lands at the entity\'s own RAW (x+8, y) — a DIFFERENT point from the attach offset',
+        r && r.id === 34 + 0xb && r.x === 108 && r.y === 100
+        && (e.carriedX !== r.x || e.carriedY !== r.y),
+        `${JSON.stringify(r)} attach=${e.carriedX},${e.carriedY}`);
+      check('a completed drop clears carriedType', e.carriedType === -1);
+    }
+    {
+      const e = new EntityB({ x: 100, y: 100, cls: 0 });
+      e.carriedType = 0xc5;   // weapon range
+      const WEAPON_NEVER = { flags: 0x08 };
+      check('weapon flags&0xC===8 never drops',
+        stepCarriedItemB(e, WEAPON_NEVER, 2, () => 0) === null && e.carriedType === 0xc5);
+      const WEAPON_ALWAYS = { flags: 0x00 };
+      const r = stepCarriedItemB(e, WEAPON_ALWAYS, 2, () => 1);
+      check('weapon flags&0xC===0 drops now: id = carriedType - 0xC0',
+        r && r.id === 0xc5 - 0xc0, JSON.stringify(r));
+    }
+    {
+      const ROLL = { flags: 0x01 };
+      const eFail = new EntityB({ x: 100, y: 100, cls: 0 }); eFail.carriedType = 34;
+      check('ordinary flags&3===1 (roll-gated): a nonzero draw refuses the drop',
+        stepCarriedItemB(eFail, ROLL, 2, () => 1) === null && eFail.carriedType === 34);
+      const ePass = new EntityB({ x: 100, y: 100, cls: 0 }); ePass.carriedType = 34;
+      check('...but a draw of exactly 0 lets it through (rand()&0x7f===0)',
+        stepCarriedItemB(ePass, ROLL, 2, () => 0) !== null && ePass.carriedType === -1);
+    }
+
+    /* An entity ANIMATES while carrying — the tests above all call
+     * stepCarriedItemB directly with hand-set mode/frame, which can't catch
+     * carryOffsetB being wired to a frozen constant instead of the entity's
+     * LIVE sprite (CS:0xF0AE reads the entity's current mode/frame every
+     * tick, and tick()'s own _walk/_step mutates both). This ticks a real
+     * walking carrier across several steps and checks the attach offset
+     * actually moves as the walk animation advances, landing on more than
+     * one row of CARRY_OFFSET_TABLE_B. */
+    {
+      const flat = new Uint8Array(128 * 64);
+      const atW = (x, y) => (((x & 0xFFE0) >> 5) + ((y & 0xFFF0) >> 4) * 128) + 0x100;
+      for (let c = 0; c < 4; c++) flat[atW(c * 32, 0)] = 1;   // a short flat floor
+      const e = new EntityB({ x: 0, y: 0, mode: MODE.WALK_L, cls: 0 });
+      e.state = 1;
+      e.carriedType = 34;
+      const NEVER = { flags: 0x02 };                          // ordinary flags&3===2 -> never drops
+      const seenOffsets = new Set();
+      for (let i = 0; i < 16; i++) {
+        e.tick(flat, VERDICT_NONE, null);
+        stepCarriedItemB(e, NEVER, 2, () => 1);
+        seenOffsets.add(`${e.carriedX - e.x},${e.carriedY - e.y}`);
+      }
+      check('stepCarriedItemB\'s attach offset MOVES as a walking carrier animates '
+        + '(carryOffsetB reads the live per-tick sprite, not a frozen constant)',
+        seenOffsets.size >= 2, [...seenOffsets].join(' | '));
+    }
+
+    /* The DYING-branch death-time drop, CS:0xF045-F068 — a SEPARATE popup
+     * call from the group reward (deathCacheX/Y above), at the entity's own
+     * raw (x+8, y), sharing only the frame===-1 one-shot gate. */
+    {
+      const e = new EntityB({ x: 200, y: 300, hp: 5 });
+      e.state = EST.DYING; e.frame = -1;
+      e.carriedType = 40;
+      e.tick(new Uint8Array(128 * 64));
+      check('CS:0xF045-F068: the DYING frame===-1 tick records a death-time drop at the RAW (x+8,y) position',
+        e.deathDropId === 40 + 0xb && e.deathDropX === 208 && e.deathDropY === 300,
+        JSON.stringify({ id: e.deathDropId, x: e.deathDropX, y: e.deathDropY }));
+      check('the carried item is consumed by the death-time drop',
+        e.carriedType === -1);
+
+      const e2 = new EntityB({ x: 0, y: 0, hp: 5 });
+      e2.state = EST.DYING; e2.frame = -1;
+      e2.tick(new Uint8Array(128 * 64));
+      check('an entity carrying nothing at death records no drop request',
+        e2.deathDropId === null);
+    }
+
+    stealGate.active = savedGateState;
   }
 
   return results;

@@ -33,7 +33,7 @@
 import {
   GRID_PITCH, GRID_CELLS, GRID_MARGIN, MAP_PITCH, VERDICT_NONE,
   OpenList, seedStrategy, SEED_STRATEGIES, search, searchable,
-  MARKER_MAX, WAYPOINTS,
+  MARKER_MAX, WAYPOINTS, stealGate,
 } from './pathfind.js';
 import { HOP_ARC_MIN, HOP_ARC } from './entity.js';
 
@@ -509,6 +509,12 @@ export function seedGoals(st, heroX, heroY, rnd) {
     for (let i = 0; i < n; i++) {                         // f7bb..f7c7
       if (paintExport39Screen(st, markers[i].x, markers[i].y)) painted = true;
     }
+    /* CS:0xF7C9 — arms System B's own steal-and-carry gate (pathfind.js's
+     * `stealGate`, entity.js's `stealAttemptB`). Fires HERE, unconditionally,
+     * the instant this branch is reached with a nonempty marker list — before
+     * the `painted` check below, so it is NOT gated on anything actually
+     * landing on-grid. See stealGate's own header for why this never resets. */
+    stealGate.active = true;
     /* Nothing landed on the grid -> the same fallback (CS:0xf7d2/0xf7d9). */
     if (!painted) return seedFallback(st, heroX, heroY, b8, idx);
     return idx;

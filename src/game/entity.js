@@ -40,10 +40,13 @@
  *       still negative, i.e. exactly once, on the FIRST f030 pass) that
  *       caches world position into DS:0x202/0x204 and — if a carried-item
  *       field at `[di+0x10]` is non-negative — drops a per-kill popup via
- *       CS:0xBF5F. The PER-KILL popup (keyed on the entity's own carried-item
- *       field, unrelated to the group descriptor's own +0x10) is NOT ported —
- *       no carried-item field exists on EntityB, same disclosed steal-and-
- *       carry gap as elsewhere in this project. The position CACHE itself
+ *       CS:0xBF5F. ⚠️⚠️ CORRECTION, a later session — THE PER-KILL POPUP IS
+ *       NOW PORTED TOO, see `deathDropId/X/Y` below and the steal-and-carry
+ *       section further down. A fresh disassemble of CS:0xF045-F068 shows it
+ *       recomputes `(entity.x+8, entity.y)` FRESH at this exact site — NOT
+ *       [0x202]/[0x204] (which CS:0xED84 reads separately, with its OWN +8
+ *       bias, for the unrelated GROUP reward below) and NOT the eased/attach
+ *       position `[di+0x14]`/`[0x16]` the LIVE carry-draw uses. The position CACHE itself
  *       (`[0x202]`/`[0x204]`, `deathCacheX/Y` below) IS ported and feeds
  *       main.js's own System-B group-elimination reward (popup.js,
  *       `UNKNOWN_f030_item_drop`) — the actual per-GROUP mechanism this gate
@@ -61,8 +64,51 @@
  *   and `cls` in scope for the ordinary sprite formula — see main.js.
  *   ⚠️⚠️ CORRECTION, a later session — the GROUP-clear reward popup IS now
  *   ported (`deathCacheX/Y`/`deathCacheSeq` above, drained by main.js into
- *   popup.js). The PER-KILL popup (entity's own carried-item field) remains
- *   unported — same disclosed steal-and-carry gap as selector2.js.
+ *   popup.js). The PER-KILL popup (entity's own carried-item field) IS NOW
+ *   ALSO PORTED — see `deathDropId/X/Y` and the steal-and-carry section below.
+ *
+ * STEAL-AND-CARRY, SYSTEM B — CS:0xEF01/0xEEBA/0xEE06-0xEEB1/0xF045-0xF068,
+ * closed in the same pass that closed System A's own mirror (CLAUDE.md's own
+ * "Steal-and-carry, System A" section). Located `DS:0x3cd`'s writer per that
+ * section's own explicit next-step instruction (`search_instructions` on the
+ * operand `3cd` — exactly 2 hits in the whole image, this gate's reader and
+ * its one writer, pathfind.js's own `stealGate`).
+ *
+ * Architecturally this is NOT a re-skin of System A's mechanism — three real
+ * differences, each load-bearing:
+ *
+ * 1. THE GATE IS GLOBAL AND ONE-WAY, NOT PER-ENTITY-PER-TICK. System A's own
+ *    theft (`strategy2`, entity-a.js) only runs while THAT entity's own
+ *    sticky strategy is 2. System B's `CS:0xEF01` checks `DS:0x3cd==2`
+ *    instead — a flag armed once, by ANY entity's pathfinder search rolling
+ *    strategy 2 with a nonempty marker list (pathfind.js's `stealGate`, set
+ *    from `pathfind-producers.js`'s `seedGoals`), and never reset. So once
+ *    any System-B entity anywhere has ever sought a marker, EVERY System-B
+ *    entity's steal attempt runs EVERY tick regardless of its own current
+ *    mode/strategy — walking, hopping, falling, chasing the hero, all of it.
+ *
+ * 2. THE THEFT+PROXIMITY MATH IS SHARED, PLUS ONE EXTRA EXCLUSION. The 48x48
+ *    proximity box and the `stealFlagBits` eligibility test are BYTE-FOR-BYTE
+ *    the same formula System A uses (confirmed by fresh disassembly, not
+ *    assumed) — reused verbatim via entity-a.js's exported `stealFlagBits`
+ *    and `searchAndSteal`. System B's own loop ADDS one exclusion System A's
+ *    lacks: `marker.type === 0x45` (69, the hint tablet, CS:0xEF51) is always
+ *    skipped, tablet or not eligible by `stealFlagBits`.
+ *
+ * 3. THE DRAW POSITION AND THE DROP POSITION ARE DIFFERENT, AND NEITHER IS
+ *    SYSTEM A'S EASED ICON. While carrying, the entity's OWN per-frame driver
+ *    (`CS:0xEE06`-`0xEE44`) computes a per-class/per-world signed offset via
+ *    `CS:0xEEBA` (`carryOffsetB` below, `DS:0xdc00`) and draws the carried
+ *    icon RIGIDLY ATTACHED at `(entity.x+dx, entity.y+dy)` — no easing, no
+ *    drift, snapped fresh every frame. But BOTH drop paths (the periodic roll
+ *    at `CS:0xEE61`/`0xEEB1` and the death-time drop at `CS:0xF054`/`0xF059`)
+ *    use a THIRD position: the entity's own RAW `(x+8, y)`, unbiased on Y —
+ *    not the attach offset at all. `stepCarriedItemB` below computes the
+ *    attach offset (for the caller to draw) and, independently, the drop
+ *    request at the raw position, exactly mirroring this split.
+ *
+ * See `stealAttemptB`, `carryOffsetB`, `stepCarriedItemB` below for the
+ * ported code, and the DYING branch in `tick()` for the death-time drop.
  *
  * THE MODE TABLE — DS:0xdbe0, 8 x {u16 handler, u16 anim_base}
  *   Note the field order is the REVERSE of the player's table at DS:0xd818,
@@ -73,7 +119,9 @@
  *   whole file, which is what pins this table to System B alone.
  */
 
-import { verdictAction, applyVerdict, VERDICT_NONE } from './pathfind.js';
+import { verdictAction, applyVerdict, VERDICT_NONE, MARKER_MAX, stealGate } from './pathfind.js';
+import { searchAndSteal, stealFlagBits } from './entity-a.js';
+import { spriteForEntity, CLASS_TABLES_B } from './spawn.js';
 
 export const MODE = {
   WALK_L: 0, WALK_R: 1, FALL_L: 2, FALL_R: 3, HOP_L: 4, HOP_R: 5,
@@ -285,6 +333,21 @@ export class EntityB {
     this.deathCacheX = null;    // CS:0xF03A-F042, +8 baked in — see the note above EntityB
     this.deathCacheY = null;
     this.deathCacheSeq = -1;
+    /* Steal-and-carry, System B — CS:0xEE06/0xEF01. +0x10 on the ENTITY
+     * record (not the group descriptor's own +0x10, the reward id — a real
+     * collision this port keeps apart by field name). -1 = carrying nothing,
+     * matching the sign test both CS:0xEF10 and CS:0xEE06 use. */
+    this.carriedType = -1;
+    this.carriedX = 0;          // the RIGID attach-point draw position — see carryOffsetB
+    this.carriedY = 0;
+    /* Port-level bookkeeping for the death-time drop, CS:0xF045-0xF068 — a
+     * SEPARATE popup call from the group reward above (deathCacheX/Y),
+     * independently recomputing the entity's own raw position. tick() has
+     * no popup-instance reference, so main.js drains this once per tick,
+     * mirroring entity-a.js's own deathDropId/X/Y for System A. */
+    this.deathDropId = null;
+    this.deathDropX = 0;
+    this.deathDropY = 0;
   }
 
   get alive() { return this.state > 0; }
@@ -327,16 +390,29 @@ export class EntityB {
      * tick itself leaves state/frame at -1/-1 and is drawn by the render
      * pass via the ordinary formula; see the file header). The one-shot gate
      * at CS:0xF034 (position-cache, only while frame is still negative) IS
-     * ported below — main.js's own group-elimination reward reads it. The
-     * per-kill carried-item popup that shares this same gate (`[di+0x10]`,
-     * an ENTITY field, unrelated to the group descriptor's own +0x10 the
-     * reward reads) is NOT ported — same disclosed steal-and-carry gap as
-     * elsewhere in this project. */
+     * ported below — main.js's own group-elimination reward reads it, and
+     * so (as of this pass) does the per-kill carried-item popup that shares
+     * this same one-shot gate (`[di+0x10]`, the ENTITY's own carried-item
+     * field, unrelated to the group descriptor's own +0x10 the reward
+     * reads) — CS:0xF045-0xF068. */
     if (this.state === EST.DYING) {
       if (this.frame === -1) {                            // CS:0xF034 `jns`
         this.deathCacheX = this.x + 8;                     // CS:0xED84 `ax += 8`
         this.deathCacheY = this.y;                          // Y untouched — System-B only
         this.deathCacheSeq = deathCacheSeq++;
+        /* CS:0xF045-0xF068 — the per-kill drop, via popup.js (CS:0xBF5F),
+         * on the SAME one-shot tick as the cache above but a SEPARATE popup
+         * call using a FRESHLY recomputed position, not [0x202]/[0x204] and
+         * not the eased/attach carriedX/Y — the entity's own raw (x+8, y),
+         * unbiased on Y. Drained by main.js, same pattern as entity-a.js's
+         * own deathDropId/X/Y. */
+        if (this.carriedType >= 0) {
+          const isWeapon = this.carriedType >= 0xC0;
+          this.deathDropId = isWeapon ? this.carriedType - 0xC0 : this.carriedType + 0xB;
+          this.deathDropX = this.x + 8;                     // CS:0xF062
+          this.deathDropY = this.y;                          // CS:0xF05F, unbiased
+          this.carriedType = -1;
+        }
       }
       this.frame++;                                       // CS:0xF06E
       if (this.frame >= DEATH_FRAMES) {                    // CS:0xF071/F075
@@ -475,4 +551,165 @@ export class EntityB {
       this.vel = 0;
     }
   }
+}
+
+/**
+ * CS:0xEF01 — System B's steal-and-carry theft attempt, called for EVERY
+ * alive System-B entity, EVERY tick, from main.js — unlike System A's own
+ * `strategy2`, this is not tied to the entity's current pathfinder strategy
+ * at all (see the file header's point 1). Combines what System A splits
+ * into `strategy2`+`stealAttempt`: there is no separate "am I doing
+ * marker-seek right now" question here, only the global gate.
+ *
+ *   ef01  DS:0x3cd != 2 -> bail (pathfind.js's `stealGate`)
+ *   ef09  markers.length === 0 -> bail
+ *   ef10  already carrying ([di+0x10] >= 0) -> bail
+ *   ef28  entityX = e.x-8, entityY = e.y-8           ; SAME bias as System A
+ *   ef39..ef92  walk up to MARKER_MAX markers front-to-back:
+ *     ef4f  stealFlagBits(flags, marker.type) === 0 -> skip
+ *     ef51  marker.type === 0x45 (hint tablet) -> skip — SYSTEM B ONLY,
+ *           System A's own stealAttempt has no such exclusion
+ *     ef6a/ef6e/ef78/ef7c  the SAME 48x48 proximity box System A uses
+ *   efa1  on the first eligible+proximate marker: searchAndSteal (shared
+ *         with System A verbatim, entity-a.js) using marker.x/y+camera,
+ *         NO +8 bias — then return (first match only)
+ *
+ * @param {EntityB} entity
+ * @param {Array<{x:number,y:number,type:number}>} markers  screen-relative
+ *   (game/markers.js's own MarkerList#entries)
+ * @param {?{flags:number}} desc  group descriptor; missing/no `flags` reads
+ *   as an all-zero word, matching CS:0xEF01's own "bits===0 -> skip" for a
+ *   group with no theft-eligible categories.
+ * @param {{x:number,y:number}} camera
+ * @param {object[]} objects  the 200-slot runtime object array (objects.js)
+ */
+export function stealAttemptB(entity, markers, desc, camera, objects) {
+  if (!stealGate.active) return;                          // CS:0xEF01 `jz ef09` / else ret
+  if (!markers || markers.length === 0) return;            // CS:0xEF09
+  if (entity.carriedType >= 0) return;                     // CS:0xEF10
+
+  const flags = desc ? (desc.flags ?? 0) : 0;
+  const entityX = entity.x - 8;
+  const entityY = entity.y - 8;
+  const count = Math.min(markers.length, MARKER_MAX);
+  for (let i = 0; i < count; i++) {
+    const marker = markers[i];
+    if (stealFlagBits(flags, marker.type) === 0) continue;  // CS:0xEF4F
+    if (marker.type === 0x45) continue;                      // CS:0xEF51 — hint tablet, System B only
+
+    const boxX = marker.x + 8 + camera.x;
+    const boxY = marker.y + 8 + camera.y;
+    if (entityX > boxX || entityY > boxY) continue;          // CS:0xEF6A/EF6E
+    if (entityX < boxX - 48 || entityY < boxY - 48) continue; // CS:0xEF78/EF7C
+
+    // searchAndSteal (shared with System A) also writes entity.carriedX/Y to
+    // the stolen object's world position — CS:0xEFCF/EFD2. For System B that
+    // write is immediately superseded: stepCarriedItemB's own per-tick
+    // attach recompute (CS:0xEE1B/EE1E) overwrites carriedX/Y with the rigid
+    // draw position on the very next call, every tick — so the position
+    // written here is dead on arrival and only carriedType survives. The
+    // original does exactly this (steal position discarded, recompute wins).
+    searchAndSteal(entity, objects, marker.type, marker.x + camera.x, marker.y + camera.y);
+    return;                                                   // first match only
+  }
+}
+
+/* DS:0xdc00 — CS:0xEEBA's own per-class, per-world signed {dx,dy} offset
+ * table, read live via `read_memory` (not decompiled), 20 pairs per world.
+ * ⚠️ ONLY WORLDS 2-4 ARE REAL. `CS:0xEEDA-EEE1` computes `(world-2)` as an
+ * 8-BIT SUBTRACTION then ZERO-EXTENDS it (`SUB DH,DH`, not the `CBW` this
+ * codebase uses everywhere else for a signed byte-to-word conversion) —
+ * for world 1 that turns `-1` into `+255`, not a small negative offset, and
+ * the resulting index (255*40 = 10200 bytes past 0xdc00) lands in unrelated
+ * DS memory that happens to sit at a real address in the compiled image but
+ * has nothing to do with this table. This is a genuine, reproducible
+ * original-binary bug, not a port gap — but a port cannot meaningfully
+ * "reproduce" a read of accidental, unrelated static data. `carryOffsetB`
+ * below falls back to `{dx:0, dy:0}` for world 1, disclosed explicitly here
+ * rather than silently guessed — the same precedent this project already
+ * uses for an out-of-range plane-A tile reading uninitialised VRAM. */
+const CARRY_OFFSET_TABLE_B = {
+  2: [[20, 25], [17, 25], [12, 24], [8, 21], [5, 21], [8, 21], [12, 24], [17, 25],
+      [20, 23], [-3, 25], [0, 25], [5, 24], [9, 21], [12, 21], [9, 21], [5, 24],
+      [0, 25], [-3, 23], [0, 0], [0, 0]],
+  3: [[20, 27], [17, 27], [12, 26], [8, 23], [5, 23], [8, 23], [12, 26], [17, 27],
+      [20, 25], [-3, 27], [0, 27], [5, 26], [9, 23], [12, 23], [9, 23], [5, 26],
+      [0, 27], [-3, 25], [0, 0], [0, 0]],
+  4: [[21, 9], [21, 10], [21, 11], [21, 10], [21, 9], [21, 10], [21, 11], [21, 10],
+      [21, 14], [-4, 9], [-4, 10], [-4, 11], [-4, 10], [-4, 9], [-4, 10], [-4, 11],
+      [-4, 10], [-4, 14], [0, 0], [0, 0]],
+};
+
+/**
+ * CS:0xEEBA. `spriteId` is whatever DS:0x8 holds when the original calls
+ * this — the CARRYING creature's own currently-computed sprite id (set by
+ * CS:0xF0AE, this port's own `spriteForEntity`), NOT the carried item's
+ * sprite. `spriteId - classBase` is the same animation-relative quantity
+ * this project's sprite-formula work already bounds to 0..17, which is why
+ * a 20-slot table is enough. Returns `{dx, dy}`, or `{dx:0, dy:0}` for
+ * world 1 or an unresolvable class (see the table's own header).
+ */
+export function carryOffsetB(world, cls, spriteId) {
+  const rec = CLASS_TABLES_B[world] && CLASS_TABLES_B[world][cls];
+  const table = CARRY_OFFSET_TABLE_B[world];
+  if (!rec || !table) return { dx: 0, dy: 0 };              // world 1, or a bad class index
+  const idx = spriteId - rec.base;
+  const pair = (idx >= 0 && idx < table.length) ? table[idx] : null;
+  if (!pair) return { dx: 0, dy: 0 };
+  return { dx: pair[0], dy: pair[1] };
+}
+
+/**
+ * CS:0xEE06-0xEEB8 — the per-frame carry step for an entity already holding
+ * a stolen item: recompute the rigid attach-point draw position, then roll
+ * the periodic drop. Called once per carrying entity per tick from main.js,
+ * alongside `tick()` — same reason as System A's own `stepCarriedItem`: the
+ * drop mutates the shared object array, a side channel `tick()` doesn't
+ * otherwise have.
+ *
+ *   ee06  not carrying ([di+0x10] < 0) -> null, nothing to do
+ *   ee13-ee1e  carriedX/Y := entity position + carryOffsetB(...) — THE DRAW
+ *              POSITION, rigidly attached, recomputed fresh every tick (no
+ *              easing, unlike System A's own carriedX/Y drift)
+ *   ee4a/ee9a  the periodic-drop test — SAME formula as System A's
+ *              stepCarriedItem: ordinary reads flags&3 (0=now,2=never,else
+ *              a 1-in-128 roll), weapon reads flags&0xC (0=now,8=never,
+ *              else the same roll)
+ *   ee67/eeb1  on a drop: id = ordinary ? carriedType+0xB : carriedType-0xC0;
+ *              position = (entity.x+8, entity.y) — the entity's OWN raw
+ *              position, NOT carriedX/Y (the attach offset above)
+ *
+ * @param {EntityB} entity
+ * @param {?{flags:number}} desc
+ * @param {number} world
+ * @param {() => number} rand
+ * @returns {?{id:number, x:number, y:number}} a drop request (same shape as
+ *   entity-a.js's `stepCarriedItem`), or null if not carrying / not dropped
+ *   this tick. `entity.carriedX/Y` are updated as a side effect regardless,
+ *   for the caller to draw the carried icon even when nothing drops.
+ */
+export function stepCarriedItemB(entity, desc, world, rand) {
+  if (entity.carriedType < 0) return null;                  // CS:0xEE06 `jns`
+
+  const spriteId = spriteForEntity(world, entity.cls, entity.mode, entity.frame,
+                                     MODE_TABLE.map((m) => m.animBase));
+  const { dx, dy } = carryOffsetB(world, entity.cls, spriteId ?? 0);
+  entity.carriedX = entity.x + dx;                          // CS:0xEE1B
+  entity.carriedY = entity.y + dy;                          // CS:0xEE1E
+
+  const isWeapon = entity.carriedType >= 0xC0;
+  const flags = desc ? (desc.flags ?? 0) : 0;
+  const bits = isWeapon ? (flags & 0xc) : (flags & 3);
+  const never = isWeapon ? 8 : 2;
+  let drop;
+  if (bits === 0) drop = true;                              // ee52/ee9f 'jz' -> drop now
+  else if (bits === never) drop = false;                    // ee54/eea4 -> never
+  else drop = (rand() & 0x7f) === 0;                        // ee59/eea9 — 1-in-128 roll
+
+  if (!drop) return null;
+
+  const id = isWeapon ? entity.carriedType - 0xC0 : entity.carriedType + 0xB;
+  const x = entity.x + 8, y = entity.y;                     // CS:0xEE67/EE6C — the RAW position
+  entity.carriedType = -1;                                  // CS:0xEE78
+  return { id, x, y };
 }
