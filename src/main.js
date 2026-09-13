@@ -14,6 +14,7 @@ import { parseAtlas, cutAll } from './formats/atlas.js';
 import { Clock, LOGIC_HZ } from './engine/clock.js';
 import { Renderer } from './render/renderer.js';
 import { Player, ST } from './game/player.js';
+import { InventoryPanel, drawInventoryPanel } from './game/inventory-panel.js';
 import { runAllChecks, checkDescriptorAnchors, checkHeroSprites,
          checkSelectorsAndObjects, checkSpawn, checkEntityB, checkEntityA, checkSpawnA,
          checkWeaponsProjectiles, checkTriggerActions,
@@ -452,6 +453,10 @@ async function main() {
    * `collectKey`, wired into Player._crouch), so this no longer needs a
    * dev-seed to keep the chest-unlock branch reachable. */
   let inventory = [INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY];
+  /* CS:0x02C0/0x02C3 -> game/inventory-panel.js. Drawn every tick regardless
+   * of state (see that module's own header); only the highlight's
+   * extend/retract animation is state-dependent. */
+  let inventoryPanel = new InventoryPanel();
   /* Executing the verbs needs the inventory and the weapon slots, so the
    * context is attached here rather than beside the EventRunner. */
   events.actionCtx = buildActionCtx(level, inventory, arsenal);
@@ -877,6 +882,10 @@ async function main() {
           return s;
         },
       });
+      /* CS:0x6139 (crouch tick) / CS:0x499A->0x1e06 (every other tick) — the
+       * panel's own extend/retract highlight animation. Runs unconditionally,
+       * same as the draw call itself. */
+      inventoryPanel.step(player.state === ST.CROUCH);
       for (const t of fr.treasures) {
         if (t.outcome === 'collected') {
           $('event').textContent = `treasure +${t.value} (score +${t.score})`;
@@ -1625,6 +1634,12 @@ async function main() {
         outOfRange++;
         renderer.strokeRect(player.x - camX, player.y - camY, 32, 48, 15);
       }
+
+      /* THE CROUCH/INVENTORY PANEL — CS:0x02C0/0x02C3, game/inventory-
+       * panel.js. Absolute screen position (rows 3-20ish, near the TOP of
+       * the screen), drawn every frame regardless of player state; see that
+       * module's own header for why this is not a crouch-only popup. */
+      drawInventoryPanel(renderer, hero && hero.frames, inventory, inventoryPanel);
 
       /* THE STATUS PANEL. Drawn LAST and opaque across the full width — see
        * renderer.js's own blitStatusPanel and status-panel.js's PROVENANCE

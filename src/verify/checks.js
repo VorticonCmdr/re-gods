@@ -20,6 +20,10 @@ import { SpikeClock, spikePingpong, heroInSpikeBox, heroInSpike130Box,
          stepSpikes, spikeSprites, spike130Sprite, SPIKE_OVERLAY,
          SPIKE117_OVERLAY, SPIKE130_ANIM, SPIKE_TYPE, SPIKE117_TYPE,
          SPIKE130_TYPE } from '../game/spikes.js';
+import { InventoryPanel, drawInventoryPanel, panelIconSprite,
+         SLOT_FRAME_SPRITE, SLOT_FRAME_HIGHLIGHT_SPRITE, PANEL_SLOT_SPACING,
+         PANEL_FRAME_X0, PANEL_FRAME_Y, PANEL_ICON_X0,
+         PANEL_ICON_Y } from '../game/inventory-panel.js';
 import { BULK_SIZE, parseMap } from '../formats/map.js';
 import { parseAllTriggers, isLive, verbOf, TRIG_COUNT } from '../game/trigger.js';
 import { parseAtlas, cutAll, atlasStats } from '../formats/atlas.js';
@@ -11051,6 +11055,155 @@ export function checkSpikes() {
     detail: 'type 50: 13/13/11/11 across worlds 1-2 (48 total). type 117: 4 '
       + '(world 3B only). type 130: 9/8 across world 4 (17 total). type 73 '
       + 'places zero times anywhere and is not modelled.' });
+
+  return results;
+}
+
+/**
+ * CS:0x1e1a/0x1f5a/0x228e/0x1dd1/0x1e06/0x1ee3 — the 4-slot crouch/inventory
+ * panel's rendering pipeline: slot frames, the extend/retract highlight
+ * animation, and the held-item icons. See game/inventory-panel.js's own
+ * header for the full disassembly this reproduces.
+ */
+export function checkInventoryPanel() {
+  const { results, check } = makeChecker();
+
+  /* ── screen geometry, read straight off the constants ─────────────────── */
+  check('the slot frames start at CS:0x1e5f\'s screenX0=0x60(96), y=3',
+    PANEL_FRAME_X0 === 0x60 && PANEL_FRAME_Y === 3);
+  check('the item icons start 8px right of the frames (CS:0x1eb9 `sub '
+    + '[0x4],0x78` after 4 slots at +0x20 lands on frameX0+8), y=4',
+    PANEL_ICON_X0 === PANEL_FRAME_X0 + 8 && PANEL_ICON_Y === 4);
+  check('both loops step 0x20(32) px per slot (CS:0x1eb0/0x1ed2)',
+    PANEL_SLOT_SPACING === 0x20);
+  check('the highlighted slot frame is base-1 (CS:0x1e9c `dec word[0x8]`), '
+    + 'not a separately-numbered sprite',
+    SLOT_FRAME_HIGHLIGHT_SPRITE === SLOT_FRAME_SPRITE - 1 && SLOT_FRAME_SPRITE === 0x74);
+
+  /* ── panelIconSprite: the empty check and the two popup-icon remaps ────── */
+  check('an empty slot (INVENTORY_EMPTY) draws nothing (CS:0x1ee8 `js` on '
+    + 'the empty-slot shl)', panelIconSprite(INVENTORY_EMPTY) === null);
+  check('an ordinary key type resolves through the plain 170+type formula, '
+    + 'unremapped (e.g. type 1 -> sprite 171)', panelIconSprite(1) === 171);
+  check('CS:0x1ef7-0x1f05: descriptor sprite 279 (0x117, the "magical gem" '
+    + 'popup-only icon) remaps to 0xb7(183) inside this panel',
+    panelIconSprite(279 - 170) === 0xb7);
+  check('CS:0x1efd-0x1f0a: descriptor sprite 280 (0x118, the "treasure '
+    + 'chest" popup-only icon) remaps to 0xcc(204) inside this panel',
+    panelIconSprite(280 - 170) === 0xcc);
+  check('the remap window is EXACTLY {279,280} — the neighbouring sprites '
+    + '278 and 281 pass through unremapped',
+    panelIconSprite(278 - 170) === 278 && panelIconSprite(281 - 170) === 281);
+
+  /* ── the extend/retract state machine, CS:0x1dd1/0x1e06/0x1e1a's own step,
+   * traced against a realistic boot sequence: DS:0x352 inits to 0 at level
+   * load (FUN_1000_8c34), but FUN_1000_1e06/RETRACT runs unconditionally on
+   * every non-crouch tick starting immediately, so delta is already -1 by
+   * the time crouch is ever entered — never genuinely 0 in play. ────────── */
+  {
+    const p = new InventoryPanel();
+    check('boots with the highlight not visible (selector 0, counter 0, '
+      + 'delta 0 — DS:0x350/0x352 both zeroed at level load, CS:0x8ece/0x8ed9)',
+      !p.isHighlighted(0) && p.counter === 0 && p.delta === 0);
+
+    p.step(false);   // the hero is never crouching at spawn
+    check('one non-crouch tick arms delta=-1 (CS:0x1e06) and the SAME-tick '
+      + 'chase-step (CS:0x1e1a) then pushes counter to -1, since 1e06\'s own '
+      + 'clamp already floored it at 0 before 1e1a ever runs',
+      p.delta === -1 && p.counter === -1);
+
+    p.step(true);
+    check('the FIRST crouch tick already shows the highlight — CS:0x1dd1\'s '
+      + '"counter<0 -> reset to 0, delta:=1" arm runs BEFORE this same tick\'s '
+      + 'own CS:0x1e1a chase-step, so counter reaches 1 in one tick, not 12',
+      p.counter === 1 && p.delta === 1 && p.isHighlighted(0));
+
+    for (let i = 0; i < 20; i++) p.step(true);
+    check('the counter saturates at 12 (0xc) and stays there — CS:0x1e21 '
+      + '`cmp [0x350],0xc / jz` skips the chase-step\'s own increment once hit',
+      p.counter === 0xc);
+
+    p.step(false);
+    check('leaving crouch hides the highlight on the SAME tick (delta flips '
+      + 'to -1 immediately, and isHighlighted requires delta>=0) even though '
+      + 'the counter itself is still high and only decays gradually',
+      p.counter === 10 && !p.isHighlighted(0));
+
+    check('the highlight is keyed to `selector`, not just "some slot" — a '
+      + 'panel extended on slot 0 does not also highlight slot 1',
+      !p.isHighlighted(1));
+  }
+
+  /* ── the retract decay rate: -2/tick (1e06's own direct dec, THEN 1e1a's
+   * chase-step, both firing on one non-crouch tick), against extend's +1 ── */
+  {
+    const p = new InventoryPanel();
+    p.step(false);   // realistic bootstrap: arm delta=-1 before extending
+    for (let i = 0; i < 5; i++) p.step(true);
+    const afterExtend = p.counter;
+    p.step(false);
+    check('retract decays TWICE as fast as extend climbs (CS:0x1e0b\'s own '
+      + 'direct dec runs on the SAME tick as CS:0x1e1a\'s chase-step, both '
+      + 'applying delta=-1) — extend has no equivalent direct step',
+      p.counter === afterExtend - 2, `${afterExtend} -> ${p.counter}`);
+  }
+
+  /* ── the counter never goes visibly haywire at either saturation edge ─── */
+  {
+    const p = new InventoryPanel();
+    for (let i = 0; i < 50; i++) p.step(false);
+    check('retracting forever settles the counter at (an oscillating) 0/-1, '
+      + 'never runs away negative — CS:0x1e06\'s own clamp floors it at 0 '
+      + 'every call, and CS:0x1e1a\'s chase-step can only ever push it ONE '
+      + 'further step past that before the next retract clamps it back',
+      p.counter === -1 || p.counter === 0, String(p.counter));
+  }
+
+  /* ── the full draw, end to end, against a fake renderer ────────────────── */
+  {
+    const drawn = [];
+    const fakeRenderer = { blitSprite(f, x, y) { drawn.push({ sprite: f.sprite, x, y }); } };
+    const frame = (sprite, w = 32, h = 19) => ({ sprite, w, h, pixels: new Uint8Array(w * h).fill(1) });
+    const frames = [];
+    frames[SLOT_FRAME_SPRITE] = frame(SLOT_FRAME_SPRITE);
+    frames[SLOT_FRAME_HIGHLIGHT_SPRITE] = frame(SLOT_FRAME_HIGHLIGHT_SPRITE);
+    frames[171] = frame(171, 16, 16);   // a 16-tall icon -> no centering offset
+    frames[174] = frame(174, 16, 8);    // an 8-tall icon -> centered lower
+
+    const inv = [1, INVENTORY_EMPTY, 4, INVENTORY_EMPTY];
+    const p = new InventoryPanel();
+    p.step(false); p.step(true); p.step(true);   // highlight slot 0, visible
+
+    drawInventoryPanel(fakeRenderer, frames, inv, p);
+    check('draws exactly 4 slot frames + 2 item icons (2 slots are empty)',
+      drawn.length === 6, JSON.stringify(drawn));
+    check('slot 0 (selected, highlighted) draws the base-1 sprite',
+      drawn[0].sprite === SLOT_FRAME_HIGHLIGHT_SPRITE && drawn[0].x === PANEL_FRAME_X0);
+    check('slots 1-3 draw the plain frame sprite, at +0x20 per slot',
+      drawn[1].sprite === SLOT_FRAME_SPRITE && drawn[1].x === PANEL_FRAME_X0 + PANEL_SLOT_SPACING
+      && drawn[2].sprite === SLOT_FRAME_SPRITE && drawn[2].x === PANEL_FRAME_X0 + 2 * PANEL_SLOT_SPACING
+      && drawn[3].sprite === SLOT_FRAME_SPRITE && drawn[3].x === PANEL_FRAME_X0 + 3 * PANEL_SLOT_SPACING);
+    const icons = drawn.slice(4);
+    check('the two occupied slots\' icons land at ICON_X0 + slot*0x20 — slot '
+      + '0 and slot 2, matching the inventory array, not slots 1/2',
+      icons[0].sprite === 171 && icons[0].x === PANEL_ICON_X0
+      && icons[1].sprite === 174 && icons[1].x === PANEL_ICON_X0 + 2 * PANEL_SLOT_SPACING,
+      JSON.stringify(icons));
+    check('CS:0x1f1c-0x1f24: a 16px-tall icon gets NO centering offset '
+      + '((17-16)>>1=0), an 8px-tall one is pushed down ((17-8)>>1=4)',
+      icons[0].y === PANEL_ICON_Y && icons[1].y === PANEL_ICON_Y + 4,
+      JSON.stringify(icons));
+  }
+
+  /* ── disclosed cuts, recorded as notes rather than left unstated ───────── */
+  results.push({ name: 'NOT PORTED', pass: true, note: true,
+    detail: 'the FIRE-tap slot cycle (CS:0x612F-0x619D) and the crouch-exit '
+      + 'drop (CS:0x61A1) — see this module\'s own header. `selector` is '
+      + 'consequently pinned at slot 0 for the life of this port, and '
+      + '`collectKey` (pickup.js) is deliberately left as its existing '
+      + 'first-empty-slot substitution rather than reverted to the original\'s '
+      + '"always overwrite the current selector", since reverting would be '
+      + 'strictly worse with no way to ever move the selector off slot 0.' });
 
   return results;
 }

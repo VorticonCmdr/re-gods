@@ -263,6 +263,13 @@ for (const r of checkSpikes()) {
   console.log(line(r));
 }
 
+console.log('\n  the crouch/inventory panel (CS:0x1e1a/0x1f5a/0x1dd1/0x1e06/0x1ee3):');
+const { checkInventoryPanel } = await import('../src/verify/checks.js');
+for (const r of checkInventoryPanel()) {
+  if (!r.pass && !r.note) bad++;
+  console.log(line(r));
+}
+
 console.log('\n  System-A spawn chain and strategy census:');
 const { checkSpawnA } = await import('../src/verify/checks.js');
 for (const r of await checkSpawnA(fetchRaw)) {
