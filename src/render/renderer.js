@@ -107,6 +107,19 @@ export class Renderer {
     }
   }
 
+  /**
+   * Blit the status panel's 320xN index band, opaque, at world screen row
+   * `dy` (no clipping needed: it's always the full SCREEN_W wide and never
+   * contains index 0 in its real content — see game/status-panel.js).
+   * Drawn LAST, after the tilemap/entities, so it also covers whatever the
+   * unclipped world renderer draws below row 160 — the original's own
+   * viewport never shows that area at all (`UNKNOWN_playfield_height`).
+   * @param {{indices:Uint8Array,w:number,h:number}} panel
+   */
+  blitStatusPanel(panel, dy) {
+    this.buf.set(panel.indices.subarray(0, panel.w * panel.h), dy * SCREEN_W);
+  }
+
   /** Debug rectangle in a palette index (used for the hero box). */
   fillRect(x, y, w, h, index) {
     for (let yy = y; yy < y + h; yy++) {

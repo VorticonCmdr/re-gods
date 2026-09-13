@@ -51,6 +51,13 @@ const WANTED = [
   // (game/pat-objects.js). Loaded only on sublevel 'a' (CS:0x3855's own
   // `cmp byte [0x43],0 / jnz` gate), one file per world.
   'PGOD01.PAT','PGOD02.PAT','PGOD03.PAT','PGOD04.PAT',
+  // The status panel (game/status-panel.js). PSTATUS.PI1 is the boot-time
+  // placeholder (Table 2 disk id 1); PSTAT3.PI1 is loaded once when real
+  // gameplay starts and overwrites it (disk ids 2,3 — the world data disks),
+  // and is what a player actually sees during play. Both are full 320x200
+  // DEGAS images whose only real content is rows 160-199 — the rest is
+  // never converted (CS:0x2a23's own SI=0x6422 skips straight to it).
+  'PSTATUS.PI1','PSTAT3.PI1',
 ];
 
 if (!existsSync(SRC)) {

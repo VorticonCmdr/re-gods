@@ -13,6 +13,7 @@ import { scanZones, unpackTeleportDest, resolveExitDestination,
          EXIT_DESTINATIONS } from '../game/zones.js';
 import { consumesKey } from '../game/trigger.js';
 import { PI1_SIZE, decodePI1, TILE_COUNT } from '../formats/pi1.js';
+import { decodeStatusPanel, PANEL_W, PANEL_H, PANEL_Y0 } from '../game/status-panel.js';
 import { BULK_SIZE, parseMap } from '../formats/map.js';
 import { parseAllTriggers, isLive, verbOf, TRIG_COUNT } from '../game/trigger.js';
 import { parseAtlas, cutAll, atlasStats } from '../formats/atlas.js';
@@ -325,6 +326,68 @@ export async function runAllChecks(fetchRaw) {
     const empty = frames.filter((f) => !f.pixels.some((v) => v !== 0)).length;
     check(`${name}: ${a.count - empty}/${a.count} frames contain pixels`,
       empty <= 1, `${empty} empty`);
+  }
+
+  /* --- the status panel (game/status-panel.js) --- *
+   * Undocumented before this pass. The load-site disassembly (CS:0x2a01 for
+   * PSTATUS, CS:0x2a09/0x05a0 for PSTAT3) says only rows 160-199 are ever
+   * converted — these checks re-derive that from the shipped bytes rather
+   * than trusting the disassembly alone. */
+  for (const name of ['PSTATUS', 'PSTAT3']) {
+    const raw = dclDecompress(await fetchRaw(`game/${name}.PI1`)).data;
+    check(`${name}.PI1 == ${PI1_SIZE} B (a genuine DEGAS image, not an atlas)`,
+      raw.length === PI1_SIZE, `${raw.length}`);
+    const img = decodePI1(raw);
+    let topZero = true;
+    for (let i = 0; i < PANEL_Y0 * 320 && topZero; i++) topZero = img.indices[i] === 0;
+    check(`${name}: rows 0..${PANEL_Y0 - 1} are ALL colour 0 (never converted — CS:0x2a23's SI skips them)`,
+      topZero);
+    const panel = decodeStatusPanel(raw);
+    check(`${name}: decodeStatusPanel returns ${PANEL_W}x${PANEL_H}`,
+      panel.w === PANEL_W && panel.h === PANEL_H, `${panel.w}x${panel.h}`);
+    const bandHasZero = panel.indices.includes(0);
+    check(`${name}: the real 40-row band contains NO colour-0 pixels (opaque, no mask needed)`,
+      !bandHasZero);
+  }
+
+  /* The two files load into the SAME destination (0xac7a) — PSTAT3 physically
+   * overwrites PSTATUS at runtime, and only PSTAT3 is ever visible once real
+   * gameplay starts. Confirm they are genuinely different assets (not one
+   * file copied under two names) and that the difference sits where the
+   * disassembly-free visual diff found it. */
+  {
+    const a = decodeStatusPanel(dclDecompress(await fetchRaw('game/PSTATUS.PI1')).data);
+    const b = decodeStatusPanel(dclDecompress(await fetchRaw('game/PSTAT3.PI1')).data);
+    let diff = 0, minX = PANEL_W, maxX = -1, minY = PANEL_H, maxY = -1;
+    for (let y = 0; y < PANEL_H; y++) for (let x = 0; x < PANEL_W; x++) {
+      const i = y * PANEL_W + x;
+      if (a.indices[i] !== b.indices[i]) {
+        diff++;
+        if (x < minX) minX = x; if (x > maxX) maxX = x;
+        if (y < minY) minY = y; if (y > maxY) maxY = y;
+      }
+    }
+    check(`PSTATUS and PSTAT3 are genuinely different (not the same file twice)`, diff > 0, `${diff} px differ`);
+    check(`...and everywhere ELSE in the 320x40 band is pixel-identical`,
+      diff > 0 && diff < PANEL_W * PANEL_H * 0.25,
+      `diff bbox x[${minX},${maxX}] y[${minY},${maxY}]`);
+  }
+
+  /* PALETTE. Neither load site installs a DAC palette (no export 7/8/9
+   * adjacent to CS:0x2a01/0x2a09) — the converted bytes are drawn through
+   * whatever level palette is already active. Confirmed here: the panel's
+   * own embedded words 2..15 match PLEVEL1A.PI1's own words 2..15 exactly,
+   * differing only in the two low, level-specific accent slots every level
+   * palette also varies independently — so reading indices through
+   * level.palette (as this port's renderer.present() already does for
+   * every other sprite) is the right call, not a simplification. */
+  {
+    const panelImg = decodePI1(dclDecompress(await fetchRaw('game/PSTATUS.PI1')).data);
+    const levelImg = decodePI1(dclDecompress(await fetchRaw('game/PLEVEL1A.PI1')).data);
+    let sharedTail = true;
+    for (let i = 2; i < 16 && sharedTail; i++) sharedTail = panelImg.paletteRaw[i] === levelImg.paletteRaw[i];
+    check(`PSTATUS's own palette words 2..15 match PLEVEL1A's exactly (shared baseline, no DAC install)`,
+      sharedTail);
   }
 
   return { results, sampleMessages, hist };

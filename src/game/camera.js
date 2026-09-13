@@ -31,13 +31,19 @@
  *   region inside the world. 160 is measured directly: VGA:0x10E8 does
  *   `mov cx,0x1b80` = 7040 bytes / 44 bytes-per-row = 160 rows.
  *
- *   UNKNOWN_playfield_height — 160 is the BACKDROP region, not a proven
- *   visible height. The tile renderer covers only 144 px (VGA:0x1136/0x113D
- *   set loop counters 8 and 0xa, both `dec`/`jns`, so 9 rows x 11 columns =
- *   352x144), and VGA.EXE never writes CRTC index 0x18, so there is no
- *   hardware split screen to draw the boundary for us. This port renders the
- *   full 320x200 with no status panel; the camera clamp is faithful, the
- *   viewport is a port-level choice. Flagged, not hidden.
+ *   UNKNOWN_playfield_height — CLOSED elsewhere in this project's own
+ *   CLAUDE.md: a live DOSBox framebuffer capture (two unrelated rooms, same
+ *   result both times) found the visible playfield really does stop dead at
+ *   row 159, with a status-panel border starting at row 160 — matching this
+ *   camera's own 0x360 = 1024-160 clamp exactly. game/status-panel.js's own
+ *   loader finding corroborates it from the asset side: PSTAT3.PI1's own
+ *   real content starts at exactly that row and nowhere else in the file is
+ *   ever converted. This port still renders the world tilemap/entities over
+ *   the full 320x200 buffer (unclamped — see renderer.js), but the status
+ *   panel is drawn LAST and is opaque across the whole width, so whatever
+ *   the world renderer draws below row 160 is fully covered before present()
+ *   — the visible RESULT already matches, even though the world-draw itself
+ *   isn't clipped to 160 rows.
  *
  *   UNKNOWN_camera_alt_path — 5EB3 `cmp byte [0x32],0 / jz 0x5ec0`. Everything
  *   above is the [0x32] == 0 branch. The other branch calls 0x5e22 and jumps

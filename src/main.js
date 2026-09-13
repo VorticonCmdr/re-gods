@@ -45,6 +45,7 @@ isDyingA, DEATH_SPRITE_BASE_A, DEATH_FRAMES_A, stepCarriedItem } from './game/en
 import { VERDICT_NONE } from './game/pathfind.js';
 import { runSearch } from './game/pathfind-producers.js';
 import { GodsRandom } from './game/random.js';
+import { decodeStatusPanel, PANEL_Y0 as STATUS_PANEL_Y0 } from './game/status-panel.js';
 /* Contact and the grid scan are reached through game/frame.js, which owns the
  * order they must run in — see the note there. */
 import { Health, HEALTH_MAX, attackHero } from './game/combat.js';
@@ -229,6 +230,14 @@ async function loadSprites(world) {
   return { frames, ranges, palette: images.PALWAYS1.palette, total: map.length };
 }
 
+/* The status panel. CS:0x38a's own latch loads it exactly once, the first
+ * time the real per-tick game loop runs (game/status-panel.js) — not per
+ * level and not per world, so this port loads it once at startup too. */
+async function loadStatusPanel() {
+  const raw = dclDecompress(await fetchRaw('game/PSTAT3.PI1')).data;
+  return decodeStatusPanel(raw);
+}
+
 /* Draw a whole atlas into a canvas as a labelled grid, so the decoded frames
  * are inspectable rather than merely asserted to be correct. */
 async function renderAtlas(name, canvas) {
@@ -331,6 +340,13 @@ async function main() {
   try {
     hero = await loadSprites(level.world);
   } catch (e) { console.error('sprites failed to load', e); }
+
+  /* Loaded once, world-independent, exactly like the original (CS:0x38a's
+   * latch never resets across levels or restarts — see status-panel.js). */
+  let statusPanel = null;
+  try {
+    statusPanel = await loadStatusPanel();
+  } catch (e) { console.error('status panel failed to load', e); }
 
   let spawn = levelSpawn(level.world);
   let player = new Player(spawn.x, spawn.y);
@@ -1546,6 +1562,15 @@ async function main() {
         outOfRange++;
         renderer.strokeRect(player.x - camX, player.y - camY, 32, 48, 15);
       }
+
+      /* THE STATUS PANEL. Drawn LAST and opaque across the full width — see
+       * renderer.js's own blitStatusPanel and status-panel.js's PROVENANCE
+       * note on why that's enough to match the original's 160-row viewport
+       * without also clipping the world draw above. Coloured through
+       * level.palette like everything else this port draws (the panel's own
+       * embedded palette is never installed in the original either). */
+      if (statusPanel) renderer.blitStatusPanel(statusPanel, STATUS_PANEL_Y0);
+
       renderer.present(level.palette);
 
       $('fps').textContent = clock.fps.toFixed(0);
