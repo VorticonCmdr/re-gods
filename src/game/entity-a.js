@@ -126,6 +126,39 @@ import { cellIndex, GRID_LO, GRID_HI, ROW_STRIDE, CELL } from './collision.js';
 export const EST = { FREE: 0, DYING: -1, WAITING: -2, MATERIALISING: -3 };
 export const MATERIALISE_TICKS = 5;    // by analogy with System B — see file header
 
+/* DYING is written by the contact routine (combat.js's creatureTouchesHero,
+ * shared with System B — CS:0xff93/0xac59 are proven common to both systems).
+ * `tick()`'s own DYING branch runs CS:0xE247's fade for every tick AFTER the
+ * kill tick; the kill tick itself (frame still -1) is drawn by main.js's
+ * render pass using the ordinary sprite formula, matching CS:0xE0B2/E0BB/
+ * E241's own kill-tick draw (already documented in CLAUDE.md's
+ * UNKNOWN_df62_full_flow closure — that routine is a DIFFERENT, earlier
+ * stage of the same death sequence, not this one).
+ *
+ * ⚠️ System A's own fade is NOT System B's fade with different numbers —
+ * three concrete divergences, all read fresh off CS:0xE247-E2EC this
+ * session: DEATH_FRAMES_A is 17 (0x11), not System B's 7; the sprite base
+ * is 0x5B (91), not System B's 0x6C (108); and the one-shot position cache
+ * (CS:0xE251/E256) has NO `+8` bias at write time — unlike System B's own
+ * `+8`-on-X-only write-time bias (CS:0xED84). The `+8`-on-BOTH-axes bias
+ * System A's own group-elimination reward applies is instead baked in at
+ * the REWARD'S OWN READ SITE (CS:0xDFC8-DFD2) — see main.js's own groupsA
+ * reward-check loop, which is where that bias belongs, not here. */
+export const isDyingA = (e) => e.state === EST.DYING;
+export const DEATH_SPRITE_BASE_A = 0x5b;   // CS:0xE2D2 `add cx,0x5b` — flat, not a class lookup
+export const DEATH_FRAMES_A = 17;          // CS:0xE2AF `cmp word[di+4],0x11`
+
+/* CS:0xE247's own one-shot gate: `cmp word[di+4],0 / jns e2ac` skips the
+ * cache (and, in the original, the carried-item drop and the [di+0x19]
+ * rank-check — both NOT ported, see below) whenever frame is already >= 0,
+ * so it fires exactly once, on the first tick() call that observes DYING
+ * with frame still -1 (one tick AFTER the kill tick — the kill tick itself
+ * never touches frame; see the header above). Mirrors entity.js's own
+ * `deathCacheSeq` exactly, including why a monotonic counter stands in for
+ * the original's single shared DS:0x202/0x204 scratch pair: main.js ticks
+ * every group's entities in one flat loop, not per-group like CS:0xdf39. */
+let deathCacheSeqA = 0;
+
 /* ── Stage 1 — CS:0xe6e4, the strategy nibble/weight roll, CS:0xe748 ──────
  * cl = [si+0x8] & 0xf (lo nibble), dl = ([si+0x8] >> 4) & 0xf (hi nibble),
  * bl = [si+0x9] (7-bit weight). rand = draw() & 0x7f. If bl < rand, swap
@@ -721,7 +754,21 @@ export class EntityA {
     this.vx = 0;                // +0x12
     this.vy = 0;                // +0x14
     this.stepCap = 1;           // +0x16 — floors at 1 every tick (stage 0 preamble)
-    this.fineGate = 0;          // +0x19 — UNKNOWN writer; defaults OFF (see stageAccelerate)
+    /* +0x19 — NOT a bare gate flag despite the name. CS:0xE72D stamps this
+     * with the group-runtime reroll-throttle counter's OWN value at the
+     * moment stage 1 (CS:0xe6e4) grants this entity a strategy reroll — a
+     * "my rank in this group's reroll queue this tick" number, read
+     * ordinally by TWO consumers: stageAccelerate's fine-arrival gate above
+     * (0 or 1 skip it, anything else arms it) and, at death, CS:0xE247's own
+     * rank-1 check (only the entity stamped exactly 1 triggers a
+     * synchronized whole-group strategy reset via CS:0xEBB9). This port
+     * never implements the reroll-throttle mechanism that would set it
+     * nonzero (see stageAccelerate's own header), so it stays 0 for the
+     * life of every entity and BOTH consumers are provably unreachable —
+     * the death-time rank-check/CS:0xEBB9 branches are correspondingly not
+     * ported below. Kept named `fineGate` rather than renamed, since that is
+     * still an accurate name for its one LIVE consumer in this port. */
+    this.fineGate = 0;
     this.zone = 0;              // +0x1a — CS:0xec12's spawn-time result, unconsumed
     this.arrivedCoarse = false; // +0x1b
     this.goalX = x;             // +0x1c — seeded to spawn point (materialise loop)
@@ -744,6 +791,11 @@ export class EntityA {
      * original entity record. */
     this.storedZone = -1;
     this.goalFresh = false;
+    /* CS:0xE251/E256's own one-shot cache — RAW, no bias (unlike System B's
+     * write-time `+8`-on-X-only). See DEATH_FRAMES_A's own header for why. */
+    this.deathCacheX = null;
+    this.deathCacheY = null;
+    this.deathCacheSeq = -1;
     /* CS:0xE001's own pre-stage-2 velocity snapshot, captured by `tick()`
      * immediately before it calls `stageAccelerate`, specifically so stage 3
      * (`stageAttack`, now wired into `tick()` — see the file header) can
@@ -790,7 +842,37 @@ export class EntityA {
       if (--this.timer <= 0) { this.state = this.hp; this.timer = 0; }
       return null;
     }
-    if (this.state <= 0) return null;
+    /* CS:0xE2EC's own dispatch — reached from the outer per-entity loop
+     * (CS:0xDF94-DF9F) for any state <= 0 OTHER than the two pre-life
+     * sentinels above: an UNCONDITIONAL jmp to CS:0xE247 with NO lower-bound
+     * comparison at all (⚠️ CORRECTS an earlier revision of CLAUDE.md's own
+     * UNKNOWN_sysA_dormant_respawn section, which read this branch as
+     * "state <= -4" — the actual bytes are `cmp -2/jz` then `cmp -3/jz` then
+     * a bare `jmp`, matching ANY other value, -1 included). Since WAITING/
+     * MATERIALISING are already handled above and this port never produces
+     * the original's separate dormant/reawaken -2/-3 (a genuinely different,
+     * unported mechanism that happens to reuse the same two state VALUES —
+     * see CLAUDE.md), every negative state that reaches here is DYING. */
+    if (this.state < 0) {
+      if (this.frame === -1) {                              // CS:0xE24F `jns`
+        this.deathCacheX = this.x;                            // CS:0xE251 — NO bias
+        this.deathCacheY = this.y;                             // CS:0xE256 — NO bias
+        this.deathCacheSeq = deathCacheSeqA++;
+        /* CS:0xE25C-E282 (carried-item drop, id via +0xB/-0xC0 bias into
+         * popup.js) and CS:0xE283-E2A9 (the [di+0x19] rank-check / EBB9
+         * group-reset) both hang off this SAME one-shot gate in the
+         * original. Neither is ported: this entity has no carried-item
+         * field at all (steal-and-carry is a disclosed, separate unported
+         * gap — see CLAUDE.md), and fineGate's own header above already
+         * establishes the rank-check is provably unreachable in this port. */
+      }
+      this.frame++;                                          // CS:0xE2AC, unconditional
+      if (this.frame >= DEATH_FRAMES_A) {                     // CS:0xE2AF/E2B3
+        this.state = EST.FREE; this.delay = 0;                // CS:0xE2B5/E2BA
+      }
+      return null;
+    }
+    if (this.state === EST.FREE) return null;
 
     /* Stage 0 preamble, CS:0xe006-0xe00f: decrement, floor at 1. */
     if (--this.stepCap < 1) this.stepCap = 1;

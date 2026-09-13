@@ -38,7 +38,8 @@ import { parseGroupsB, parseGroupsA, GroupSlots, spriteForEntity, MAX_ENTITIES,
          CREATURE_DESCRIPTOR_BASE } from './game/spawn.js';
 import { EntityB, MODE, MODE_TABLE, groundBelow, isDying, EST,
 DEATH_SPRITE_BASE, DEATH_FRAMES } from './game/entity.js';
-import { EntityA, CLASS_TABLES_A, spriteForEntityA } from './game/entity-a.js';
+import { EntityA, CLASS_TABLES_A, spriteForEntityA, EST as ESTA,
+isDyingA, DEATH_SPRITE_BASE_A, DEATH_FRAMES_A } from './game/entity-a.js';
 import { VERDICT_NONE } from './game/pathfind.js';
 import { runSearch } from './game/pathfind-producers.js';
 import { GodsRandom } from './game/random.js';
@@ -464,6 +465,15 @@ async function main() {
    * sentinel makes the two equivalent), at whichever member's own (frozen,
    * post-death) position happens to be read last. */
   let groupsB = [];
+  /* System-A's OWN, separate group-elimination reward (CS:0xDFAC-0xE000,
+   * `UNKNOWN_sysA_0x1f4_elimination_detector`) — a distinct mechanism from
+   * System-B's above, not a duplicate, despite the identical +0x10 offset
+   * on a different 50-record descriptor table. Same reward-fire condition
+   * as System B (dead-or-dying === count, CS:0xDFC4); the original's
+   * STRICTER dead-only slot-free condition (CS:0xDFF5) is not modelled
+   * here either, for the same reason System B's own block above doesn't:
+   * this port's GroupSlots has no fixed runtime-slot cap to recycle. */
+  let groupsA = [];
   /* Stage 6 (CS:0xe659) is ported and now wired end to end for BOTH entity
    * systems: the reload timer, facing test and muzzle computation feed the
    * shared EnemyShots array below, the same one the nest creature fires
@@ -597,11 +607,18 @@ async function main() {
       const n = Math.min(d.count, MAX_ENTITIES);
       if (d.count > MAX_ENTITIES) clampedA++;
       const x = d.tileX * 32, y = d.tileY * 16;
+      const members = [];
       for (let i = 0; i < n; i++) {
-        enemiesA.push(Object.assign(
+        const e = Object.assign(
           new EntityA({ x, y, cls: d.cls, hp: d.hp || 1, delay: 0 }),
-          { desc: d }));
+          { desc: d });
+        enemiesA.push(e);
+        members.push(e);
       }
+      /* CS:0xDFED/DFDB — System-A's own "reward already given" latch, the
+       * same shape as groupsB's above (this port has no group-runtime slot
+       * of its own to hang it off, unlike CS:0xdf39's own `[bp+0x10]`). */
+      groupsA.push({ desc: d, members, rewardGiven: false });
       slot.state = 1;
     }
   };
@@ -647,7 +664,7 @@ async function main() {
       slots = new GroupSlots(); enemies = []; clamped = 0; firedByB = 0;
       slotsA = new GroupSlots(); enemiesA = []; clampedA = 0; firedByA = 0;
       firedHazardsByA = 0; firedHazardsByB = 0;
-      groupsB = []; popup = new Popup();
+      groupsB = []; groupsA = []; popup = new Popup();
       rng = new GodsRandom(1);
       nests = new Nests(level.world, rng); shots = new EnemyShots(); tock = 0;
       lineHazards = new LineHazards();
@@ -1128,6 +1145,26 @@ async function main() {
           popup.spawn(src.deathCacheX, src.deathCacheY, g.desc.rewardId);
         }
       }
+      /* `UNKNOWN_sysA_0x1f4_elimination_detector` — System-A's OWN, separate
+       * group-elimination reward. Same dead-or-dying-vs-count shape as
+       * System B's loop above (CS:0xDFC4), but with the bias arrangement
+       * INVERTED: System B's entity caches its own position WITH an `+8`
+       * bias already baked in at write time (CS:0xED84); System A's own
+       * entity cache (entity-a.js's DYING branch) is RAW, and the `+8`
+       * bias — on BOTH X and Y, not X alone — is applied HERE, at this
+       * read site, matching CS:0xDFC8-DFD2 exactly (`ax=[0x202]+8`,
+       * `bx=[0x204]+8`). Getting this backwards either drops the bias
+       * entirely or double-applies System B's own +8-on-X convention to
+       * System A's reward position. */
+      for (const g of groupsA) {
+        if (g.rewardGiven) continue;
+        if (!g.members.every((e) => e.state === ESTA.FREE || e.state === ESTA.DYING)) continue;
+        g.rewardGiven = true;
+        if (g.desc.rewardId >= 0) {
+          const src = g.members.reduce((a, b) => (b.deathCacheSeq > a.deathCacheSeq ? b : a));
+          popup.spawn(src.deathCacheX + 8, src.deathCacheY + 8, g.desc.rewardId);
+        }
+      }
       /* Drain selector2.js's own group-elimination rewards (`CS:0xAED0`-
        * `0xAF0F`) into the SAME single-slot popup — previously computed
        * correctly but grown forever and never rendered. */
@@ -1279,9 +1316,28 @@ async function main() {
        * since the original's shared draw call (CS:0x3569) doesn't
        * distinguish the two either. */
       for (const e of enemiesA) {
-        if (e.state <= 0) continue;   // waiting / materialising / dying
+        if (e.state === ESTA.FREE || e.state === ESTA.WAITING) continue;   // free / not yet visible
         const sx = e.x - camX, sy = e.y - camY;
         if (sx < -64 || sy < -64 || sx > SCREEN_W || sy > SCREEN_H) continue;
+        if (isDyingA(e)) {
+          /* CS:0xE0B2/E241/E247 — the kill tick (frame still -1) draws via
+           * the ordinary formula below; every later tick draws
+           * DEATH_SPRITE_BASE_A + frame (0..16) through the SAME blitter.
+           * Mirrors System B's own DYING render above exactly, with A's own
+           * constants (see entity-a.js's DEATH_FRAMES_A header). */
+          dying++;
+          if (e.frame < 0) {
+            const eid = spriteForEntityA(level.world, e.cls, e, CLASS_TABLES_A);
+            const ef = eid !== null && hero && hero.frames[eid];
+            if (ef) renderer.blitSprite(ef, sx, sy);
+            else { outOfRange++; renderer.strokeRect(sx, sy, 24, 24, 11); }
+          } else if (e.frame < DEATH_FRAMES_A) {
+            const df = hero && hero.frames[DEATH_SPRITE_BASE_A + e.frame];
+            if (df) renderer.blitSprite(df, sx, sy);
+            else { outOfRange++; renderer.strokeRect(sx, sy, 24, 24, 11); }
+          }
+          continue;
+        }
         const eid = spriteForEntityA(level.world, e.cls, e, CLASS_TABLES_A);
         const ef = eid !== null && hero && hero.frames[eid];
         if (ef) renderer.blitSprite(ef, sx, sy);

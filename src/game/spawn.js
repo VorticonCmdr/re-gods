@@ -104,6 +104,18 @@ export function parseGroupsA(buf) {
       zoneWeight: b[0x0d],                     // stage 1 (CS:0xe9de), NOT previously exposed
       extra:      b[0x0e],                     // copied to group-runtime +0x6 at materialise; consumer not traced
       attackGate: b[0x0f],                     // stage 3 (CS:0xe487) gate — stage 3 is NOT ported
+      /* CS:0xDFDB's own `mov cx,word[si+0x10]` (BE -> native, negative =
+       * none) — System-A's OWN, separate group-elimination reward id.
+       * NOT a duplicate of System-B's rewardId below despite the identical
+       * +0x10 offset: this is a distinct field in a distinct 50-record
+       * descriptor table (DESC_A_OFF vs DESC_B_OFF). Fires once dead+dying
+       * == count (CS:0xDFC4), at the position cached by whichever member's
+       * OWN death-draw last ran, +8 on BOTH axes (CS:0xDFC8-DFD2 — the bias
+       * is applied at this READ site, not at the entity's own write-time
+       * cache, which has no bias — see entity-a.js's DYING branch). The
+       * slot itself only frees on the stricter dead == count (CS:0xDFF5),
+       * a separate, later condition — see main.js's own groupsA tracking. */
+      rewardId: signWord((b[0x10] << 8) | b[0x11]),
       tileX:   b[0x12],
       tileY:   b[0x13],
       live:    b[0x00] !== 0,

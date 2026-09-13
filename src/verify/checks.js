@@ -30,7 +30,10 @@ import { EntityA, CLASS_TABLES_A, spriteForEntityA, rollStrategy,
          stageAccelerate, stageApply, stageFacingAndFire,
          SPRITE_BASE_8FRAME, SPRITE_BASE_6FRAME,
          stageAttack, REACH_OFFSETS, DISPLACEMENT_TABLE,
-         ZONES, ZONE_SCRATCH, currentZone, strategy1, strategy2 } from '../game/entity-a.js';
+         ZONES, ZONE_SCRATCH, currentZone, strategy1, strategy2,
+         EST as ESTA, isDyingA,
+         DEATH_SPRITE_BASE_A as ENTA_DEATH_SPRITE_BASE,
+         DEATH_FRAMES_A as ENTA_DEATH_FRAMES } from '../game/entity-a.js';
 import { SELECTOR_TABLE, SELECTOR_TRIGGER, EVENT_TABLE_OFF, EVENT_COUNT,
          palfilsNameFor, parsePalfils, EventRunner } from '../game/events.js';
 import { GROUP_SLOTS as PAT_GROUP_SLOTS, SUBRECORDS_PER_GROUP, ABSOLUTE_TAG,
@@ -2225,6 +2228,141 @@ export function checkEntityA() {
       eCam2.goalX === 250 && eCam2.goalY === 130, `goal=${eCam2.goalX},${eCam2.goalY}`);
   }
 
+  /* CS:0xE247's death fade — System A's OWN, distinct from System B's:
+   * DEATH_FRAMES_A=17 not 7, sprite base 0x5b not 0x6c, and a RAW (unbiased)
+   * position cache (System B's own write-time cache adds +8 to X). A
+   * regression guard mirroring checkEntity()'s own CS:0xF030 tests exactly,
+   * so the two entity systems' death sequences stay independently verified. */
+  {
+    const desc0 = { seedPair: 0, seedWeight: 0, stepCap: 4, speedCap: 4, fireByte: 0, flags: 0 };
+    const d = new EntityA({ x: 0, y: 0, hp: 5 });
+    d.state = ESTA.DYING; d.frame = -1;          // combat.js's own kill-tick values
+    check('a killed System-A entity is DYING, not silently freed',
+      isDyingA(d) && d.state === ESTA.DYING);
+
+    const frames = [];
+    for (let i = 0; i < ENTA_DEATH_FRAMES; i++) {
+      d.tick({ x: 0, y: 0 }, desc0, () => 0, false);
+      frames.push(d.frame);
+      check(`CS:0xE2AC/E2AF: tick ${i} keeps the entity DYING while frame < ${ENTA_DEATH_FRAMES}`,
+        isDyingA(d), `frame=${d.frame} state=${d.state}`);
+    }
+    check(`CS:0xE2AC: frame counts 0..${ENTA_DEATH_FRAMES - 1} across exactly ${ENTA_DEATH_FRAMES} ticks`,
+      frames.join() === Array.from({ length: ENTA_DEATH_FRAMES }, (_, i) => i).join(),
+      frames.join());
+    check(`CS:0xE2D2: the fade sprite base is the FLAT ${ENTA_DEATH_SPRITE_BASE.toString(16)} constant, ` +
+      `distinct from System B's own 0x6c`,
+      ENTA_DEATH_SPRITE_BASE === 0x5b);
+
+    d.tick({ x: 0, y: 0 }, desc0, () => 0, false);   // the ENTA_DEATH_FRAMES-th tick — CS:0xE2B3's `jl` is NOT taken
+    check('CS:0xE2B5/E2BA: the entity finalises to FREE, not stuck dying forever',
+      d.state === ESTA.FREE && !isDyingA(d), `state=${d.state}`);
+    check('CS:0xE2BA: the delay/dormant-countdown field is also cleared on finalise',
+      d.delay === 0);
+  }
+
+  /* CS:0xE251/E256's one-shot cache — RAW, no bias, unlike System B's own
+   * write-time `+8`-on-X. The `+8`-on-BOTH-axes bias belongs at the
+   * REWARD'S OWN read site (main.js), not here — see entity-a.js's own
+   * DEATH_FRAMES_A header for why getting this backwards either drops the
+   * bias or wrongly reuses System B's X-only convention. */
+  {
+    const desc0 = { seedPair: 0, seedWeight: 0, stepCap: 4, speedCap: 4, fireByte: 0, flags: 0 };
+    const fresh = new EntityA({ x: 10, y: 20, hp: 5 });
+    check('a freshly-spawned System-A entity is WAITING (-2), which satisfies `state <= 0` '
+      + '— the same trap System B\'s own group-reward guard already documents',
+      fresh.state === ESTA.WAITING && fresh.state <= 0, `state=${fresh.state}`);
+    check('the cache is UNSET before any entity has died',
+      fresh.deathCacheSeq === -1 && fresh.deathCacheX === null);
+
+    const killed = new EntityA({ x: 100, y: 50, hp: 5 });
+    killed.state = ESTA.DYING; killed.frame = -1;
+    killed.tick({ x: 0, y: 0 }, desc0, () => 0, false);
+    check('CS:0xE251/E256: the kill-tick (frame still -1 at entry) caches the position RAW',
+      killed.deathCacheX === 100 && killed.deathCacheY === 50 && killed.deathCacheSeq >= 0,
+      `x=${killed.deathCacheX} y=${killed.deathCacheY} seq=${killed.deathCacheSeq}`);
+    check('CS:0xE251/E256: unlike System B, NEITHER axis is biased at write time',
+      killed.deathCacheX === killed.x && killed.deathCacheY === killed.y);
+
+    const seqAfterFirst = killed.deathCacheSeq;
+    for (let i = 0; i < ENTA_DEATH_FRAMES; i++) killed.tick({ x: 0, y: 0 }, desc0, () => 0, false);
+    check('CS:0xE24F is a ONE-SHOT gate — the cache does not move once frame leaves -1',
+      killed.deathCacheSeq === seqAfterFirst && killed.deathCacheX === 100);
+
+    const first = new EntityA({ x: 0, y: 0, hp: 5 });
+    first.state = ESTA.DYING; first.frame = -1;
+    const second = new EntityA({ x: 200, y: 200, hp: 5 });
+    second.state = ESTA.DYING; second.frame = -1;
+    first.tick({ x: 0, y: 0 }, desc0, () => 0, false);
+    second.tick({ x: 0, y: 0 }, desc0, () => 0, false);
+    check('the entity ticked SECOND has the higher deathCacheSeq (it cached most recently)',
+      second.deathCacheSeq > first.deathCacheSeq,
+      `first=${first.deathCacheSeq} second=${second.deathCacheSeq}`);
+  }
+
+  /* End-to-end regression guard for main.js's own `groupsA` reward-check
+   * loop (CS:0xDFAC-E000): drive a full 3-member group through kill -> the
+   * full DEATH_FRAMES_A-tick fade -> FREE, and assert the SAME predicate
+   * main.js uses (`state === FREE || state === DYING`) fires the reward the
+   * instant the LAST member starts dying — NOT waiting for any member to
+   * finish its fade — and stays latched (no re-fire) once every member has
+   * finished. Before this session neither `groupsA` nor this predicate
+   * existed at all, so this is also the first test that would have caught
+   * a group never being tracked in the first place. */
+  {
+    const desc0 = { seedPair: 0, seedWeight: 0, stepCap: 4, speedCap: 4, fireByte: 0, flags: 0 };
+    const members = [
+      new EntityA({ x: 10, y: 20, hp: 3 }),
+      new EntityA({ x: 30, y: 40, hp: 3 }),
+      new EntityA({ x: 50, y: 60, hp: 3 }),
+    ];
+    for (const m of members) m.state = m.hp;   // skip the pre-life FSM — all three alive
+    const rewardFired = () => members.every((e) => e.state === ESTA.FREE || e.state === ESTA.DYING);
+
+    check('a fully-alive 3-member group does NOT satisfy the reward predicate',
+      !rewardFired());
+
+    members[0].state = ESTA.DYING; members[0].frame = -1;
+    members[0].tick({ x: 0, y: 0 }, desc0, () => 0, false);   // caches its own death position
+    check('one of three dying — the other two still alive — does NOT fire',
+      !rewardFired());
+
+    members[1].state = ESTA.DYING; members[1].frame = -1;
+    members[1].tick({ x: 0, y: 0 }, desc0, () => 0, false);
+    check('two of three dying — one still alive — still does NOT fire',
+      !rewardFired());
+
+    members[2].state = ESTA.DYING; members[2].frame = -1;
+    members[2].tick({ x: 0, y: 0 }, desc0, () => 0, false);
+    check('CS:0xDFC4: ALL THREE dying (none fully dead yet) DOES satisfy the reward '
+      + 'predicate — dead+dying === count, not dead === count',
+      rewardFired());
+    check('every member has a cache to read at reward time, since DYING is only '
+      + 'reachable through the frame===-1 tick that writes it',
+      members.every((e) => e.deathCacheX !== null && e.deathCacheY !== null));
+
+    const src = members.reduce((a, b) => (b.deathCacheSeq > a.deathCacheSeq ? b : a));
+    check('the group\'s own reward position picks whichever member cached MOST recently '
+      + '(the third, ticked last)',
+      src === members[2], `picked x=${src.x}`);
+    check('CS:0xDFC8-DFD2: the read-site bias is +8 on BOTH axes, applied here — NOT at '
+      + 'the entity\'s own (unbiased) write-time cache',
+      src.deathCacheX + 8 === members[2].x + 8 && src.deathCacheY + 8 === members[2].y + 8);
+
+    /* Run the full 17-tick fade out to FREE on all three — the reward
+     * predicate must stay satisfied throughout (FREE also counts), matching
+     * CS:0xDFC4's own dead-OR-dying test rather than the stricter dead-ONLY
+     * CS:0xDFF5 slot-free condition this port does not model (see main.js's
+     * own header comment on `groupsA`). */
+    for (let i = 0; i < ENTA_DEATH_FRAMES; i++) {
+      for (const m of members) m.tick({ x: 0, y: 0 }, desc0, () => 0, false);
+    }
+    check(`after the full ${ENTA_DEATH_FRAMES}-tick fade every member is FREE`,
+      members.every((e) => e.state === ESTA.FREE), members.map((e) => e.state).join());
+    check('...and the reward predicate STILL holds (FREE counts, same as DYING)',
+      rewardFired());
+  }
+
   return results;
 }
 
@@ -3045,6 +3183,7 @@ export async function checkSpawnA(fetchRaw) {
   let live = 0, refs = 0, badRef = 0, overCount = 0;
   const perFile = [];
   const loHist = {}, share = { 0: 0, 1: 0, 2: 0, 3: 0 };
+  const rewardIdsA = new Set();
   for (const k of keys) {
     const buf = dclDecompress(await fetchRaw(`game/${palfilsNameFor(k)}`)).data;
     const groups = parseGroupsA(buf);
@@ -3052,6 +3191,7 @@ export async function checkSpawnA(fetchRaw) {
     for (const g of groups) {
       if (!g.live) continue;
       live++; n++;
+      rewardIdsA.add(g.rewardId);
       if (g.count > MAX_ENTITIES) overCount++;
       const lo = g.seedPair & 0xf, hi = (g.seedPair >> 4) & 0xf;
       loHist[lo] = (loHist[lo] || 0) + 1;
@@ -3079,6 +3219,25 @@ export async function checkSpawnA(fetchRaw) {
     badRef === 0, `${refs} references, ${badRef} dangling`);
   check(`no live descriptor's low strategy nibble exceeds 2`,
     Object.keys(loHist).every((k) => +k <= 2), JSON.stringify(loHist));
+
+  /* CS:0xDFDB's own BE i16 reward id — the FIRST census of this previously-
+   * undocumented System-A-only field, re-derived from raw bytes independent
+   * of parseGroupsA itself (matching the discipline of System B's own
+   * DOCUMENTED_REWARD_IDS check above). Distinct set from System B's own
+   * census by construction: two unrelated descriptor tables at two
+   * different PALFILS offsets, sharing only the +0x10 byte position. */
+  const DOCUMENTED_REWARD_IDS_A = new Set([-1, 0, 16, 22, 27, 45]);
+  const rewardIdsASorted = [...rewardIdsA].sort((a, b) => a - b);
+  check(`every live System-A descriptor's +0x10 reward id matches this session's own census`,
+    rewardIdsASorted.every((id) => DOCUMENTED_REWARD_IDS_A.has(id)),
+    `got {${rewardIdsASorted.join(',')}}`);
+  results.push({
+    name: 'descriptor +0x10 reward ids in shipped System-A data',
+    note: true, pass: true,
+    detail: `${rewardIdsASorted.join(',')} — negative = no reward, `
+      + '0 a plain numeric popup (undecoded, not rendered), >= 0xB a POBJECTS type '
+      + '(16-11=5, 22-11=11 chrystal, 27-11=16 iron chest, 45-11=34 jewel)',
+  });
 
   results.push({
     name: 'shipped System-A strategy nibbles (lo, before the weight roll)',
