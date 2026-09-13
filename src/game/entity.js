@@ -262,6 +262,10 @@ export const DEATH_FRAMES = 7;           // CS:0xF071 `cmp word[di+4],0x7`
  * that could be cross-contaminated by entities from OTHER groups ticking in
  * the same pass (this port ticks all of `enemies` in one flat loop, not
  * per-group like CS:0xed38). */
+// Monotonic for the life of the page — never reset on level switch, even
+// though `enemies`/`groupsB` are rebuilt. Harmless: it's only ever compared
+// within one group's own members at reward time (main.js), never read as
+// a global "how many have died" count.
 let deathCacheSeq = 0;
 
 export class EntityB {

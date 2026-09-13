@@ -1120,14 +1120,12 @@ async function main() {
            * OWN most-recently-cached member died, not simply the last one in
            * spawn order. `deathCacheSeq` (entity.js) reproduces "freshest"
            * without a real shared scratch pair, since this port ticks all
-           * groups' entities in one flat loop rather than per-group. */
-          const cached = g.members.filter((e) => e.deathCacheSeq >= 0);
-          const src = cached.length
-            ? cached.reduce((a, b) => (b.deathCacheSeq > a.deathCacheSeq ? b : a))
-            : g.members[g.members.length - 1];
-          const x = cached.length ? src.deathCacheX : src.x;
-          const y = cached.length ? src.deathCacheY : src.y;
-          popup.spawn(x, y, g.desc.rewardId);
+           * groups' entities in one flat loop rather than per-group.
+           * Every member is FREE or DYING here (the .every() guard above),
+           * and both states are only reachable through a frame===-1 tick
+           * that writes the cache — so every member has one, always. */
+          const src = g.members.reduce((a, b) => (b.deathCacheSeq > a.deathCacheSeq ? b : a));
+          popup.spawn(src.deathCacheX, src.deathCacheY, g.desc.rewardId);
         }
       }
       /* Drain selector2.js's own group-elimination rewards (`CS:0xAED0`-
