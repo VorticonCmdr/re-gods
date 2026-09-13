@@ -1036,6 +1036,56 @@ So on death, the hero's respawn is nudged to the **nearest tile in this small, d
 
 A port that seeds the scroll origin to `(0,0)` or to the raw, unclamped spawn point on every level load will visibly snap on the first frame in three of the four worlds (1, 2 and 4 — world 3's spawn point happens to clamp to `(0,0)` either way, so it alone matches by accident).
 
+### `UNKNOWN_level_exit_destination` — still open, but the destination-record stream is mapped and the leading hypothesis is refuted `[PROVEN]`
+
+This is the standing question of which of the 8 shipped `.MAP` files loads after a real (non-attract-mode) level-exit trigger fires. Not closed this pass, but three things are now nailed down that narrow it considerably: a second, genuinely distinct table feeding `DS:0x178`; the full `FUN_1000_6553`→`FUN_1000_694d`→`FUN_1000_6992` call chain the exit flow runs through; and — the main result — proof that `DS:0xe674` and `DS:0xe67c` are two different *entry points* into **one shared, non-uniform-stride record stream**, which refutes the natural "advance a cursor through the array" reading of the one arithmetic operation in this chain that looked like it might be the answer.
+
+**`DS:0x178` has two independent writers, not one.** `zones.js`'s own ACT4/level-exit handler already documents the first: an exit zone resolves its `arg` (2–5) into one of 4 pointers at `DS:0xe67c` and stores the pointer into `DS:0x178`, setting `DS:0x36a` ("exit pending"). The second writer is **`FUN_1000_8c34`** (`CS:0x8D22`–`0x8D31`, inside the level-load master routine this document already documents extensively under *`UNKNOWN_camera_init`*): `DS:0x178 := word[DS:0xe674 + (world-1)*2]` — a **world-indexed**, not arg-indexed, 4-entry pointer table, read unconditionally at every level (re)load. Reading `DS:0xe674` directly (16 bytes) gives 8 words: `0xe684, 0xe70e, 0xe7ba, 0xe820, 0xe6ea, 0xe796, 0xe7fe, 0xe8a8` — the **last four are byte-for-byte `DS:0xe67c`'s own four pointers** (the arg-indexed `EXIT_DESTINATIONS` table `zones.js` already ports), so `DS:0xe674` is a contiguous 8-pointer block: first 4 are its own world-indexed table, last 4 are simply a second reference to the arg-indexed table sitting immediately after it in memory. That much was already known going into this pass.
+
+**The score-tally/bonus screen, `FUN_1000_6553`–`0x67b7` (220 instructions), fully disassembled:**
+
+```
+6553  mov si,word ptr [0x178]         ; the resolved destination record (from EITHER writer above)
+6557  add word ptr [0x178],0x22       ; advance the STORED pointer by 34 bytes — see below, this does NOT track record boundaries
+655e  mov dx,word ptr [si + 0x1e]     ; a field 30 bytes into the record — new, not part of the {param,always0,param2,text} shape zones.js already ports
+6562  cmp word ptr [si + 0x4],0x0
+6565  jnz 0x656e
+656b  jmp 0x694d                       ; bail-out when the record's own +0x4 (="always0" in zones.js's naming) is nonzero — never true for the shipped LEVEL/GAME records, all of which read 0 there
+656e  ... [full tally UI: time bonus from lives [0x224], health bonus [0x192], money/score digit
+       display, "cha-ching" sfx 0x52f looped]
+67b0  pop si
+67b1  mov dx,word ptr [si + 0x1e]     ; re-read the SAME field, from the SAME (now-advanced) SI
+67b4  call 0x1000:694d
+67b7  ret
+```
+
+**`FUN_1000_694d`–`0x6972` (19 instructions) is a 32-iteration bit-dispatch loop over a function-pointer table at `SS:0x35aa`–`0x35e8`**, walked backward. Careful bit-shift tracing (`SHL` by 4, then `SHL` by 1, testing carry each iteration) proves only 3 of `DX`'s 16 bits are ever meaningfully tested — bits 11, 6, 1, in that iteration order — because every bit above 11 is discarded on the first shift and every iteration past the 3rd tests always-zero padding. The three live table entries: `SS:0x35e8` (bit 11 → handler `0x4828`), `SS:0x35e6` (bit 6 → handler `0x69d7`), `SS:0x35e4` (bit 1 → handler `0x6992`).
+
+⚠️ **The `SS:0x35aa` table physically overlaps this document's own already-documented 17-entry CONDITION-predicate dispatch table at `SS:0x35b0`** — confirmed by reading the raw bytes and comparing against the known `3bc1, 3e69, 3e88, ...` sequence, offset by 3 words. A structural curiosity (two dispatch tables sharing/adjoining memory), not previously noted.
+
+**`FUN_1000_6992`–`0x69d5` (the bit-1 handler — the only one of the three that ever fires for the shipped LEVEL ONE/TWO/THREE records) is a full register-preserving per-level-runtime-pool reset**: it re-runs a subset of `FUN_1000_8c34`'s own per-level-init call sequence (`0x9026, 0xb0c3, 0xdbfb, 0x1221, 0x75a9`, a `world!=3`-gated destructible-block restore/clear pair `0x74db`/`0x74cd`, then `0x7e58, 0x80f7, 0x7f45, 0x8661, 0xde34, 0xde6f, 0xb263`) — i.e. it resets destructible blocks, System-A entity groups, and hazard walkers. **It writes neither `DS:0x42` (world) nor `DS:0x43` (sublevel) anywhere in its body.** `1000:69d6` is a lone `RET` byte; `1000:69d7` begins a distinct, unrelated routine reading the password table (`DS:0x42a`) that never fires for the records under study here.
+
+**Which of DX's three tested bits fire depends on a previously-undocumented record field, `+0x1e`.** Extended raw reads of all four `EXIT_DESTINATIONS` records give: `LEVEL ONE` (`0xe6ea`) `+0x1e = 0x0502`; `LEVEL TWO` (`0xe796`) `+0x1e = 0x0502` (identical); `LEVEL THREE` (`0xe7fe`) `+0x1e = 0x0702`; `GAME` (`0xe8a8`) `+0x1e = 0x0000`. Both `0x0502` and `0x0702` set bit 1 (the `FUN_1000_6992` pool-reset handler) and clear bits 6/11; `0x0000` sets none. So the pool reset runs for all three real "LEVEL" exits and not for "GAME" — consistent with a game-over/ending sequence not needing its runtime pools reset.
+
+**Exhaustively re-confirmed this pass: no code anywhere writes `DS:0x42`/`DS:0x43` from the real-gameplay level-exit flow.** All `MOV byte [0x42/0x43], <imm/reg>` sites (10 + 4, previously enumerated) are attract-mode/password/game-over/loading-title-card related; `INC byte [0x42]`, `MOV word [0x42]` (a combined world+sublevel write), and `ADD byte [0x42]` all return **zero hits** program-wide. This negative is now exhaustive across every simple write form.
+
+**The main finding: `DS:0xe674` and `DS:0xe67c` are two entry points into one shared, non-uniform-stride record stream — and the `ADD word[0x178],0x22` above does *not* track that stream's own record boundaries.** A 204-byte raw read starting at `0xe6ea` (`LEVEL ONE`'s own pointer target) decodes as a sequence of back-to-back records, each `{u16 param, u16 always0, u16 param2, char text[24]}` (30 bytes) followed by 2 or 3 trailing `u16` words:
+
+| offset | address | record | param | param2 | trailer | size |
+|---|---|---|---|---|---|---|
+| 0 | `0xe6ea` | `LEVEL ONE` | 12 | 2500 | `+0x1e=0x0502, +0x20=0, +0x22=0xFFFF` (**3** words) | 36 |
+| 36 | `0xe70e` | `WORLD ONE` | 6 | 500 | `+0x1e=0x0180, +0x20=0` (**2** words) | 34 |
+| 70 | `0xe730` | `WORLD TWO` | 10 | 500 | `+0x1e=0x03C1, +0x20=8` | 34 |
+| 104 | `0xe752`(calc) | *(blank text)* | 11 | 0 | `+0x1e=0x0180, +0x20=0` | 34 |
+| 138 | `0xe776`(calc) | *(blank text)* | 15 | 0 | `+0x1e=0x0280, +0x20=0` | 34 |
+| 172 | `0xe796` | `LEVEL TWO` | 16 | 2500 | — | — |
+
+Every offset in the "address" column is arithmetic (`0xe6ea + offset`), not a second independent read, and **two of them land exactly on already-known pointers**: offset 36 (`0xe70e`) is `DS:0xe674`'s own world-2 entry, and offset 172 (`0xe796`) is `DS:0xe67c`'s own arg-3 (`LEVEL TWO`) entry — both hit precisely, with zero slack, which is what makes this a discriminating result rather than a coincidental byte pattern. **So the two tables' pointers are entry points into one pool of records that both world-load and level-exit share**, not two independently-authored tables as the header comment in `zones.js` previously implied.
+
+⚠️ **This refutes the natural reading of `FUN_1000_6553`'s own `ADD word[0x178],0x22`.** `LEVEL ONE`'s record is **36 bytes**, not 34 — it carries a third trailer word (`+0x22 = 0xFFFF`) that `WORLD ONE`/`WORLD TWO`/the two blank records do not. Advancing the stored pointer by a flat `0x22` (34) from a 36-byte record lands **2 bytes short of the true next record**, inside `LEVEL ONE`'s own trailing `0xFFFF` word rather than at `WORLD ONE`'s header. So `[0x178] += 0x22` is not "walk to the next record in this stream" — record sizes are not uniform, and the arithmetic doesn't respect the boundaries this pass just mapped. Whatever that increment is actually for (the tally screen re-reads `[SI+0x1e]` a second time afterward, from the *advanced* `SI` — see the `67b1` line above — so it does do *something* meaningful with the shifted pointer) is now a narrower, still-open question, not the world/sublevel answer.
+
+**Net effect on the standing item:** `UNKNOWN_level_exit_destination` remains open, but the search space has narrowed. Ruled out, exhaustively: a direct `DS:0x42`/`DS:0x43` write anywhere in the real-gameplay exit path (all four indirect/simple write forms checked); a `DS:0x178`/`+0x22` record-cursor reading of world advancement (the record sizes refute it). Established: the full `FUN_1000_8c34 → DS:0x178 (world-indexed) `and` zone-exit → DS:0x178 (arg-indexed)` dual-writer picture; the `6553→694d→6992` per-level-pool-reset chain, which is a real part of the exit sequence but not the world-select mechanism; and the shared-record-stream structure of `0xe674`/`0xe67c`, whose *purpose* (why a world-load pointer resolves to text reading `WORLD ONE` rather than, say, `WORLD TWO`) is itself now an open question rather than an assumption. Plausible remaining avenues, not chased this pass: what runs in the main loop immediately after `FUN_1000_6553` returns (once `[0x36a]` is cleared); and register-indirect write forms to `DS:0x42`/`0x43` (e.g. `MOV [BX+SI],AL`), which none of this pass's substring/immediate searches can see.
+
 ## The plane-B event probe rounds X but floors Y `[PROVEN]`
 
 `0x5fab`, called from the epilogue at `0x5ea0`:
