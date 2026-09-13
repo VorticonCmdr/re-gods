@@ -2991,7 +2991,13 @@ dff9  [bp+0] = 0                                 ; ALL fully dead -> DEACTIVATE 
 
 So there are **two distinct thresholds, not one**: "dead + dying == total" is the trigger for a **one-shot popup/message**, read straight out of a previously-undocumented `PALFILS` field (`System-A group descriptor +0x10`, big-endian `u16`) — this is the mechanism behind "you cleared this group" style flavour text, fired the instant the last live entity starts dying rather than waiting for its death animation to finish, at the position cached from whichever entity most recently went through the death-draw path. "Dead == total" (strictly fully dead, not merely dying) is the **separate, stricter** condition that actually frees the group's runtime slot. A group that has just finished dying-but-not-yet-dead sits in a window where the message has fired but the slot is still occupied.
 
-⚠️⚠️ **CORRECTION, a later session — disclosed as unported.** This is a third, INDEPENDENT group-elimination-reward mechanism, distinct from both System-B's own `+0x10` (`UNKNOWN_f030_item_drop`, port: `popup.js`/`spawn.js`'s `parseGroupsB`/`main.js`) and the selector-2 spawner's own reward (`CS:0xAED0`-`0xAF0F`, port: `selector2.js`). `gods-web`'s `parseGroupsA` (`spawn.js`) has no `rewardId`-equivalent field, and `main.js` never drains a System-A reward into `popup.js`. Not ported this pass — deliberately out of scope for the System-B/selector-2 popup-rendering fix this session closed, since it is a genuinely separate mechanism on a separate entity system, not a variant of the one that was gapped. Left as the next concrete item for a future pass.
+⚠️⚠️ **CORRECTION, a later session — now PORTED.** This is a third, INDEPENDENT group-elimination-reward mechanism, distinct from both System-B's own `+0x10` (`UNKNOWN_f030_item_drop`, port: `popup.js`/`spawn.js`'s `parseGroupsB`/`main.js`) and the selector-2 spawner's own reward (`CS:0xAED0`-`0xAF0F`, port: `selector2.js`). A prior revision of this note said `gods-web`'s `parseGroupsA` had no `rewardId`-equivalent field and `main.js` never drained a System-A reward — both are now closed: `parseGroupsA` (`spawn.js`) reads `+0x10` with the identical BE `i16` convention as `parseGroupsB`, and `main.js` carries a `groupsA` runtime-tracking array (mirroring the existing `groupsB` array's own shape) whose reward-check loop fires on the SAME `dead+dying === count` condition as `CS:0xDFC4` above, draining into the same single-slot `popup.js` every other reward channel in this project already shares.
+
+Two divergences from System B's own port that are easy to get backwards, both load-bearing:
+- **The position bias is applied at the OPPOSITE end.** System B's own entity caches its position WITH a `+8`-on-X-only bias baked in at write time (`CS:0xED84`). System A's own cache (`CS:0xE251`/`E256`, see the fresh disassembly two sections below) is **raw, no bias at all** — the `+8`-on-**BOTH**-axes bias seen in the trace above (`dfc8 ax=[0x202]+8 ; bx=[0x204]+8`) is applied at THIS READ SITE instead. `gods-web`'s `entity-a.js` (`deathCacheX`/`deathCacheY`) stores the raw position; `main.js`'s own `groupsA` reward loop adds `+8` to both axes when it reads the cache out, not before.
+- **The slot-free condition (`dff9`/`dff5`, strictly `dead === count`, dying does NOT count) is NOT modelled**, for the same reason System B's own port doesn't model its identical `CS:0xEDB1`/`0xEDAA` condition either: this port's `GroupSlots`/runtime-tracking arrays have no fixed 10-slot cap to recycle, so there is nothing for a stricter free-condition to protect. Only the looser reward-fire condition (dead-**or**-dying) is ported, on both entity systems, consistently.
+
+**`UNKNOWN_sysA_reward_ids` — a first census, mirroring `UNKNOWN_sysB_reward_ids` above.** Decompressed all 8 `PALFILS.0{A,B}{1-4}` files and read every live System-A descriptor's `+0x10` field directly (`gods-web`'s own test suite now runs this same census at `node tools/verify-node.mjs` time, so it stays live rather than transcribed): across the 74 live records the set is exactly `{-1, 0, 16, 22, 27, 45}` — negative (none) is the minority, and the four positive ids recover as `POBJECTS` types `5`, `11` (`"chrystal"` — the SAME dominant default System B's own census finds), `16` (`"treasure chest"`/iron — the very chest this document's own chest-key-surplus section finds SIX keys shipped for and ZERO placed), and `34` (`"jewel"` — the SAME type the world-2 nest's own death-award popup already spawns). Unlike System B's own eight-value census, `0` (the undecoded plain-numeric-popup branch, `CS:0xC004`) is genuinely reachable here, not merely theoretical.
 
 ### `UNKNOWN_sysA_0x16_refill` — CLOSED: a windup countdown, refilled by the attack and re-floored inside strategy 4 `[STATIC]`
 
@@ -3191,7 +3197,7 @@ Reading `FUN_1000_e2ec` (reached from the master loop, `CS:0xDF98 jmp 0xe2ec`, w
 ```
 e2ec  cmp word[di+8],-2 / jz 0xe31a        ; state == -2 -> the FLASH arm
 e2f2  cmp word[di+8],-3 / jz 0xe2fb        ; state == -3 -> the REAWAKEN arm
-e2f8  jmp 0xe247                           ; state <= -4 -> the already-documented ordinary death draw
+e2f8  jmp 0xe247                           ; ANY OTHER value -> the ordinary death draw — see the correction below
 
 ; state == -3, REAWAKEN:
 e2fb  dec word[di+6] / jz 0xe303           ; a countdown at +0x6 — ticks down, does nothing while nonzero
@@ -3209,6 +3215,53 @@ e322    call 0x1000:ff59                    ; the already-documented "spawn flas
 So this closes two of the three previously-"unresolved" fields in one pass: **`+0x6` is a dormant/reawaken countdown**, reused identically by both special states, and **`+0x8` (state) has a THIRD region beyond "positive=alive" and "≤−4=ordinary dying"**: `−2` and `−3` are a genuine **delayed-respawn mechanism** — an entity is parked dormant for `[di+6]` ticks, then either (`−2`) plays the spawn-flash effect again or (`−3`) is reactivated outright, with its fresh state value pulled from the group descriptor's own `+0x1` byte — **doubled specifically for the group's pre-selected member** (`[bp+0x11]`, the same materialise-time random draw `CS:0xEB37`'s leader-election reads).
 
 `UNKNOWN_sysA_0x8_states_-2/-3_producer` — **CLOSED.** `−3`'s producer is `CS:0xFF59` (the spawn-flash routine, above — see *`UNKNOWN_sysA_spawn_flash_entity_fields` — CLOSED*), which writes `[di+8]=0xFFFD`(−3) and `[di+6]=5` onto whichever entity's stagger countdown just reached zero. `−2` has no *distinct* producer, and that closure — see the same section, *`UNKNOWN_sysA_waiting_vs_dormant_overlap` — CLOSED* — is the point: `−2` and `0xFFFE`("waiting") are deliberately the same value, because the ordinary post-materialise "waiting" state *is* the dormant countdown's starting point for every entity but the group's first. `UNKNOWN_descriptor_0x1` — **narrowed by a shipped-data census, not fully proven.** Reading the raw byte directly across all live System-A descriptors in all 8 `PALFILS` files (74 records): values are `{5, 8, 10, 20, 25, 30, 40, 50}` — always a multiple of 5, ranging 5–50, one value per world tier (world 1: mostly 5–10; world 4: mostly 30–50). That range and shape is a plausible fit for a **per-entity hit-point/strength value** reborn into `[di+8]` on reawaken — matching the documented pattern for both System B's own descriptor (`+0x1` = hit points per entity) and the `DS:0xce64` creature's `+4` "hp/strength" field — and the doubling for the group's elected member would then read as "the leader reawakens tougher than its followers." This is inferred from the value range and the doubling behaviour alone, **not confirmed by tracing any code that consumes the reawoken `[di+8]` as HP** (e.g. via the shared damage-grid/contact thunk `CS:0xA9E4`, which this document already documents round-tripping a `BP`-held strength value for other entity types) — that trace was not run this pass.
+
+⚠️⚠️ **CORRECTION, a later session — the third arm's own condition, re-verified.** The transcript directly above already labels the third arm "ANY OTHER value" rather than repeating the framing this closure originally shipped with, and that correction is the substance of this note: an earlier revision of this document read `e2f8 jmp 0xe247` as gated on `state <= -4`, which the bytes do not support. `CS:0xE2EC`–`0xE2F8` is exactly two `CMP`/`JZ` pairs (against `-2`, then `-3`) followed by a bare, **unconditional** `JMP` — there is no third comparison and no lower bound anywhere in this span. So the real rule is: **any state that is not exactly `-2` or `-3` falls through to `CS:0xE247`**, `-1` included — `state <= -4` merely describes the *shipped* case, since `-1` (ordinary post-contact death, `CS:0xFFBF`) and the pre-life sentinels (`WAITING`/`MATERIALISING`, `-2`/`-3`) are the only states this project's own port ever produces for `[di+8]`, and the port's own dispatch order (checking `WAITING`/`MATERIALISING` by exact equality first, matching `-2`/`-3` here) means every OTHER state — `-1` included — reaches the death-fade branch, exactly as `CS:0xE2EC` does. `gods-web/src/game/entity-a.js` implements this as `if (this.state < 0)` gated *after* the two exact-equality pre-life checks, which is the literal shape of `CS:0xE2EC` itself, not an approximation of it.
+
+### System A's own death-fade — `CS:0xE247`–`0xE2EC`, the full routine, decoded and PORTED `[PROVEN]`
+
+The `jmp 0xe247` arm above lands here, and the routine turns out to differ from System B's own fade (`CS:0xF030`, `UNKNOWN_creature_death_anim`) in three concrete, easy-to-transpose-wrong ways. Full disassembly, `1000:e247`–`1000:e2eb` (165 bytes):
+
+```
+e247  inc word[0x1f4]                      ; per-group dying tally, CS:0xDFAC's own field
+e24b  cmp word[di+4],0 / jns 0xe2ac        ; ONE-SHOT gate: skip everything below once frame >= 0
+e251  ax=[di] / [0x202]=ax                  ; cache X — NO bias (contrast System B's own CS:0xED84 `ax += 8`)
+e256  ax=[di+2] / [0x204]=ax                ; cache Y — NO bias either
+e25c  cmp word[di+0x10],0 / js 0xe283       ; carried-item type: negative = carrying nothing -> skip the drop
+e262  cx=[di+0x10]
+e265  cmp cx,0xc0 / jge 0xe270
+e26b    add cx,0xb                          ; ordinary POBJECTS type: +0xB bias (CS:0xBF5F's own id>=0xB convention)
+e26e    jmp 0xe274
+e270    sub cx,0xc0                         ; weapon index: -0xC0 bias
+e274  ax=[di+0x20] / bx=[di+0x22]           ; the CARRIED ICON's own (eased) position — NOT the entity's own x/y
+e27d  call 0x1000:bf5f                      ; popup.spawn(ax, bx, cx) — the shared floating-item-icon popup
+e283  cmp byte[di+0x19],0 / jz 0xe2ac       ; the [di+0x19] rank check — see fineGate's own header, unreachable in this port
+e289  al=[di+0x19] / cbw / cmp ax,1 / jnz 0xe297
+e292    call 0x1000:ebb9 / jmp 0xe2ac       ; rank == 1 -> synchronized whole-group strategy reset
+e297    dec byte[bp+0x12]                    ; rank != 0,1 -> give the group's own throttle slot back
+        ... bitmask clear ...
+e2a9    call 0x1000:ebe5                     ; a further group-wide rank scan
+e2ac  inc word[di+4]                        ; frame++, UNCONDITIONAL
+e2af  cmp word[di+4],0x11 / jl 0xe2c2       ; frame < 17(0x11) -> draw (e2c2); else finalize
+e2b5    mov word[di+8],0                     ; state := FREE
+e2ba    mov word[di+6],0                     ; the dormant-countdown field, also cleared
+e2bf    jmp 0xdfa2                           ; back to the outer per-entity loop tail — NO draw this tick
+e2c2  ax=[di] / bx=[di+2] / ax-=[0xa] / bx-=[0xc]   ; world -> screen
+e2cf  cx=[di+4] / cx += 0x5b                 ; sprite = frame + 0x5B(91) — a FLAT constant, not a class lookup
+e2d5  [0x4]=ax / [0x6]=bx / [0x8]=cx
+e2e3  call 0x1000:3569                       ; draw — the SAME shared blitter every entity in this game uses
+e2e9  jmp 0xdfa2
+```
+
+Three divergences from System B's own fade, all now ported in `gods-web/src/game/entity-a.js`:
+
+- **`DEATH_FRAMES_A = 17` (`0x11`), not System B's `7`.** `cmp word[di+4],0x11` at `e2af`, closing at frame `17` rather than `7`.
+- **The fade sprite base is `0x5B` (91), not System B's `0x6C` (108).** `cx += 0x5b` at `e2d2`, a flat add with no class-table lookup — the same "flat constant" shape as System B's own `0x6c`, just a different constant.
+- **The one-shot position cache has NO bias at write time.** `e251`/`e256` are bare `mov`s — contrast System B's own `CS:0xED84`, which adds `+8` to X before storing. This project's own group-elimination-reward closure above (`UNKNOWN_sysA_0x1f4_elimination_detector`) already establishes where System A's own `+8` bias actually lives instead: `dfc8`'s own read site, applied to **both** axes, not System B's X-only convention. A port that bakes the bias into the write-time cache (mirroring System B) either double-applies it or applies it on the wrong axis.
+
+**Two pieces of this routine are intentionally NOT ported, both already-disclosed gaps, not new ones:**
+- The carried-item drop (`e25c`–`e282`) needs a `carriedType` field (`[di+0x10]`) and an eased carried-icon position (`[di+0x20]`/`[di+0x22]`) that `EntityA` does not have — this is the same "steal-and-carry" mechanic (`CS:0xE99F`/`0xEFA2`/`0xC041`) this project discloses as unported everywhere else it surfaces. Since `EntityA` never sets a carried-item type, this branch would always take the "carrying nothing" path (`e25c`'s own `js`) even if implemented, so skipping it changes nothing observable yet.
+- The `[di+0x19]` rank-check (`e283`–`e2a9`, `CALL 0x1000:ebb9`/`0x1000:ebe5`) is gated on a field (`fineGate`, `EntityA`'s own `+0x19`) this port never sets nonzero, because the reroll-throttle mechanism that would set it (`CS:0xE72D`, inside stage 1's strategy-reroll gate) is itself unported — see `entity-a.js`'s own header note on `stageAccelerate`. Provably unreachable in this port; not implemented.
 
 ### `DS:0x296` — CLOSED: a facing-deadzone snapshot, not a new mechanism `[STATIC]`
 
