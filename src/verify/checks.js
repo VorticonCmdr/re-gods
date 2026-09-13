@@ -7682,6 +7682,17 @@ export async function checkWeaponsProjectiles(fetchRaw) {
         p.tick(ladderMap, I({ left: true, down: true }), null, 1, { objects: [nearby], cats, inventory: [] });
         check('...but an object near the hot point sends the hero to CROUCH instead',
           p.state === ST.CROUCH);
+
+        /* Regression guard: a non-null `pickup` context alone must not block
+         * ladder descent — only an object actually INSIDE the hot-point box
+         * does. Without this, a future widening of objectNearHotPoint's box
+         * could silently kill ladder descent everywhere `pickup` is passed
+         * (i.e. always, in real play) and nothing here would fail. */
+        const far = forceGround();
+        const farObj = { x: hot.x + 200, y: hot.y + 200, type: 0, dead: false, flag6: 1 };
+        far.tick(ladderMap, I({ left: true, down: true }), null, 1, { objects: [farObj], cats, inventory: [] });
+        check('a live object OUTSIDE the hot-point box still lets the hero descend',
+          far.state === ST.CLIMB);
       }
 
     }
