@@ -25,7 +25,8 @@ import { makeActionContext, makeGates, DOOR_TILES,
          ACTION_NAMES } from './game/trigger-actions.js';
 import { cameraForSpawn } from './game/camera.js';
 import { spriteFor, STATE_INFO, UNMODELLED_PHASE_STATES } from './game/states.js';
-import { buildDescriptorMap, GROUP_STEMS, HERO_DESCRIPTOR_MAX } from './formats/descriptors.js';
+import { buildDescriptorMap, GROUP_STEMS, HERO_DESCRIPTOR_MAX,
+         LEVEL_LOAD_ORDER } from './formats/descriptors.js';
 import { spriteForType, parseObjectCategories, sortForDraw, isDeadType,
          isUnstamped, OBJECT_SLOTS, activationBox,
          activateObjects, insertSpawned,
@@ -242,7 +243,7 @@ async function loadSprites(world) {
    * CS:0x2c19 right after `CS:0x2c00` snapshots the descriptor cursor into
    * `DS:0x27e`, which is exactly the base the glyph blit adds the raw
    * character byte to. Appending it here shifts no existing descriptor. */
-  const groups = ['always', 'objects', `level${world}`, 'smallfnt'];
+  const groups = LEVEL_LOAD_ORDER(world);
   const atlases = {}, images = {};
   for (const g of groups) {
     for (const s of GROUP_STEMS[g]) {
@@ -1066,10 +1067,6 @@ async function main() {
        * panel's own extend/retract highlight animation. Runs unconditionally,
        * same as the draw call itself. */
       inventoryPanel.step(player.state === ST.CROUCH);
-      /* CS:0x02DB `call 0x4569` — the message line's own countdown and page
-       * flip, straight-line in the main loop right after the HUD digits
-       * (game/message.js). Unconditional, like every other overlay here. */
-      messages.step();
       if (fr) {
       for (const t of fr.treasures) {
         /* CS:0x18A4 (ordinary treasure, CX = type) and CS:0x18EF (a chest just
@@ -1131,6 +1128,19 @@ async function main() {
          * new total (consumables.js's own `state.lives = (state.lives??0)+1`
          * seeds from that same spread copy), so apply it to the REAL fx. */
         if (c.result && typeof c.result.lives === 'number') fx.lives = c.result.lives;
+        /* ⚠️ The tablet reaches this loop through the `notWired` branch, since
+         * its effect is not an `applyConsumable` state change. Left alone, the
+         * debug HUD read `"tablet" (reveals clues) — hint: ...` while the panel
+         * below was showing the hint perfectly — i.e. it still READ as
+         * unported, which is the exact trap that hid this whole subsystem for
+         * as long as it was hidden. Report what actually happened. */
+        if (c.type === HINT_TABLET_TYPE) {
+          const off = hintOffsetForX(level.hints.keys, level.hints.offs, c.x);
+          $('event').textContent = off >= 0
+            ? `tablet @x=${c.x} → hint "${String.fromCharCode(...stringAt(level.textPool.arena, off))}"`
+            : `tablet @x=${c.x} → no PALFILS key (CS:0x63FC's own bug path) — "Hint Error"`;
+          continue;
+        }
         $('event').textContent = c.notWired
           ? `"${c.name}" (${c.desc || 'no description'}) — ${c.effect}: ${c.notWired}`
           : c.effect === 'health'
@@ -1145,6 +1155,19 @@ async function main() {
           (p.duplicate ? ` (again — count ${p.count})` : ` into slot ${'ABC'[p.slot]}`);
       }
       }
+      /* CS:0x02DB `call 0x4569` — the message line's own countdown and page
+       * flip (game/message.js).
+       *
+       * ⚠️ ORDER, AND IT IS AN OFF-BY-ONE IF YOU GET IT WRONG. The original
+       * picks objects up inside the player state machine at CS:0x0254 and
+       * updates the message at CS:0x02DB — POST FIRST, THEN DECREMENT, in the
+       * same frame. Running the update before the pickup block gives a
+       * freshly-posted message 32 frames instead of 31.
+       *
+       * UNCONDITIONAL, and deliberately outside the `if (fr)` guard above:
+       * CS:0x02DB is straight-line in the main loop, and `fr` is null on
+       * death/game-over frames, where a message must still count down. */
+      messages.step();
       /* plane-B cell -> event record -> selector 2 -> trigger evaluator */
       const fired = events.step(player.x, player.y,
         events.makeState({ timer: clock.tick, inventory }));

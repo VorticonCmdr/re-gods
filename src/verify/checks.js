@@ -223,7 +223,8 @@ import { Ce64Creatures, Ce64Spits,
          SPIT_CULL, SPIT_DEATH_SPRITE_BASE,
          SPIT_DEATH_FRAMES } from '../game/ce64.js';
 import { MessageEngine, PRIORITY, LINE_CHARS, ORIGIN_X, Y_LOCAL, ADVANCE,
-         PAGE1_TICKS, PAGE2_TICKS, blitGate } from '../game/message.js';
+         PAGE1_TICKS, PAGE2_TICKS, blitGate, drawMessage } from '../game/message.js';
+import { LEVEL_LOAD_ORDER } from '../formats/descriptors.js';
 import { SeenBitmap, SEEN_BYTES, messageGate, composeObjectMessage, composeHint,
          HINT_TABLET_TYPE } from '../game/message-compose.js';
 import { buildObjectArena, appendHints, hintOffsetForX, stringAt,
@@ -12973,6 +12974,101 @@ export async function checkMessages(fetchRaw) {
     PANEL_Y0 + Y_LOCAL === 189);
   check('28 chars from x=24 end at x=304, inside the 320px screen',
     ORIGIN_X + LINE_CHARS * ADVANCE === 304);
+
+  /* ── THE INTEGRATION PATH ───────────────────────────────────────────────
+   *
+   * Everything above tests a module in isolation. This block runs the chain
+   * main.js actually uses — the cumulative descriptor map, the slice that
+   * turns it into a byte-indexed glyph array, the blit gate, `page()` and
+   * `drawMessage` itself — against a stub renderer that records every blit.
+   *
+   * ⚠️ This exists because the isolated tests CANNOT catch the failure this
+   * project has already shipped once: `game/frame.js` exists only because a
+   * mutation that swapped the projectile step and the player tick survived
+   * the entire suite while every module still passed on its own.
+   */
+  {
+    const world = 1;
+    const groups = LEVEL_LOAD_ORDER(world);
+    const atlases = {};
+    const images = {};
+    for (const g of groups) for (const stem of GROUP_STEMS[g]) {
+      atlases[stem] = parseAtlas(dclDecompress(await fetchRaw(`game/${stem}.DAT`)).data);
+      images[stem]  = decodePI1(dclDecompress(await fetchRaw(`game/${stem}.PI1`)).data);
+    }
+    const { map: dmap, ranges } = buildDescriptorMap(groups, (s) => atlases[s].count);
+    const fontRange = ranges.find((r) => r.stem === 'PSMLFNT');
+    check('`smallfnt` is in the level load order and PSMLFNT gets a descriptor '
+      + 'range (CS:0x2c19 loads it last, after level<N>)',
+      !!fontRange && fontRange.count === 130);
+    /* The whole point of DS:0x27e being snapshotted BEFORE the load: adding
+     * smallfnt must not move anything already numbered. */
+    check('adding smallfnt shifts no existing descriptor — the hero is still '
+      + '#0..#57 and the digit strip still #127',
+      dmap[0].stem === 'PALWAYS1' && dmap[127].stem === 'PALWAYS3'
+        && dmap[HERO_DESCRIPTOR_MAX].frame !== undefined
+        && fontRange.base > 127);
+
+    const frames = [];
+    for (let id = 0; id < dmap.length; id++) {
+      const d = dmap[id];
+      const f = atlases[d.stem].frames[d.frame];
+      frames[id] = { ...f, pixels: cutAll(images[d.stem], { frames: [f] })[0].pixels };
+    }
+    const glyphs = frames.slice(fontRange.base, fontRange.base + fontRange.count);
+
+    /* The real PLEV1A tablet, through the real draw call. */
+    const pal = dclDecompress(await fetchRaw('game/PALFILS.0A1')).data;
+    const pool = buildObjectArena(dclDecompress(await fetchRaw('game/POBJECTS.001')).data);
+    const h = appendHints(pool.arena, pal);
+    const off = hintOffsetForX(h.keys, h.offs, 178);
+    const eng = new MessageEngine();
+    eng.post(composeHint(stringAt(h.arena, off)), PRIORITY.hint);
+
+    const blits = [];
+    const stub = { blitSprite: (f, x, y) => blits.push({ f, x, y }) };
+    drawMessage(stub, glyphs, eng, PANEL_Y0,
+                { loadStage: 0, shopActive: false, world });
+    check('drawMessage blits one sprite per character of page 1 (27)',
+      blits.length === 27, `${blits.length}`);
+    check('the first glyph lands at (34, 189) — ORIGIN_X + centre*10, and '
+      + 'PANEL_Y0 + 29',
+      blits.length > 0 && blits[0].x === 34 && blits[0].y === PANEL_Y0 + Y_LOCAL,
+      blits.length ? `(${blits[0].x},${blits[0].y})` : 'nothing blitted');
+    check('every glyph steps exactly 10px and stays on one row',
+      blits.every((b, i) => b.x === 34 + i * ADVANCE && b.y === blits[0].y));
+    /* The identity mapping, end to end: the frame handed to the renderer for
+     * character c must BE the atlas's record c. */
+    const page = eng.page();
+    const fa = atlases.PSMLFNT;
+    check('the frame blitted for each character IS that character\'s own atlas '
+      + 'record — the descriptor slice reproduces `sprite = byte + DS:0x27e`',
+      blits.every((b, i) => {
+        const rect = fa.frames[page.chars[i]];
+        return b.f.x === rect.x && b.f.y === rect.y
+            && b.f.w === rect.w && b.f.h === rect.h;
+      }));
+    check('the diamond really is drawn first (character 0x11), not a space',
+      blits[0].f.x === fa.frames[0x11].x && blits[0].f.y === fa.frames[0x11].y);
+
+    /* And the blit gate really is consulted by drawMessage, not just exported. */
+    const gated = [];
+    drawMessage({ blitSprite: (f, x, y) => gated.push({ f, x, y }) }, glyphs, eng,
+                PANEL_Y0, { loadStage: 1, shopActive: false, world: 1 });
+    check('drawMessage draws NOTHING when the blit gate is closed (CS:0x44c7)',
+      gated.length === 0, `${gated.length}`);
+
+    /* Page 2, after the dwell — the page the user's DOSBox capture shows. */
+    for (let i = 0; i <= PAGE1_TICKS; i++) eng.step();
+    const blits2 = [];
+    drawMessage({ blitSprite: (f, x, y) => blits2.push({ f, x, y }) }, glyphs, eng,
+                PANEL_Y0, { loadStage: 0, shopActive: false, world });
+    check('page 2 blits 20 glyphs starting at x=64 — "to exit this world <>", '
+      + 'the exact line a DOSBox capture of the real game shows',
+      blits2.length === 20 && blits2[0].x === 64
+        && blits2[0].y === PANEL_Y0 + Y_LOCAL,
+      `${blits2.length} @ ${blits2.length ? blits2[0].x : '-'}`);
+  }
 
   return results;
 }
