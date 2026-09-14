@@ -68,7 +68,7 @@ import { MarkerList, stepMarkers, DISTRACT_TYPE } from '../game/markers.js';
 import { Health, HEALTH_MAX, damageFor, attackHero, creatureTouchesHero,
          difficultyScale, DIFFICULTY_MULTIPLIERS, difficultyForgiven,
          DIFFICULTY_PROGRESSION, creatureScansGrid, hitSparkAxis,
-         CREATURE_CONTACT_BOX } from '../game/combat.js';
+         CREATURE_CONTACT_BOX, db4eHit, DB4E_CROUCH_TOP_RAISE } from '../game/combat.js';
 import { DeathBurst, DEATH_BURST_TEMPLATE, DEATH_BURST_TICKS,
          DEATH_BURST_SPRITE_BASE, ARRIVAL_ZONE_TABLE, findRespawnPosition,
          loseLife, gameOverPlaceholder } from '../game/death.js';
@@ -122,7 +122,7 @@ import { SelectorTwoSpawns, parseClasses as parseSelectorTwoClasses,
          stepHandlerB03C as selectorTwoHandlerB03C,
          DEATH_FRAMES as SEL2_DEATH_FRAMES,
          DEATH_SPRITE_BASE as SEL2_DEATH_SPRITE_BASE, stepPace32x32 } from '../game/selector2.js';
-import { RockSettlePool, RockBurstPool } from '../game/rockfall.js';
+import { RockSettlePool, RockBurstPool, AD94_SPRITE_BASE } from '../game/rockfall.js';
 import { HERO_SHOTS_AT, ENEMY_SHOTS_AT } from '../game/frame.js';
 import { Nests, aimAt, broodCount, signed16,
          OBJECT_TYPE as NEST_TYPE, OBJECT_SPRITE as NEST_OBJ_SPRITE,
@@ -10415,24 +10415,68 @@ export function checkSelectorTwo() {
 export function checkRockfall() {
   const { results, check } = makeChecker();
 
-  /* (a) RockSettlePool — DS:0xaccc. Gravity-free 2px/tick fall (no ground
-   * probe modelled), a 4-entry sprite ping-pong on the shared tock, and a
-   * lifetime countdown that frees the slot at negative. */
+  /* (a) RockSettlePool — DS:0xaccc. A ground-probed 2px/tick fall (revert
+   * on a solid landed cell, CS:0xB1EB/0xB27F), a 4-entry sprite ping-pong
+   * on the shared tock, and a lifetime countdown that frees the slot at
+   * negative.
+   *
+   * ⚠️ tock POLARITY, FIXED a later pass. `CS:0xB205 cmp[0x36c],0 /
+   * CS:0xB20A jz <skip>` is a `cmp/jz-skip` shape — per this project's own
+   * `selector2.js` header (its `CS:0xB725-B73E` note), that shape means
+   * "advance only when NONZERO", the opposite of what this test originally
+   * asserted (and what `rockfall.js` originally implemented). Both are
+   * fixed together; a stale copy of either would fail the other. */
   {
     const pool = new RockSettlePool();
     check('spawn() seeds lifetime=0x37, type=0 (CS:0xB1AD/B1B2)',
       pool.spawn(100, 200) === true && pool.slots[0].lifetime === 0x37 && pool.slots[0].type === 0);
     const drawn = [];
-    pool.step({ x: 0, y: 0 }, 1, drawn);
-    check('CS:0xB16E: worldY += 2 every tick', pool.slots[0].y === 202, pool.slots[0].y);
-    check('tock!=0: type does not advance', pool.slots[0].type === 0);
     pool.step({ x: 0, y: 0 }, 0, drawn);
-    check('CS:0xdf44 read live: {531,532,533,532} — tock===0: type advances 0->1, sprite = 532',
+    check('CS:0xB16E: worldY += 2 every tick (no ground below -> not reverted)',
+      pool.slots[0].y === 202, pool.slots[0].y);
+    check('CS:0xB205/B20A: tock===0 -> type does NOT advance', pool.slots[0].type === 0);
+    pool.step({ x: 0, y: 0 }, 1, drawn);
+    check('CS:0xdf44 read live: {531,532,533,532} — tock!=0: type advances 0->1, sprite = 532',
       pool.slots[0].type === 1 && drawn.some((d) => d.sprite === 532), drawn);
     check('10 slots, refused past capacity', (() => {
       for (let i = 0; i < 9; i++) pool.spawn(i, i);
       return pool.spawn(999, 999) === false && pool.refused === 1;
     })());
+  }
+
+  /* (a2) RockSettlePool — the ground probe itself, CS:0xB27F: `col=x>>5`
+   * (no bias), `row=(y+8)&~0xf` (biased THEN floored — a round, not a
+   * lookahead), same-cell test. A solid landed cell reverts the +2 step;
+   * an open one commits it, matching (a)'s own no-planeB baseline. */
+  {
+    const MAP_COLS = 128;
+    const planeB = new Uint8Array(MAP_COLS * 64);
+    /* Spawn at y=200: nextY=202, (202+8)&~0xf = 208, row=208>>4=13. col = x>>5. */
+    const x = 320;
+    const col = x >> 5, row = (200 + 2 + 8) & 0xfff0;
+    planeB[(row >> 4) * MAP_COLS + col] = 1;   // mark the landed cell solid
+    const pool = new RockSettlePool();
+    pool.spawn(x, 200);
+    pool.step({ x: 0, y: 0 }, 0, [], planeB);
+    check('CS:0xB1EE-B1F6: a solid landed cell REVERTS the +2 step — the rock holds Y',
+      pool.slots[0].y === 200, pool.slots[0].y);
+    pool.step({ x: 0, y: 0 }, 0, [], planeB);
+    check('a held rock keeps re-testing the SAME cell and stays held (not a one-shot revert)',
+      pool.slots[0].y === 200, pool.slots[0].y);
+
+    const openPlaneB = new Uint8Array(MAP_COLS * 64);   // no 0x1 anywhere
+    const pool2 = new RockSettlePool();
+    pool2.spawn(x, 200);
+    pool2.step({ x: 0, y: 0 }, 0, [], openPlaneB);
+    check('an open cell below commits the +2 step normally',
+      pool2.slots[0].y === 202, pool2.slots[0].y);
+    check('omitting planeB entirely falls back to the pre-ground-probe behaviour '
+      + '(always commits) rather than throwing', (() => {
+        const pool3 = new RockSettlePool();
+        pool3.spawn(x, 200);
+        pool3.step({ x: 0, y: 0 }, 0, []);
+        return pool3.slots[0].y === 202;
+      })());
   }
 
   /* (b) RockSettlePool lifetime expiry. */
@@ -10466,7 +10510,16 @@ export function checkRockfall() {
     check('CS:0xB448: gravity — vy increments on the tock===0 tick', s0.vy === 5, s0.vy);
     check('CS:0xB44B-B458: drag — nonzero vx decays by 1 toward 0',
       Math.abs(s0.vx) === 3, s0.vx);
-    check('CS:0xB424: sprite = type + 0x213', drawn.some((d) => d.sprite === 0x213 + s0.type), drawn);
+    /* CS:0xB3ED loads the sprite's own `type` BEFORE the draw at CS:0xB424,
+     * and the type increment (CS:0xB441) runs AFTER the draw — so a tick's
+     * OWN draw always uses the type as it stood entering that tick, one
+     * step behind whatever `s0.type` reads once the tick finishes. Checking
+     * against the post-step type (as an earlier version of this test did)
+     * silently broke when the draw/gravity call order was corrected to
+     * match the bytes — this is what that reordering actually changed. */
+    check('CS:0xB424: the draw uses the PRE-increment type, one tick behind s0.type',
+      drawn.some((d) => d.sprite === 0x213 + (s0.type - 1)) && s0.type === 1,
+      { drawn, type: s0.type });
   }
 
   /* (d) RockBurstPool cull and hero-hit, isolated. */
@@ -10488,6 +10541,242 @@ export function checkRockfall() {
       pool2.live === 0 && debrisSpawns.length === 1, JSON.stringify(debrisSpawns));
     check('CS:0xac59\'s own damageFor(0) formula: a flat 5 damage off the default 24-point target',
       health2.target === 0x18 - 5, health2.target);
+  }
+
+  /* (e) RockBurstPool's own ground probe (CS:0xB45B-B480) and the 3-piece
+   * SHATTER on landing (CS:0xB38F, table DS:0xdf5c: {-1,-6},{0,-7},{1,-6},
+   * read live). A landing tick frees the parent WITHOUT running the hero-
+   * hit test that same tick (CS:0xB487 jumps past CS:0xB48A entirely) —
+   * but it DOES still draw that tick (the draw, CS:0xB424, runs BEFORE the
+   * ground probe in program order; only the hit test is skipped).
+   *
+   * ⚠️ CORRECTS TWO WRONG ASSERTIONS an earlier pass of this test made.
+   * `CS:0x0230/0x0233` are two SEPARATE, sequential walker calls each tick
+   * (`b3ce` completes fully before `b4e7` starts) — see this module's own
+   * header. So a child this tick's `#stepAd1c` shatters into the ad94 half
+   * IS walked, moved and drawn by `#stepAd94` LATER IN THE SAME `step()`
+   * call — a freshly-shattered child does NOT sit at its exact spawn
+   * position for a whole tick; it already carries one tick of its own
+   * velocity by the time `step()` returns. And the landing parent itself
+   * still draws once, at its landed position, before it's freed. Both are
+   * the original's own confirmed behaviour, not a "double movement" bug.
+   *
+   * Slots are set directly (not via `spawn()`, which itself applies its own
+   * CS:0xB35E/B361 `+3,+0xb` offset) so the post-move landing position —
+   * and hence the exact cell to mark solid — is fully under this test's
+   * control, matching (f)'s own convention. */
+  {
+    const MAP_COLS = 128;
+    const health = new Health();
+    const farHero = { x: -9999, y: -9999, state: 0 };
+
+    /* col=(x+8)>>5, row=(y+4)&~0xf, probe cell is ONE ROW BELOW (+MAP_COLS)
+     * — the AD1C/#stepAd1c probe only; the ad94 half's own probe (tested
+     * separately below) is a different formula entirely. */
+    const makeSolidBelow = (x, y) => {
+      const planeB = new Uint8Array(MAP_COLS * 64);
+      const col = (x + 8) >> 5, row = (y + 4) & 0xfff0;
+      planeB[(row >> 4) * MAP_COLS + col + MAP_COLS] = 1;
+      return planeB;
+    };
+
+    const pool = new RockBurstPool();
+    pool.slots[0] = { x: 100, y: 100, vx: 0, vy: 4, type: 0 };   // lands at (100, 104) after y+=vy
+    const planeB = makeSolidBelow(100, 104);
+    const drawn = [];
+    pool.step({ x: 0, y: 0 }, farHero, health, 1, {}, drawn, null, planeB);
+    check('CS:0xB4BF: a landed parent is freed from its OWN (0..11) slot',
+      pool.slots[0] === null, pool.slots[0]);
+    check('CS:0xB3AA/B3AD: the 3 shattered children land in the DS:0xad94 half '
+      + '(indices 12..41), never 0..11', pool.slots.slice(0, 12).every((s) => s === null));
+    const children = pool.slots.slice(12).filter(Boolean);
+    check('CS:0xB39C mov bp,0xdf5c / DX:=3: exactly 3 children spawn',
+      children.length === 3, children.length);
+    /* `#stepAd94` runs immediately after `#stepAd1c` in the SAME step()
+     * call, and it walks these very slots — so by the time step() returns,
+     * each child has already applied one tick of its OWN seeded velocity
+     * on top of the (parentX+5, parentY+13) spawn position: 105-1=104,
+     * 105+0=105, 105+1=106 on X; 117-6=111, 117-7=110, 117-6=111 on Y. */
+    const bySprite = (vx) => children.find((c) => c.vx === vx);
+    check('CS:0xB3A4/B3A7 then B35E/B361 spawn at (105,117) — THEN #stepAd94 '
+      + 'applies one tick of the child\'s own velocity in the SAME step() call',
+      bySprite(-1)?.x === 104 && bySprite(-1)?.y === 111 &&
+      bySprite(0)?.x === 105 && bySprite(0)?.y === 110 &&
+      bySprite(1)?.x === 106 && bySprite(1)?.y === 111,
+      JSON.stringify(children));
+    check('DS:0xdf5c read live: children carry exactly {-1,-6},{0,-7},{1,-6}',
+      JSON.stringify(children.map((c) => ({ vx: c.vx, vy: c.vy })).sort((a, b) => a.vx - b.vx))
+      === JSON.stringify([{ vx: -1, vy: -6 }, { vx: 0, vy: -7 }, { vx: 1, vy: -6 }]),
+      children);
+    check('CS:0xB424: the landed parent draws once, at its landed position, '
+      + 'BEFORE CS:0xB45B\'s own ground probe frees it',
+      drawn.some((d) => d.x === 100 && d.y === 104 && d.sprite === 0x213), drawn);
+    check('the 3 fresh children ALSO draw this same tick (#stepAd94\'s own '
+      + 'unconditional draw, after their own one-tick move)',
+      drawn.filter((d) => d.sprite === AD94_SPRITE_BASE).length === 3, drawn);
+
+    /* Omitting planeB must fall back to the pre-ground-probe behaviour: the
+     * rock keeps falling/culling/hitting, never landing or shattering. */
+    const noProbePool = new RockBurstPool();
+    noProbePool.slots[0] = { x: 100, y: 100, vx: 0, vy: 4, type: 0 };
+    noProbePool.step({ x: 0, y: 0 }, farHero, health, 1, {}, [], null);
+    check('omitting planeB never lands/shatters — the record just keeps falling',
+      noProbePool.live === 1 && noProbePool.slots.slice(12).every((s) => s === null));
+
+    /* An open cell below must NOT shatter, and the hero-hit path must still
+     * run normally on a non-landing tick (this pool's own existing test (d)
+     * already covers the hit itself; this just confirms planeB doesn't
+     * suppress it when nothing is actually solid below). */
+    const openPool = new RockBurstPool();
+    openPool.slots[0] = { x: 100, y: 100, vx: 0, vy: 4, type: 0 };
+    const openPlaneB = new Uint8Array(MAP_COLS * 64);   // no 0x1 anywhere
+    const drawn2 = [];
+    openPool.step({ x: 0, y: 0 }, farHero, health, 1, {}, drawn2, null, openPlaneB);
+    check('an open cell below does not shatter — the parent survives and draws',
+      openPool.slots[0] !== null && openPool.slots.slice(12).every((s) => s === null)
+      && drawn2.length === 1, { slot: openPool.slots[0], drawn: drawn2 });
+  }
+
+  /* (f) The shatter's own capacity boundary — it searches ONLY the ad94
+   * half (indices 12..41), exactly like the original's `SI:=0xad94`
+   * addressing, and must NEVER spill into a free ad1c slot (0..11) even
+   * when one is available and the ad94 half is completely full. The
+   * landing rock now sits in the AD1C half itself (index 0) — only
+   * `#stepAd1c` ever calls `#shatter()`; the ad94 half's own walker
+   * (`#stepAd94`) never shatters at all. Slots are set directly here (not
+   * via `spawn()`, which only ever searches 0..11 itself, matching
+   * CS:0xB31A's own `mov cx,0xc` — it could never place a probe subject in
+   * the ad94 half to begin with). */
+  {
+    const MAP_COLS = 128;
+    const health = new Health();
+    const farHero = { x: -9999, y: -9999, state: 0 };
+    const pool = new RockBurstPool();
+    /* Filler slots sit at a fixed ON-SCREEN, non-probe-colliding position
+     * so they survive this same step()'s cull and never land/hit themselves. */
+    for (let i = 12; i < 42; i++) pool.slots[i] = { x: 50, y: 50, vx: 0, vy: 0, type: 0 };
+    pool.slots[0] = { x: 100, y: 100, vx: 0, vy: 4, type: 0 };     // the landing rock, in the AD1C half
+    const planeB = new Uint8Array(MAP_COLS * 64);
+    const col = (100 + 8) >> 5, row = (104 + 4) & 0xfff0;
+    planeB[(row >> 4) * MAP_COLS + col + MAP_COLS] = 1;
+    pool.step({ x: 0, y: 0 }, farHero, health, 1, {}, [], null, planeB);
+    check('slot 5 (in the 1..11 range) stays free — the shatter never spills there',
+      pool.slots[5] === null);
+    check('the landing rock at slot 0 is freed, refused += 3 since ad94 has no room',
+      pool.slots[0] === null && pool.refused === 3, pool.refused);
+  }
+
+  /* (g) `db4e` (combat.js) — a completely separate hero-hit routine from
+   * `ac59`, read fresh this pass (1000:db4e-1000:dbbf). Point-vs-box, flat
+   * -2 off the TARGET, invulnerability passes THROUGH without consuming
+   * (unlike ac59's own "suppress the damage, still report the hit"), and
+   * the crouch raise is 0x18 — NOT ac59's own 0x14. */
+  {
+    const hero = { x: 100, y: 200, state: 0 };
+    const health = new Health();
+    check('CS:0xDB7D/DB8A: inside the box, on the health target -= 2',
+      (() => { const r = db4eHit(110, 220, hero, health, {}); return r.hit && health.target === 0x18 - 2; })());
+    check('CS:0xDB7D: hotX < heroX -> reject, no consume',
+      !db4eHit(99, 220, hero, new Health(), {}).hit);
+    check('CS:0xDB8A: hotX > heroX+0x20 -> reject',
+      !db4eHit(hero.x + 0x21, 220, hero, new Health(), {}).hit);
+    check('CS:0xDB79: hotY < heroTop -> reject',
+      !db4eHit(110, hero.y - 1, hero, new Health(), {}).hit);
+    check('CS:0xDB95: hotY > heroY+0x30 -> reject',
+      !db4eHit(110, hero.y + 0x31, hero, new Health(), {}).hit);
+    check('CS:0xDB68/DB76: crouching (state 18/19) raises heroTop by 0x18, NOT ac59\'s 0x14',
+      (() => {
+        const crouched = { x: 100, y: 200, state: 0x12 };
+        const justAbove = db4eHit(110, crouched.y + DB4E_CROUCH_TOP_RAISE - 1, crouched, new Health(), {});
+        const justInside = db4eHit(110, crouched.y + DB4E_CROUCH_TOP_RAISE, crouched, new Health(), {});
+        return !justAbove.hit && justInside.hit;
+      })());
+    check('CS:0xDB99: invulnerable -> PASSES THROUGH, no damage AND no consume',
+      (() => {
+        const h = new Health();
+        const r = db4eHit(110, 220, hero, h, { invuln: true });
+        return !r.hit && h.target === 0x18;
+      })());
+  }
+
+  /* (h) db4e wired into both live callers. Settle pool: hot point
+   * (worldX, worldY+6), BP-record consumed via slots[i]=null, debris at
+   * (worldX-8, worldY). Ad94 fragment: hot point (worldX+8, worldY+6),
+   * debris at the fragment's own plain position, exactly. */
+  {
+    const health = new Health();
+    const hero = { x: 100, y: 200, state: 0 };   // box: x∈[100,132], y∈[200,232]
+    const debrisSpawns = [];
+    const fakeDebris = { spawn: (...a) => debrisSpawns.push(a) };
+    const pool = new RockSettlePool();
+    /* Settle's own +2/tick lands at y=196 with no planeB (always commits);
+     * hot point is then (110, 196+6=202) — just inside the box. */
+    pool.spawn(110, 194);
+    pool.step({ x: 0, y: 0 }, 1, [], undefined, hero, health, {}, fakeDebris);
+    check('CS:0xB236: the settle pool\'s own db4e hit consumes the record and '
+      + 'drops a stationary spark at (worldX-8, worldY)',
+      pool.slots[0] === null && debrisSpawns.length === 1
+      && debrisSpawns[0][0] === 110 - 8 && debrisSpawns[0][1] === 196
+      && debrisSpawns[0][2] === 0 && debrisSpawns[0][3] === 0,
+      { slot: pool.slots[0], debrisSpawns });
+    check('CS:0xDB99 via the settle pool: invulnerable -> the rock keeps falling, no consume',
+      (() => {
+        const h2 = new Health();
+        const p2 = new RockSettlePool();
+        p2.spawn(110, 194);
+        p2.step({ x: 0, y: 0 }, 1, [], undefined, hero, h2, { invuln: true }, null);
+        return p2.slots[0] !== null && h2.target === 0x18;
+      })());
+
+    /* The ad94 half updates x/y unconditionally EVERY tick (CS:0xB509/B50C),
+     * so with vx=vy=0 the fragment's own final position is just (x,y) —
+     * hot point (x+8, y+6) = (110, 200), just inside the hero's box. Camera
+     * Y is offset so the fragment's SCREEN y stays inside the cull bounds
+     * even though its WORLD y (194) sits past the raw 192 screen-cull
+     * threshold — camera and hitbox are independent axes in the original. */
+    const burstPool = new RockBurstPool();
+    burstPool.slots[12] = { x: 102, y: 194, vx: 0, vy: 0, type: 0 };
+    const debrisSpawns2 = [];
+    const fakeDebris2 = { spawn: (...a) => debrisSpawns2.push(a) };
+    burstPool.step({ x: 0, y: 100 }, hero, health, 1, {}, [], fakeDebris2);
+    check('CS:0xB5A6: the ad94 fragment\'s own db4e hit consumes it and drops '
+      + 'a stationary spark at its OWN plain (x,y), exactly',
+      burstPool.slots[12] === null && debrisSpawns2.length === 1
+      && debrisSpawns2[0][0] === 102 && debrisSpawns2[0][1] === 194
+      && debrisSpawns2[0][2] === 0 && debrisSpawns2[0][3] === 0,
+      { slot: burstPool.slots[12], debrisSpawns2 });
+  }
+
+  /* (i) The ad94 half's own cull/landing exit — unlike the ad1c half's
+   * silent free-and-forget, BOTH scrolling off-screen and landing on solid
+   * ground funnel into the SAME CS:0xB5C2 code: free the record and drop a
+   * MOVING debris spark carrying the fragment's own current velocity. */
+  {
+    const MAP_COLS = 128;
+    const health = new Health();
+    const farHero = { x: -9999, y: -9999, state: 0 };
+
+    const offscreen = new RockBurstPool();
+    offscreen.slots[12] = { x: 9999, y: 9999, vx: 3, vy: -2, type: 0 };
+    const spawns1 = [];
+    offscreen.step({ x: 0, y: 0 }, farHero, health, 1, {}, [], { spawn: (...a) => spawns1.push(a) });
+    check('CS:0xB518-B53A -> B5C2: scrolling off-screen frees the ad94 fragment '
+      + 'and drops a MOVING spark (not silent, unlike the ad1c half\'s own cull)',
+      offscreen.slots[12] === null && spawns1.length === 1
+      && spawns1[0][2] === 3 && spawns1[0][3] === -2, spawns1);
+
+    const landing = new RockBurstPool();
+    landing.slots[12] = { x: 100, y: 100, vx: 2, vy: 3, type: 0 };
+    const planeB = new Uint8Array(MAP_COLS * 64);
+    // fragmentGroundSolid: col=(x+5)>>5, row=(y-2)&~0xf, SAME cell (post-move: 102,103)
+    const col = (102 + 5) >> 5, row = (103 - 2) & 0xfff0;
+    planeB[(row >> 4) * MAP_COLS + col] = 1;
+    const spawns2 = [];
+    landing.step({ x: 0, y: 0 }, farHero, health, 1, {}, [], { spawn: (...a) => spawns2.push(a) }, planeB);
+    check('CS:0xB564-B58C -> B5C2: a solid SAME-cell landing frees the ad94 '
+      + 'fragment and drops a MOVING spark too — no shatter, ever, on this half',
+      landing.slots[12] === null && spawns2.length === 1
+      && spawns2[0][2] === 2 && spawns2[0][3] === 3, spawns2);
   }
 
   return results;

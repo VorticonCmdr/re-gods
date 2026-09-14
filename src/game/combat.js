@@ -182,6 +182,66 @@ export const HERO_CORE_Y = [0x08, 0x26];   // CS:0xac8f / 0xac8c
 export const CROUCH_TOP_RAISE = 0x14;      // CS:0xaca0
 export const CROUCH_STATES = [0x12, 0x13]; // CS:0xac92 / 0xac99 — states 18, 19
 
+/* ── `DS:0xdb4e` — the OTHER hero-damage routine ─────────────────────────
+ *
+ * A completely separate hit test from `ac59` above, shared by (at least)
+ * two of `rockfall.js`'s pools: the settle pool (`CS:0xB236`) and the
+ * `DS:0xad94` fragment walker (`CS:0xB5A6`). Disassembled in full this pass
+ * (`1000:db4e`-`1000:dbbf`):
+ *
+ *     db4e  push bp                          ; BP IN = the caller's own
+ *                                             ;   "record pointer" — the
+ *                                             ;   field a hit writes 0xFFFF
+ *                                             ;   into to consume the record
+ *     db4f  cx = ax + 4 + [0xa] + 2           ; hotX = AX_param + 6 + camX
+ *     db54  dx = bx + 4 + [0xc]               ; hotY = BX_param + 4 + camY
+ *     db64  bp = heroY
+ *     db68  state in {0x12,0x13} (crouching) -> bp += 0x18   ; NOTE: 0x18,
+ *                                             ;   not ac59's own 0x14
+ *     db79  dy < bp            -> reject (no consume)
+ *     db7d  cx < heroX         -> reject
+ *     db8a  cx > heroX + 0x20  -> reject
+ *     db95  dy > heroY + 0x30  -> reject
+ *     db99  invuln (`[0x172]`) -> reject — PASSES THROUGH, no consume either
+ *     dba0  [0x192] -= 2                      ; flat 2, off the TARGET
+ *     dba6  [bp+0] = 0xFFFF                   ; consume — bp is the CALLER's
+ *                                             ;   own record pointer, popped
+ *                                             ;   back off the stack first
+ *     dbae  cx = dx = 0                       ; ALWAYS zeroed — every db4e
+ *                                             ;   hit drops a STATIONARY
+ *                                             ;   spark, regardless of caller
+ *     dbbb  call 0x1000:a633 (ax-2, bx-2, cx=0, dx=0)
+ *
+ * Each caller pre-adjusts its own AX/BX before the call, so the net hot
+ * point differs per caller — this function takes the FINAL world hot point
+ * directly rather than replicating each caller's own pre-offset arithmetic.
+ * ⚠️ It is a POINT-vs-box test, unlike `ac59`'s box-vs-box — there is no
+ * attacker width/height here at all.
+ */
+export const DB4E_CROUCH_TOP_RAISE = 0x18;   // CS:0xDB76 — NOT ac59's 0x14
+
+/**
+ * @param {number} hotX WORLD hot-point X (the caller's own pre-offset
+ *   already resolved into this one number)
+ * @param {number} hotY WORLD hot-point Y
+ * @param {{x:number,y:number,state:number}} hero
+ * @param {Health} health
+ * @param {{invuln?:boolean}} [opts]
+ * @returns {{hit:boolean}} `hit` also means "consume the caller's record" —
+ *   the original does both in the same branch (`CS:0xDBA0`/`0xDBA6`).
+ */
+export function db4eHit(hotX, hotY, hero, health, opts = {}) {
+  const crouching = hero.state >= CROUCH_STATES[0] && hero.state <= CROUCH_STATES[1];
+  const heroTop = hero.y + (crouching ? DB4E_CROUCH_TOP_RAISE : 0);   // CS:0xDB68-DB76
+  if (hotY < heroTop) return { hit: false };                          // CS:0xDB79
+  if (hotX < hero.x) return { hit: false };                           // CS:0xDB7D
+  if (hotX > hero.x + 0x20) return { hit: false };                    // CS:0xDB8A
+  if (hotY > hero.y + 0x30) return { hit: false };                    // CS:0xDB95
+  if (opts.invuln) return { hit: false };                             // CS:0xDB99 — THROUGH, no consume
+  health.damage(2);                                                    // CS:0xDBA0
+  return { hit: true };
+}
+
 /** The damage curve. ⚠️ FIVE arithmetic shifts, not four — see the note below. */
 export const damageFor = (strength) => (((strength + 1) >> 5) + 5);
 

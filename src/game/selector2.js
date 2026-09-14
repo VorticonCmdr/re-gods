@@ -186,9 +186,13 @@
  *     (a 4px pace per tock tick, turning at walls/ledges) and what remains
  *     unported (a second, `facingSelect`-gated hero-column flip whose exit
  *     loop was not confidently resolved from the bytes).
- *   - The `RockBurstPool`'s own ground-probe-based landing and its
- *     recursive 3-piece SHATTER on landing (`CS:0xB38F`, table
- *     `DS:0xdf5c`, not read this pass) — see `rockfall.js`'s own header.
+ *   ~~The `RockBurstPool`'s own ground-probe-based landing and its
+ *   recursive 3-piece SHATTER on landing~~ — CLOSED, a later pass. Both
+ *   pools' ground-probe/landing bodies were read in full and `DS:0xdf5c`'s
+ *   own 3-entry `{vx,vy}` shatter table read live; `step()` now threads
+ *   `opts.planeB` into both `rockSettle.step`/`rockBurst.step`. See
+ *   `rockfall.js`'s own header for the full trace, including a genuine
+ *   settle-pool tock-polarity bug this same pass found and fixed.
  */
 
 import { CLASS_TABLES_B } from './spawn.js';
@@ -713,12 +717,13 @@ export class SelectorTwoSpawns {
         if (deadCount >= slot.entities.length) { this.slots[this.slots.indexOf(slot)] = null; }
       }
     }
-    /* ⚠️ NOT VERIFIED whether CS:0x0230/0x0233's own main-loop call sites for
-     * these two walkers sit inside or outside the `DS:0x2fa` freeze gate —
-     * not read this pass. Stepped unconditionally here rather than guessed;
-     * flagged so a future pass can check `CS:0x022D-0x0236` directly. */
-    this.rockSettle.step(cam, tock, drawn);
-    this.rockBurst.step(cam, hero, health, tock, { invuln: opts.invuln }, drawn, opts.debris);
+    /* ⚠️ CLOSED, this pass: `CS:0x022D-0x0233` (`b1c2`/`b3ce`/`b4e7`, all
+     * three) sit behind `cmp byte[0x34],0 / jnz 0x23c` — the scripted-
+     * cutscene engine — NOT `DS:0x2fa` "freezes aliens" as this comment
+     * used to guess. Stepped unconditionally here regardless, since this
+     * port has no model of `DS:0x34`'s cutscene engine at all. */
+    this.rockSettle.step(cam, tock, drawn, opts.planeB, hero, health, { invuln: opts.invuln }, opts.debris);
+    this.rockBurst.step(cam, hero, health, tock, { invuln: opts.invuln }, drawn, opts.debris, opts.planeB);
     return { drawn };
   }
 
