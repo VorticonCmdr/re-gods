@@ -375,3 +375,67 @@ Both operands share `X` in screen space (camera cancels — equivalent to world 
 
 **Ported in the sibling `gods-web` repo** as `game/levers.js`, verified live in the browser: a real idle+FIRE press flips an ordinary lever's sprite (a visible orange handle appearing/disappearing), end to end through the actual input pipeline, not just a unit test.
 
+## How levers neutralize hazards — `ACT6`, live-confirmed on world 1 `[PROVEN]`
+
+Full deep-dive requested on world 1 specifically (`PLEV1A`/`PLEV1B`): which of the 15 action verbs actually *removes* a hazard when lever-gated, disassembled to the instruction, censused against both shipped level-A/B files with a full reachability check (not just "a record exists"), and confirmed live under DOSBox by forcing the real handler against the real running level.
+
+### `ACT6`, `CS:0x3BD1`–`0x3CC6` — full trace `[PROVEN]`
+
+The verb table above already named `ACT6` "kill ≤2 category-4 objects near the point" from its 25-record census; this pass disassembled the body itself (Ghidra had no function defined over it — one of the un-disassembled gaps this document already flags elsewhere — so read via `disassemble_bytes`, not `decompile_function`):
+
+```
+3BD2  AX,BX := record.x, record.y            ; DI+0xc/DI+0xe, the trigger record's own point
+3BDC  [0x214]=x-0xC  [0x216]=y-0xC            ; min corner  (a ±12px / 25×25 box, NOT a radius)
+3BE2  [0x218]=x+0xC  [0x21A]=y+0xC            ; max corner
+3BF7  byte[0x3A6] := 0                        ; kill counter, this invocation
+3BFC  SI=0x8314 (runtime objects) DI=0x2A4E (descriptors); CX=0xC8 (200)
+3C1B    skip if word[SI+4] < 0                ; dead slot
+3C21    DI = 0x2A4E + type*10 ; skip unless byte[DI+4] == 4   ; CATEGORY 4 ONLY
+3C48    skip unless [0x214]<=obj.x<=[0x218] AND [0x216]<=obj.y<=[0x21A]
+3C65    word[SI+4] := 0xFFFF ; word[SI+6] := 0                ; KILL (type 0x60 gets one extra
+                                                                ;  cosmetic y-8 on its effect sprite;
+                                                                ;  every other category-4 type, incl.
+                                                                ;  the type-50 "spike", kills identically)
+3C78    queue a 4-slot effect record (DS:0x8C3C) at (obj.x-8, obj.y[-8 if type 0x60]) ; call CS:0x22CA (AX=0xF22)
+3CB6    INC byte[0x3A6] ; == 2 ? stop early : continue the 200-object scan
+```
+
+So the doc's "≤2" figure is now instruction-proven, not inferred: the outer loop always walks up to 200 live objects, but a hard counter (`DS:0x3A6`) stops the function the instant a **second** category-4 kill lands. The "near the point" radius is exactly **±12 px on each axis**, centered on the *trigger record's own* `(x, y)` — not the hazard object's. The kill itself writes `0xFFFF` into the object's type word and zeros its flag word, the identical dead-object convention used everywhere else in this codebase (`CS:0x9000`'s sign test, already documented). This is a pure verb-level effect — it does not touch score, inventory, or the lever table itself (confirmed by reading the full body: no reference to `DS:0x17e`, `0x194`, or `0xa5f8` anywhere in `0x3BD1`–`0x3CC6`).
+
+### The census: lever-gated `ACT6` records that actually reach a shipped hazard, world 1 `[PROVEN]`
+
+A naive grep for "lever condition + `ACT6`" risks the exact mistake this document already made once for `PLEV3A` record #50 (a structurally-real wild jump that never fires because nothing in the shipped data dispatches it — see *`UNKNOWN_palfils_0320`*, above). So this pass ran the full reachability chain before trusting any hit: decompressed `PLEV1A.MAP`/`PLEV1B.MAP` and `PALFILS.0A1`/`0B1`, decoded all 100 trigger records and all 253 `PALFILS` event records per file, and for every trigger record with a `COND 11`/`12` (lever) slot, checked whether some event record is `{selector 3, param = that record}` **and** whether that event id is actually dispatchable — either a plane-B cell equal to `event+3`, or another `ACT5` action elsewhere in the same file with `arg = event+1` (the exact two-way OR the trigger evaluator itself uses, `CS:0x6022`/`0x6029`, both documented above). Every `ACT6` hit below cleared that check.
+
+**`PLEV1A`** — 5 lever-gated, reachable, live-object-matching `ACT6` records, against 13 shipped type-50 ("spike") objects:
+
+| rec# | lever condition(s) | point | kills (exact object match) |
+|---|---|---|---|
+| 1 | lever 0 **off** ∧ lever 1 **off** ∧ lever 2 **on** | (137, 624) | obj `(137, 624)` type 50 |
+| 2 | lever 0 **off** ∧ lever 1 **off** ∧ lever 2 **on** | (158, 624) | obj `(158, 624)` type 50 |
+| 7 | lever 3 **on** | (443, 960) | obj `(443, 960)` type 50 |
+| 8 | lever 3 **on** | (462, 960) | obj `(462, 960)` type 50 |
+| 11 | lever 4 **on** | (83, 719) | obj `(83, 720)` type 50 (1px, inside the ±12 box) |
+
+**`PLEV1B`** — 2 more, against the **same 13 type-50 objects**: a full 1200-byte diff of the two files' object regions found 53 of 200 records genuinely differ between the level-halves (mostly levers and scenery, placed independently per half — e.g. lever 0 sits at world (424,592) on `1A` but (3367,592) on `1B`), but every one of the 13 type-50 records is byte-identical, same index and same `{x,y}`, in both files:
+
+| rec# | lever condition(s) | point | kills |
+|---|---|---|---|
+| 39 | lever 11 **on** | (1740, 960) | obj `(1740, 960)` type 50 |
+| 55 | lever 12 **off** ∧ event cond (`5, 165`) | (1610, 800) | obj `(1610, 800)` type 50 |
+
+(Condition polarity re-confirmed this pass, not just carried over from the verb table above: `CS:0x3F6C` — `ret` on a **clear** bit, i.e. `COND11` only passes when the bit is **set** — and `CS:0x3F87` is the mirror image, passing only when **clear**. Both handlers read `DS:0xa5f8 + arg*6 + 4` directly, `arg` used verbatim as the 0–63 lever-table index.)
+
+Two distinct authored shapes, both real: a **3-lever AND-combo** (records 1/2) that clears a pair of spikes only when levers 0 and 1 are *off* and lever 2 is *on*, and plain **single-lever ON switches** (records 7/8, 11, 39) each clearing one or two spikes outright. Records 1/2's lever bank (`0`/`1`/`2` at world (424,592)/(201,592)/(234,592)) is the **same bank** already documented under *`UNKNOWN_chest_key_surplus`* in `CLAUDE.md` — `PLEV1A` triggers #3/#4, 25 px away at (393,597)/(368,594), spawn the world's one iron chest (type 16) and its key (type 23) when levers 0 **and** 2 are both *on*. **Lever 0 has opposite required polarity in the two paths** (off for the hazard-clear records, on for the chest/key records), so the reward path and the hazard-clearing path are **mutually exclusive at any given instant** — not just "different combinations," but a puzzle bank where arming one payoff structurally disarms the other. `PLEV1A`/`PLEV1B` place 13 type-50 objects total; 7 of them (5 reachable from `1A`'s own trigger table, 2 more from `1B`'s) are lever-removable. The rest have no `ACT6` wiring in either file's live trigger data — they are permanent.
+
+**Trap doors are not lever-driven — clean negative.** `CS:0x40C0` (the `DS:0xa82c` trap-door patcher, documented above) has exactly two callers file-wide (`get_function_callers`): `FUN_1000_2A37` (the level/PALFILS loader) and `FUN_1000_8C34`, itself called only from `FUN_1000_006F` and shown by decompile to be a **level-(re)start reset** — it zeroes the hero's inventory/score/state block and re-runs the same handful of level-init routines (`0x41BC`, `0x40C0`, `0x9196`, …) every time. Neither caller is a trigger action, the lever toggle, or a per-frame tick, so trap-door state is fixed at level load and cannot be a lever-neutralization mechanism, unlike `ACT6`.
+
+### Confirmed live under DOSBox `[PROVEN]`
+
+Booted fresh by passing `GODS.EXE`'s own path as the DOSBox launch target (auto-mounts its parent directory as `C:` and runs it, reaching `GAME.EXE` without typing through the shell). The title screen's attract-mode demo cycles through several levels unpredictably (already known to be awkward for live input — see the `docs/dynamic-trace-and-runtime-data.md` boot trace), so rather than fight that timing, this pass raced to read `DS:0x7004`'s record-1 signature the moment real gameplay started; it matched `PLEV1A` exactly. Located `ACT6` in the live image with a `mem_scan` on its own opening bytes (unique hit), confirming the running code segment. With the emulator paused mid-frame inside `GAME.EXE`'s own segment:
+
+- Read the live runtime object array (`DS:0x8314`, 200 × 8-byte `{x,y,type,flag}`, confirmed by the same `CX=0xC8` bound the disassembly uses): slot 32 held `(137, 624, type=50, flag=0)` — alive — and slot 33 `(158, 624, type=50, flag=0)`, its 21px-distant neighbor.
+- Overwrote 8 live code bytes at the CPU's current (unrelated) instruction with a self-contained `MOV DI,0x701C` (the live address of `PLEV1A`'s own trigger record #1, already sitting in the running game's own trigger table) / `CALL ACT6` / `JMP $`, so the **real handler ran against the real record** rather than a synthetic one.
+- After the forced call: slot 32 read `(137, 624, type=0xFFFF, flag=0)` — **dead**, by the exact convention the disassembly predicted — and slot 33 was **unchanged** (`type=50`), confirming the ±12px box excludes the 21px-distant neighbor exactly as computed statically.
+
+This closes the loop, but with each leg's confidence kept honest rather than blended: the lever toggle and the `COND11`/`COND12` read (`CS:0x1045`, `0x3F6C`/`0x3F87`) and the reachability of trigger record #1 (the static census above) are `[PROVEN]` **statically** — the forced call skipped over that plumbing rather than exercising it, since it injected a direct `CALL` into `ACT6` instead of waiting on the real lever-toggle-then-walk-over-the-plane-B-cell input sequence. What the DOSBox session adds, and what was not previously confirmed by disassembly alone, is the **action leg**: that `ACT6`, invoked with the real record data from a live, running `PLEV1A`, actually reaches into the real runtime object array and kills the intended object — observed directly, not inferred from the decompile.
+

@@ -516,6 +516,8 @@ So the mechanism this document had recorded only as "`DS:0x8014` is shared by wo
 
 Types **50, 73, 96, 97, 115, 117, 130** are category 4, identically in all four `POBJECTS` files. **Six of the seven have an empty name and an empty description**; the exception is type 50, named `"spike"`. That fits: categories 0–3 are potion / treasure / keys / levers — all things the hero picks up and all named — while category 4 holds things that are *done to* the hero. A category-4 object is also rejected by the walk-in pickup path (`CS:0x17E6 jg` sends category ≥ 2 away), so it never needs text. `POBJECTS` categories 4 and 5 remain `UNKNOWN` as enums, but this is what 4 looks like.
 
+**Category 4 is also the trigger system's own deletion target.** Trigger `ACT6` (`CS:0x3BD1`) kills up to 2 category-4 objects inside a ±12px box around the firing trigger's point — the mechanism behind lever-neutralized spikes on world 1 (7 of `PLEV1A`/`PLEV1B`'s 13 type-50 objects, live-confirmed under DOSBox); see *How levers neutralize hazards* in `docs/triggers-and-difficulty.md`.
+
 ### The retracting spike hazard — types 50/117/130, `CS:0x1B72`/`0x1AF6` `[PROVEN]`
 
 Undocumented before this pass: the paragraph above named all seven category-4 types and stopped once the two already-known members (the world-2 nest, type 115, and the world-3 `ce64` creature, type 96, both below) were matched. Reading `CS:0x1B5D`-`0x1B6F`'s own sprite dispatch (`170+type`, since these are ordinary stamped map objects) past those two turns up a third, previously-unchased mechanism, shared by three of the remaining five types:
