@@ -550,8 +550,12 @@ async function main() {
    * zones.js) and otherwise persistent for the session, exactly like
    * leverToggle/spikeClock above: nothing in the original ever clears them,
    * not even a full restart, so `fullRestart()` below does not reset this
-   * either. Index 0/1/2 = the password that unlocks world 2/3/4. This port
-   * has no "ENTER A PASSWORD" grid-entry screen to type one back into
+   * either. (The original's own storage — DS:0x432/0x436/0x43a — does get
+   * overwritten by HISCORES.BIN's own load/save round-trip at CS:0x3211/
+   * 0x3445; that file round-trip is the one writer this port doesn't have,
+   * not something to "fix" by clearing passwordSlots on restart.) Index
+   * 0/1/2 = the password that unlocks world 2/3/4. This port has no "ENTER
+   * A PASSWORD" grid-entry screen to type one back into
    * (`UNKNOWN_password_entry_ui`), so a generated password is only ever
    * surfaced as event text — see the ZONE_EXIT branch below. */
   let passwordSlots = new Array(PASSWORD_SLOTS).fill(null);
