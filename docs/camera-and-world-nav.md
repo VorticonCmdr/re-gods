@@ -265,6 +265,26 @@ The resolved mechanism (`FUN_1000_6b00`'s world-advance, `FUN_1000_6ad4`'s key-i
 
 The asymmetry is deliberate: the hero is 32 px wide so his **centre** picks the column, while Y is floored to the row his head is in. A port using `X >> 5` fires **every** plane-B event 16 px late — measured across all 8 shipped levels, all 1923 event cells shift by exactly 16 px.
 
+### It's not one cell, and it's not edge-triggered `[PROVEN]`
+
+A closer read of the full body, `CS:0x5FAB`–`0x6021` (prompted by a report that a lever-gated hazard-kill "should work but doesn't" — see the lever/`ACT6` census in `docs/triggers-and-difficulty.md`), found this document's own earlier framing of "the probe" as a single `(col, row)` lookup was incomplete:
+
+```
+5FD2  cmp byte[si],2 / jna 5fda / call 0x6022         ; cell (col, row)      — the one already documented
+5FDA  si += 0x80 ; cmp/jna/call                        ; cell (col, row+1)
+5FE6  si += 0x80 ; cmp/jna/call                        ; cell (col, row+2)
+5FF2  ax = heroX & 0x1f ; cmp ax,0x10 / jl 0x6021       ; skip the rest unless the hero is past
+                                                        ;   the halfway point of his own 32px column
+5FFD  si += 0xfeff  (== si -= 0x101 == -2 rows, -1 col) ; cell (col-1, row)
+6001  cmp/jna/call                                     ; cell (col-1, row)
+600D  si += 0x80 ; cmp/jna/call                        ; cell (col-1, row+1)
+6019  si += 0x80 ; cmp/jna/call                        ; cell (col-1, row+2)
+```
+
+So every frame this probes **3 cells** (the hero's own column, one and two rows below it) and, whenever the hero is past the midpoint of his own tile, **3 more** in the adjacent column — up to 6 cells, not 1 — each independently dispatched (`CALL 0x6022`) if its value is `> 2`. `CS:0x5EA0` itself has **zero callers** (`get_xrefs_to`) — it's reached purely by fall-through from the preceding camera/hero-position epilogue, which is unconditional, per-frame code — so this whole scan runs **every single tick**, for every frame the hero spends anywhere near an event cell, with **no comparison against a previous frame's cell anywhere in the body**. Re-dispatching an already-fired event is harmless only because the trigger evaluator itself is idempotent (`CS:0x39FE` marks the event record `0xFFFF` on first success, and `CS:0x6034`'s `or ax,ax/js/jz` skips a consumed or empty record on every later attempt) — so the *design* tolerates being re-tried 15 times a second, and the game relies on exactly that: a trigger's conditions can start false and become true while the hero never leaves the tile (e.g. flips a lever while standing right next to it), and the very next frame's re-scan catches the change.
+
+**A port that gates this on cell-entry (`if (currentCell === lastCell) return`) is not faithful** — it will miss exactly that case: flip a lever while standing on or beside the dispatch cell without stepping off and back on, and the kill/spawn/etc. never (re-)fires, even though the original would catch it on the next frame. This was caught because `gods-web`'s own `events.js` `step()` has exactly that gate, commented "edge-triggered, like the original" — which this pass shows is not so; see the port-side note below.
+
 ## Randomness — a replayed table, not a PRNG `[PROVEN]`
 
 `GAME.EXE` has only 14 `MUL`/`IMUL` instructions total, all register-operand: **there is no LCG or multiply-based generator.**
