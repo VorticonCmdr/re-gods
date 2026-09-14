@@ -110,7 +110,15 @@
   .drop.over { border-color: var(--accent); color: var(--accent); }
   .marker {
     position: absolute; border-radius: 50%; transform: translate(-50%,-50%);
-    box-shadow: 0 0 0 1px rgba(0,0,0,.6); cursor: help;
+    box-shadow: 0 0 0 1px rgba(0,0,0,.6); cursor: pointer;
+  }
+  .marker.selected {
+    box-shadow: 0 0 0 2px #fff, 0 0 0 4px var(--accent); z-index: 2;
+  }
+  tr.obj-selected td { background: rgba(90,169,255,.22); }
+  #objCoordReadout {
+    display: inline-block; font-family: var(--mono); background: var(--panel2);
+    border: 1px solid var(--border); border-radius: 4px; padding: .2rem .6rem; color: var(--accent2);
   }
   .legend { display: flex; gap: .8rem; flex-wrap: wrap; font-size: 11px; color: var(--dim); margin: .4rem 0; }
   .legend .sw { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: .3em; vertical-align: middle; }
@@ -1525,9 +1533,25 @@ RENDERERS.map = (main, entry) => {
   const scaleSel = h('select', null, ...[0.125, 0.25, 0.5, 1].map((s) => h('option', { value: s, selected: s === 0.25 ? '' : null }, `${Math.round(s * 100)}%`)));
   const overlayChk = h('input', { type: 'checkbox' });
   const mapArea = h('div');
+  const coordReadout = h('span', { id: 'objCoordReadout' }, 'click an object marker or table row…');
   main.appendChild(h('h3', null, 'Level render'));
-  main.appendChild(h('div', { class: 'controls' }, h('label', null, 'scale:', scaleSel), h('label', null, overlayChk, 'plane-B overlay (red=solid, green=climbable, blue=event)')));
+  main.appendChild(h('div', { class: 'controls' }, h('label', null, 'scale:', scaleSel), h('label', null, overlayChk, 'plane-B overlay (red=solid, green=climbable, blue=event)'), coordReadout));
   main.appendChild(mapArea);
+
+  let selectedIdx = null;
+  let objTableEl = null;
+  function selectObject(idx, o) {
+    selectedIdx = idx;
+    mapArea.querySelectorAll('.marker.selected').forEach((el) => el.classList.remove('selected'));
+    const marker = mapArea.querySelector(`.marker[data-idx="${idx}"]`);
+    if (marker) marker.classList.add('selected');
+    if (objTableEl) {
+      objTableEl.querySelectorAll('tr.obj-selected').forEach((el) => el.classList.remove('obj-selected'));
+      const row = objTableEl.querySelector(`tbody tr[data-idx="${idx}"]`);
+      if (row) { row.classList.add('obj-selected'); row.scrollIntoView({ block: 'nearest' }); }
+    }
+    if (o) coordReadout.textContent = `selected obj #${idx} — x=${o.x}, y=${o.y}`;
+  }
 
   const objByType004fix = (t) => t; // types are used positionally, not offset-adjusted here
   const worldNum = key ? key[0] : null;
@@ -1590,8 +1614,8 @@ RENDERERS.map = (main, entry) => {
       container.appendChild(ov);
     }
 
-    for (const o of map.objects) {
-      if (o.type & 0x8000) continue;
+    map.objects.forEach((o, i) => {
+      if (o.type & 0x8000) return;
       const isWeapon = o.type >= 0xC0;
       const color = isWeapon ? WEAPON_COLOR : CAT_COLOR[(pobj && pobj[o.type] && pobj[o.type].category) || 0] || '#fff';
       let title = isWeapon ? `weapon: ${WEAPON_NAMES[o.type - 0xC0] || o.type}` : (pobj && pobj[o.type] ? `${pobj[o.type].name || '(type ' + o.type + ')'} — ${pobj[o.type].desc || ''}` : `type ${o.type}`);
@@ -1600,12 +1624,14 @@ RENDERERS.map = (main, entry) => {
         if (hit) title += `  ⚑ hint: "${hit.text}"`;
       }
       const m = h('div', {
-        class: 'marker',
+        class: 'marker' + (i === selectedIdx ? ' selected' : ''),
         style: { left: (o.x * scale) + 'px', top: (o.y * scale) + 'px', width: '6px', height: '6px', background: color },
         title: `(${o.x},${o.y}) ${title}`,
+        'data-idx': i,
+        onclick: (e) => { e.stopPropagation(); selectObject(i, o); },
       });
       container.appendChild(m);
-    }
+    });
     mapArea.appendChild(container);
     mapArea.appendChild(h('div', { class: 'legend' },
       ...['potion','treasure','key','lever','hazard','unknown'].map((n, i) => h('span', null, h('span', { class: 'sw', style: { background: CAT_COLOR[i] } }), n)),
@@ -1617,7 +1643,7 @@ RENDERERS.map = (main, entry) => {
   /* ── objects table ── */
   main.appendChild(h('h3', null, 'Objects'));
   const liveObjs = map.objects.map((o, i) => ({ ...o, i })).filter((o) => (o.type & 0x8000) === 0);
-  main.appendChild(table(
+  objTableEl = table(
     ['#', { label: 'x', num: true }, { label: 'y', num: true }, { label: 'type', num: true }, { label: 'sprite', num: true }, 'name', 'note'],
     liveObjs.map((o) => {
       const isWeapon = o.type >= 0xC0;
@@ -1625,7 +1651,14 @@ RENDERERS.map = (main, entry) => {
       let note = '';
       if (o.type === 69 && hints) { const hit = hints.find((hh) => hh.key === o.x); if (hit) note = `hint: "${hit.text}"`; }
       return [o.i, o.x, o.y, o.type, objectSprite(o.type), name || '—', note];
-    })));
+    }));
+  objTableEl.querySelectorAll('tbody tr').forEach((row, i) => {
+    const o = liveObjs[i];
+    row.dataset.idx = o.i;
+    row.style.cursor = 'pointer';
+    row.addEventListener('click', () => selectObject(o.i, o));
+  });
+  main.appendChild(objTableEl);
 
   /* ── messages ── */
   const msgs = map.messages.map((m, i) => [i, m]).filter(([, m]) => m);
