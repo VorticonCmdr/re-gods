@@ -227,7 +227,7 @@ The number that actually discriminates a sound decode from a systematic probe er
 
 **Tag discipline.** This mechanic is tagged `[PROVEN]` for the bounce table (a live `read_memory`) and the shipped-data simulation (executed against real level bytes), but the fall-step/ground-probe/category-gate disassembly itself was read, not watched executing — the disassembly-only parts remain `[STATIC]` until a live trace confirms them. **To promote:** an execute breakpoint on the fall-step store at offset `CS:0x1587` (resolve the live segment first — this project has recorded `CS=0x1000`, `CS=877`(`0x36D`), and other values across different traced sessions depending on where DOS actually loads `GAME.EXE`; see *`UNKNOWN_asset_load_segments` — CLOSED*) should hit repeatedly for an unsupported object, with `[SI+2]` (the object's Y) climbing by 4 each hit.
 
-### `UNKNOWN_chest_key_surplus` — partly closed: one key's real purpose found in shipped trigger text
+### `UNKNOWN_chest_key_surplus` (world 4 third) — partly closed: one key's real purpose found in shipped trigger text
 
 Counted over all 8 shipped maps, with the carry-forward above in mind:
 
@@ -235,7 +235,7 @@ Counted over all 8 shipped maps, with the carry-forward above in mind:
 |---|---|---|---|
 | 12 gold (3000) | **9** | 21 | **8** |
 | 14 steel (2000) | **3** | 22 | **3** |
-| 16 iron (1000) | **0** | 23 | **6** |
+| 16 iron (1000) | **0** static (⚠️ see below — **1 trigger-spawned**, `PLEV1A`) | 23 | **6** static (⚠️ see below — **+1 trigger-spawned**, `PLEV1A`) |
 
 World 2 additionally splits a pair across sublevels — `PLEV2A` holds a steel chest with no key 22, `PLEV2B` a gold chest with no key 21. The arithmetic is not in doubt.
 
@@ -246,7 +246,26 @@ PLEV4B trigger #79:  cond0 = (kind 1 "item held", arg 23)   action = ACT13 (mess
 message #1 text:      "you won't need that key anymore"
 ```
 
-So **in world 4, holding key 23 fires a trigger whose entire job is to tell the player they no longer need it** — exactly the flavour text you'd expect once a key has done whatever it was really for. Cross-referenced against the census: world 4 places key 23 **once** (`(628, 756)`, both sublevels — same underlying position), and this is its only trigger reference anywhere in the shipped data. Since no iron chest (type 16) is placed in any of the 8 maps, **this key's "real" purpose in world 4 was never the chest at all** — it opens or grants something else (a door, a barrier, a different object this pass didn't chase), and the message is a design nicety confirming the key has already served that purpose. This resolves the *world-4* third of the surplus concretely; the two `PLEV2A`/`PLEV2B` key-23 pickups (`(2965,21)`, `(3307,48)`) have **no** trigger reference anywhere in either map's 100 records, so for world 2 specifically the original framing stands: a chest cut late, or a spare, genuinely not decidable from the bytes.
+So **in world 4, holding key 23 fires a trigger whose entire job is to tell the player they no longer need it** — exactly the flavour text you'd expect once a key has done whatever it was really for. Cross-referenced against the census: world 4 places key 23 **once** (`(628, 756)`, both sublevels — same underlying position), and this is its only trigger reference anywhere in the shipped data. ⚠️ **Corrected below — no iron chest is *statically* placed in any of the 8 maps, but one is spawned dynamically, and it is not in world 4.** So world 4's key still opens or grants something else the message doesn't name; the flavour text confirms it already happened, not that it was ever the (statically absent) chest. This resolves the *world-4* third of the surplus as before.
+
+### `UNKNOWN_chest_key_surplus` (world 2) — CLOSED: no consumer exists anywhere in the shipped game, checked four independent ways `[STATIC]`
+
+The two `PLEV2A`/`PLEV2B` key-23 pickups (`(2965,21)`, `(3307,48)`, both sublevels) have **no** trigger reference anywhere in either map's 100 records — that stood from the pass above. What closes the item is finding out *why* key 23 exists at all, which required checking a mechanism the earlier passes never looked for.
+
+**The iron chest's real, working consumer exists — and it's a dynamic spawn, not a static placement, which is why the object census above never found it.** All 800 trigger records' **action** verb 0 (`spawn object into `DS:0x8314` via the allocator `CS:0x38d7`, argument = object type`) were parsed across the 8 maps. Exactly **one** spawns type 16 (the closed iron chest): `PLEV1A` trigger **#3**, at world position `(393,597)`, gated on three conditions — `(kind 11, arg 0)`, `(kind 11, arg 2)` (both "lever bit0 set", i.e. two specific levers must be on — see the `COND11`/`12` predicate), and `(kind 5, arg 18)` ("event word `[0x932c + (18−1)*4]` < 0", the already-documented `(arg−1)*4` indexing for this predicate pair). **`PLEV1A` trigger #4, 25px away at `(368,594)`, spawns key type 23 under the identical three conditions.** The chest trigger's own message field is `5`; decoding the map's message pool (`FUN_1000_374b`'s own load-time arithmetic gives the base — offsets in the file's 40-entry table are added to the message *block's* own start, not the string pool a further 160 bytes in, confirmed by reading the loader routine directly rather than guessing the base) most plausibly reads **"special bonus"**, though this specific text was cross-checked against the file's own bytes rather than the display-side consumer and should be read as the strongest available reading, not a certainty; the key's own message field (`39`) resolves unambiguously to **no message** — table value `0` is the loader's own explicit "no message" sentinel (`FUN_1000_374b`'s `CMP AX,0`/`JZ`), true regardless of any indexing ambiguity.
+
+So: **key 23 / iron chest 16 has a real, designed, shipped use** — a two-lever-plus-event gate in world 1 spawns both the chest and its key together. (Whether those two specific levers are themselves placed and reachable in `PLEV1A`, i.e. whether a player can actually satisfy the gate in normal play, was not checked this pass — the claim here is that the trigger pair is real and correctly wired, not that the puzzle is provably completable.)
+
+**Against that now-understood mechanism, world 2's two keys were checked four independent ways, all converging on "no consumer":**
+
+1. **Static object census** (this document, above): no chest of any type, iron or otherwise, is statically placed in world 2.
+2. **Trigger CONDITION census, re-derived independently this session** rather than trusted from the prior pass: all 800 records' three condition slots were scanned for `arg == 23` regardless of `kind`. Exactly the same two hits as before (`PLEV3A #50`, `PLEV4B #79`) — neither in world 2.
+3. **Trigger ACTION/spawn census, new this session**: all 800 records' action-verb-0 spawns were parsed for `arg == 16` (chest) or `arg == 23` (key). The only spawns of either are the `PLEV1A` #3/#4 pair above — world 2 spawns neither, statically or dynamically.
+4. **The "use consumes the key" path, `CS:0x3AEB`** (invoked by action verbs 2/3/4/7/8 — door, teleport, level-exit, gate-open, gate-close — whenever that same record's own condition slot is `kind 1` with an item-type argument in `[0x12,0x17]` or `[0x7f,0x81]`) was read in full and shown to be a **subset** of check 2 above, not a separate avenue: it only fires on a `kind 1`/"item held" condition, and check 2 already found every such condition referencing key 23 anywhere in the 800 records. World 2 does use this exact mechanism heavily — nine door/gate/teleport records keyed to items 18, 19, 20, 128, 129 — just never to 21, 22, or 23.
+
+World 2's own key/door economy is real and busy; it simply never touches the chest-key family at all. And since the 4-slot key inventory is cleared at every world-B completion (already documented above), whatever a player does with world 2's two key-23 pickups is bounded to world 2 itself (both sublevels share one inventory — a key taken in `2A` does carry into `2B` — but the clear on finishing `2B` stops it from ever reaching world 3 or 4 regardless).
+
+**What remains open is not decidable from bytes, and is retired as such rather than left pending:** why a designer placed two pickups of a key type whose one shipped use is a separate, self-contained puzzle in a different world — an early design where world 2 also had an iron-chest puzzle that got cut, a deliberate red herring, or an authoring leftover — is a question about intent, not mechanism, and every mechanism this binary has was checked.
 
 ### Two more small closures from this pass `[PROVEN]`
 
