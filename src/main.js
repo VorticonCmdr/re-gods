@@ -76,7 +76,7 @@ import { buildObjectArena, appendHints, hintOffsetForX,
          stringAt } from './game/text-arena.js';
 import { Arsenal, spawnableWeapons } from './game/hero-fire.js';
 import { stepHeroFrame, stepCreatureDamage } from './game/frame.js';
-import { DamageGrid, damageForTag } from './game/collision.js';
+import { DamageGrid, damageForTag, despawnConsumedHit } from './game/collision.js';
 import { parseWeapons } from './game/weapons.js';
 import { pickUpWeapon } from './game/pickup.js';
 import { scanZones, unpackTeleportDest, resolveExitDestination,
@@ -472,12 +472,27 @@ async function main() {
    * `mode` defaults to 0 (every ordinary creature); the DS:0xce64 world-3
    * creature (game/ce64.js) forces mode:1 around its own contact/scan call,
    * which is what makes the starburst/invulnerability-aura potions deal it
-   * only 50/0 damage instead of the usual 10000/10000 — see ce64.js's header. */
-  const decodeTag = (tag, mode = 0) => damageForTag(
-    tag,
-    arsenal.slots.map((s) => s.weapon),
-    Object.fromEntries(arsenal.slots.filter((s) => s.st).map((s) => [s.weapon, s.st])),
-    mode);
+   * only 50/0 damage instead of the usual 10000/10000 — see ce64.js's header.
+   *
+   * ⚠️ CS:0x937C/0x9382 — weapon +0x49 (weapons.js's `consumedOnHit`) lives
+   * INSIDE this same decode in the original, so despawnConsumedHit runs here
+   * too, right after damageForTag, rather than in collision.js's
+   * damageForTag itself (which stays pure — many verify checks call it with
+   * synthetic, non-mutable state). On any ordinary weapon hit, a weapon with
+   * +0x49 set despawns the exact projectile record that just scored it —
+   * single-hit, non-piercing. Every one of this port's grid consumers (the
+   * hero's own creatureScansGrid, ce64/pat-objects/selector2/statue's
+   * proxied scans) is threaded through this ONE decodeTag closure, so wiring
+   * it here covers all of them at once. */
+  const decodeTag = (tag, mode = 0) => {
+    const d = damageForTag(
+      tag,
+      arsenal.slots.map((s) => s.weapon),
+      Object.fromEntries(arsenal.slots.filter((s) => s.st).map((s) => [s.weapon, s.st])),
+      mode);
+    despawnConsumedHit(d, arsenal.weapons, arsenal.slots.map((s) => s.area));
+    return d;
+  };
   /* DS:0x365 — level progression only. 0 on world 1, so full damage here. */
   let difficulty = 0;
   let shotsFired = 0, creaturesShot = 0, picked = 0, consumed = 0, banked = 0;

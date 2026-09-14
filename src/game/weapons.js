@@ -87,9 +87,27 @@ export function parseWeapons(buf) {
       /* +0x48 reads 0x00 or 0xFF as a BYTE — the "projectile breaks solid
        * terrain" flag, i.e. the famous "maces break blocks". +0x49 is a
        * second, separate byte flag. Reading them as one big-endian word
-       * conflates two fields. */
+       * conflates two fields.
+       *
+       * +0x49 — CS:0x937C `cmp byte ptr [di+0x49],0x0` inside FUN_1000_9320
+       * (the shared grid-tag decoder, collision.js's damageForTag / this
+       * port's main.js decodeTag). On ANY ordinary weapon-tag hit — not the
+       * FF/FE/FD/FC special sources — CS:0x9382 `mov word ptr [si+0x2],0x0`
+       * zeroes THAT PROJECTILE RECORD'S OWN TAG when this byte is nonzero,
+       * unconditionally, regardless of the damage dealt or whether the
+       * target dies. Same despawn shape as CS:0x9d91/0xA85B. Read directly
+       * off all four shipped PWEAPONS files, byte-identical across worlds:
+       * SET (0xFF) for knife, fireball, flame, hunter, magic axe; CLEAR
+       * (0x00) for time bomb, lightning bolt, throwing star, spear, axe,
+       * mace. So the knife is single-hit / non-piercing in the shipped
+       * game — consumed by the first creature it damages, kill or not —
+       * while the other six weapons already correctly persist through a
+       * hit. This corrects combat-and-projectiles.md's UNKNOWN_tag_fd
+       * closure, which said the record's tag byte "has exactly one [other]
+       * writer" (CS:0x9d91/0xA85B) — CS:0x9382 is a third, missed because
+       * that pass stopped reading FUN_1000_9320 at CS:0x9361. */
       breaksTerrain: buf[o + 0x48] !== 0,
-      flag49: buf[o + 0x49] !== 0,
+      consumedOnHit: buf[o + 0x49] !== 0,
       value: be(o + 0x4a),          // the shop's "Value" stat
       /* Projectile-behaviour handler indices into DS:0xd88c, one per facing.
        * The emitters read them as BYTES from the post-swap record — `mov

@@ -181,7 +181,8 @@ import { FIRE_STATES as FS, FIRE_STATE_IDS, WALK_FIRE_ANIM, EMIT_WALK,
 import { clipScanBox, CLIP_NEAR, CLIP_BOTTOM, CLIP_RIGHT,
          DamageGrid, CELL, GRID_ORIGIN, GRID_LO, GRID_BYTES, ROW_STRIDE,
          WRITE_LO, WRITE_HI, MAX_SCAN_COLS, stampIndex, scanIndex,
-         damageForTag, TAGS_PER_SLOT } from '../game/collision.js';
+         damageForTag, TAGS_PER_SLOT,
+         hitConsumesProjectile, despawnConsumedHit } from '../game/collision.js';
 import { FireControl, FIRE_BIT, EMIT_PHASE, RECHECK_PHASE,
          FIRE_STATES } from '../game/fire.js';
 import { SLOT_STRIDE, PROJECTILE_SIZE, GROUP_STRIDE, GROUP_ENTRIES,
@@ -4773,6 +4774,49 @@ export async function checkWeaponsProjectiles(fetchRaw) {
     dmg.damage === knife.power && dmg.slot === 0 && dmg.record === 0,
     `${dmg.damage} damage from slot ${dmg.slot} record ${dmg.record} — the full ` +
     'chain from a button press to a creature losing health');
+
+  /* CS:0x937C/0x9382 — weapon +0x49 (`consumedOnHit`). A previously-unwired
+   * byte flag: parsed since this project's first weapons.js pass but never
+   * read anywhere until now. Read directly off all four shipped PWEAPONS
+   * files (byte-identical across worlds): SET for knife/fireball/flame/
+   * hunter/magic axe, CLEAR for the other six. On an ordinary weapon-tag
+   * hit CS:0x9382 zeroes the EXACT projectile record that scored it,
+   * unconditionally — so a single-hit weapon is consumed whether or not the
+   * target dies, and this happens inside the SAME decode that computed the
+   * damage above, which is why despawnConsumedHit takes damageForTag's own
+   * return rather than re-deriving anything. */
+  /* `all[7]`/`all[9]` etc. would work too (byte-identical across worlds),
+   * but naming it by `.index` rather than array position survives `sets`
+   * ever being reordered. */
+  const axeRec = all.find((w) => w.index === 7);
+  check(`the knife is flagged consumedOnHit and the axe is not`,
+    knife.consumedOnHit === true && axeRec.consumedOnHit === false,
+    `knife ${knife.consumedOnHit}, axe ${axeRec.consumedOnHit} — CS:0x937C ` +
+    '`cmp byte [di+0x49],0`, read straight off all four PWEAPONS files');
+  check(`hitConsumesProjectile agrees, keyed off the DECODED weapon index`,
+    hitConsumesProjectile(dmg, all) === true,
+    'dmg.weapon must resolve back through the SAME weapons array the hit came ' +
+    'from, not a hardcoded index');
+  check(`END TO END: despawnConsumedHit zeroes the EXACT record the grid tag names`,
+    area2[0].tag === hitTag && despawnConsumedHit(dmg, all, [area2, [], []])
+    && area2[0].tag === 0,
+    'CS:0x9382 `mov word ptr [si+0x2],0x0` — the same record spawnVolley wrote ' +
+    'and stepProjectiles stamped above, not a copy');
+  const axeSt = armWeapon(axeRec);
+  const axeArea = Array.from({ length: 18 }, () => ({ tag: 0, x: 0, y: 0, dir: 1 }));
+  /* Slot A here is a test fixture, not a claim about the axe's real
+   * `slotAClass` — tagFor(0,0) just needs to match the slotWeapons entry
+   * damageForTag is given below. */
+  const axeVol = spawnVolley(axeSt, axeRec.handlerRight, tagFor(0, 0), 100, 200);
+  axeVol.entries.forEach((e, i) => { axeArea[i] = e; });
+  const axeDmg = damageForTag(tagFor(0, 0), [axeRec.index, -1, -1],
+    { [axeRec.index]: axeSt });
+  check(`a piercing weapon's hit does NOT despawn its own record`,
+    axeArea[0].tag !== 0 && !despawnConsumedHit(axeDmg, all, [axeArea, [], []])
+    && axeArea[0].tag !== 0,
+    'the axe (and lightning bolt/throwing star/spear/mace/time bomb) must keep ' +
+    'flying after a hit — this is what makes them pierce multiple creatures, ' +
+    'exactly as this port already modelled before +0x49 was wired in');
 
   /* ⚠️ +0x48 STOPS the projectile; it does not break blocks. */
   /* Two setup details this test needs, both of which caught me:

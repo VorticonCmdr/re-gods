@@ -319,3 +319,38 @@ export function damageForTag(tag, slotWeapons, weaponState, mode = 0) {
     damage: st ? st.count : 0,           // [di+0x8] — the pickup count
   };
 }
+
+/**
+ * CS:0x937C `cmp byte ptr [di+0x49],0x0` — does a decoded hit despawn the
+ * projectile that scored it? True only for an ordinary weapon-tag hit (not
+ * a special FF/FE/FD/FC source, and not an empty slot) whose weapon has
+ * +0x49 set (weapons.js's `consumedOnHit`). See despawnConsumedHit below
+ * for the actual write, and weapons.js's own field comment for the full
+ * provenance and the shipped-data census (knife/fireball/flame/hunter/
+ * magic axe set; time bomb/lightning bolt/throwing star/spear/axe/mace
+ * clear).
+ * @param {ReturnType<typeof damageForTag>} decoded
+ * @param {Array} weapons  the parsed PWEAPONS records for the current world
+ */
+export function hitConsumesProjectile(decoded, weapons) {
+  return decoded.weapon !== undefined && decoded.weapon >= 0
+    && !!(weapons[decoded.weapon] && weapons[decoded.weapon].consumedOnHit);
+}
+
+/**
+ * CS:0x9382 `mov word ptr [si+0x2],0x0` — inside the SAME decode that just
+ * computed the hit's damage, zero the exact projectile record that scored
+ * it, unconditionally (whether or not the target dies). This is what makes
+ * the knife (and fireball/flame/hunter/magic axe) single-hit and every
+ * other weapon persist through a hit exactly as this port already modelled.
+ * @param {ReturnType<typeof damageForTag>} decoded
+ * @param {Array} weapons    the parsed PWEAPONS records for the current world
+ * @param {Array} slotAreas  the three slots' own projectile-record arrays,
+ *   `[slotA.area, slotB.area, slotC.area]` — index by `decoded.slot`.
+ * @returns {boolean} whether a despawn happened
+ */
+export function despawnConsumedHit(decoded, weapons, slotAreas) {
+  if (!hitConsumesProjectile(decoded, weapons)) return false;
+  slotAreas[decoded.slot][decoded.record].tag = 0;   // CS:0x9382
+  return true;
+}
