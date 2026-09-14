@@ -70,6 +70,48 @@ The tag decode `CS:0x9320` turns a grid cell back into a weapon:
 
 This joins cleanly to what this document already recorded: `0xAB45 mov bx,[0x1ea]` and `0xAB56 cmp byte [0x365],0` are the difficulty-scalar site already documented, with "`bx` the raw damage from `DS:0x1ea` and `bp` the target's HP". The tail was known; what was missing was that the **entry is a grid scan**.
 
+### Weapon `+0x49` — the knife does NOT pierce: single-hit weapons are CONSUMED on their first hit `[PROVEN]`
+
+`FUN_1000_9320` (the tag decoder above) does not end at `0x9361`. Read to its actual `RET` at `0x938A`, the fall-through past the damage store contains a second, previously-unwired mechanism:
+
+```
+9364  ax = [0x198] - [0x1ba] ; jg 0x9399         ; unrelated to this mechanism (an
+9399  ax >>= 3 (sar ×3) ; [0x1ea] += ax ; jmp 936d ; event-gated damage bonus, not traced further here)
+936D  cmp byte [0x34],0 / jz 0x937c              ; sfx gate, unrelated
+9374  ...play sfx 0xf22 (mode-1 death sfx)...
+937C  cmp byte ptr [di+0x49],0x0                 ; <-- DI is STILL the weapon record from 0x934B-935C
+9380  jz 0x9387                                  ;     (0xe2b6 + weapon*0x50), untouched since the damage read
+9382  mov word ptr [si+0x2],0x0                  ; <-- DESPAWN, but [si] here is NOT the grid pointer
+9387  sub ax,ax                                  ;     — see the SI derivation below
+9389  pop di / ret
+```
+
+**`[si+0x2]` is the exact projectile record that scored the hit, not a copy and not the grid.** `SI` was set at `0x932A/0x9331/0x933A` to the SLOT BASE (`0xdd10`/`0xdda2`/`0xde34`) and then, at `0x9349 add si,ax` (the one instruction the project's earlier reading of this function stopped short of — it quoted `0x9347 bx=[si]` and `0x934B di=...` as adjacent, skipping the `ADD SI,AX` between them), advanced by `(tag-1)*8` — the same offset `0x933F-0x9345` computes. Since a slot's actual record array starts at `slot_base + 2` (the leading word is the slot's own weapon index, per this document's existing record layout), `SI = slot_base + (tag-1)*8 = record_address − 2`, so `[SI+2]` lands exactly on that record's own `+0` field — its TAG. `MOV word ptr [SI+2], 0` is therefore the identical despawn shape as `CS:0x9d91` (common-mover cull) and `CS:0xA85B` (terrain stop): it zeroes the live projectile's tag, freeing its slot immediately (the allocator's free test reads that same word).
+
+This fires on **any** ordinary weapon-tag hit (tag 1..27; the negative-tag special sources FF/FE/FD/FC never reach this code — they return earlier, at `0x938A`/`0x9398`/`0x93BE`/`0x93CB`/`0x93DC`), gated only on the HIT weapon's own `+0x49` byte, and **unconditionally** — it does not check the damage dealt or whether the target's HP crossed zero. A weapon with `+0x49` set is consumed by the very first creature it damages, kill or not.
+
+**Read directly off all four shipped `PWEAPONS.00{1-4}` files (`blast.py`), byte-identical across every world:**
+
+| weapon | `+0x48` breaksTerrain | `+0x49` consumedOnHit |
+|---|---|---|
+| knife | 0xFF | **0xFF** |
+| time bomb | 0xFF | 0x00 |
+| fireball | 0xFF | **0xFF** |
+| flame | 0xFF | **0xFF** |
+| lightning bolt | 0x00 | 0x00 |
+| throwing star | 0xFF | 0x00 |
+| spear | 0x00 | 0x00 |
+| axe | 0x00 | 0x00 |
+| hunter | 0x00 | **0xFF** |
+| magic axe | 0x00 | **0xFF** |
+| mace | 0xFF | 0x00 |
+
+**The knife is a single-hit, non-piercing weapon in the shipped game** — along with fireball, flame, hunter and magic axe. Time bomb, lightning bolt, throwing star, spear, axe and mace persist through a hit and can strike more than one creature per shot. This has nothing to do with `+0x48` (terrain collision, documented above) — the two flags are independent; the knife has BOTH set (stops at a wall, and is consumed by a creature hit), while e.g. the mace breaks terrain but pierces creatures, and the axe does neither.
+
+⚠️ **This corrects the `UNKNOWN_tag_fd` closure above**, which read `FUN_1000_9320` only as far as `0x9361` and stated the projectile tag byte "has exactly one writer... and exactly one other, which zeroes it on despawn" (`CS:0x9d91`/`0xA85B`). `CS:0x9382` is a **third** writer, conditioned on the hit weapon's `+0x49` flag. This does not change that closure's conclusion about `0xFD` specifically (that tag still never reaches the grid, by any producer), but the "exactly one other" phrasing was incomplete — the fuller and now-correct count is: the fire-slot allocator (creates), the common mover's cull (`0x9d91`), the terrain-stop path (`0xA85B`), and the grid-tag decoder's `+0x49` despawn (`0x9382`), each independently gated.
+
+`gods-web` ported since early in this project's history that it decompresses `+0x48` and `+0x49` as two separate byte fields rather than one big-endian word (`weapons.js`'s `breaksTerrain`/`consumedOnHit`), but `+0x49` sat parsed and completely unread until this session — every weapon, knife included, incorrectly kept flying through every creature it hit. `collision.js` now exports `hitConsumesProjectile`/`despawnConsumedHit`, and `main.js`'s shared `decodeTag` closure (the one function every grid consumer — the hero's own scan, ce64, pat-objects, selector2, statue — is threaded through) calls `despawnConsumedHit` right after `damageForTag`, mirroring `CS:0x9382` living inside the same decode in the original.
+
 The `cmp al,9` split independently re-confirms the tag layout: 9 tags per slot, `(tag−1)*8` addressing 8-byte records — records 0..8, the same **nine** the allocator reaches and the mover walks. Three independent routines agree on nine.
 
 ### Other grid users — the `[WF]` note was checked, and half of it was wrong `[PROVEN]`
