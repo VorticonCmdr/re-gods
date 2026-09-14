@@ -122,24 +122,37 @@
  * they are read verbatim (param2 jumping 10x on the arg-5 "GAME" record is
  * suggestive of a score bonus, since world 4's own exit is the only one that
  * would plausibly end the whole game rather than advance a level) but no
- * consumer of either field was located this pass, so neither is asserted as
+ * consumer of either field was located, so neither is asserted as
  * "score bonus" or anything else — see EXIT_DESTINATIONS below.
  *
- * A LATER PASS (see Gods/CLAUDE.md's own `UNKNOWN_level_exit_destination`
- * section) traced [0x178]'s OTHER writer and the record layout further, and
- * both findings matter for anyone tempted to derive world/sublevel advance
- * from this data:
+ * `UNKNOWN_level_exit_destination` IS NOW CLOSED (Gods/CLAUDE.md's own
+ * section of that name) and the real mechanism is what this file ports
+ * below, replacing the "cycles the 8 shipped .MAP files in a fixed order"
+ * placeholder an earlier revision of this file (and of main.js) used. Three
+ * findings from that closure explain the shape of the code below:
  *
  *   1. FUN_1000_8c34 (level load) ALSO writes [0x178], from a DIFFERENT,
  *      WORLD-indexed table at DS:0xe674 (word[0xe674 + (world-1)*2]) — NOT
  *      this file's own arg-indexed DS:0xe67c table. DS:0xe674's own last 4
  *      words are byte-identical to DS:0xe67c's 4 pointers, so the two tables
- *      are adjacent, not the same, in memory.
- *   2. Each record actually carries a THIRD field this file doesn't parse
- *      yet, at +0x1e (a u16, read by CS:0x6553's own score-tally screen as a
- *      bit-dispatch selector — bits 11/6/1 only, via CS:0x694d -> mostly
- *      CS:0x6992, a per-level-runtime-pool reset with no [0x42]/[0x43]
- *      write). LEVEL ONE/TWO read +0x1e=0x0502, LEVEL THREE=0x0702, GAME=0.
+ *      are adjacent, not the same, in memory. This second writer just
+ *      re-derives the SAME record on every level (re)load and plays no
+ *      further role in the exit mechanism itself, so it is not ported.
+ *   2. Each record carries a THIRD field, at +0x1e (a u16), read by
+ *      CS:0x6553's own score-tally screen as a bit-dispatch selector via
+ *      CS:0x694d. A prior pass mis-derived the bit mapping (claimed 11/6/1);
+ *      the corrected mapping — re-simulated by hand AND confirmed against a
+ *      raw read of the SS:0x35aa dispatch table — is bits 11/10/9/8/1, and
+ *      only four of those five ever fire from shipped data: bit 1 (world++,
+ *      wrapped 5->1, sublevel FORCED to A — FUN_1000_6b00), bit 8 (clear
+ *      every inventory slot whose held item's own category != 0, i.e. every
+ *      key, potions untouched — FUN_1000_6ad4), bit 9 (a per-level-runtime-
+ *      pool reset, LEVEL THREE ONLY — FUN_1000_6992), bit 10 (generate and
+ *      store a password for the just-completed world, only if that slot is
+ *      still empty — FUN_1000_69d7). Bit 11 (FUN_1000_4828, sublevel B)
+ *      never fires from any of the 4 real destination records — see
+ *      `EXIT_DESTINATIONS`' own `bits` field and `EXIT_BIT`/`exitEffects`
+ *      below.
  *   3. Records are NOT fixed-size. A raw 204-byte read starting at 0xe6ea
  *      shows LEVEL ONE is 36 bytes (an extra +0x22=0xFFFF trailer word) while
  *      the records after it (a "WORLD ONE" record at EXACTLY 0xe674's own
@@ -147,18 +160,24 @@
  *      34 bytes each — landing EXACTLY on 0xe796 (LEVEL TWO, this file's own
  *      arg-3 pointer) after 3 more 34-byte steps. So 0xe674 and 0xe67c point
  *      into ONE SHARED, non-uniform-stride record stream, not two
- *      independent tables.
- *   4. That non-uniformity REFUTES the obvious reading of CS:0x6557's own
- *      `ADD word[0x178],0x22` as "walk to the next record": from a 36-byte
- *      LEVEL record, +0x22 (34) lands 2 bytes short of the true next record.
- *      So world/sublevel advance is NOT a simple cursor-through-this-array
- *      rule, and this file's EXIT_DESTINATIONS/nextLevelKey placeholder
- *      should not be "fixed" using it. See CLAUDE.md for the full trace,
- *      the exhaustive (still negative) [0x42]/[0x43] write-site search, and
- *      what remains open.
+ *      independent tables. That non-uniformity REFUTES the obvious reading
+ *      of CS:0x6557's own `ADD word[0x178],0x22` as "walk to the next
+ *      record" (from a 36-byte LEVEL record, +0x22 lands 2 bytes short of
+ *      the true next one) — but nothing ported below relies on that cursor,
+ *      so the refutation doesn't touch the world/sublevel-advance answer.
+ *      See CLAUDE.md's own `UNKNOWN_level_exit_destination` section for the
+ *      full trace, including the (still open, still irrelevant here)
+ *      residual of what `[0x178]+=0x22` is actually for.
+ *
+ * A shipped .MAP census (all 8 files) confirms the mechanism end to end:
+ * exactly 3 ACT4 records exist in the whole game, one per world-1/2/3
+ * sublevel B (`PLEV1B #11 arg=2`, `PLEV2B #95 arg=3`, `PLEV3B #84 arg=4`);
+ * `arg=5` ("GAME") is never placed, so world 4 has no level-exit trigger at
+ * all and `EXIT_DESTINATIONS[3]`'s all-zero `bits` never fires anything.
  */
 
 import { ZONE_TELEPORT, ZONE_EXIT } from './trigger-actions.js';
+import { INVENTORY_EMPTY } from './treasure.js';
 
 export { ZONE_TELEPORT, ZONE_EXIT };
 
@@ -196,13 +215,15 @@ export function unpackTeleportDest(arg) {
 }
 
 /* DS:0xe6ea / 0xe796 / 0xe7fe / 0xe8a8 — read directly, not decompiled.
- * Indexed by `arg - 2` for arg in [2, 5]; see the header note above for what
- * is and is not established about the two numeric fields. */
+ * Indexed by `arg - 2` for arg in [2, 5]. `bits` is each record's own +0x1e
+ * field, read live off the same four addresses; see `EXIT_BIT` below for
+ * what each bit does. `param`/`param2` remain unestablished — see the
+ * header note above. */
 export const EXIT_DESTINATIONS = [
-  { param: 12, param2: 2500, text: '    LEVEL  ONE   ' },
-  { param: 16, param2: 2500, text: '    LEVEL  TWO     ' },
-  { param: 100, param2: 2500, text: '   LEVEL  THREE   ' },
-  { param: 20, param2: 25000, text: '        GAME        ' },
+  { param: 12, param2: 2500, text: '    LEVEL  ONE   ', bits: 0x0502 },
+  { param: 16, param2: 2500, text: '    LEVEL  TWO     ', bits: 0x0502 },
+  { param: 100, param2: 2500, text: '   LEVEL  THREE   ', bits: 0x0702 },
+  { param: 20, param2: 25000, text: '        GAME        ', bits: 0x0000 },
 ];
 
 /**
@@ -210,10 +231,123 @@ export const EXIT_DESTINATIONS = [
  * loop without writing DS:0x178, i.e. a zone with an out-of-range arg is
  * inert exactly like a miss.
  * @param {number} arg
- * @returns {?{param:number, param2:number, text:string}}
+ * @returns {?{param:number, param2:number, text:string, bits:number}}
  */
 export function resolveExitDestination(arg) {
   const idx = arg - 2;
   if (idx < 0 || idx >= EXIT_DESTINATIONS.length) return null;
   return EXIT_DESTINATIONS[idx];
+}
+
+/* ── The bit-dispatch table, CS:0x694d -> SS:0x35aa, and its four live
+ * handlers ──────────────────────────────────────────────────────────────
+ *
+ * Only these four bits are ever set by a shipped destination record (see
+ * the table above); bit 11 (FUN_1000_4828, sublevel B) is real code but
+ * unreachable from any of the 4 records, so it has no port-side effect and
+ * is not exported here — see CLAUDE.md's own `UNKNOWN_sublevel_b_entry_point`
+ * correction for why FUN_1000_4828 is not "the" answer to how sublevel B is
+ * really entered. */
+export const EXIT_BIT = {
+  WORLD_ADVANCE: 1 << 1,    // 0x0002 — FUN_1000_6b00
+  KEY_CLEAR:     1 << 8,    // 0x0100 — FUN_1000_6ad4
+  POOL_RESET:    1 << 9,    // 0x0200 — FUN_1000_6992, LEVEL THREE only
+  PASSWORD_GEN:  1 << 10,   // 0x0400 — FUN_1000_69d7
+};
+
+/**
+ * Decodes a destination record's `bits` into the four effects a caller
+ * needs to act on. Pure — no state, so `exitEffects(dest.bits)` is testable
+ * in isolation from the world/inventory/password state main.js owns.
+ * @param {number} bits `dest.bits`, an EXIT_DESTINATIONS record's +0x1e
+ * @returns {{advance:boolean, clearKeys:boolean, poolReset:boolean, genPassword:boolean}}
+ */
+export function exitEffects(bits) {
+  return {
+    advance: (bits & EXIT_BIT.WORLD_ADVANCE) !== 0,
+    clearKeys: (bits & EXIT_BIT.KEY_CLEAR) !== 0,
+    poolReset: (bits & EXIT_BIT.POOL_RESET) !== 0,
+    genPassword: (bits & EXIT_BIT.PASSWORD_GEN) !== 0,
+  };
+}
+
+/**
+ * CS:0x6B00-0x6B0B (FUN_1000_6b00), the ENTIRE world/sublevel advance rule.
+ * `INC AL` wrapped 5->1 — never a jump to a specific world, so reaching
+ * world 4 from LEVEL THREE's own record is coincidental to the wrap, not an
+ * explicit target — and `[0x43] := 0` UNCONDITIONALLY: every real level
+ * exit forces sublevel A. Sublevel B is reached some other way, not this
+ * one (`UNKNOWN_sublevel_b_entry_point` remains open).
+ * @param {number} world current 1-based world, DS:0x42
+ * @returns {{world:number, sublevel:0}}
+ */
+export function advanceWorld(world) {
+  return { world: world >= 4 ? 1 : world + 1, sublevel: 0 };
+}
+
+/**
+ * CS:0x6AD4-0x6AFF (FUN_1000_6ad4). Clears every inventory slot whose held
+ * item's own POBJECTS category is NOT 0 (consumable/potion) — in practice
+ * every key, since this 4-slot array (DS:0x17e) never holds anything else.
+ * Mutates `inventory` in place, matching the original's own `MOV [SI],
+ * 0xFFFF` per slot.
+ * @param {number[]} inventory the live 4-slot array (INVENTORY_EMPTY-filled)
+ * @param {Uint8Array|number[]} cats POBJECTS category table, indexed by type
+ */
+export function clearNonPotionInventory(inventory, cats) {
+  for (let i = 0; i < inventory.length; i++) {
+    const item = inventory[i];
+    if (item === INVENTORY_EMPTY) continue;
+    if (cats[item] !== 0) inventory[i] = INVENTORY_EMPTY;   // CS:0x6AED/0x6AF3
+  }
+}
+
+/* ── The level-select password, CS:0x69D7 (FUN_1000_69d7) / CS:0x6A6B ─────
+ *
+ * DS:0x432/0x436/0x43a — three 3-character passwords, one per unlockable
+ * world (2/3/4), generated for the JUST-COMPLETED world (1/2/3) when bit 10
+ * fires and that world's own slot is still empty. This port has no
+ * "ENTER A PASSWORD" screen to consume these (CLAUDE.md's own closure notes
+ * that mechanism was never wired to a producer until this pass either), so
+ * they are stored in a plain 3-slot array main.js owns and surfaced as
+ * text — the generate-and-store half of the mechanism is real and ported;
+ * the grid-entry UI that would let a player TYPE one back in is a disclosed
+ * gap, `UNKNOWN_password_entry_ui`. */
+export const PASSWORD_LENGTH = 3;     // 3 chars per world, DS:0x432/0x436/0x43a
+export const PASSWORD_SLOTS = 3;      // one per unlockable world: 2, 3, 4
+
+/**
+ * World 1/2/3 completing generates the password for world 2/3/4
+ * respectively — the slot the "ENTER A PASSWORD" screen's own table
+ * (DS:0x42a) would map a correct guess back to.
+ * @param {number} completedWorld 1..3, DS:0x42 BEFORE FUN_1000_6b00's advance
+ * @returns {number} 0..2
+ */
+export function passwordSlotForWorld(completedWorld) {
+  return completedWorld - 1;
+}
+
+/**
+ * CS:0x6A6B — NOT a stub: three draws through the shared random source,
+ * each reduced via `random/2521 + 1` to this project's own 1-based
+ * hiscore-name alphabet (A=1..Z=26). `rng` is this port's own GodsRandom,
+ * which — unlike the mixer — DOES faithfully replay FUN_1000_3836's draw
+ * shape (see random.js's own header), so matching the original's divisor
+ * costs nothing and is kept rather than swapped for a plain 1..26 roll.
+ * The original's own password is wall-clock seeded and so was never
+ * reproducible run-to-run either way.
+ * @param {{next(): number}} rng
+ * @returns {number[]} PASSWORD_LENGTH ints, each 1..26
+ */
+export function generatePassword(rng) {
+  const chars = [];
+  for (let i = 0; i < PASSWORD_LENGTH; i++) {
+    chars.push(Math.min(26, Math.floor(rng.next() / 2521) + 1));
+  }
+  return chars;
+}
+
+/** 1-based alphabet (A=1..Z=26) -> a display string, for UI/debug text. */
+export function passwordToString(chars) {
+  return chars.map((c) => String.fromCharCode(0x40 + c)).join('');
 }

@@ -10,7 +10,9 @@ import { dclDecompress } from '../formats/dcl.js';
 import { DOOR_TILES, ZONE_TELEPORT, ZONE_EXIT, makeGates, makeActionContext,
          runAction, fireTrigger } from '../game/trigger-actions.js';
 import { scanZones, unpackTeleportDest, resolveExitDestination,
-         EXIT_DESTINATIONS } from '../game/zones.js';
+         EXIT_DESTINATIONS, EXIT_BIT, exitEffects, advanceWorld,
+         clearNonPotionInventory, generatePassword, passwordSlotForWorld,
+         passwordToString, PASSWORD_LENGTH, PASSWORD_SLOTS } from '../game/zones.js';
 import { consumesKey } from '../game/trigger.js';
 import { PI1_SIZE, decodePI1, TILE_COUNT } from '../formats/pi1.js';
 import { decodeStatusPanel, PANEL_W, PANEL_H, PANEL_Y0 } from '../game/status-panel.js';
@@ -8729,9 +8731,10 @@ export async function checkTriggerActions(fetchRaw) {
       'objects are killed, the timer resets and weapon slots clear. The zone ' +
       'array is now READ too (see checkZones / game/zones.js): CS:0x0324 and ' +
       'CS:0x0FDF-0x1042 are ported, so a teleport zone actually teleports. A ' +
-      'level-exit zone advances to the next of the 8 shipped levels, which ' +
-      'is an HONEST PLACEHOLDER — the original’s true world/sublevel-' +
-      'advance rule (FUN_1000_8c34) is not traced. ACT0/ACT1 spawn through allocObject, which ' +
+      'level-exit zone now applies the REAL bit-dispatch mechanism (see ' +
+      'checkZones for the full decode) — world advance, key-inventory clear, ' +
+      'the LEVEL-THREE-only pool reset and password generation — rather than ' +
+      'the earlier "cycle the 8 shipped levels" placeholder. ACT0/ACT1 spawn through allocObject, which ' +
       'appends rather than re-ranking, so a runtime object draws on top of ' +
       'the weapon pickups where export 32 puts treasure behind. The kill ' +
       'list at DS:0x8c3c is filled and never drawn (CS:0x3cc7 is its walker). ' +
@@ -8892,26 +8895,138 @@ export async function checkZones(fetchRaw) {
     'genuinely frees the slot rather than leaving it stuck busy',
     slotsA.activate(descA) && slotsA.lostActivations === 0);
 
+  /* --- CS:0x694d's bit dispatch, decoded (game/zones.js's exitEffects) --- */
+  const fxOne = exitEffects(EXIT_DESTINATIONS[0].bits);     // LEVEL ONE, 0x0502
+  const fxTwo = exitEffects(EXIT_DESTINATIONS[1].bits);     // LEVEL TWO, 0x0502
+  const fxThree = exitEffects(EXIT_DESTINATIONS[2].bits);   // LEVEL THREE, 0x0702
+  const fxGame = exitEffects(EXIT_DESTINATIONS[3].bits);    // GAME, 0x0000
+  check('LEVEL ONE/TWO fire advance + clearKeys + genPassword, NOT poolReset',
+    fxOne.advance && fxOne.clearKeys && fxOne.genPassword && !fxOne.poolReset &&
+    fxTwo.advance && fxTwo.clearKeys && fxTwo.genPassword && !fxTwo.poolReset,
+    JSON.stringify({ fxOne, fxTwo }));
+  check('LEVEL THREE additionally fires poolReset — the one asymmetry a ' +
+    '"clean" reading would flatten away, and it is real',
+    fxThree.advance && fxThree.clearKeys && fxThree.genPassword && fxThree.poolReset,
+    JSON.stringify(fxThree));
+  check('bit 9 (poolReset) fires for EXACTLY ONE of the 4 destinations',
+    [fxOne, fxTwo, fxThree, fxGame].filter((f) => f.poolReset).length === 1);
+  check('the never-shipped GAME record (arg 5) fires NONE of the four effects',
+    !fxGame.advance && !fxGame.clearKeys && !fxGame.poolReset && !fxGame.genPassword,
+    JSON.stringify(fxGame));
+
+  /* --- FUN_1000_6b00: +1, wrapped 5->1, sublevel ALWAYS forced to A ------ */
+  check('advanceWorld: 1->2, 2->3, 3->4, all forcing sublevel 0 (A)',
+    [1, 2, 3].every((w) => {
+      const n = advanceWorld(w);
+      return n.world === w + 1 && n.sublevel === 0;
+    }));
+  check('advanceWorld(4) WRAPS to world 1, NOT world 5 — INC AL wraps, it ' +
+    'never jumps to a specific target world',
+    JSON.stringify(advanceWorld(4)) === JSON.stringify({ world: 1, sublevel: 0 }));
+
+  /* --- FUN_1000_6ad4: category != 0, NOT "=== 2" — every non-potion clears,
+   * not narrowly "every key". A synthetic cats table with all four category
+   * codes present is what makes this discriminating. --- */
+  const catsFixture = new Uint8Array(40);
+  catsFixture[5] = 0;    // potion/consumable — MUST survive
+  catsFixture[10] = 1;   // treasure          — must ALSO clear
+  catsFixture[20] = 2;   // key                — clears
+  catsFixture[30] = 3;   // lever/switch       — must ALSO clear
+  const invFixture = [5, 10, 20, 30];
+  clearNonPotionInventory(invFixture, catsFixture);
+  check('clearNonPotionInventory: the ONE category-0 (potion) slot survives',
+    invFixture[0] === 5, JSON.stringify(invFixture));
+  check('...and EVERY other category (treasure, key, lever) is cleared — ' +
+    'the predicate is "category != 0", not "type is a key"',
+    invFixture[1] === INVENTORY_EMPTY && invFixture[2] === INVENTORY_EMPTY &&
+    invFixture[3] === INVENTORY_EMPTY, JSON.stringify(invFixture));
+  const invEmptyFixture = [INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY];
+  clearNonPotionInventory(invEmptyFixture, catsFixture);
+  check('an all-empty inventory is untouched (no index-0xffff crash)',
+    invEmptyFixture.every((v) => v === INVENTORY_EMPTY));
+
+  /* --- FUN_1000_69d7 / CS:0x6A6B: generate-if-empty, 1-based alphabet ---- */
+  check('passwordSlotForWorld: world 1/2/3 completing fills slot 0/1/2 — ' +
+    'the password that unlocks world 2/3/4',
+    passwordSlotForWorld(1) === 0 && passwordSlotForWorld(2) === 1 &&
+    passwordSlotForWorld(3) === 2);
+  const pw = generatePassword(new GodsRandom(42));
+  check(`generatePassword draws PASSWORD_LENGTH (${PASSWORD_LENGTH}) chars, each 1..26`,
+    pw.length === PASSWORD_LENGTH && pw.every((c) => c >= 1 && c <= 26),
+    JSON.stringify(pw));
+  check('generatePassword is deterministic for a given seed (this port\'s ' +
+    'RNG is NOT wall-clock seeded, unlike the original)',
+    JSON.stringify(generatePassword(new GodsRandom(7))) ===
+    JSON.stringify(generatePassword(new GodsRandom(7))));
+  check("passwordToString maps 1-based A..Z, matching this project's own " +
+    'hiscore-name alphabet',
+    passwordToString([1, 2, 26]) === 'ABZ');
+
+  /* --- against real shipped data: the whole mechanism's precondition ----
+   * exactly 3 ACT4 records exist in the entire game, one per world-1/2/3
+   * sublevel B, with arg 2/3/4 respectively — Gods/CLAUDE.md's own census,
+   * re-derived here so a level-editing change to the shipped maps would be
+   * caught rather than silently breaking the level-exit mechanism above. */
+  const act4ByKey = {};
+  for (const k of keys) {
+    const map = parseMap(dclDecompress(await fetchRaw(`game/PLEV${k}.MAP`)).data);
+    for (let i = 0; i < TRIG_COUNT; i++) {
+      const t = parseAllTriggers(map.bulk)[i];
+      if (!isLive(t)) continue;
+      if (verbOf(t) !== 4) continue;
+      (act4ByKey[k] ||= []).push(t.actionArg);
+    }
+  }
+  const act4Total = Object.values(act4ByKey).reduce((n, a) => n + a.length, 0);
+  check('exactly 3 ACT4 (level-exit) records exist across all 8 shipped maps',
+    act4Total === 3, JSON.stringify(act4ByKey));
+  check('...one each on 1B/2B/3B with arg 2/3/4, and none on any other level',
+    JSON.stringify(act4ByKey['1B']) === JSON.stringify([2]) &&
+    JSON.stringify(act4ByKey['2B']) === JSON.stringify([3]) &&
+    JSON.stringify(act4ByKey['3B']) === JSON.stringify([4]) &&
+    !act4ByKey['1A'] && !act4ByKey['2A'] && !act4ByKey['3A'] &&
+    !act4ByKey['4A'] && !act4ByKey['4B'],
+    JSON.stringify(act4ByKey));
+  check('each shipped arg (2/3/4) resolves to advance+clearKeys+genPassword, ' +
+    'and poolReset fires ONLY for arg 4 (world 3, LEVEL THREE)',
+    [2, 3, 4].every((arg) => {
+      const fx = exitEffects(resolveExitDestination(arg).bits);
+      return fx.advance && fx.clearKeys && fx.genPassword &&
+        (fx.poolReset === (arg === 4));
+    }));
+
   results.push({
     name: 'what the zone read-side now does, and what is still a placeholder',
     note: true, pass: true,
     detail: 'A teleport zone moves the hero to the packed destination and ' +
       're-enters state 4, matching CS:0x0FDF-0x1042 at the byte level. A ' +
-      'level-exit zone with arg 2..5 resolves a real destination TEXT ' +
-      'record (CS:0x0FB8-0x0FD4) but then advances to the next of the 8 ' +
-      'shipped levels in a fixed cycle — an HONEST PLACEHOLDER, not the ' +
-      'original’s own rule, which lives in FUN_1000_8c34 and was not ' +
-      'traced past confirming it re-derives the same destination table from ' +
-      'the CURRENT world rather than the zone’s arg. Also not ' +
-      'reproduced: the familiar reposition (CS:0x0FFC, no Familiar entity ' +
-      'exists in this port yet). The three CALLs at CS:0x100F-0x1015 are now ' +
+      'level-exit zone with arg 2..5 resolves a real destination record ' +
+      '(CS:0x0FB8-0x0FD4), decodes its own +0x1e bit field (CS:0x694d, ' +
+      'game/zones.js\'s exitEffects), and now performs the REAL mechanism, ' +
+      'not the "cycle the 8 shipped levels" placeholder an earlier revision ' +
+      'of this port used (Gods/CLAUDE.md\'s own UNKNOWN_level_exit_destination ' +
+      'is CLOSED): world++ wrapped 5->1 with sublevel forced to A ' +
+      '(FUN_1000_6b00), the 4-slot key inventory cleared for every ' +
+      'category != 0 item (FUN_1000_6ad4), a password generated-if-empty ' +
+      'for the just-completed world (FUN_1000_69d7/CS:0x6A6B), and — LEVEL ' +
+      'THREE only — a partial pool reset (FUN_1000_6992: System-A\'s entity-' +
+      'group runtime and the line-hazard pool are reset; the destructible-' +
+      'block sub-step is correctly a no-op here too, matching the ' +
+      'original\'s own world!=3 gate on it; two further sub-resets — a ' +
+      '"spawn flash" pool and the pickup-sparkle array — have no port-side ' +
+      'module at all, `UNKNOWN_pool_reset_unmodelled_subpools`). Not ' +
+      'reproduced: an "ENTER A PASSWORD" grid-entry screen to type a ' +
+      'generated password back in (`UNKNOWN_password_entry_ui` — the ' +
+      'generate-and-store half is real; there is no consumer UI in this ' +
+      'port) and the familiar reposition (CS:0x0FFC, no Familiar entity ' +
+      'exists in this port yet). The three CALLs at CS:0x100F-0x1015 are ' +
       'traced (see game/zones.js): 0x100F is the level-load/respawn camera ' +
       'init (Gods/CLAUDE.md UNKNOWN_camera_init, now CLOSED and ported as ' +
       'cameraForSpawn — a teleport IS a hard camera cut), 0x1012 clears the ' +
       'System-A entity group-runtime array — NOW PORTED (main.js\'s own ' +
       'teleport branch resets slotsA/groupsA/enemiesA, checked above) — and ' +
       '0x1015 is the already-ported per-tick object-activation-box pass. ' +
-      'UNKNOWN_zone_scan_caller and UNKNOWN_level_exit_destination both stand.',
+      'UNKNOWN_zone_scan_caller still stands.',
   });
 
   return results;

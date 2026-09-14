@@ -69,7 +69,9 @@ import { DamageGrid, damageForTag } from './game/collision.js';
 import { parseWeapons } from './game/weapons.js';
 import { pickUpWeapon } from './game/pickup.js';
 import { scanZones, unpackTeleportDest, resolveExitDestination,
-         ZONE_TELEPORT, ZONE_EXIT } from './game/zones.js';
+         ZONE_TELEPORT, ZONE_EXIT, exitEffects, advanceWorld,
+         clearNonPotionInventory, generatePassword, passwordSlotForWorld,
+         passwordToString, PASSWORD_SLOTS } from './game/zones.js';
 import { DeathBurst, findRespawnPosition, loseLife,
          gameOverPlaceholder } from './game/death.js';
 
@@ -542,6 +544,17 @@ async function main() {
    * 0x39f are never reset on level load), so every spike across every level
    * this session visits shares one continuous phase. */
   const spikeClock = new SpikeClock();
+  /* DS:0x432/0x436/0x43a — the level-select password slots (game/zones.js's
+   * `generatePassword`/`passwordSlotForWorld`), written by FUN_1000_69d7 on
+   * a real level exit (bit 10 of the destination record's own +0x1e — see
+   * zones.js) and otherwise persistent for the session, exactly like
+   * leverToggle/spikeClock above: nothing in the original ever clears them,
+   * not even a full restart, so `fullRestart()` below does not reset this
+   * either. Index 0/1/2 = the password that unlocks world 2/3/4. This port
+   * has no "ENTER A PASSWORD" grid-entry screen to type one back into
+   * (`UNKNOWN_password_entry_ui`), so a generated password is only ever
+   * surfaced as event text — see the ZONE_EXIT branch below. */
+  let passwordSlots = new Array(PASSWORD_SLOTS).fill(null);
   /* CS:0x7F0D — the world-3 DS:0xce64 creature and its "spit" sub-projectile
    * (game/ce64.js). Unlike nest.js/statue.js this module calls combat.js
    * directly, so main.js just hands it the real health/grid/decodeTag rather
@@ -680,12 +693,12 @@ async function main() {
    * beside its siblings, which is where the other counters already lived. */
   let outOfRange = 0, unstamped = 0, dying = 0;
 
-  /* The 8 shipped levels, in the only order this project can currently
-   * justify — see the "level exit" note in game/zones.js: the original's
-   * true world/sublevel-advance rule (CS:0x0FAC's DS:0x178/0x36a hand-off
-   * into FUN_1000_8c34) is not traced past confirming the destination TEXT
-   * table exists. This wraps 4B -> 1A. `UNKNOWN_level_exit_destination`. */
-  const nextLevelKey = (key) => LEVELS[(LEVELS.indexOf(key) + 1) % LEVELS.length];
+  /* CS:0x42/0x43 -> a LEVELS key string. The real advance (FUN_1000_6b00,
+   * see game/zones.js's `advanceWorld`) only ever produces sublevel A, so
+   * this never needs to build a "B" key itself — but it takes `sublevel`
+   * rather than hardcoding 'A' so it stays honest about that being the
+   * advance rule's own output, not an assumption baked in here. */
+  const levelKeyFor = (world, sublevel) => `${world}${sublevel === 1 ? 'B' : 'A'}`;
 
   /* True while `switchLevel` is mid-flight — the tick loop pauses rather
    * than scanning zones or stepping physics against a level that is only
@@ -1069,10 +1082,66 @@ async function main() {
         $('event').textContent = `teleport zone -> (${dest.x}, ${dest.y})`;
       } else if (zoneHit && zoneHit.kind === ZONE_EXIT && !transitioning) {
         const dest = resolveExitDestination(zoneHit.arg);
-        $('event').textContent = dest
-          ? `level exit -> "${dest.text.trim()}"`
-          : `level exit — arg ${zoneHit.arg} out of range, inert (CS:0x0FC8)`;
-        if (dest) switchLevel(nextLevelKey(sel.value));   // fire-and-forget
+        if (!dest) {
+          $('event').textContent =
+            `level exit — arg ${zoneHit.arg} out of range, inert (CS:0x0FC8)`;
+        } else {
+          /* CS:0x6553's own +0x1e bit dispatch (CS:0x694d) — see
+           * game/zones.js's header for the full closure. `completedWorld`
+           * is captured before advanceWorld() runs below, since password
+           * generation and the key clear are both keyed to the world being
+           * LEFT, not the one being entered. */
+          const fx2 = exitEffects(dest.bits);
+          const completedWorld = levelInfo.world;
+          if (fx2.clearKeys) clearNonPotionInventory(inventory, level.cats);
+          if (fx2.poolReset) {
+            /* FUN_1000_6992, LEVEL THREE only (see the table in zones.js's
+             * header — bit 9 is set on no other record). The original
+             * re-runs a chunk of FUN_1000_8c34's own level-init sequence:
+             * destructible blocks, System-A's entity-group runtime, and
+             * several small hazard-pool clears. The destructible-block
+             * restore/clear pair in THAT sequence is itself gated
+             * `world != 3`, so at the world this handler fires from (3) it
+             * is already a no-op in the ORIGINAL — `blocks` is correctly
+             * left untouched here, not an omission. What genuinely resets:
+             * System-A's entity-group runtime (the same three-structure
+             * mirror of FUN_1000_de6f the teleport-zone branch above
+             * already uses) and the line-hazard pool (FUN_1000_dbfb,
+             * game/line-hazard.js). Two further sub-resets in the
+             * original's own sequence — a "spawn flash" pool at DS:0xac90
+             * and the pickup-sparkle array at DS:0xb578 — have no port-side
+             * module at all yet; the world-2 nest pool (DS:0xcfcc) is
+             * world-2-specific and already empty by world 3 in ordinary
+             * play. None of those three are reproduced here. */
+            slotsA = new GroupSlots();
+            groupsA = [];
+            enemiesA = [];
+            lineHazards = new LineHazards();
+          }
+          let passwordNote = '';
+          if (fx2.genPassword) {
+            /* FUN_1000_69d7 / CS:0x6A6B — generate-if-empty, for the world
+             * being LEFT (so completing PLEV1B fills the slot that unlocks
+             * world 2). See zones.js's own header for why the divisor is
+             * kept and why there is no "ENTER A PASSWORD" screen here to
+             * type this back into. */
+            const passwordSlot = passwordSlotForWorld(completedWorld);
+            if (passwordSlot >= 0 && passwordSlot < passwordSlots.length &&
+                !passwordSlots[passwordSlot]) {
+              passwordSlots[passwordSlot] = generatePassword(rng);
+            }
+            const pw = passwordSlots[passwordSlot];
+            if (pw) passwordNote =
+              ` — password for world ${completedWorld + 1}: ${passwordToString(pw)}`;
+          }
+          $('event').textContent = `level exit -> "${dest.text.trim()}"${passwordNote}`;
+          if (fx2.advance) {
+            /* FUN_1000_6b00 — the ENTIRE advance rule: +1, wrapped 5->1,
+             * sublevel FORCED to A. Never a jump to a specific world. */
+            const next = advanceWorld(completedWorld);
+            switchLevel(levelKeyFor(next.world, next.sublevel));  // fire-and-forget
+          }
+        }
       }
 
       /* CS:0x0282 — the nest walker, BEFORE the System-B entity step at
