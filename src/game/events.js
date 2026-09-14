@@ -175,8 +175,26 @@ export class EventRunner {
     const col = colOverride === undefined ? (x + 16) >> 5 : colOverride;
     const row = y >> 4;
     const cell = row * this.map.cols + col;
-    if (cell === this.lastCell) return null;    // edge-triggered, like the original
-    this.lastCell = cell;
+    this.lastCell = cell;   // reported for debugging only — not consulted below
+
+    /* ⚠️ CORRECTION: this was previously gated `if (cell === lastCell) return
+     * null`, commented "edge-triggered, like the original". It is not. Full
+     * disassembly of CS:0x5FAB-0x6021 (the caller, CS:0x5EA0, has zero xrefs
+     * — it's unconditional per-frame code, not gated on movement) shows no
+     * comparison against any previous cell anywhere in the body: the game
+     * re-probes every single tick regardless of whether the hero's cell
+     * changed, and relies on the trigger evaluator's own idempotent
+     * consume-on-success (CS:0x39FE marks the event 0xFFFF; CS:0x6034 skips
+     * a consumed/empty record on every later attempt) to make that safe.
+     * The bug this caused: pull a lever while standing on/beside the
+     * dispatch tile (never crossing a tile boundary afterward) and a
+     * lever-gated trigger — e.g. PLEV1A #7/#8, the lever-3 spike kill —
+     * would never (re-)fire, though the original catches it the very next
+     * frame. See docs/camera-and-world-nav.md in the sibling Gods dump for
+     * the full trace. The real per-frame scan also checks up to 5 more
+     * neighbor cells (2 rows below, and conditionally an adjacent column)
+     * that this single-cell probe still doesn't reach — a further, smaller
+     * fidelity gap left open rather than silently guessed at here. */
 
     const v = this.map.planeB[cell];
     if (v < 3) return null;

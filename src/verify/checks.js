@@ -8889,6 +8889,46 @@ export async function checkTriggerActions(fetchRaw) {
       spikes.every((s) => s.dead), `dead: [${spikes.map((s) => s.dead)}]`);
   }
 
+  /* --- regression: step() must re-fire without a cell change -------------
+   * This exact bug shipped once too: `step()` gated re-dispatch on
+   * `cell !== lastCell`, commented "edge-triggered, like the original". Full
+   * disassembly of CS:0x5FAB-0x6021 (docs/camera-and-world-nav.md in the
+   * sibling Gods dump) shows no such gate exists there — the original
+   * re-probes every frame and relies on the trigger evaluator's own
+   * consume-on-success to make repeats harmless. The practical effect: a
+   * player who pulls a lever while standing on/beside its hazard-kill's
+   * dispatch tile, without ever stepping off and back on, saw nothing die —
+   * reported live against PLEV1A's lever 3 (416,928) and its two spikes.
+   * The check above can't catch this because it drives `dispatchEvent`
+   * directly and manually resets `lastCell` before every call — exactly
+   * bypassing the real per-frame API this bug lived in. This one calls
+   * `step()` itself, twice, at the IDENTICAL (x, y) — the one thing the old
+   * gate treated as "nothing happened, don't bother". */
+  {
+    const map = parseMap(dclDecompress(await fetchRaw('game/PLEV1A.MAP')).data);
+    const palRaw = dclDecompress(await fetchRaw('game/PALFILS.0A1')).data;
+    const cats = parseObjectCategories(
+      dclDecompress(await fetchRaw('game/POBJECTS.001')).data);
+    const objects = map.objects.map((o) => ({ ...o, dead: false, flag6: 1 }));
+    const runner = new EventRunner(map, parsePalfils(palRaw));
+    runner.actionCtx = makeActionContext({
+      planeA: map.planeA.slice(), planeB: map.planeB.slice(),
+      objects, gates: makeGates(palRaw), tiles: DOOR_TILES[0],
+      messages: map.messages, categoryOf: (t) => cats[t],
+    });
+    const spike = objects.find((o) => o.type === 50 && o.x === 443 && o.y === 960);
+
+    // Trigger #7's own dispatch tile: col13,row59 -> world (416,944).
+    runner.step(416, 944, runner.makeState({}));
+    check('standing on the dispatch tile with the lever OFF kills nothing (yet)',
+      !spike.dead, `dead: ${spike.dead}`);
+
+    runner.pal.levers[3].type ^= 1;   // pull the lever WITHOUT moving the hero
+    runner.step(416, 944, runner.makeState({}));   // same (x, y) -> same cell
+    check('END TO END: step() re-fires at the SAME cell once the lever is on, no re-entry needed',
+      spike.dead, `dead: ${spike.dead}`);
+  }
+
   results.push({
     name: 'what the ACTION verbs now do, and what they still do not',
     note: true, pass: true,
