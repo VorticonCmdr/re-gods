@@ -18,7 +18,8 @@ import { InventoryPanel, drawInventoryPanel } from './game/inventory-panel.js';
 import { runAllChecks, checkDescriptorAnchors, checkHeroSprites,
          checkSelectorsAndObjects, checkSpawn, checkEntityB, checkEntityA, checkSpawnA,
          checkWeaponsProjectiles, checkTriggerActions,
-         checkZones, checkPopup, checkLevers, checkSpikes } from './verify/checks.js';
+         checkZones, checkPopup, checkLevers, checkSpikes,
+         checkMessages } from './verify/checks.js';
 import { EventRunner, parsePalfils, palfilsNameFor } from './game/events.js';
 import { makeActionContext, makeGates, DOOR_TILES,
          ACTION_NAMES } from './game/trigger-actions.js';
@@ -66,6 +67,11 @@ import { PatGroups, parsePatDirectory, parsePatSpawnDescriptor } from './game/pa
 import { MarkerList, stepMarkers } from './game/markers.js';
 import { Debris } from './game/debris.js';
 import { Popup } from './game/popup.js';
+import { MessageEngine, drawMessage, PRIORITY } from './game/message.js';
+import { SeenBitmap, messageGate, composeObjectMessage,
+         composeHint, HINT_TABLET_TYPE } from './game/message-compose.js';
+import { buildObjectArena, appendHints, hintOffsetForX,
+         stringAt } from './game/text-arena.js';
 import { Arsenal, spawnableWeapons } from './game/hero-fire.js';
 import { stepHeroFrame, stepCreatureDamage } from './game/frame.js';
 import { DamageGrid, damageForTag } from './game/collision.js';
@@ -160,6 +166,14 @@ async function loadLevel(key) {
    * record straight into the 10-byte runtime descriptor, so +6 — the VALUE —
    * is what the treasure award at CS:0x18A8 pays out. */
   const objValues = parseObjectRecords(objRaw).map((r) => r.value);
+  /* The SAME file read a third way: its 132 name/description pairs are the
+   * front of the `DS:0x1fc6` string arena every in-level message reads its
+   * words out of (game/text-arena.js). The 40 PALFILS hint strings are
+   * appended to that same pool by FUN_1000_36b1, which is why the hint tablet
+   * and the object composer both resolve text through one base. */
+  const textPool = buildObjectArena(objRaw);
+  const hints = appendHints(textPool.arena, palfilsData);
+  textPool.arena = hints.arena;
   const groupsB = parseGroupsB(dclDecompress(pfRaw).data);
   const groupsA = parseGroupsA(dclDecompress(pfRaw).data);
   /* PALFILS +0x0718 — selector-2's own stationary-turret class descriptors
@@ -200,7 +214,7 @@ async function loadLevel(key) {
 
   return { map, sheet, palette, tiles, tileCount: count, palfils, palfilsRaw: palfilsData, cats, drawObjects,
            objValues, groupsB, groupsA, groupsSel2, patDescriptors, patDirectory, patBlobBytes,
-           weapons, world: +key[0] };
+           weapons, textPool, hints, world: +key[0] };
 }
 
 /* THE HERO'S SPRITES.
@@ -223,7 +237,12 @@ async function loadSprites(world) {
    * #450 — always(170) + objects(280) — which is exactly where the enemy
    * sprite-class bases start. Despite the name, PLEVEL<N><X>.PI1 is a 32x32
    * creature animation strip, not a tileset. */
-  const groups = ['always', 'objects', `level${world}`];
+  /* `smallfnt` (PSMLFNT) is the in-game message font — game/message.js. It is
+   * the LAST group of the level load order (formats/descriptors.js), loaded at
+   * CS:0x2c19 right after `CS:0x2c00` snapshots the descriptor cursor into
+   * `DS:0x27e`, which is exactly the base the glyph blit adds the raw
+   * character byte to. Appending it here shifts no existing descriptor. */
+  const groups = ['always', 'objects', `level${world}`, 'smallfnt'];
   const atlases = {}, images = {};
   for (const g of groups) {
     for (const s of GROUP_STEMS[g]) {
@@ -238,7 +257,15 @@ async function loadSprites(world) {
     const f = atlases[d.stem].frames[d.frame];
     frames[id] = { ...f, pixels: cutAll(images[d.stem], { frames: [f] })[0].pixels };
   }
-  return { frames, ranges, palette: images.PALWAYS1.palette, total: map.length };
+  /* `DS:0x27e` — the glyph base (CS:0x2c4b's `[0x68]-0x1e00 >> 3`, snapshotted
+   * BEFORE the smallfnt load, so it is that atlas's own record 0). The blit is
+   * `sprite = rawByte + base` with no fold and no clamp, so exposing the font
+   * as a byte-indexed array of frames IS the original's mapping. */
+  const fontBase = ranges.find((r) => r.stem === 'PSMLFNT');
+  const glyphs = fontBase
+    ? frames.slice(fontBase.base, fontBase.base + fontBase.count) : null;
+  return { frames, ranges, glyphs, glyphBase: fontBase ? fontBase.base : -1,
+           palette: images.PALWAYS1.palette, total: map.length };
 }
 
 /* The status panel. CS:0x38a's own latch loads it exactly once, the first
@@ -325,7 +352,7 @@ async function main() {
     checkTriggerActions(fetchRaw), checkZones(fetchRaw),
     Promise.resolve(checkEntityA()), checkSpawnA(fetchRaw),
     Promise.resolve(checkPopup()), Promise.resolve(checkLevers()),
-    Promise.resolve(checkSpikes()),
+    Promise.resolve(checkSpikes()), checkMessages(fetchRaw),
     ]) results.push(...await g);
     renderChecks(results);
     const mh = $('messages');
@@ -504,6 +531,68 @@ async function main() {
    * +0x10, spawn.js's `rewardId`) — both were fully decoded but had no
    * rendering module before this pass. */
   let popup = new Popup();
+  /* CS:0x434e — the status-panel message line (game/message.js) and the
+   * once-per-type "already shown" bitmap at DS:0x8cea (CS:0x462e). The bitmap
+   * is cleared on a FULL level entry and not on the light re-entry path, so it
+   * is rebuilt alongside the engine in switchLevel() below. */
+  let messages = new MessageEngine();
+  let seenTypes = new SeenBitmap();
+
+  /**
+   * `CS:0x4609` reached through the pickup dispatcher — the generic
+   * name/description/value message, gated and de-duplicated.
+   */
+  function postObjectMessage(type) {
+    if (!level.textPool) return;
+    /* `shopActive` is false because this port has no shop screen; that makes
+     * the CS:0x461D gate reduce to "world 1, or the type-0x53 bypass", which
+     * is exactly what the original does in a level. See messageGate's header
+     * for why that is NOT the same as hard-coding "world 1 only". */
+    if (!messageGate({ type, category: level.cats[type], world: level.world,
+                       shopActive: false, seen: seenTypes })) return;
+    const msg = composeObjectMessage(type, level.textPool);
+    if (!msg) return;                       // CS:0x4679 — this type has no text
+    /* CS:0x4717-0x4731 — a submit the engine REFUSED un-sets the seen bit, so
+     * a message that lost a priority race is retried rather than lost. */
+    if (!messages.post(msg, PRIORITY.object)) seenTypes.clear(type);
+  }
+
+  /**
+   * The consumable branch of the dispatcher, `CS:0x1829`-`CS:0x1839`.
+   *
+   * Type 69 is the HINT TABLET and does not go through the composer at all:
+   * `CS:0x63D5` builds its own buffer, submits at priority 100 and returns
+   * `DX = 0`, which is what stops the player also seeing the tablet's own
+   * "tablet / reveals clues". Every other handler returns a message TIER:
+   *     0  -> no message          CS:0x182D `or dx,dx / jz`
+   *     1  -> show it             CS:0x1831 `dec dx / jz`
+   *   >=2  -> clear the priority barrier first, then show it   CS:0x1834
+   */
+  function postPickupMessage(c) {
+    if (c.type === HINT_TABLET_TYPE) {
+      /* CS:0x63DD-0x63FA: the key is the tablet's own WORLD X. The original
+       * reads it back off the draw-list record it appended for this same
+       * object and adds the camera origin — `(x - camX) + camX`, identically
+       * the object's x, so this port compares the object's x directly. */
+      const off = hintOffsetForX(level.hints.keys, level.hints.offs, c.x);
+      /* ⚠️ NO MATCH IS A SHIPPED, REACHABLE BUG IN THE ORIGINAL, and it is
+       * deliberately NOT reproduced. `CS:0x63FC` jumps to a nine-POP sequence
+       * having pushed five words: it loads DS with the handler's own address,
+       * eats its return address and RETs to the tablet's screen Y. Two of the
+       * 46 shipped tablets reach it — PLEV1B's objects at x=348 and x=329,
+       * against PALFILS.0B1's only live keys 1521/1611. What the corrupt path
+       * was WRITTEN to show is the string at DS:0xed17, so that is what this
+       * port shows; emulating the crash would gain nothing and make the port
+       * non-deterministic. `UNKNOWN_63d5_nomatch_runtime_effect`. */
+      const hint = off >= 0 ? stringAt(level.textPool.arena, off) : null;
+      messages.post(composeHint(hint), PRIORITY.hint);
+      return;                               // CS:0x646C `sub dx,dx`
+    }
+    const tier = CONSUMABLES[c.rank] ? CONSUMABLES[c.rank].dx : 0;
+    if (!tier) return;                      // CS:0x182F `jz 0x183c`
+    if (tier >= 2) messages.barrier = 0;    // CS:0x1834 `mov byte [0x394],0`
+    postObjectMessage(c.type);              // CS:0x1839 `call 0x4609`
+  }
   /* Per-GROUP tracking for System-B's own elimination reward — NOT provided
    * by GroupSlots (which only tracks activation, never per-entity
    * membership or completion). Each entry mirrors the ORIGINAL's own
@@ -743,6 +832,7 @@ async function main() {
       slotsA = new GroupSlots(); enemiesA = []; clampedA = 0; firedByA = 0;
       firedHazardsByA = 0; firedHazardsByB = 0;
       groupsB = []; groupsA = []; popup = new Popup();
+      messages = new MessageEngine(); seenTypes = new SeenBitmap();
       rng = new GodsRandom(1);
       nests = new Nests(level.world, rng); shots = new EnemyShots(); tock = 0;
       lineHazards = new LineHazards();
@@ -976,8 +1066,17 @@ async function main() {
        * panel's own extend/retract highlight animation. Runs unconditionally,
        * same as the draw call itself. */
       inventoryPanel.step(player.state === ST.CROUCH);
+      /* CS:0x02DB `call 0x4569` — the message line's own countdown and page
+       * flip, straight-line in the main loop right after the HUD digits
+       * (game/message.js). Unconditional, like every other overlay here. */
+      messages.step();
       if (fr) {
       for (const t of fr.treasures) {
+        /* CS:0x18A4 (ordinary treasure, CX = type) and CS:0x18EF (a chest just
+         * unlocked, CX = type|1 — the OPEN sprite's own type, which is why the
+         * message reads "treasure chest / open" rather than "/ iron"). */
+        if (t.outcome === 'collected') postObjectMessage(t.type);
+        else if (t.outcome === 'unlocked') postObjectMessage(t.type | 1);
         if (t.outcome === 'collected') {
           $('event').textContent = `treasure +${t.value} (score +${t.score})`;
         } else if (t.outcome === 'unlocked') {
@@ -1020,6 +1119,7 @@ async function main() {
       if (fr.emitted) shotsFired++;
       for (const c of fr.consumed) {
         consumed++;
+        postPickupMessage(c);
         /* CS:0x6377 — over-healing is banked into DS:0x168 at 32 a point,
          * not discarded. UNKNOWN_DS_0168, so it is only counted here. */
         if (c.banked) banked += c.banked;
@@ -1913,6 +2013,11 @@ async function main() {
       clampMoneyForDisplay(purse);
       drawMoney(renderer, digitFrames, purse, STATUS_PANEL_Y0);
       drawScore(renderer, digitFrames, score, STATUS_PANEL_Y0);
+      /* THE MESSAGE LINE — game/message.js. Panel-local row 0x1d (absolute
+       * screen row 189), drawn last because the original draws it into the
+       * same panel page every overlay above writes to, after them. */
+      drawMessage(renderer, hero && hero.glyphs, messages, STATUS_PANEL_Y0,
+                  { loadStage: 0, shopActive: false, world: level.world });
 
       renderer.present(level.palette);
 

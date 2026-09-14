@@ -77,7 +77,12 @@ export const CONSUMABLES = Object.freeze([
     name: 'weapon arc', desc: 'wide' },
   { rank: 17, type: 54, at: 0x6217, placed: 14, dx: 1, effect: 'teleport',
     name: 'teleport stone', desc: '' },
-  { rank: 18, type: 69, at: 0x63d5, placed: 46, dx: 1, effect: 'hint',
+  /* ⚠️ `dx: 0`, CORRECTED. This row read `dx: 1` ("show the generic message")
+   * for as long as it existed, and that is refuted on bytes: CS:0x646C is
+   * `sub dx,dx / ret`. Tier 0 is load-bearing — it is what stops the player
+   * seeing "tablet / reveals clues" on top of the hint the handler just
+   * submitted itself. See game/message-compose.js's `composeHint`. */
+  { rank: 18, type: 69, at: 0x63d5, placed: 46, dx: 0, effect: 'hint',
     name: 'tablet', desc: 'reveals clues' },
   { rank: 19, type: 70, at: 0x6306, placed:  0, dx: 1, effect: 'health', health: 0x02,
     name: 'food', desc: 'restores energy' },
@@ -276,7 +281,16 @@ export const NOT_WIRED_REASON = Object.freeze({
   familiarWings: 'types 39/40/41 are placed ZERO times in all 8 maps',
   familiarClaws: 'types 39/40/41 are placed ZERO times in all 8 maps',
   teleport:      'decoded and proven; needs level transitions the port lacks',
-  hint:          'already ported as the PALFILS hint system',
+  /* ⚠️ THIS ENTRY USED TO READ "already ported as the PALFILS hint system",
+   * and that was FALSE — the hint TABLE had been decoded (docs/asset-formats
+   * .md's 40 keys / 40 strings), but nothing in this port ever rendered it, so
+   * walking over the first tablet in PLEV1A produced no text at all. The hint
+   * is now genuinely wired: game/text-arena.js resolves the key, game/message-
+   * compose.js composes `<> Hint <> ...`, game/message.js paginates and draws
+   * it. It is not listed in WIRED because its effect is not an `applyConsum-
+   * able` state change — CS:0x63D5 submits a message and returns tier 0. */
+  hint:          'handled by CS:0x63D5 itself, not by applyConsumable — it '
+               + 'submits the PALFILS hint message and returns tier 0',
   unimplemented: 'type 43 has no handler and is never placed',
 });
 

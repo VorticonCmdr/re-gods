@@ -278,17 +278,17 @@ export function stepPickups(objects, hero, arsenal, bar = 1,
     o.dead = true;
     const rank = consumableRank(o.type, cats);
     const h = CONSUMABLES[rank];
-    if (!h) { consumed.push({ type: o.type, rank, unknownRank: true }); continue; }
+    if (!h) { consumed.push({ type: o.type, x: o.x, y: o.y, rank, unknownRank: true }); continue; }
     /* Every handler is decoded now, but only the WIRED ones have an effect
      * this port can apply — the rest are reported with the reason. */
     if (!WIRED.includes(h.effect)) {
-      consumed.push({ type: o.type, rank, at: h.at, effect: h.effect,
+      consumed.push({ type: o.type, x: o.x, y: o.y, rank, at: h.at, effect: h.effect,
                       name: h.name, desc: h.desc,
                       notWired: NOT_WIRED_REASON[h.effect] || 'not modelled' });
       continue;
     }
     const r = applyConsumable(h, { health, arsenal, ...(effects || {}) });
-    consumed.push({ type: o.type, rank, effect: h.effect, name: h.name,
+    consumed.push({ type: o.type, x: o.x, y: o.y, rank, effect: h.effect, name: h.name,
                     desc: h.desc, health: h.health, dx: h.dx,
                     taken: r ? (r.taken ?? true) : false,
                     banked: r ? (r.banked ?? 0) : 0, result: r,

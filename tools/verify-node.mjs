@@ -242,6 +242,13 @@ for (const r of await checkPatObjects(fetchRaw)) {
   console.log(line(r));
 }
 
+console.log('\n  the status-panel message line (CS:0x434e/0x43b6/0x443e/0x4609/0x63d5):');
+const { checkMessages } = await import('../src/verify/checks.js');
+for (const r of await checkMessages(fetchRaw)) {
+  if (!r.pass && !r.note) bad++;
+  console.log(line(r));
+}
+
 console.log('\n  the group-elimination reward popup (CS:0xBF5F/0xBF80):');
 const { checkPopup } = await import('../src/verify/checks.js');
 for (const r of checkPopup()) {

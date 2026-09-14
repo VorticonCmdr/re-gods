@@ -14,6 +14,7 @@
     "frame": "node tools/frame-node.mjs",
     "world": "node tools/render-node.mjs",
     "objects": "node tools/object-sheet.mjs",
+    "messages": "node tools/message-sheet.mjs",
     "enemies": "node tools/enemy-sheet.mjs",
     "hunt": "node tools/hunt.mjs",
     "lint": "node tools/lint-checks.mjs"

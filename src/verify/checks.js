@@ -90,7 +90,7 @@ import { pickUpWeapon, chooseSlot, heroTouches, stepPickups, PICKUP_BOX,
          collectKey } from '../game/pickup.js';
 import { CONSUMABLES, WIRED, WEAPON_ARCS, NOT_WIRED_REASON, applyConsumable,
          INVULN_TICKS_POTION, INVULN_TICKS_SPAWN, INVULN_SPAWN_DEDUCTION,
-         FREEZE_TICKS, GIANT_JUMP_TICKS, POWER_POTION_STEPS, MSG_CLEAR_394,
+         FREEZE_TICKS, GIANT_JUMP_TICKS, POWER_POTION_STEPS, MSG_CLEAR_394, MSG_NONE,
          SHIELD_NOOP_DS, SHIELD_NOOP_SITES, UNIMPLEMENTED_TYPE,
          FAMILIAR_ENERGY_DS, FAMILIAR_CLEAR_SITES,
          banksOverheal } from '../game/consumables.js';
@@ -222,6 +222,13 @@ import { Ce64Creatures, Ce64Spits,
          SPIT_FACING_LEFT_OFFSET, SPIT_FACING_RIGHT_OFFSET, SPIT_BOX,
          SPIT_CULL, SPIT_DEATH_SPRITE_BASE,
          SPIT_DEATH_FRAMES } from '../game/ce64.js';
+import { MessageEngine, PRIORITY, LINE_CHARS, ORIGIN_X, Y_LOCAL, ADVANCE,
+         PAGE1_TICKS, PAGE2_TICKS, blitGate } from '../game/message.js';
+import { SeenBitmap, SEEN_BYTES, messageGate, composeObjectMessage, composeHint,
+         HINT_TABLET_TYPE } from '../game/message-compose.js';
+import { buildObjectArena, appendHints, hintOffsetForX, stringAt,
+         nextStringOffset, NO_TEXT, OBJ_RECORDS,
+         OBJ_STRIDE } from '../game/text-arena.js';
 
 export function makeChecker() {
   const results = [];
@@ -6816,15 +6823,22 @@ export async function checkWeaponsProjectiles(fetchRaw) {
 
     /* THE MESSAGE TIER. */
     const tiers = CONSUMABLES.filter((h) => h.dx !== null).map((h) => h.dx);
-    check(`only the shop potion returns message tier 2`,
+    check(`the shop potion is the only tier 2, the hint tablet the only tier 0`,
       CONSUMABLES.find((h) => h.type === 83).dx === MSG_CLEAR_394
+        && CONSUMABLES.find((h) => h.type === 69).dx === MSG_NONE
         && tiers.filter((d) => d === 2).length === 1
-        && tiers.filter((d) => d === 1).length === 21,
+        && tiers.filter((d) => d === 0).length === 1
+        && tiers.filter((d) => d === 1).length === 20,
       'CS:0x182D reads DX as a tier, not a success flag: 0 shows no message, ' +
-      '1 shows it, >=2 clears DS:0x394 first. 21 handlers return 1 and only ' +
-      'CS:0x61E9 returns 2 — the same handler that parks DS:0x363 at 0x41, a ' +
-      'POSITIVE value, which makes CS:0x49B5 `js` skip the whole player state ' +
-      'machine while the shopkeeper is up');
+      '1 shows it, >=2 clears DS:0x394 first. ⚠️ The tablet\'s row read `dx: 1` ' +
+      'until this pass and that is refuted on bytes — CS:0x646C is ' +
+      '`sub dx,dx / ret`. Tier 0 is load-bearing: CS:0x63D5 submits the PALFILS ' +
+      'hint message itself at priority 100, and tier 0 is what stops the ' +
+      'generic composer ALSO showing "tablet / reveals clues" over it. So 20 ' +
+      'handlers return 1, one returns 0 (the tablet) and only CS:0x61E9 ' +
+      'returns 2 — the same handler that parks DS:0x363 at 0x41, a POSITIVE ' +
+      'value, which makes CS:0x49B5 `js` skip the whole player state machine ' +
+      'while the shopkeeper is up');
 
     /* WHAT A PLAYER CAN ACTUALLY REACH. */
     const placed = {};
@@ -12669,6 +12683,296 @@ export function checkDeath() {
         catch { return false; }
       })());
   }
+
+  return results;
+}
+
+/* ══ THE STATUS-PANEL MESSAGE LINE ══════════════════════════════════════
+ *
+ * game/message.js (the engine), game/message-compose.js (the two composers
+ * and the gates) and game/text-arena.js (the DS:0x1fc6 string pool).
+ *
+ * The subsystem these cover was not merely missing from this port — it was
+ * recorded as PRESENT. `consumables.js`'s own `NOT_WIRED_REASON.hint` read
+ * "already ported as the PALFILS hint system" while nothing rendered a single
+ * character, so the first tablet in PLEV1A produced no text at all. These
+ * checks exist so that particular failure cannot recur silently.
+ */
+export async function checkMessages(fetchRaw) {
+  const { results, check } = makeChecker();
+  const note = (name, detail) => results.push({ name, note: true, detail });
+
+  /* ── the DS:0x1fc6 arena, FUN_1000_35fb ─────────────────────────────── */
+  const pools = {};
+  for (const w of [1, 2, 3, 4]) {
+    const raw = dclDecompress(await fetchRaw(`game/POBJECTS.00${w}`)).data;
+    check(`POBJECTS.00${w} is exactly 132 x 48 bytes (CS:0x223A mov cx,0x84)`,
+      raw.length === OBJ_RECORDS * OBJ_STRIDE, `${raw.length}`);
+    pools[w] = buildObjectArena(raw);
+    const noText = [...pools[w].textOff].filter((o) => o === NO_TEXT).length;
+    check(`world ${w}: 42 of the 132 object types have no text at all`,
+      noText === 42, `${noText}`);
+  }
+  /* The arena is built here from the shipped asset; these four sizes were
+   * predicted independently from the binary's own parser before this port
+   * ran, which is what makes them a real cross-check rather than a restatement
+   * of whatever this code happens to produce. */
+  check('the four world arenas measure 1435 / 1447 / 1425 / 1442 bytes',
+    pools[1].arena.length === 1435 && pools[2].arena.length === 1447
+      && pools[3].arena.length === 1425 && pools[4].arena.length === 1442,
+    `${pools[1].arena.length}/${pools[2].arena.length}/` +
+    `${pools[3].arena.length}/${pools[4].arena.length}`);
+  {
+    /* CS:0x4698-0x46a5's "walk past the NUL" only works if name and
+     * description really are packed back to back. */
+    const p = pools[1];
+    const name = stringAt(p.arena, p.textOff[69]);
+    const desc = stringAt(p.arena, nextStringOffset(p.arena, p.textOff[69]));
+    check('type 69 resolves to "tablet" / "reveals clues" through the packed pool',
+      String.fromCharCode(...name) === 'tablet'
+        && String.fromCharCode(...desc) === 'reveals clues');
+  }
+
+  /* ── the composers ──────────────────────────────────────────────────── */
+  {
+    const m = composeObjectMessage(0, pools[1]);
+    const s = String.fromCharCode(...m.subarray(0, m.length - 1));
+    check('CS:0x4609 composes name / desc / Value with 0x11 separators and '
+      + 'five zero-padded digits',
+      s === '\x11 health \x11 restores energy \x11 Value 04000 \x11 ', JSON.stringify(s));
+  }
+  {
+    /* An empty description must NOT emit its trailing separator — CS:0x46B0
+     * tests the append helper's own character counter for exactly this. */
+    const m = composeObjectMessage(8, pools[1]);
+    const s = String.fromCharCode(...m.subarray(0, m.length - 1));
+    check('an empty description emits no second separator (CS:0x46B0 or dx,dx)',
+      s === '\x11 pile of coins \x11 Value 00002 \x11 ', JSON.stringify(s));
+  }
+  check('a type with no text at all composes nothing (CS:0x4679 jge)',
+    composeObjectMessage([...pools[1].textOff].findIndex((o) => o === NO_TEXT),
+      pools[1]) === null);
+
+  /* ── the hint table, and that every shipped tablet resolves ─────────── */
+  let tablets = 0, resolved = 0, wrapped = 0, overrun = 0;
+  const noKey = [];
+  for (const w of [1, 2, 3, 4]) for (const sub of ['A', 'B']) {
+    const key = `${w}${sub}`;
+    const pal = dclDecompress(await fetchRaw(`game/PALFILS.0${sub}${w}`)).data;
+    const map = parseMap(dclDecompress(await fetchRaw(`game/PLEV${key}.MAP`)).data);
+    const pool = buildObjectArena(
+      dclDecompress(await fetchRaw(`game/POBJECTS.00${w}`)).data);
+    const h = appendHints(pool.arena, pal);
+    for (const o of map.objects) {
+      if (o.type !== HINT_TABLET_TYPE) continue;
+      tablets++;
+      const off = hintOffsetForX(h.keys, h.offs, o.x);
+      if (off < 0) { noKey.push(`${key}@${o.x}`); continue; }
+      resolved++;
+      const text = stringAt(h.arena, off);
+      const eng = new MessageEngine();
+      check(`${key} tablet x=${o.x} produces a message the engine accepts`,
+        eng.post(composeHint(text), PRIORITY.hint) === true);
+      const p1 = eng.page();
+      if (!p1) { check(`${key} tablet x=${o.x} draws a first page`, false); continue; }
+      if (p1.chars.length > LINE_CHARS || p1.x + p1.chars.length * ADVANCE > 320) overrun++;
+      if (eng.morePages >= 0) {
+        wrapped++;
+        for (let i = 0; i <= PAGE1_TICKS; i++) eng.step();
+        const p2 = eng.page();
+        check(`${key} tablet x=${o.x} shows its second page after 31 ticks`,
+          !!p2 && p2.chars.length > 0);
+        if (p2 && (p2.chars.length > LINE_CHARS
+                   || p2.x + p2.chars.length * ADVANCE > 320)) overrun++;
+      }
+    }
+  }
+  check('all 46 shipped hint tablets were found', tablets === 46, `${tablets}`);
+  check('44 of them match a PALFILS key; the two that do not are both in PLEV1B',
+    resolved === 44 && noKey.length === 2 && noKey.every((s) => s.startsWith('1B')),
+    noKey.join(' '));
+  check('no page ever exceeds the 28-character field or runs off the 320px screen',
+    overrun === 0, `${overrun} overruns`);
+  note('wrapping is the NORMAL path, not an edge case',
+    `${wrapped} of ${resolved} resolved tablets wrap to two pages — a port that ` +
+    'renders one centred line would be wrong for most of the game');
+
+  /* ── the PLEV1A tablet, against a DOSBox capture of the real game ───── */
+  {
+    const pal = dclDecompress(await fetchRaw('game/PALFILS.0A1')).data;
+    const pool = buildObjectArena(
+      dclDecompress(await fetchRaw('game/POBJECTS.001')).data);
+    const h = appendHints(pool.arena, pal);
+    const off = hintOffsetForX(h.keys, h.offs, 178);
+    const text = String.fromCharCode(...stringAt(h.arena, off));
+    check('PLEV1A\'s first tablet (x=178) is "find the gold key to exit this world"',
+      text === 'find the gold key to exit this world', text);
+    const eng = new MessageEngine();
+    eng.post(composeHint(stringAt(h.arena, off)), PRIORITY.hint);
+    const p1 = eng.page();
+    const s1 = String.fromCharCode(...p1.chars);
+    /* These two pages are what a DOSBox capture of the real game shows, so
+     * they are ground truth rather than a restatement of the layout code. */
+    check('page 1 is "\\x11 Hint \\x11 find the gold key\\x26" at x=34',
+      s1 === '\x11 Hint \x11 find the gold key\x26' && p1.x === 34,
+      `${JSON.stringify(s1)} x=${p1.x}`);
+    for (let i = 0; i <= PAGE1_TICKS; i++) eng.step();
+    const p2 = eng.page();
+    const s2 = String.fromCharCode(...p2.chars);
+    check('page 2 is "to exit this world \\x11" at x=64',
+      s2 === 'to exit this world \x11' && p2.x === 64,
+      `${JSON.stringify(s2)} x=${p2.x}`);
+    /* CS:0x43e2/0x4586 — 31 then 61 decrements. */
+    for (let i = 0; i <= PAGE2_TICKS; i++) eng.step();
+    check('the message is torn down after page 2\'s 61st decrement, and drops '
+      + 'the priority barrier with it (CS:0x45f7/0x45fc)',
+      eng.page() === null && eng.active === false && eng.barrier === 0);
+  }
+
+  /* ── lifetime: a SINGLE page gets 30 ticks, not 30 then 60 ──────────── */
+  {
+    const eng = new MessageEngine();
+    eng.post(composeHint(Uint8Array.from([...'find the candle'].map((c) => c.charCodeAt(0)))),
+             PRIORITY.hint);
+    check('a 26-character message fits on one page (CS:0x43ea jns)',
+      eng.morePages < 0 && eng.page().chars.length === 26);
+    for (let i = 0; i < PAGE1_TICKS; i++) eng.step();
+    check('...and is still up on the 30th decrement', eng.page() !== null);
+    eng.step();
+    check('...and gone on the 31st — CS:0x43cb seeds DS:0x262 = 0xFFFF '
+      + 'UNCONDITIONALLY, so a single-page message never gets a second phase',
+      eng.page() === null);
+  }
+
+  /* ── the priority ladder and the asymmetric prefix reject ───────────── */
+  check('the hint outranks every other in-level channel (100 > 50 > 49 > 30 > 25)',
+    PRIORITY.hint === 0x64 && PRIORITY.extraLife === 0x32
+      && PRIORITY.bonusGem === 0x31 && PRIORITY.shopItem === 0x1e
+      && PRIORITY.object === 0x19);
+  {
+    const eng = new MessageEngine();
+    const long = Uint8Array.from([0x11, 0x20, 65, 66, 67, 68, 69, 70, 0]);
+    const short = Uint8Array.from([0x11, 0x20, 65, 66, 67, 0]);
+    eng.post(long, PRIORITY.object);
+    check('a new message that is a PREFIX of the displayed one is REJECTED',
+      eng.post(short, PRIORITY.object) === false);
+    const eng2 = new MessageEngine();
+    eng2.post(short, PRIORITY.object);
+    check('...but the reverse is ACCEPTED — CS:0x435b lodsb reads the NEW '
+      + 'string, so the test is a prefix test and NOT symmetric equality',
+      eng2.post(long, PRIORITY.object) === true);
+  }
+  {
+    /* CS:0x4485 drops the barrier on the first real draw, inside the same
+     * submit call — so priority only arbitrates within one frame. */
+    const eng = new MessageEngine();
+    eng.post(composeHint(Uint8Array.from([104, 105])), PRIORITY.hint);
+    check('the priority barrier is dropped again by the first draw (CS:0x4485), '
+      + 'so a later low-priority message is not locked out for the whole dwell',
+      eng.barrier === 0);
+  }
+
+  /* ── the composer's own gates, CS:0x4613-0x464c ─────────────────────── */
+  {
+    const cats1 = parseObjectCategories(
+      dclDecompress(await fetchRaw('game/POBJECTS.001')).data);
+    const seen = new SeenBitmap();
+    check('world 1: an ordinary object message passes the gate once',
+      messageGate({ type: 0, category: cats1[0], world: 1, shopActive: false, seen }));
+    check('...and is muted the second time by the DS:0x8cea bitmap',
+      !messageGate({ type: 0, category: cats1[0], world: 1, shopActive: false, seen }));
+    check('...and shows again after a full level entry clears the bitmap',
+      (seen.reset(), messageGate({ type: 0, category: cats1[0], world: 1,
+                                   shopActive: false, seen })));
+    check('worlds 2-4 suppress in-level object messages entirely '
+      + '(CS:0x461D — DS:0x3ab is the SHOP flag, and the shop is the other half)',
+      !messageGate({ type: 0, category: cats1[0], world: 3,
+                     shopActive: false, seen: new SeenBitmap() }));
+    check('...unless the shop is up, which is what carries worlds 2-4\'s traffic',
+      messageGate({ type: 0, category: cats1[0], world: 3,
+                    shopActive: true, seen: new SeenBitmap() }));
+    {
+      /* CS:0x4618 — type 0x53 jumps past BOTH the world gate and the bitmap. */
+      const s = new SeenBitmap();
+      check('type 0x53 bypasses the world gate AND the once-per-type bitmap, '
+        + 'in every world, every time (CS:0x4618)',
+        messageGate({ type: 0x53, category: cats1[0x53], world: 4, shopActive: false, seen: s })
+          && messageGate({ type: 0x53, category: cats1[0x53], world: 4, shopActive: false, seen: s }));
+    }
+    check('category 2 (keys) bypasses the gate too (CS:0x4613)',
+      messageGate({ type: 23, category: 2, world: 4, shopActive: false,
+                    seen: new SeenBitmap() }));
+  }
+  {
+    const seen = new SeenBitmap();
+    check('the seen bitmap is 16 bytes = 128 bits (CS:0x8ee9 mov cx,0x10)',
+      seen.bits.length === SEEN_BYTES);
+    seen.testAndSet(69);
+    check('bit (type & 7) of byte (type >> 3) — type 69 sets bit 5 of byte 8',
+      seen.bits[8] === 0x20, seen.bits[8].toString(16));
+    seen.clear(69);
+    check('the retry path clears exactly that bit (CS:0x472d rol 0xFE)',
+      seen.bits[8] === 0);
+  }
+
+  /* ── the font: the mapping really is the identity ───────────────────── */
+  {
+    const dat = dclDecompress(await fetchRaw('game/PSMLFNT.DAT')).data;
+    const atlas = parseAtlas(dat);
+    const img = decodePI1(dclDecompress(await fetchRaw('game/PSMLFNT.PI1')).data);
+    const frames = cutAll(img, atlas);
+    check('PSMLFNT is a 130-record atlas (2 + 10*130 = 1302 bytes)',
+      atlas.count === 130 && dat.length === 1302, `${atlas.count}/${dat.length}`);
+    let identical = 0;
+    for (let i = 0; i < 26; i++) {
+      const a = frames[0x41 + i], b = frames[0x61 + i];
+      if (a.w === b.w && a.h === b.h && a.pixels.every((v, k) => v === b.pixels[k])) identical++;
+    }
+    check('all 26 lowercase slots hold artwork PIXEL-IDENTICAL to the uppercase '
+      + 'ones — which is why the shipped lowercase text renders uppercase with '
+      + 'NO case fold anywhere in CS:0x44e3 (do not add one: it would break '
+      + '0x11 / 0x20 / 0x26)', identical === 26, `${identical}/26`);
+    check('0x20 is the only all-zero cell in the whole atlas',
+      frames.filter((f) => f.pixels.every((v) => !v)).length === 1
+        && frames[0x20].pixels.every((v) => !v));
+    check('0x11 (the separator) and 0x26 (the page-break arrow) are real inked '
+      + 'glyphs, not control codes',
+      frames[0x11].pixels.some((v) => v) && frames[0x26].pixels.some((v) => v));
+    check('every glyph cell is 16 px wide, so the fixed 10 px advance '
+      + '(CS:0x44f4) deliberately overlaps them',
+      frames.slice(0x20, 0x7b).every((f) => f.w === 16) && ADVANCE === 10);
+    /* CS:0x44e6 applies no clamp: a byte past the glyph range would blit a
+     * GODS-logo piece. Nothing shipped emits one — prove it over every string
+     * this port can compose. */
+    let bad = 0;
+    for (const w of [1, 2, 3, 4]) {
+      for (let t = 0; t < OBJ_RECORDS; t++) {
+        const m = composeObjectMessage(t, pools[w]);
+        if (m) for (const c of m) if (c !== 0 && (c < 0x11 || c > 0x7a)) bad++;
+      }
+    }
+    check('no composed object message anywhere emits a byte outside the glyph '
+      + 'range (CS:0x44e6 has no clamp)', bad === 0, `${bad}`);
+  }
+
+  /* ── the blit gate, CS:0x44c7-0x44e1 ────────────────────────────────── */
+  check('the blit gate passes during ordinary level play (DS:0x38a == 0)',
+    blitGate({ loadStage: 0, shopActive: false, world: 1 }));
+  check('...and is suppressed mid-load in worlds 1-3 while still latching the '
+    + 'active flag, exactly as CS:0x44fb does',
+    !blitGate({ loadStage: 1, shopActive: false, world: 1 })
+      && !blitGate({ loadStage: 2, shopActive: false, world: 3 }));
+  check('...but world 4 at load stage 2 is the documented exception',
+    blitGate({ loadStage: 2, shopActive: false, world: 4 }));
+
+  /* ── geometry ───────────────────────────────────────────────────────── */
+  check('the line is 28 chars at x0=24, y=29 panel-local, 10 px apart',
+    LINE_CHARS === 0x1c && ORIGIN_X === 0x18 && Y_LOCAL === 0x1d && ADVANCE === 0xa);
+  check('y=29 panel-local resolves to absolute screen row 189, inside the '
+    + '160-199 status band and never the playfield',
+    PANEL_Y0 + Y_LOCAL === 189);
+  check('28 chars from x=24 end at x=304, inside the 320px screen',
+    ORIGIN_X + LINE_CHARS * ADVANCE === 304);
 
   return results;
 }
