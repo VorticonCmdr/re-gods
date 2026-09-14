@@ -1,0 +1,207 @@
+# Execution model, PKLITE unpacking, and frame pacing
+
+> Extracted from `Gods/CLAUDE.md` to keep the top-level ledger navigable. The evidence-discipline tag legend (`[PROVEN]`/`[STATIC]`/`[WF]`/`[UNKNOWN]`) is defined once in `CLAUDE.md` and applies unchanged here.
+
+## Execution model `[STATIC — disassembly-proven, not yet runtime-confirmed]`
+
+**The user runs `GODS.EXE`. Nothing else is launched directly.** Full chain, proven instruction-by-instruction:
+
+```
+INSTALL.EXE  ── writes GODS.INI (AH=3Ch create @0xcb4, AH=40h write @0xcd0). Has NO EXEC call.
+                 It is the ONLY writer of the INI.
+
+GODS.EXE (launcher, 4.8K)
+  ├─ 1000:03ec  copy-protection check (INT 21h AH=19h current drive)
+  │               drive >= 2 (hard disk) → verdict byte [0x63d] = 'X'  (check bypassed)
+  │               floppy → INT 13h/25h read volume label, accept only 'X'/'1'/'A'
+  ├─ 1000:051d  read + parse GODS.INI into config bytes [0x634..0x63d]
+  │               ends with bias loop @1000:05b5: all 10 bytes += 0x61 (→ printable letters)
+  ├─ 1000:0057  INT 21h AH=4Bh AL=00h  EXEC child #1: "introv.exe"
+  │               byte [0x6cf] patched 'v'→'t' (Tandy) or 'v'→'e' (EGA) from the video setting
+  ├─ 1000:0112  INT 21h AH=4Bh AL=00h  EXEC child #2: "game.exe"
+  │               → "tgame.exe" when the video letter is 'c' (Tandy 16 colour)
+  └─ 1000:0168  AH=4Dh read child exit code:
+                  0 → JMP back to 1000:003b, re-running intro+game (quit-to-title loop)
+                  5 → "Protection failure."
+                  else → "Thank you for playing GODS." and exit
+```
+
+Config reaches the children through the **DOS EXEC command tail** (param block at `0xa2a`, tail at `0x634`), landing in the child's PSP at `0x80`. `GAME.EXE` reads `PSP:0x81` (video), `PSP:0x88` (sound), `PSP:0x89` (protection verdict).
+
+**`GAME.EXE` never spawns a process.** It uses `INT 21h AX=4B03h` (**DOS load-overlay**) exactly three times, unconditionally, as the first three calls from its entry point:
+
+| Site | Loads | Notes |
+|---|---|---|
+| `1000:28f7` | `unpack.exe` | The PKWARE DCL decompressor — **live, not vestigial**. Confirms the container format below. **No error check** on this one; a missing `UNPACK.EXE` goes undetected. |
+| `1000:2906` | `vga.exe`, patched to `ega.exe` | Single-byte patch when the video letter is `'a'` |
+| `1000:29a0` | one of `bpr/adl/rol/adl/tdy.exe` | Via a 5-entry pointer table at `1ffd:eb50` indexed by (sound letter − `'a'`). **Index 3 (Sound Blaster) reuses `adl.exe`** — SB is driven through the AdLib/OPL driver. |
+
+`VGA/EGA/TGA/ROL/ADL/TDY/BPR.EXE` are **not standalone programs** — they are host-loaded overlay modules: 512-byte all-zero MZ header, zero relocations, `CS:IP=0000:0000`, and they call back into the host through far pointers at fixed `DS` offsets (e.g. `ROL.EXE` → `[DS:0x0044]`, `VGA/EGA` → `[DS:0x00a1]`). `TGA.EXE` is unreachable from `GAME.EXE` and belongs to `TGAME.EXE`.
+
+Sound overlays open their own data files by unprefixed name: `ROL.EXE` → `player.bin` + `godsrle.rl` (7th char patched `'a'+n` → `PGODSRL{A..G}.RL`), `TDY.EXE` → `tandy.bin`, `BPR.EXE` → `beeper.bin`. `ADL.EXE` contains no filename strings at all.
+
+### `UNKNOWN_unpack_ax_param` — site located and value pinned, semantics still `[UNKNOWN]`
+
+This token lost its own defining prose at some point (a project self-audit, `analysis/audit-2026-09/items.txt`, confirmed it as a bare, undefined name — the only trace of the original question was the sibling, already-closed `UNKNOWN_export9_ax_param`, which suggested the naming convention but not this one's content). What follows is fresh work, not a recovery of lost prose.
+
+The shared file-load wrapper, `CS:0x257E`, is what every overlay/asset open funnels through (filename-buffer prep, DOS open+read, then the actual DCL decompress). Its tail, immediately before the far call into the just-loaded `unpack.exe` entry point (`CS:0x25A8`, `callf 0x40ec:0000` post-relocation — this document's own already-established runtime segment):
+
+```
+2598  mov dx,0x1666          ; the "P"-prefixed filename buffer
+259B  call 0x1000:25bb       ; open + read the compressed file, stash a {offset,seg} pointer at DS:0x2f6/0x2f8
+259E  mov ax,0x89f3          ; <- the AX parameter, a bare constant, set unconditionally
+25A1  pop es / pop di        ; restore the CALLER's ES:DI (the decompression OUTPUT buffer)
+25A3  mov cx,[0x102]         ; compressed byte count (from the read)
+25A7  push ds
+25A8  callf 0x40ec:0000      ; -> UNPACK.EXE entry
+25AD  pop ds
+```
+
+**`AX = 0x89F3` is a literal immediate, not a computed value and not a GAME.EXE address** — disassembling `CS:0x89F3` as if AX held a same-segment callback offset lands mid-instruction inside an unrelated routine (the `DS:0x8014` brood-array walker), which rules out the "it's a callback pointer into the host" hypothesis this document uses elsewhere for the graphics/sound driver interface (`ROL.EXE`'s `DS:0x0044`, `VGA/EGA`'s `DS:0x00a1`) — those are genuine near/far function pointers into real code; `0x89F3` is not. `ES:DI` (the destination buffer) and `CX` (the compressed length) are the two registers that visibly vary per call; `AX` does not, across every call site disassembled this pass.
+
+**What `UNPACK.EXE` itself does with `AX` is not established** — that requires disassembling `UNPACK.EXE` (a separate PKLITE-unpacked-derivative binary per this document's own *`GAME.EXE` and `INSTALL.EXE` are unpacked derivatives* section), which was not done this pass. `UNKNOWN_unpack_entry_ax_semantics` narrows the residual to exactly that: the call site, the exact constant, and its "not an address" status are now `[PROVEN]`; only the constant's *meaning inside `UNPACK.EXE`* remains open.
+
+### `WIBBLE.EXE` invocation — **now CLOSED**, see *Unpacking the PKLITE binaries*
+
+> The paragraph below records how far the pre-unpack analysis got. The four packed binaries it names as unchecked have since been unpacked and searched; nothing invokes `WIBBLE.EXE`.
+
+The string `wibble.exe` sits in `GODS.EXE`'s table at `0x6bf`, but **no instruction anywhere in the binary loads that address** (verified: zero hits for the immediate across all 4868 bytes, while its table neighbours all hit). A follow-up pass proved the same for `GAME.EXE` (zero `"wibble"` hits by raw-byte grep, Ghidra string search, and a full `.exe`-stem enumeration that found only the 13 known driver-launcher names) and `INSTALL.EXE` (not PKLITE-packed, so a clean-byte search is conclusive: no `"wibble"`, and its only `.exe` reference is its own name). No `.BAT`/`.SYS`/`.COM` file exists in the directory, and `GODS.INI` is pure config text with no filenames. **`INTROE/INTROT/INTROV.EXE` and `TGAME.EXE` remain PKLITE-packed and unchecked** — a raw-byte search on them is provably inconclusive (their post-header content is opaque compressed noise, not plaintext), so invocation from one of those four is not ruled out.
+
+`WIBBLE.EXE` itself turns out to hide a genuinely sophisticated hand-written anti-debug scheme, fully reverse engineered statically: its entry point hijacks the `INT3` vector (self-relocating via a call/pop trick) to point at `CS:0x778`; that handler then hijacks `INT1` (single-step trap) to point at `CS:0x7C4` and decrypts exactly 59 bytes there in place with a byte-wise `NEG` loop (independently verified by extracting and NEG-ing those bytes offline — they disassemble into coherent code). The decrypted `INT1` handler implements a **sliding, self-decrypting one-word execution window** walking forward from `CS:0x33`, with a `0xCC` (breakpoint) tripwire check — a classic single-step-based decryption cascade whose full extent can't be recovered statically since each step's key depends on executing the previous one. Past that protected region, a plaintext epilogue at `CS:0x7FF` unconditionally exits via `INT21h AH=4Ch`; one branch first prints the verified `"Warning: Gods original disk not found..."` string and waits for a keypress. **Which branch fires is not determined** — the byte pair that looked like the deciding `TEST`/`JC` sits inside the still-encrypted region and is ciphertext, not real code (and `TEST` can't even set the carry flag `JC` reads). Confirmed: `WIBBLE.EXE` never itself issues `AH=4Bh` (it doesn't spawn anything).
+
+Best-supported reading: an orphaned, standalone disk-verification utility (its instruction-level shape — anti-debug guard, print-message-and-exit — fits a manually-run tool, not a library routine meant to be called). Not conclusively excluded: invocation from one of the four still-packed binaries.
+
+### ⚠️ `GAME.EXE` and `INSTALL.EXE` are unpacked derivatives
+
+Both were PKLITE-packed on the distribution media and were **unpacked in place** (`GAME.EXE` 49.6K→148.8K, `INSTALL.EXE` 4.9K→9.6K). Their current hashes are **not** distribution hashes; pristine copies are backed up outside this directory (per the maintainer). `INTROE/INTROT/INTROV.EXE` and `TGAME.EXE` shipped PKLITE-packed — the PKLITE signature (`"PKLITE Copr. 1990-91 PKWARE Inc."`) starts at file offset `0x1e` in all four, confirmed byte-for-byte (an earlier pass mis-cited this as `0x20`, which is the third letter of the signature, not its start). **All four have now been unpacked** — see the next section. The on-disk copies are untouched; the decompressed images live only in the session scratchpad.
+
+## Unpacking the PKLITE binaries `[PROVEN]`
+
+All four remaining packed executables are decompressed with **`deark -m pklite`** (`brew install deark`, v1.7.3). Nothing was written to the game directory.
+
+```
+INTROE.EXE   6.0K →  11552 B      INTROV.EXE   6.0K →  11488 B
+INTROT.EXE   5.6K →  11136 B      TGAME.EXE   50.1K → 152898 B
+```
+
+All four are PKLITE v1.12 with an identical relocator stub (`CS:IP = fff0:0100`, entry at image start, `"Not enough memory$"` at `0x132`). `TGAME.EXE`'s flag byte is `0c 31` versus `0c 11` on the three intros — a different packing option, which deark handled anyway.
+
+**The unpacker is validated against a live trace, not merely assumed correct.** `INTROV.EXE` is the one of the four already traced under DOSBox, so its expected string set was known in advance. The unpacked image contains all 8 of the traced filenames — `unpack.exe`, `one.pi1`, `introft.dat`, `introft.pi1`, `stback.pi1`, `beeper.bin`, `player.bin`, `title.rl` — and, as the `P`-prefix convention predicts, **unprefixed**. The output is also a structurally sane MZ (48 relocations, 14-paragraph header, `CS:IP=0000:0000`, declared size matching actual). The other three outputs inherit that confidence.
+
+> **Tagging caveat:** the *unpacking method* is `[PROVEN]`. A string read out of a resulting image is `[STATIC]` — present in the binary, not observed being used at runtime.
+
+### `UNKNOWN_wibble_invocation` — CLOSED `[PROVEN]`
+
+A clean-byte search for `wibble` across **all 16 shipped executables** (counted: `ls *.EXE` = 16) now returns exactly one hit, in `GODS.EXE`, which is the already-known orphan table entry at `0x6bf` that no instruction loads:
+
+| Binary | hits | | Binary | hits |
+|---|---|---|---|---|
+| `GODS.EXE` | **1** (dead table entry) | | `INTROE/INTROT/INTROV` (unpacked) | 0 |
+| `GAME.EXE` | 0 | | `TGAME` (unpacked) | 0 |
+| `INSTALL.EXE` | 0 | | `UNPACK.EXE` | 0 |
+| `VGA/EGA/TGA.EXE` | 0 | | `ROL/ADL/TDY/BPR.EXE` | 0 |
+| `WIBBLE.EXE` itself | 0 | | | |
+
+Every binary in the release is now searchable in the clear — the four PKLITE files were the last blind spot. **Nothing invokes `WIBBLE.EXE`.** It is an orphaned standalone disk-verification utility, exactly as the instruction-level shape of its code suggested.
+
+### The intro sound-file list `[STATIC]`
+
+All three intros carry a **packed ASCIIZ list of five names** — spacings `0x0b / 0x0c / 0x0b / 0x0a` are exactly `strlen+1`, so it is a contiguous string list, not a padded array:
+
+```
+introv 0x2640  beeper.bin  godmus2.mus  demosb4.sb  tandy.bin  title.rl
+introe 0x2660  (same five, same spacing)
+introt 0x24c0  (same five, same spacing)
+```
+
+Five names, five `GODS.INI` sound settings. **This resolves the last three unowned assets** (`PDEMOSB4.SB`, `PGODMUS2.MUS`, and `PMUSIC.MUS`, the last at introv `0x29fe` in the general-asset cluster alongside `player.bin`/`introft`/`stback`/`one.pi1`/`unpack.exe`).
+
+**There is no table at all** `[STATIC, exhaustive]` — which is why the pointer-table scan found nothing and why "storage order = enum" contradicted the live trace. The five names are reached by **seven hard-coded `mov dx,imm16` instructions in the branches of one if/else dispatcher** (introv `0x1355`, single caller at `0x004A`; introe `0x1380`; introt `0x1209`, instruction-for-instruction identical).
+
+The reason the offsets looked invisible: each intro sets `DS` to a paragraph that puts **`DS:0x0000` exactly on the first byte of `"beeper.bin"`** (`mov ax,0x256 / mov ds,ax` in introv → image `0x2560` → file `0x2640`). So the code carries tiny immediates — `0x00`, `0x0B`, `0x17`, `0x22`, `0x2C` — not pointer-sized values.
+
+```
+1359  mov al,[es:0x88]   ; ES = PSP; sound config byte
+135D  sub al,0x61        ; un-bias -> 0..4
+135F  jnz ...            ; enum 0 -> 0x1514  BEEPER
+1364  cmp al,0x4 -> 0x1540  TANDY
+136C  mov dx,0x3b3       ; enums 1,2,3 all load "player.bin" first
+137B  cmp al,0x2 -> 0x13F2  ROLAND
+137F  mov dx,0x3be       ; "music.mus"    <- default (enum 1, AdLib)
+138C  cmp al,0x3 / 1390  mov dx,0xb       ; "godmus2.mus"  <- override (enum 3, SB)
+13BD  cmp al,0x3 / 13C1  mov dx,0x17      ; "demosb4.sb"   <- extra SB sample load
+```
+
+| `GODS.INI` sound | enum | Files the intro opens |
+|---|---|---|
+| Beeper | 0 | `beeper.bin` |
+| AdLib | 1 | `player.bin` + `music.mus` |
+| Roland | 2 | `player.bin` + `title.rl` |
+| Sound Blaster | 3 | `player.bin` + `godmus2.mus` + `demosb4.sb` |
+| Tandy | 4 | `tandy.bin` |
+
+**This reconciles exactly with the live trace** — Beeper reaches only `beeper.bin`; Roland loads `player.bin` at `0x136C` then branches to `title.rl` *before* reaching the `music.mus` code, so neither traced config could ever have opened the three AdLib/SB assets. Closure was checked exhaustively: those seven immediates appear nowhere else in the image, and the dispatcher has exactly one caller.
+
+### ⚠️ A shipped bug in the Tandy intro `[STATIC]`
+
+`INTROT.EXE` uses **`adlib.bin`** (`DS:0x3d3`, file `0x2893`) where the other two intros use `player.bin`. **No `PADLIB.BIN` ships** — verified directly: the only `.BIN` files in the release are `PBEEPER.BIN`, `PPLAYER.BIN`, `PTANDY.BIN`, `PBUMLIST.BIN` and `HISCORES.BIN`. So selecting Tandy *video* (which is what launches `INTROT.EXE`) together with AdLib, Roland or Sound Blaster *sound* asks for a file that does not exist. Only the Beeper and Tandy sound branches of `INTROT.EXE` reach a real file.
+
+### `TGAME.EXE` is a variant build of `GAME.EXE` `[STATIC]`
+
+Unpacked `TGAME` is 152898 B against `GAME.EXE`'s 152384 B — a **514-byte** delta. Filtering both string dumps to plausible real text (≥4 chars, containing letters) gives **240 shared strings and zero meaningful differences**; the handful of set-unique entries on each side (`R*SZS`, `.rXV`, `QHQxQ`, `y3yNyiy`) are binary noise from shifted code. Both headers declare the same 93 relocations and 25-paragraph header.
+
+So **the difference is code, not data** — the filename tables, message pool and driver interface are common. `tga.exe` appears in `TGAME` at `0x1ec6b` and `0x25041`, consistent with the documented claim that `TGA.EXE` belongs to `TGAME.EXE` rather than `GAME.EXE`.
+
+⚠️ Do **not** read a string's presence in `TGAME` as new information: `god0?.pat`, `pgod01/02/03.pat`, `alfils.0*?`, `joypos.dat` and `\pcgods.dat` are all present in `GAME.EXE` too (verified count-for-count). They are shared-table entries, so their presence in `TGAME` proves nothing on its own. (`.PAT` and `alfils` were both cracked later, but by *code* analysis — see below — not by this string check.)
+
+### Credits and intro text recovered `[STATIC]`
+
+The intro's full text pool sits at introv `0x2a3e`–`0x2cd5`: `RENEGADE` / `PRESENTS` / `A BITMAP BROTHERS` / `GAME`, then `PRODUCTION TEAM` — **CODE** Steve Tall, **GRAPHICS** Mark Coleman, **DESIGN** Eric Matthews + Steve Tall, **MUSIC** Nation XII, **MUSIC CODE AND SFX** Richard Joseph, **ADDITIONAL CODE** Mike Montgomery — followed by `LOADING GAME` and the 24-line story poem (`"the challenge / any man may / earn through / skill and courage..."`). Two Roland-specific messages sit at `0x2677`/`0x2698`: `"initialising roland card"` / `"please wait"`.
+
+One oddity resolved: the poem reads `heroGs failure` where an apostrophe belongs. This is **glyph-index arithmetic, not a typo** — the renderer maps a string byte to an atlas record by adding a fixed bias, and `'G'` lands on the apostrophe glyph. Text is fed to the blitter as `C + 0x20`. So the intro really renders `HERO'S`.
+
+### `TGAME.EXE`'s 514 bytes, mapped `[STATIC]`
+
+Aligning the two images properly (rather than by naive `cmp`) gives **22 size-changing regions summing to exactly +514**, across 575 raw differing regions; 24821 of ~24850 instructions are structurally identical (**99.92%**). Two findings matter for a port:
+
+- **`TGAME` exports 40 graphics entries, not 41 — export 16 is absent** (`GAME.EXE`'s only export-16 thunk is at `CS:0x22dc`). `TGA.EXE` itself still ships a full 41-offset table.
+- **482 of the 514 bytes are one added table** in `CODE_2`: 241 `u16` where `v[y] == (y&3)*0x2000 + (y>>2)*160` for the first 200 entries and `v[200+y] == y*160` for the next 40. That is a **row→address table for Tandy's 4-way interleaved video banks** (`0x2000` apart), replacing VGA's flat 44-byte pitch. `GAME.EXE` has 482 zero bytes in that slot. Corroborated by the blit constants: `GAME` uses `0x1fcc = 185×44` and `0x1b80 = 160×44`, `TGAME` uses `0x172 = 185×2` and `0x140 = 160×2`.
+
+The overlay-load site is otherwise byte-identical between the two, differing only in the filename it points at (`vga.exe` → `tga.exe`, both at `DS:0xeaeb`).
+
+> **Reusable technique — `TGAME` as a de-aliasing oracle.** `TGAME`'s `SS` is shifted `+0x1e2` relative to `GAME.EXE`'s. A common immediate that is hopelessly ambiguous in one binary can be unambiguous in the other: the `.PAT` buffer is `SS:0x500` in `GAME.EXE` (27 hits, mostly noise) but `SS:0x6e2` in `TGAME` (**6 hits, all real**). That is what cracked `UNKNOWN_pat_owner` below. Map the hits back to `GAME.EXE` afterwards — the code is the same, just shifted.
+
+## Frame pacing — the game logic runs at **15 Hz**, not 50 `[PROVEN]`
+
+Two different clocks, and they are easy to conflate:
+
+```
+PIT channel 0                              1193182 / 19886 = 60.0011 Hz
+music player   (ISR skips 1 in 6)                            50.001  Hz
+game logic / display  (frame gate, below)  60.0011 / 4     = 15.000  Hz
+```
+
+The sound-driver timer ISR is byte-identical in `ADL`/`BPR`/`ROL`/`TDY`, and the crucial detail is the **ordering**:
+
+```
+inc byte [0x39]              ; UNCONDITIONAL - full 60.001 Hz
+cmp byte [0x85],0 / jz ret   ; sound disabled?
+dec byte [0xa9] / jnz play
+mov byte [0xa9],6 / jmp ret  ; skip 1 in 6
+play: ... call the music player
+```
+
+`inc byte [0x39]` sits **before** the 5-of-6 divider, so `[0x39]` counts PIT ticks, not music ticks.
+
+`GAME.EXE`'s main loop ends with `mov al,[0x3d6]` → `call 0x35ad` (graphics export 14). **`[0x3d6]` has exactly one write in the whole binary** — `mov byte [0x3d6],0x3` at `CS:0x0031` — so `AL = 3` always. Export 14 spins on it and then clears the counter:
+
+```
+VGA:0x0E5C  cmp al,0xff / jz 0xe66      ; 0xFF would skip the wait (never happens)
+VGA:0x0E60  cmp al,[0x39]
+VGA:0x0E64  jnl 0xe60                   ; wait until [0x39] > 3
+   ... 0x3DA retrace sync, page flip ...
+VGA:0x0F0D  mov byte [0x39],0x0         ; identical in EGA.EXE
+```
+
+**One frame = 4 PIT ticks = 15.0 Hz**, and the player update `FUN_1000_4993` runs once per frame. Every per-second figure must be derived from 15 Hz: walking is ~60 px/s and a jump lasts ~1.53 s — consistent with the game's famously slow, committed jump. `UNKNOWN_tick_bypass`: no path setting `AL=0xFF` was found.
+

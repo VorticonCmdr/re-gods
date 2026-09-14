@@ -1,0 +1,312 @@
+# Difficulty, trigger predicates/verbs, and levers
+
+> Extracted from `Gods/CLAUDE.md` to keep the top-level ledger navigable. The evidence-discipline tag legend (`[PROVEN]`/`[STATIC]`/`[WF]`/`[UNKNOWN]`) is defined once in `CLAUDE.md` and applies unchanged here.
+
+## Difficulty: authored per-trigger, plus one progression scalar `[PROVEN]`
+
+GODS is widely described as having "adaptive difficulty". That is **true in effect but not in mechanism** — there is no global evaluator anywhere in `GAME.EXE`. Two real systems produce the effect:
+
+**1. A progression-driven difficulty scalar `DS:0x365`.** Exactly 10 references. Initialised to 0 (1 when `[0x42]==4`), incremented on level completion (`1000:0445`, clamped to `[2,4]`), and **consumed** as a difficulty multiplier at only two adjacent instructions inside damage resolution (`1000:ab56`/`ab63`) — though it is also read by its own clamp logic at `0x449`/`0x455`, so "two reads in the whole binary" (an earlier claim here) was wrong; there are four reads across ten reference sites. Net damage multiplier by value: **1.00, 0.75, 0.50, 0.25, 0.25** — i.e. **the hero deals less damage as the scalar rises**; see the correction below for why the shift is the amount *forgiven* rather than the amount dealt, ⚠️ and why those figures are the **asymptotic** ratio rather than what a creature touch actually costs. Its inputs are **level progression only** — never health, lives, deaths, time or score. Corroborated by the game's own hint text: `"and the game gets more difficult too"`.
+
+**2. Performance conditions authored into individual trigger records.** The section-4 trigger table genuinely gates spawns on how the player is doing — as level data, per trigger. Decoded examples:
+
+- `PLEV1A #28` — `ACT=0 spawn(type=54)`, message `"help bonus"`, conditions `score ≤ 24*5000` **and** `timer/17 > 24*5` → help for a slow, low-scoring player.
+- `PLEV1A #6` — `ACT=0 spawn(type=5)`, message `"speed bonus"`, condition `timer/17 ≤ 12*5` → reward for a fast player.
+- Other `"help bonus"` triggers gate on **health** `[0x192]` and lives `[0x224]` — see *`UNKNOWN_DS_0192` — CLOSED*.
+
+⚠️⚠️ **A CORRECTION TO A CORRECTION — the shifted value is NOT the damage** `[PROVEN]`. This section has now held the multipliers two different ways, and **both were wrong**, because both were read off `shr bx,cl` in isolation. The full bracket, re-read here instruction by instruction:
+
+```
+ab56  cmp byte [0x365],0 / jz 0xab92    ; scalar 0 -> the simple path
+ab5d  push bp                           ; save the target's HP
+ab5e  sub bp,bx                         ; bp = HP - RAW      <-- SUBTRACT FIRST
+ab60  mov cx,3
+ab63  sub cl,[0x365]                    ; cl = 3 - scalar   (a BYTE subtract)
+ab67  jns 0xab6b / ab69 sub cx,cx       ; clamp at 0
+ab6b  push bx                           ; save RAW
+ab6c  shr bx,cl                         ; bx = RAW >> cl    (LOGICAL shift)
+ab6e  push si / mov si,sp
+ab71  cmp bx,[ss:si+0x2]                ; vs the saved RAW
+ab76  jnz 0xab82                        ; the shift changed it -> keep bx
+ab78  mov cx,bx / shr bx,1 / sub cx,bx / sar cx,1 / add bx,cx   ; else bx = 3/4 RAW
+ab82  add sp,0x2 / ab85 pop cx          ; cx = the saved HP
+ab86  add bp,bx                         ; bp = (HP - RAW) + bx  <-- ADDED BACK
+ab88  js 0xab98 / ab8a jz 0xab98        ; <= 0 -> the death path
+ab8c  sub cx,bp / mov bx,cx             ; the damage REPORTED is HP - newHP
+ab92  sub bp,bx                         ; scalar 0: the full raw damage
+```
+
+`bp` is the target's HP, in and out (`0xffa2` loads it, `0xffb4` writes it back). The routine subtracts the **raw** damage at `0xab5e` and adds the **shifted** value back at `0xab86` — so the shift is the amount **forgiven**, not the amount dealt. Applied damage is `raw − (raw >> cl)`:
+
+| scalar | 0 | 1 | 2 | 3 | 4 |
+|---|---|---|---|---|---|
+| `cl` | — | 2 | 1 | 0 | 0 |
+| forgiven | — | raw/4 | raw/2 | ¾ raw | ¾ raw |
+| **multiplier** | **1.00** | **0.75** | **0.50** | **0.25** | **0.25** |
+
+which is the *original* table, with the intuitive direction: **as the scalar rises the hero deals less damage.** The clamp was re-read too — `0x0445 inc byte [0x365]`, then `0x0449 cmp 2 / jnl` raises it to 2 and `0x0455 cmp 4 / jl` caps it at 4 — so the sequence a player meets is **0, 2, 3, 4, 4** → a monotone **1.00 → 0.50 → 0.25 → 0.25**. **Enemies are toughest at the end**, which is also the only reading consistent with the game's own hint text *"and the game gets more difficult too"*.
+
+⚠️ **The multipliers above are ASYMPTOTIC, and at shipped damage magnitudes they are not what the hero meets** `[PROVEN]`. `forgiven` is an integer shift, so the clean fraction only lands when `raw` is divisible by the relevant power of two; otherwise it floors and the applied damage is proportionally **higher**. That is not academic, because System-B contact damage is `((HP + 1) >> 5) + 5` — i.e. `raw` runs **5..13**, squarely in the deviating range:
+
+| `raw` | 5 | 6 | 8 | 10 | 13 | 1000 |
+|---|---|---|---|---|---|---|
+| applied at scalar 3 | 2 | 2 | 2 | 3 | 4 | 250 |
+| **effective multiplier** | **0.40** | **0.33** | **0.25** | **0.30** | **0.31** | 0.25 |
+
+So the endgame scalar forgives roughly a **third**, not three quarters, of a typical creature touch. The clean table is the limit (mean ratio over `raw` 1..4000 is 1.0000 / 0.7508 / 0.5006 / 0.2509 / 0.2509) — **a port must implement the shift, not the fraction.**
+
+⚠️ **And there is a SECOND, UNCLAMPED incrementer** `[PROVEN]`. The byte pattern `FE 06 65 03` (`inc byte [0x365]`) occurs **exactly twice** in the image: `CS:0x0445`, which is followed by the `cmp 2 / jnl` … `cmp 4 / jl` clamp pair this section already records, and **`CS:0xD5F7`, which is followed immediately by `C3` (`RET`)** — it increments and returns, with no clamp at all. It cannot change any multiplier: `cl` saturates at 0, so every scalar from 3 upward gives the same result.
+
+`UNKNOWN_365_second_incrementer` — **CLOSED negative: `CS:0xD5F7` is unreachable dead code `[STATIC, exhaustive]`.** Both `get_xrefs_to(1000:d5f7)` and a `search_instructions` sweep for the operand `d5f7` return zero hits — no near `CALL`/`JMP` anywhere in the image targets it. A separate raw byte-pattern search for the little-endian word `F7 D5` across all four initialized code blocks (152384 bytes, the whole image) also returns zero matches, so the address isn't parked in any jump table, dispatch table, or computed-call slot either — every other instance of a computed call in this codebase (trigger ACTION/CONDITION tables, the sound-driver export tables, the graphics export table, `DS:0xd95c`, `DS:0xdbe0`, …) stores its target as exactly this kind of raw little-endian word, so this sweep is the same check that would have found it. **No code path in the shipped `GAME.EXE` can ever reach `CS:0xD5F7`** — it is a second, harmless-if-called-but-never-called copy of the same `inc byte[0x365]` instruction sequence, sitting in the image without ever being wired to anything.
+
+> **The transferable lesson, worth more than the numbers:** an instruction that looks like it computes the answer may be computing a *correction* to it. Reading `shr bx,cl` and asking "what multiplier is this?" produced a confident wrong answer twice, in opposite directions. The `push bp` / `sub bp,bx` … `add bp,bx` bracket is the evidence, and it is 40 bytes away from the shift.
+
+`bx` is the raw damage from `DS:0x1ea` and `bp` the target's HP, restored from `DS:0x1ec` at `0xac53`.
+
+⚠️ **This whole bracket belongs to the WEAPON-vs-CREATURE grid scan, not the hero-contact box test — a genuine ambiguity in how this section was worded, not just a reader's mistake, since it stood next to *"The damage routine CS:0xac59"* with no explicit disambiguation and the debris section elsewhere in this document (under `CS:0x8b4c`) went on to wrongly say `0xAC4C` sits "inside the shared contact/damage routine `CS:0xac59`".** Traced the full call chain fresh, since getting this wrong would have misdirected a port's `attackHero()`:
+
+```
+CS:0xa9e4  call 0xac59            ; the hero-contact BOX TEST (a small, self-contained
+                                   ; routine with its own early RETs at 0xACBB/0xACD7/…) —
+                                   ; already documented under "The damage routine CS:0xac59"
+CS:0xa9e7  cmp bp,0 / jns 0xa9ef  ; bp UNCHANGED on a REJECT (no overlap) — ac59 never
+                                   ; touches bp on that path, only on a HIT
+CS:0xa9ec  jmp 0xabc0             ; HIT -> sound, return (this document's own existing note)
+CS:0xa9ef  ...                    ; REJECT -> the DAMAGE-GRID SCAN begins here, using the
+                                   ; SAME bp untouched by ac59 — i.e. the creature's own HP
+                                   ; (CS:0xff93 sets it once, at 0xffa2, before EITHER path runs)
+...        (CS:0xaad1-0xab3f, "the scanner", already documented)
+CS:0xab40  call 0x9320            ; a HIT -> the tag decode, sets DS:0x1ea
+CS:0xab56  ...                    ; THIS bracket — applies the scalar to raw damage from
+                                   ; DS:0x1ea against the SAME bp (creature HP)
+```
+
+So `CS:0xac59` (hero-contact) and this bracket (weapon-vs-creature) are **two different consumers of one shared `bp`**, not one routine — `ac59` is CALLED and RETURNS before the scan even starts, and everything from `0xa9ef` onward (the scan, the tag decode, this bracket, and the `CS:0xABDA-0xAC58` tail including the `CS:0xAC4C` debris spark) is a separate, larger body of code that happens to sit at LOWER addresses than `ac59` despite running AFTER it. The practical upshot for a port: **the difficulty scalar and the "hit lands, target survives with reduced HP" mechanic apply ONLY to a weapon hitting a creature, never to a creature touching the hero** — `attackHero()`/`CS:0xac59` needs no difficulty-scalar or survival logic of its own; that model belongs entirely to the grid-scan side (`creatureScansGrid` in `gods-web`, which already implemented it correctly before this correction was written — the only piece genuinely missing was the `CS:0xAC4C` debris spark on the survive case, now closed, see *`DS:0x8b4c` — debris*).
+
+So a port reproduces this by **evaluating the shipped trigger records**, not by writing a balance function.
+
+### Trigger verbs decoded so far
+
+First-pass ACTION-verb table, superseded by the complete decode below (*The 15 trigger ACTION verbs* / *The 17 trigger CONDITION predicates* — `UNKNOWN_map_trigger_verbs` is CLOSED). Kept for the verb-count census (across 756 live records: `203/4/75/75/3/134/25/60/48/18/7/6/8/77/13`):
+
+| Slot | Meaning |
+|---|---|
+| ACT 0 | spawn object, `arg` = object type |
+| ACT 6 | kill category-4 objects near the record's point |
+| ACT 7 / 8 | write `word [0x2f8c + n*6 + 4]` (a flag array **no condition reads**) |
+| COND 1 / 2 | inventory check — 4 compares against `DS:0x17e`…`0x184` |
+| COND 9 / 10 | level timer — `uint32/17` vs `arg*5` |
+| COND 11 / 12 | lever bit — `test byte [0xa5f8 + dx*6 + 4],1` |
+
+## The 17 trigger CONDITION predicates `[PROVEN]`
+
+Table `SS:0x35b0` (file `0x22B10`). The handlers occupy `1000:3bc1` and `1000:3e69`–`1000:4019` **contiguously with no gaps**, which independently confirms the set is complete.
+
+**Result convention:** each slot byte (`DS:0x3a3`/`0x3a4`/`0x3a5`) is pre-initialised to `0xFF`; a predicate signals **FAIL by writing 0** and PASS by doing nothing. The three are ANDed and tested for the **sign bit**. Clearing is monotone, so no handler ever needs to write `0xFF`.
+
+| # | Addr | Reads | PASS when |
+|---|---|---|---|
+| 0 | `3bc1` | — | **always** (a bare `RET`; the "unused slot") |
+| 1 / 2 | `3e69` / `3e88` | inventory `0x17e`…`0x184` | arg **is** / **is not** in inventory |
+| 3 / 4 | `3ea8` / `3ec1` | `0xdd10`, `0xdda2`, `0xde34` | arg **matches** / **matches none** of the 3 slots |
+| 5 / 6 | `3edb` / `3ef7` | event word `[0x932c + (arg−1)*4]` | word **< 0** / **≥ 0** |
+| 7 / 8 | `3f13` / `3f21` | **health** `[0x192]` | value **>** / **<** arg |
+| 9 / 10 | `3f2f` / `3f51` | 32-bit timer `[0x11e]:[0x120]` | `timer/17` **>** / **<** `arg*5` |
+| 11 / 12 | `3f6c` / `3f87` | `byte [0xa5f8 + arg*6 + 4]` | lever bit0 **set** / **clear** |
+| 13 / 14 | `3fbe` / `3ff1` | BCD score `[0x3b5]`…`[0x3b8]` | threshold **<** / **>** score |
+| 15 / 16 | `3fa2` / `3fb0` | lives `[0x224]` | lives **>** / **<** arg |
+
+**Every pair is strict — equality FAILS both members.** Getting a polarity backwards would invert level logic, so a port must copy the table rather than infer it.
+
+Two implementation notes: the dispatcher at `1000:3a58` has **no bounds check** on `cond_kind`; and the FAIL store is a **word**, so slot *n* also zeroes byte *n+1*. Because clearing is monotone the spill can never change a verdict, so **a port may safely use byte writes**.
+
+`COND0` accounts for 1207 of the 2268 condition slots in shipped data — most records use fewer than three conditions. Its argument is ignored, so nonzero args on those slots are dead editor data.
+
+## The 15 trigger ACTION verbs `[PROVEN]`
+
+Table `SS:0x3592` (file `0x22AF2`). The evaluator **tail-jumps** into the handler (`1000:3a56 jmp bp`), and runs three shared steps first: show `[di+0x14]`'s message (guarded by the *sign* of `DS:0xac00[id]` plus an empty-string test — **not** `id != 0`); `call 0x3aeb` key-consume, only for actions {2,3,4,7,8}; `call 0x3a69` inventory-consume, only when action bit15 is set.
+
+| # | Addr | Arg `[di+0x12]` | Effect | n |
+|---|---|---|---|---|
+| 0 | `3da1` | object type | spawn object into `DS:0x8314` via allocator `0x38d7` | 203 |
+| 1 | `3e08` | weapon idx (stored `+0xC0`) | spawn weapon pickup | 4 |
+| 2 | `4276` | — | **open a 2×3 door** — writes plane A and clears plane B (passable) | 75 |
+| 3 | `3d56` | packed dest `(col<<8)\|row` | create teleport zone in `DS:0x8f68` | 75 |
+| 4 | `3d12` | zone arg | create level-exit zone in `DS:0x8f68` | 3 |
+| 5 | `3d08` | event index | `jmp 0x6029` — dispatch a `DS:0x932c` event | 134 |
+| 6 | `3bd1` | — | kill ≤2 category-4 objects near the point | 25 |
+| 7 | `4144` | — | gate open: `DS:0x2f8c[n].state=1`, plane A/B updated | 60 |
+| 8 | `4180` | — | gate close: `DS:0x2f8c[n].state=0` | 48 |
+| 9 | `42e7` | — | **close a 2×3 door** | 18 |
+| 10 | `3e3f` | weapon id | clear whichever of `0xdd10`/`0xdda2`/`0xde34` matches | 7 |
+| 11, 12, 13 | `3bcf`, `3bd0`, `3bc1` | — | **three separate single `C3` bytes** — no-ops | 6, 8, 77 |
+| 14 | `3bc2` | — | zero the 32-bit level timer | 13 |
+
+`ACT13`'s 77 records are not inert: 52 carry real text (`"treasure room"`, `"you need the treasure key"`), so it is the **message / precondition-gate** verb. `ACT11`/`ACT12`'s 14 records have no text and are genuinely inert in the shipped data.
+
+**Clean negatives:** no action verb calls the random source `0x3836`, and none writes the lever table, the descriptors, or the entity array.
+
+### `UNKNOWN_planeB_id_range` — RESOLVED `[PROVEN]`
+
+`0x6022` (`sub al,3`) **falls straight through** into `0x6029` (`mov si,0x932c`), and its only other caller is the per-frame plane-B scan at `0x5fd7`–`0x601e`, which calls it only when `byte[si] > 2`. Therefore:
+
+> **A plane-B cell value `v ≥ 3` is an event id**, dispatching `DS:0x932c` record `v − 3`.
+
+That explains the census exactly: plane B's `0`/`1`/`2` are empty/solid/climbable (97 % of cells), and the thin spread over 3–254 is per-cell **event ids**, as suspected. `ACT5` reaches the same table with `arg − 1`, so `arg = planeB − 2`.
+
+### ⚠️ The selector dispatch is **1-BASED** — `handler = SS:0x3570[selector − 1]` `[PROVEN]`
+
+This is the most consequential correction in the document. An earlier revision said "the selector indexes the jump table at `SS:0x3570`; entry [2] is `0x39ae`". The **entry** was right; the inference that *selector value 2* reaches it was wrong. `CS:0x603A` does a `dec ax` first:
+
+```
+6022  push si
+6025  mov al,[si] / 6027 sub al,3        ; -> event record index
+6029  mov si,0x932c
+602C  shl ax,1 (x2) / add si,ax          ; 4-byte records
+6032  mov ax,[si]                        ; selector
+6034  or ax,ax / js 0x6047 / jz 0x6047   ; consumed (0xFFFF) / empty (0) -> skip
+603A  DEC AX                             ; <-- the 1-based bias
+603B  shl ax,1 / mov di,0x3570 / add di,ax
+6042  mov ax,[ss:di] / call ax           ; NO upper-bound check
+```
+
+So the trigger evaluator is **selector 3, not 2** — which dissolves the `PLEV3A` paradox (it dispatches 82 triggers, not zero). Getting this wrong makes selector 4, a System-B entity-group spawn, look like the trigger evaluator. **Apply the correction exactly once.**
+
+| sel | idx | handler | effect | param |
+|---|---|---|---|---|
+| 1 | 0 | `0xb908` | spawn from PALFILS `+0x0000` (`DS:0x9008`) → runtime `DS:0xb6b8` | < 100 |
+| 2 | 1 | `0xad06` | spawn from PALFILS `+0x0718` (`DS:0x9720`) → runtime `DS:0xaec0` | < 100 |
+| **3** | 2 | `0x39ae` | **trigger evaluator** (the 100 × 24 B table at `DS:0x7004`) | < 100 |
+| 4 | 3 | `0xde08` | activate **System-B** entity group → `SS:0x36b4` | < 50 |
+| 5 | 4 | `0xde42` | activate **System-A** entity group → `SS:0x3768` | < 50 |
+| 6 | 5 | `0x38f5` | progress / position marker (param never read) | 0 |
+| 7–10 | 6–9 | `0x75fc/7600/7605/760a` | four entry points into one body, `CX = sel − 7` | < 25 |
+| 11 | 10 | `0xc49c` | install per-world scripted routine via `SS:0x537a[world−1]` | 0 |
+
+**The table is 11 entries.** The immediate `0x3570` occurs exactly once file-wide (`CS:0x603D`); the words from index 11 belong to a different table at `SS:0x3586` whose sole consumer is `CS:0xAE7C`.
+
+**The shipped data forces the same reading independently.** Across all 2024 records in the 8 `PALFILS` files the selector census is `0:281 1:137 2:406 3:727 4:217 5:57 6:8 7:80 8:74 9:26 10:3 11:8` — **maximum 11, exactly the table size**, which under 0-based would dispatch into the foreign table. And each selector's maximum param lands exactly where its handler's table requires: `1/2/3 → 99` (three different 100-entry tables), `4 → 49` (a 50-record window), `7–10 → 23/23/13/1` (a 25-record window). Selector 0 is an **empty slot**, dropped by the `jz`.
+
+**Endianness.** On disk the records are big-endian. The original packs each field to one byte (`CS:0x386E`, `lodsw / xchg al,ah / stosb`, 506 words) into a master at `DS:0x8114`, then unpacks to native words (`CS:0x3880`). No shipped field exceeds 255 (verified: 0 of 4048), so reading the big-endian `u16` directly is equivalent.
+
+Three further consequences `[PROVEN]`:
+
+- **Dying re-arms every consumed event.** `CS:0x3880` is called from level load (`CS:0x0095`) *and* from the respawn path (`CS:0x485E`), restoring the pristine master and wiping all `0xFFFF` consume markers.
+- **Records 251 and 252 are hard-patched** on every unpack to `{11,0}` and `{6,0}` (`CS:0x3894`), discarding whatever `PALFILS` holds. All 8 shipped files already read exactly that, so it is a no-op on shipped data.
+- **Trigger actions write plane B**, so the event map is not immutable. `ACT2` zeroes three cells (`0x42D1`–`0x42E3`), `ACT9` sets them to 1, `ACT7`/`ACT8` write one each. A door opening can erase an event cell permanently.
+
+### `PALFILS` feeds the trigger system `[PROVEN]`
+
+The 7000-byte front region — previously `UNKNOWN_alfils_record_fields` — is not one array. `1000:2aa6` copies it (`rep movsb`, `cx=0x1b58`) to **`DS:0x9008`**, and three known tables are windows into it:
+
+| PALFILS off | DS addr | Stride | Count | Consumer / role |
+|---|---|---|---|---|
+| `0x0000` | `0x9008` | 8 | 100 | spawn table; runtime `DS:0xb6b8` stride `0x1c`, 5 slots |
+| `0x0324` | `0x932c` | 4 | 253 | **event records**, dispatched via `SS:0x3570` |
+| `0x0718` | `0x9720` | `0x10` | 100 | spawner `0xad0d`; runtime `DS:0xaec0` stride `0x20` |
+| `0x0D58` | `0x9d60` | `0x16` | **50** | **System-A group descriptors** → runtime `SS:0x3768` stride `0xe4`, 10 slots |
+| `0x11A4` | `0xa1ac` | `0x16` | **50** | **System-B group descriptors** → runtime `SS:0x36b4` stride `0x12`, 10 slots |
+| `0x15F0` | `0xa5f8` | 6 | 64 | **levers** `{x, y, object_type}`, BE→native at `0x2acf`; `+4` bit0 = state |
+| `0x1770` | `0xa778` | 6 | 30 | `{key, x, y}` lookup at `0x6241` |
+| `0x1824` | `0xa82c` | 6 | **20** | **trap doors** — see below |
+| `0x189C` | `0xa8a4` | `0x1c` | 25 | handed to the driver via `DS:0x7a` |
+| `0x1B58` | `0xab60` | 2 | 40 | hint **trigger values** (BE `i16`) |
+| `0x1BA8` | arena `DS:[0x14c]` | `0x28` | 40 | hint **text**, ASCIIZ |
+
+**The accounting closes:** `804 + 1012 + 1600 + 1100 + 1100 + 384 + 180 + 120 + 700 = 7000 = 0x1B58`, and `+80 + 1600 + 80 = 8760`. Every region abuts the next exactly, and each count was taken from a loop immediate in code, not fitted to the data. **6996 of the 7000 front bytes are accounted for**; the only gaps are `UNKNOWN_palfils_0320` — see below — and `UNKNOWN_palfils_tail` (the 80-byte all-zero tail at `0x21E8`).
+
+### `UNKNOWN_palfils_0320` — mechanism CLOSED, live-reachability CLOSED (negative) `[PROVEN]`
+
+The 4 bytes are byte-identical `00 02 00 00` in all 8 shipped `PALFILS.0{A,B}{1-4}` files, landing at runtime `DS:0x9328` via the front-region copy `CS:0x2AA3 mov si,0x0 / CS:0x2AA6 mov di,0x9008 / CS:0x2AA9 mov cx,0x1b58 / CS:0x2AAC rep movsb`. No instruction in `GAME.EXE`, `TGAME.EXE`, or any of the other shipped executables references linear address `DS:0x9328`/`0x9329`/`0x932A` via a direct immediate operand — the lone `CS:0x9328`-shaped hits in both binaries are unrelated code addresses (inside the grid damage-tag decoder), not data references.
+
+**But three handlers reach it anyway, via an off-by-one.** `COND5` (`CS:0x3EDB`), `COND6` (`CS:0x3EF7`), and `ACT5` (`CS:0x3D08 → CS:0x6029`) all compute `si = 0x932c + (arg−1)*4` into the PALFILS event table; because the arithmetic is 16-bit, an `arg` of `0` — or, equivalently mod 65536, `16384`/`32768`/`49152` — underflows to exactly `DS:0x9328`. (Checked exhaustively: brute-forcing all 65536 possible `arg` values confirms `{0, 16384, 32768, 49152}` is the complete aliasing set, and none of the three other values occurs anywhere in the 800 shipped `.MAP` trigger records for either handler family.) These 4 bytes are structurally "PALFILS event record −1."
+
+For `COND5`/`COND6` an `arg` of 0 is harmless — it just makes the predicate test the mystery word's sign (`0x0200` is positive, so `COND5` fails and `COND6` passes, silently; zero shipped records use either with an aliasing arg). For `ACT5` it is a genuine wild jump. `CS:0x6029` reads the mystery bytes as a *native* word — they are never byte-swapped, since the pack/unpack loop at `CS:0x386E`/`CS:0x3880` starts exactly at `0x932c` (`mov si/di,0x932c`, `cx=0x1fa`=506 words) and never touches `0x9328` — giving `0x0200` = 512. **Because that value is neither zero nor negative, it fails to trip the routine's own `or ax,ax / js 0x6047 / jz 0x6047` "consumed/empty" guard**, and execution falls through to `dec ax / shl ax,1 / mov di,0x3570 / add di,ax / mov ax,[ss:di] / call ax`, landing on `SS:0x396E` — 1022 bytes past the legitimate 11-entry `SS:0x3570` selector table, and, by address arithmetic against this document's own `SS:0x3768`/stride-`0xE4`/10-slot System-A group-runtime span (`[0x3768, 0x4050)`), inside that live runtime array rather than any jump table. The call target is therefore whatever entity-group runtime data happens to sit there at the moment — an unguarded, data-dependent wild call.
+
+**Shipped data comes within one wiring step of hitting this.** A full census of all 8 `.MAP` files' 800 trigger records finds exactly one record anywhere with `ACT5` and an aliasing arg: **`PLEV3A.MAP` record #50** — `cond0: kind=2 (item NOT held) arg=23 ("chest key")`, `action=5 arg=0` — "if the player lacks chest key 23, run `ACT5(0)`." But reaching record #50 at all requires a `PALFILS.0A3` event record `{selector=3, param=50}`, which exists at event index 95 (of 78 live `selector=3` records in that file) — and the *only* two ways to ever dispatch event index 95 are a plane-B cell valued 98 (`95+3`) or another `ACT5` with `arg=96` (`95+1`). **Neither exists in `PLEV3A`'s shipped data**: 0 of its 8192 plane-B cells equal 98, and none of its 20 `ACT5` records use `arg=96`. So the wild-jump path is real and structurally proven — and it fails to fire only because the level-editor never wired an entry point to event index 95, not because of anything about the 4 mystery bytes.
+
+**Conclusion:** in every shipped play scenario these 4 bytes are dead padding — not because their specific value blocks anything (it does not; `0x0200` is exactly the kind of value that would let the wild call proceed if the code path were ever reached), but because the one code path able to read them as data is never dispatched with shipped level content. Their value never varies with level content, unlike every record around them (including the very next 4 bytes, event record #0, which differs across files), ruling out "duplicated first record." A plausible origin — unprovable from these bytes alone — is a level-export-tool artifact: a phantom "index-0 / base" slot the tool's own internal array representation always emits ahead of the real table. `UNKNOWN_palfils_0320_intent` — deliberate guard vs. tooling artifact — is not decidable from static bytes alone.
+
+### `DS:0xa82c` — trap doors `[PROVEN]`, formerly `UNKNOWN_alfils_a82c`
+
+`1000:40c0`, `cx=0x14`: **20 records of `{u16 x, u16 y, u16 open}`** that patch the map at level load — plane-A tile from `[0x152]`/`[0x154]`, and **plane-B solidity as `open XOR 1`**:
+
+```
+40E2  cmp dx,0 / js skip        ; 0xFFFF terminates
+40E9  call 0x379b               ; di = plane A + (Y<<3) + (X>>5)
+40F1  mov bl,[0x152] / mov [di],bl    ; open != 0
+40F9  mov bl,[0x154] / mov [di],bl    ; open == 0
+40FF  add di,0x2000             ; -> plane B
+4103  xor dl,1 / mov [di],dl    ; solidity = open XOR 1
+```
+
+This is the mechanism behind the message `"a trap door closes beneath you"`.
+
+Verified independently: `0x9008 + 0x324/0x15f0/0x1824` land exactly on `0x932c`/`0xa5f8`/`0xa82c`, and `PALFILS.0A1+0x15f0` decodes to 36 live lever records whose `{x, y, type}` match `PLEV1A`'s object records exactly (entry 0 = `(424, 592, 24)` = object #15). A byte-swap pass at `1000:2acf` (`cx=0xc0` = 64×6 bytes) converts the lever table BE→native.
+
+**The lever "state" is bit 0 of the object type**, not a separate flag: types 24/25 = lever off/on, 26/27 = switch off/on, so `xor byte [...+4],1` flips state and graphic together. Conditions 11/12 test that same bit.
+
+## Levers and triggers — no bitfields `[PROVEN]`
+
+A lever is a `POBJECTS` **category 3** object. State lives in a **64-entry × 6-byte `{x, y, state}` table at `DS:0xa5f8`**, toggled one bit at a time (`xor byte [...+4],1`) by the player-overlap handler around `1000:1087`, and read by trigger conditions 11 and 12 (`test byte [0xa5f8 + dx*6 + 4],1`).
+
+Multi-lever puzzles are real — a census of the 756 live trigger records finds 17 with three lever conditions, and levers {45,46,47} on `LEV3A/3B` appear in five records with five polarity patterns selecting five different actions. But the combination logic is **the trigger table's three AND-ed predicates**, not a bitfield indexed into a solution matrix: an exhaustive search of the handler and toggle regions found **zero** bitfield idioms (`or reg,reg`, `or [abs],r16`, `rcl`/`rcr`, `xlat`).
+
+Trigger actions cannot set levers — `DS:0xa5f8` is written only by the player toggle — so lever puzzles cannot chain into one another.
+
+### The lever/switch toggle, `CS:0x1045`-`0x10D6` — full trace, and a correction `[PROVEN]`
+
+⚠️ **Correction to the paragraph above: it is not a "player-overlap handler".** `CS:0x1045` is reached from exactly one place, `CS:0x49F2`, inside player **state 26 (idle)**'s own fire dispatch (`CS:0x49EA test byte[0x382],0x80`) — see *Which states can fire a weapon*, above, which already names this but had not traced the routine's own body past the `xor` at `0x10C5`. The hero must be standing still (not walking, jumping, falling, or on a ladder) and holding FIRE; walking into a lever does nothing at all. Read in full this pass, including its two previously-untraced callees:
+
+```
+1045  cmp byte[0x346],0 / jz 104f     ; DEBOUNCE LATCH, identical shape to the
+104c    jmp 10dc (return)             ;   weapon fire latch DS:0x351: cleared
+                                      ;   every tick fire is NOT held (CS:0x49F9
+                                      ;   mov byte[0x346],0), set the instant this
+1059  cmp byte[0x3a2],0 / jns 10dc    ;   scan is even attempted (0x1060), whether
+1060  mov byte[0x346],1              ;   or not it finds anything to toggle
+                                      ; DS:0x3a2 >= 0 -> a delayed animated toggle
+                                      ;   is already in progress -> bail (see below)
+1065  si=0x8314 ; cx=0xc8             ; walk all 200 live object records
+106b    cmp word[si+6],0 / jz next     ; +6 (flag6) must be nonzero — on screen
+1071    cmp word[si+4],0 / js next      ; +4 (type) must be live
+1087    cmp descriptor(type).category,3 / jnz next   ; CATEGORY 3 ONLY
+1094    call 0x115b                     ; lever-table lookup — below
+1099    or dx,dx / js next               ; NOT a real lever -> skip
+109d    call 0x10dd                      ; hero-proximity box — below
+10a0    jc next                          ; too far -> skip
+10a2..10b8  sprite in {0x120,0x122,0x124,0xe8}?  -> arm the delayed animation
+10c5    else: xor byte[obj.type],1  AND  xor byte[lever.type],1   ; BOTH structures
+10ce    play sfx 0x62b
+10d6    ret                              ; ONE toggle per press — no loop-continue
+```
+
+`CS:0x115b` (previously unread) is a linear search of the 64-entry `DS:0xa5f8` lever table for an EXACT `{x,y}` match against the candidate object, using `DX`'s sign as the found/not-found flag (the loop's own countdown register, left non-negative on a match, driven to `−1` by the unconditional `dec dx` on every failed attempt through all 64 records):
+
+```
+115b  si=0xa5f8 ; dx=0x3f(63)
+1161  cmp ax,[si] / jnz 116a ; cmp bx,[si+2] / jz 1170   ; {x,y} match -> RET (dx unchanged, >= 0)
+116a  si+=6 ; dec dx ; jns 1161                            ; next record
+1170  ret                                                    ; exhausted -> dx = -1
+```
+
+`CS:0x10dd` (previously unread) is the hero-proximity box — WORLD space, and genuinely asymmetric on both axes:
+
+```
+10df  bx=heroWorldX ; ax=objWorldX+4
+10e6  cmp bx,ax / jg reject          ; heroX >  objX+4   -> reject
+10ea  bx+=0x18 ; cmp bx,ax / jl reject  ; heroX+24 < objX+4 -> reject
+                                      ; => heroX in [objX-20, objX+4]
+10f4  bx=heroWorldY ; ax=objWorldY+0x10
+10fb  cmp bx,ax / jg reject          ; heroY >  objY+16  -> reject
+10ff  bx+=0x30 ; cmp bx,ax / jl reject  ; heroY+48 < objY+16 -> reject
+                                      ; => heroY in [objY-32, objY+16]
+1106  clc / ret                       ; accept
+```
+
+Both operands share `X` in screen space (camera cancels — equivalent to world space) but the caller keeps `Y` in world space throughout this part of the object walk for category>=3 objects (see `UNKNOWN_ss432_indirect`, above), which is why no camera term appears on the Y side.
+
+**The four special sprites — `0x120`/`0x122`/`0x124`/`0xe8` (POBJECTS types 118/120/122/62) — get a delayed, animated toggle instead of the instant `xor`**, already documented above under `UNKNOWN_lever_special_types`'s own `FUN_1000_1d01` trace, now cross-referenced from the trigger side rather than the draw side: `CS:0x10BA` arms it (`[0x20e]:=`the object, `[0x3a2]:=0`), and the draw routine advances `DS:0x3a2` once per FRAME (not once per press) through the per-world 5-entry table at `DS:0xe01e`, toggling both the object AND the lever-table record at phase 3 of 5, re-arming (idle) after phase 5. **Placed 18 times across the 8 shipped maps** (5/4/2/2/0/3/0/2 — types 118, 62, 62, 62, none, 120, none, 122 respectively), a small but real mechanic, previously known only as a draw-side animation with no traced trigger.
+
+**Ported in the sibling `gods-web` repo** as `game/levers.js`, verified live in the browser: a real idle+FIRE press flips an ordinary lever's sprite (a visible orange handle appearing/disappearing), end to end through the actual input pipeline, not just a unit test.
+
