@@ -1989,7 +1989,95 @@ So `stat3.pi1` decompresses into the identical staging buffer (`0x351b:0`) and c
 
 **Rendered, the two images are pixel-identical everywhere except one 89×29 region** (x 226–314, y 160–188 of the full frame): `PSTATUS` shows an amber circular icon beside a horizontal track; `PSTAT3` shows a skull icon beside a small digit tile. Everything else — a left-hand weapon/item alcove, a portrait frame, a row of empty pillar-flanked slots, a black health-bar trough spanning the full width, an ornate stone border — is shared. `UNKNOWN_status_panel_right_icon` — what that region represents, and whether it is itself later overdrawn by something dynamic, is not established; only its bounding box and the fact that it differs between the two shipped files.
 
-**Not traced this pass**: the dynamic elements drawn on top of this static frame each tick (the health-bar fill into the black trough, score/weapon-slot/key-icon digits and sprites) — this pass only chased the frame's own load/convert path, which is the only part `gods-web`'s new `game/status-panel.js` ports.
+**The dynamic overlay — health bar, score/lives/money digits — traced and ported `[STATIC]`, position confirmed live in the browser port.** A later pass chased the elements the paragraph above left unnamed: they are straight-line, unconditional calls in the main loop right after the panel's own backdrop refresh, no branch around any of them —
+
+```
+CS:0x02C6  call 0x1000:0dff   ; the health-bar CHASE (already documented — DS:0x19a chases DS:0x192)
+CS:0x02C9  call 0x1000:0e77   ; health bar DRAW
+CS:0x02CC  call 0x1000:0ab1   ; LIVES digits
+CS:0x02CF  call 0x1000:0b21   ; money-changed detector (sets DS:0x6e/0x6f)
+CS:0x02D2  call 0x1000:0b40   ; MONEY digits
+CS:0x02D8  call 0x1000:0bbf   ; SCORE digits
+```
+
+**The health bar, `FUN_1000_0e77`/`FUN_1000_0e93` (CS:0x0e77-0x0e93).** Seeds icon base `DS:0x312:=0x7a`(122) and X `[0x4]:=0xf`(15); on every OTHER tick (`DS:0x36d`, the shared toggle this document already uses for several unrelated cadences) advances a 0..3 shimmer-phase counter `DS:0x3b4` before drawing. The draw itself is a two-crop trick reusing this document's own already-established 8-byte sprite-descriptor convention (`{-(width-1), height-1, arena_offset, arena_segment}`, `DS:0x0e`/`0x1e00`): it dynamically overwrites a sprite's `height-1` field and `arena_offset` field to crop one 16×14 bitmap into a variable-height progress-bar fill — a technique this document had not previously documented anywhere.
+
+```
+0e93  si = 0x1e00 + (DS:0x312+4)*8        ; descriptor #126 (0x7a+4), the "empty" sprite
+0eac  ax = 4 - DS:0x3b4                    ; pushed, used to pick the shimmer sprite after draw #1
+0eb5  ES := (DS:0x33&4) ? 0xad4c : 0xacde  ; see the Y-positioning note below
+0ecc  [0x6] := 7 ; [0x4] += (DS:0x33&4)     ; panel-local Y=7, X=15(+0/4)
+0ed8  ax := max(DS:0x19a, 0)                ; the health BAR value (chases the target), 0..24
+0ee7  E := (24 - ax) >> 1                    ; "empty" row count, 0..12
+0eee  descriptor[126].height := E             ; height-1 field
+0efd  DRAW #1: sprite 126, height-field E      ; source rows [0, E+1) at output Y=7
+0f03  [0x6] += E+1                              ; Y := 7 + (E+1)
+0f0d  spriteId := 126 - (4 - DS:0x3b4)            ; one of {122..125}, the shimmer cycle
+0f20  descriptor[that].height := max(11-E,0)+1      ; height-1 field
+0f2b  descriptor[that].arenaOffset += E*2               ; source row skip = E rows (2 bytes/row, 16px 1-bit mask)
+0f30  if (E+1)*2 != 26: DRAW #2                          ; SKIPPED only when E==12 (health==0)
+```
+
+Measured against the real assets (`PALWAYS3.DAT`/`.PI1` via the port's own `parseAtlas`/`cutAll`): descriptors 122-126 (frames 11-15) are all **16×14** — five identical-sized sprites. 126 is the empty/trough graphic; 122-125 are the four shimmer-phase fill variants. Draw #1 renders source rows `[0, E+1)` of sprite 126 at output `Y=[panelY, panelY+E+1)`; draw #2 renders source rows `[E, 13)` of the shimmer sprite (13-E rows for E≤11) at output `Y=[panelY+E+1, panelY+14)`. The two output ranges are adjacent with no gap and no overlap, covering exactly 14 rows for every E in 0..11 (verified algebraically: `E+(13-E)+1==14`) — though sprite row 13 (the physical last row of both bitmaps) is never source-sampled by either draw, a 1px reserved border row. At `E==12` (health==0 exactly) draw #2 is skipped by the original's own bounds check, leaving output one row short (13 of 14) — a genuine, faithfully-reproduced quirk, not "fixed."
+
+`DS:0x3b4` (the shimmer phase) has **no zero-reset writer anywhere** in the binary (`search_instructions`, 7 hits, exhaustive) — a genuine session-persistent global, ported as such (`main.js`'s `healthBarShimmer`, beside `leverToggle`/`spikeClock`/`passwordSlots`, not reset by `switchLevel`). It has a second, unchased writer (`FUN_1000_6b97`, near the already-documented `FUN_1000_6b00` world-advance function) not modelled by this port.
+
+**Score/lives/money digits, `FUN_1000_0bbf`/`FUN_1000_0ab1`+`FUN_1000_0af0`/`FUN_1000_0b21`+`FUN_1000_0b40`.** All three share one digit strip: `FUN_1000_0bbf`'s own call into `FUN_1000_0df8` (`mov bp,0x52a6 / callf [bp+0] / ret`) is graphics-driver **export 21**, which this document's own `formats/descriptors.js` had already independently anchored at **descriptor #127** (PALWAYS3 frame 16, measured 80×7 — exactly ten 8×7 digit cells) in prior, undocumented work — this pass is the first time that anchor was actually wired to a consumer.
+
+**Score** draws all 4 bytes of the packed-BCD score (`DS:0x3b5`-`0x3b8`) least-significant byte first, ones nibble before tens nibble, stepping the draw cursor LEFT 8px per digit from a fixed **right** anchor `[0x4]:=0x128`(296):
+
+```
+0c05  al := bytes[0] ; push ax ; al &= 0xf   ; LOW nibble (ones) drawn first
+0c0b  draw(al) ; [0x4] -= 8
+0c13  pop ax ; al >>= 4                       ; HIGH nibble (tens)
+0c1c  draw(al) ; [0x4] -= 8
+... repeated for bytes[1..3] ...
+```
+
+**Lives**, `FUN_1000_0ab1`/`FUN_1000_0af0`, draws in the **opposite** order and from a fixed **left** anchor `LIVES_X=0x42`(66) — established from raw bytes, not the decompiler's pseudo-C, which renders this as an opaque signed-byte loop and gets the digit order backwards:
+
+```
+0afb  bl:=10 ; cl:=0
+0aff  al -= bl / js 0b07 / inc cl / jmp 0aff   ; repeated subtraction, counting in CL
+0b07  al += bl                                  ; undo -> AL = ONES digit
+0b09  push ax                                    ; save {ones}
+0b10  al := cl ; draw(al)                         ; TENS FIRST, at the fixed left anchor
+0b18  [0x4] += 8                                   ; step RIGHT
+0b1d  pop ax ; draw(al)                             ; ONES SECOND, 8px right of tens
+```
+
+So lives reads normally left-to-right (tens then ones) from a fixed left anchor, the opposite convention from score/money's right-anchored, right-to-left layout — a real asymmetry between a fixed-width 2-digit counter and a variable-magnitude accumulator, clamped at 99 (`CS:0x0af3`/`0x0af8`).
+
+**Money**, `FUN_1000_0b21` (change detector, comparing the live 32-bit total `DS:0x194`/`0x196` against a same-tick snapshot and setting a third dirty-flag pair) + `FUN_1000_0b40` (draw), renders as a **plain decimal** number (repeated `div 10`, not BCD), right-anchored at the same `0x128` score uses, six digits:
+
+```
+0b7b  cmp dx,7 / jl 0b92                  ; high word < 7 -> no clamp
+0b80  cmp ax,0xa120 / jle 0b92              ; == 7 and low <= 0xa120 -> no clamp
+0b85  ax:=0xa120 ; dx:=7                    ; ELSE clamp
+0b8b  [0x194]:=ax ; [0x196]:=dx               ; WRITTEN BACK — a real, permanent clamp
+```
+
+`0x0007a120 == 500,000` — **money is capped at display time**, in `FUN_1000_0b40`, with the clamped value written back into the real 32-bit total rather than being a display-only trick. A genuinely new finding: no earlier pass of this document had located a money cap anywhere.
+
+⚠️ **`DS:0x33` bit 2 is read by every one of health/score/lives/money** (and, per the backfill below, by the separate top-of-screen inventory panel too) — an unidentified UI-mode flag selecting between `ES=0xacde`/`0xad4c` (health bar) or a 0/4px X shift (digits, inventory panel). Its true meaning was never established in this document; `gods-web` defaults to the bit-clear arm throughout, consistent with `inventory-panel.js`'s own prior, undocumented precedent, and discloses the shift as NOT PORTED rather than silently dropping it.
+
+**`UNKNOWN_status_panel_es_segment` — the exact segment arithmetic in `GAME.EXE` was not traced further, but the +160 offset itself is now confirmed empirically, not just circumstantially.** Panel-local Y values (5, 7, 9, 0x11) are far too small to be absolute screen rows within the empirically-verified 160-199 status-panel band (`UNKNOWN_playfield_height`, above). Disassembling graphics export 21's own body in `VGA.EXE` (`ndisasm`, offset+0x200 per this document's established file↔memory formula) shows its destination is computed as `(X>>3) + Y*44` — the exact mode-0Dh 44-byte scanline pitch this document already documents — with **no** addition of the `SS:0x40A` UI-context variable also seen written around the main loop (a real variable used elsewhere for gameplay/hiscore/password screen Y-origins, but not the mechanism here). The arithmetic itself does not resolve which VGA page or offset `0xacde`/`0xad4c` denote — `0xacde*16` and `0xad4c*16` are not whole multiples of 44 scanlines above either documented page base (`0xa000:0`/`0xa226:0`), so the ES segment is not simply "a page base plus 160 rows" in any form this document can derive from the two known pages alone; it differs from `0xad4c` by exactly 40 rows (1760 bytes), a relationship whose origin was not chased further.
+
+**Rather than push the arithmetic further, the +160 offset was verified the cheaper way the project's own precedent (the ladder-clipping and jump-ceiling fixes) already establishes: driven live in the browser port and looked at.** With `hp=5/24` and `lives=2`, money/score at 0, the rendered frame shows: (1) the lives digit "02" at native pixel `(66, 169)` — exactly `LIVES_X` and `STATUS_PANEL_Y0(160)+LIVES_Y_LOCAL(9)` — sitting correctly inside the portrait-frame art, not in the playfield; (2) the health-bar cage at native X=15 showing a mostly-empty trough with a small filled patch near the bottom, matching `E=(24-5)>>1=9` (10 empty rows on top, 4 filled rows at the bottom) exactly; (3) eight identical "0" digit glyphs in a row at the score's Y (`160+5=165`) and six at money's Y (`160+0x11=177`), 12 native pixels apart as predicted, right-anchored at the same X — matching `SCORE_DIGITS=8`/`MONEY_DIGITS=6` exactly. All three elements land in the correct screen band, in the correct relative positions, with correct proportions for the live game state, with zero special-casing in the renderer. This does not prove the original's own `0xacde`/`0xad4c` segment arithmetic (that remains genuinely `UNKNOWN_status_panel_es_segment`), but it does confirm the port's own model of the mechanism — `STATUS_PANEL_Y0=160` plus the panel-local Y read straight off the disassembly — produces the correct on-screen result, which is the practically load-bearing question for this port.
+
+**Backfill: the crouch/inventory panel is a SEPARATE HUD element near the top of the screen, not part of the bottom status band — a finding from prior, undocumented work in this project that was never written up here.** `gods-web/src/game/inventory-panel.js` (committed in `38464c7`, "Port the crouch/inventory panel's rendering pipeline") already fully implements `FUN_1000_1e1a`/`FUN_1000_1f5a`/`FUN_1000_1dd1`/`FUN_1000_1e06`/`FUN_1000_1ee3`, with citations this later pass independently re-derived byte-for-byte before discovering the port already had them — a process gap (real RE findings existing only in port code comments, never reaching this ledger) worth naming so a future session doesn't repeat the re-derivation. Summarized:
+
+- **Called unconditionally every tick**, straight-line in `FUN_1000_006f`, regardless of player state — not a crouch-only popup:
+  ```
+  CS:0x02C0  call 0x1000:1f5a   ; commit pending slot-selector change (DS:0x367 -> DS:0x366)
+  CS:0x02C3  call 0x1000:1e1a   ; draw the panel: 4 slot frames, then 4 held-item icons
+  ```
+- **Screen position, absolute, not panel-local**: `FUN_1000_1e1a` draws the 4 slot frames at `screenX0=0x60`(96), `screenY=3`, stepping 0x20(32)px per slot (sprite `0x74`, the highlighted slot `0x73`), then the 4 item icons 8px right and one row down (`screenY=4`), via export 2. So this panel sits at **rows 3-20ish, near the top of the screen** — genuinely separate from the bottom 40-row status band (`STATUS_PANEL_Y0=160`), not baked into PSTATUS/PSTAT3's own art. No earlier pass of this document had located this panel's own per-tick call site or established its on-screen position before this backfill.
+- **The highlight is gated by a saturating counter/delta pair** (`DS:0x350` 0..12, `DS:0x352` ±1) with exactly three writers program-wide: `FUN_1000_1dd1` (EXTEND, armed once per CROUCH tick), `FUN_1000_1e06` (RETRACT, armed once per non-crouch tick via the player state-machine's own `CS:0x499A`/`0x49A7` dispatch gate), and `FUN_1000_1e1a`'s own unconditional per-call chase-step. Net effect: crouching advances the counter +1/tick; not crouching advances it −2/tick (RETRACT's own direct step plus the chase-step, both applying delta=−1 the same tick) until it saturates at 0.
+- **The item icon, `FUN_1000_1ee3`**: looks up the slot's stamped sprite id (`170+type`) via the runtime object-descriptor array (`DS:0x2a4e`), remaps two special ids (`0x117`→`0xb7`, `0x118`→`0xcc` — the "magical gem"/"treasure chest" popup-only icons get a separate, smaller variant here rather than their own raised popup sprite), and vertically centers a variable-height icon against a nominal 16px band via `(16 - (h-1)) >> 1` (arithmetic shift).
+- **NOT PORTED, disclosed**: `DS:0x33` bit 2's 4px shift and dirty-flag swap (moot for a full-redraw renderer); the FIRE-tap slot-selector cycle (`CS:0x612F`-`0x619D`, real trigger confirmed from bytes as a debounced FIRE-tap-while-crouching-over-no-key cycle, not up/down as an earlier design note guessed) — unported, so `selector` never leaves slot 0; `CS:0x61A1` (drop the selected slot's item on crouch exit) — already flagged unported elsewhere.
+
+Both status-panel overlay modules (`game/health-bar.js`, `game/hud-digits.js`) and the inventory panel above are wired into `src/main.js` and covered by dedicated `checkHealthBar()`/`checkHudDigits()` functions in `src/verify/checks.js`.
 
 **`UNKNOWN_export22_call_args` — largely CLOSED: the trailing three parameters are OUTPUT/chained state, threaded across multiple export-22 calls `[STATIC]`.** The clinching site is `FUN_1000_2882` (`CS:0x2882`–`0x28D7`), export 22's **first-ever caller** in the whole binary — called exactly once, from `entry` (`CS:0x006c`), i.e. unconditionally at `GAME.EXE` startup, before any level or screen logic runs:
 
