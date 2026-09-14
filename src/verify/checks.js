@@ -60,6 +60,9 @@ import { EntityA, CLASS_TABLES_A, spriteForEntityA, rollStrategy,
          groupRewardPositionA } from '../game/entity-a.js';
 import { SELECTOR_TABLE, SELECTOR_TRIGGER, EVENT_TABLE_OFF, EVENT_COUNT,
          palfilsNameFor, parsePalfils, EventRunner } from '../game/events.js';
+import { parseLineBarrierRecords, LineBarriers, TABLE_OFF as BARRIER_TABLE_OFF,
+         RECORD_COUNT as BARRIER_RECORD_COUNT, RECORD_STRIDE as BARRIER_RECORD_STRIDE,
+         SELECTOR_TO_SLOT as BARRIER_SELECTOR_TO_SLOT } from '../game/line-barriers.js';
 import { GROUP_SLOTS as PAT_GROUP_SLOTS, SUBRECORDS_PER_GROUP, ABSOLUTE_TAG,
          HOLD_BOX, reloadTicks, decodeDelta, parsePatDirectory,
          parsePatSpawnDescriptor, CLASS_TABLE_A, PatGroups,
@@ -12496,6 +12499,184 @@ export function checkLevers() {
       + 'table; a special-sprite type with no lever-table entry does not — '
       + 'exactly the split this scan\'s own CS:0x1099 gate produces',
       matched === 4);
+  }
+
+  return results;
+}
+
+/**
+ * Selectors 7-10 — the "path job" / line-barrier system (game/
+ * line-barriers.js). Found and fixed this session: a live DOSBox capture of
+ * PLEV1A's opening screen showed a platform tile the port was not drawing,
+ * traced to this system rather than a tilemap bug (plane A at that cell is
+ * 7, a plain background brick, both on disk and read live out of running
+ * memory).
+ */
+export async function checkLineBarriers(fetchRaw) {
+  const { results, check } = makeChecker();
+
+  /* ── the record layout, on a synthetic buffer (independent of any shipped
+   * file — pure byte-offset/bit-packing math) ───────────────────────────── */
+  {
+    check('the table spans exactly PALFILS +0x189C..+0x1B58 (25 x 0x1c = 700 '
+      + 'bytes), abutting the hint-value table this project\'s own PALFILS '
+      + 'accounting already places at +0x1B58',
+      BARRIER_TABLE_OFF + BARRIER_RECORD_COUNT * BARRIER_RECORD_STRIDE === 0x1b58,
+      `${BARRIER_TABLE_OFF.toString(16)} + ${BARRIER_RECORD_COUNT}*0x1c = `
+      + `${(BARRIER_TABLE_OFF + BARRIER_RECORD_COUNT * BARRIER_RECORD_STRIDE).toString(16)}`);
+
+    const buf = new Uint8Array(0x1b58);
+    const dv = new DataView(buf.buffer);
+    const o = BARRIER_TABLE_OFF + 3 * BARRIER_RECORD_STRIDE;   // record 3
+    dv.setUint16(o, 0x1234, false);                            // srcX
+    dv.setUint16(o + 2, 0x5678, false);                        // srcY
+    buf[o + 5] = 7;                                             // stepSeed
+    dv.setUint16(o + 0x06, 100, false); dv.setUint16(o + 0x08, 200, false);  // target 0 (sel 7)
+    dv.setUint16(o + 0x0a, 101, false); dv.setUint16(o + 0x0c, 201, false);  // target 1 (sel 8)
+    dv.setUint16(o + 0x0e, 102, false); dv.setUint16(o + 0x10, 202, false);  // target 2 (sel 9)
+    dv.setUint16(o + 0x12, 103, false); dv.setUint16(o + 0x14, 203, false);  // target 3 (sel 10)
+    buf[o + 0x16] = 0xfe;   // -2, signed
+    buf[o + 0x1a] = 0x85;   // width bits = 5 -> width 6, bit7 set -> skipSolid
+    buf[o + 0x1b] = 2;      // rows = 3
+    const recs = parseLineBarrierRecords(buf);
+    const r = recs[3];
+    check('srcX/srcY read big-endian', r.srcX === 0x1234 && r.srcY === 0x5678);
+    check('stepSeed reads the raw byte', r.stepSeed === 7);
+    check('all 4 target points decode in order, each its own BE u16 pair',
+      r.targets[0].x === 100 && r.targets[0].y === 200 && r.targets[3].x === 103 && r.targets[3].y === 203);
+    check('the obstacle-type byte is SIGNED (0xFE -> -2)', r.types[0] === -2);
+    check('width = (low 3 bits of +0x1a) + 1', r.width === 6, `got ${r.width}`);
+    check('bit 7 of +0x1a is the skip-solid flag', r.skipSolid === true);
+    check('rows = +0x1b + 1', r.rows === 3, `got ${r.rows}`);
+
+    /* an all-zero record (this project's own census found several, e.g. */
+    /* PLEV1A's own records 4-8) never arms — CS:0x761B/0x7627's liveness */
+    /* test on ALL FOUR target points, not just the selector fired with. */
+    const zeroMap = { planeA: new Uint8Array(1), planeB: new Uint8Array(1) };
+    const lb = new LineBarriers(zeroMap, recs);
+    lb.arm(4, 7);
+    check('a record with every target point zeroed does not arm', lb.live === 0);
+    lb.arm(3, 8);
+    check('a live record arms on the selector it is dispatched with',
+      lb.live === 1 && lb.slots[3].x === 101 && lb.slots[3].y === 201);
+    check('skipSolid true leaves plane B untouched even though the record armed',
+      zeroMap.planeB[0] === 0);
+  }
+
+  /* ── PLEV1A end to end, against the actual shipped file — this is the '
+   * exact bug this session found and fixed ─────────────────────────────── */
+  {
+    const mapBuf = dclDecompress(await fetchRaw('game/PLEV1A.MAP')).data;
+    const map = parseMap(mapBuf);
+    const pfBuf = dclDecompress(await fetchRaw(`game/${palfilsNameFor('1A')}`)).data;
+    const palfils = parsePalfils(pfBuf);
+    const records = parseLineBarrierRecords(pfBuf);
+
+    check('record 0\'s own selector-8 target (index 1) is (1,480), read live '
+      + 'from DS:0x1ca6 under DOSBox this session, predicted from these '
+      + 'same tables before it was read',
+      records[0].targets[BARRIER_SELECTOR_TO_SLOT[8]].x === 1
+        && records[0].targets[BARRIER_SELECTOR_TO_SLOT[8]].y === 480);
+    check('record 2\'s own selector-8 target (index 1) is (160,832) — the '
+      + 'missing platform tile\'s world position, read live from DS:0x1cd6 '
+      + 'under DOSBox with zero game input sent',
+      records[2].targets[BARRIER_SELECTOR_TO_SLOT[8]].x === 160
+        && records[2].targets[BARRIER_SELECTOR_TO_SLOT[8]].y === 832);
+
+    const cell = 52 * MC + 5;   // col 5, row 52 — the boxed cell in the user's own screenshot
+    check('plane A at the missing-platform cell is 7 (background brick) in '
+      + 'the shipped .MAP — this was never a tilemap bug',
+      map.planeA[cell] === 7);
+    check('plane B at that cell is 0 in the shipped .MAP (the "before" state)',
+      map.planeB[cell] === 0);
+
+    const lineBarriers = new LineBarriers(map, records);
+    const events = new EventRunner(map, palfils);
+    events.onPathJob = (param, sel) => lineBarriers.arm(param, sel);
+    /* The world-1 hero spawn point IS the probe cell that arms this — see
+     * events.step's own (X+16)>>5 / Y>>4 rounding, docs/triggers-and-
+     * difficulty.md's "confirmed live under DOSBox" section. */
+    const dispatched = events.step(64, 944, events.makeState());
+    check('the spawn-point probe dispatches (consumes an event, returns '
+      + 'null — every armed selector returns null, matching selectors '
+      + '1/2/4/5)', dispatched === null);
+    check('arming the barrier flips plane B at the missing-platform cell to '
+      + '1 (solid) — the collision half of the fix',
+      map.planeB[cell] === 1);
+    const cells = [...lineBarriers.cells()];
+    const filled = cells.find((c) => c.col === 5 && c.row === 52);
+    check('the barrier draws exactly the missing cell, with a resolved tile '
+      + '(the visual half of the fix — not a guess at the unknown sprite-'
+      + 'type dispatch, see line-barriers.js\'s own header)',
+      !!filled && filled.tileId !== null, JSON.stringify(filled));
+
+    /* Second entry point on the same level, predicted from the tables and '
+     * confirmed live under DOSBox this session by teleporting the hero '
+     * onto (96,624). */
+    events.step(96, 624, events.makeState());
+    check('the second PLEV1A entry point (plane B (col3,row39)=77 -> event '
+      + '#74 -> record 0) also arms, landing at its own record\'s target '
+      + '(1,480)', lineBarriers.live === 2 && lineBarriers.slots[0]
+        && lineBarriers.slots[0].x === 1 && lineBarriers.slots[0].y === 480);
+  }
+
+  /* ── every shipped level, walking plane B exactly the way EventRunner.step
+   * does (a cell value >=3 dispatches event v-3) — NOT the raw event table
+   * directly, which also contains ~100 selector-7-10 entries this project's
+   * own docs already established are unreachable via plane B at all (dead
+   * data, or only reachable through ACT5's own direct event-index dispatch,
+   * never traced for this system). Walking plane B is what real gameplay
+   * actually does, and it is the same methodology the "99 cells / 83 '
+   * events" census in docs/triggers-and-difficulty.md itself used, so this
+   * check's own total should land on that same figure. ─────────────────── */
+  {
+    let totalArmedRecords = 0, outOfMap = 0, unresolved = 0, cellHits = 0, distinctEvents = 0;
+    for (const key of ['1A','1B','2A','2B','3A','3B','4A','4B']) {
+      const mapBuf = dclDecompress(await fetchRaw(`game/PLEV${key}.MAP`)).data;
+      const map = parseMap(mapBuf);
+      const pfBuf = dclDecompress(await fetchRaw(`game/${palfilsNameFor(key)}`)).data;
+      const palfils = parsePalfils(pfBuf);
+      const records = parseLineBarrierRecords(pfBuf);
+      const lineBarriers = new LineBarriers(map, records);
+      const originalPlaneB = map.planeB.slice();   // arming mutates planeB; walk the PRE-stamp values
+      const eventsSeen = new Set();
+      for (let cellIdx = 0; cellIdx < originalPlaneB.length; cellIdx++) {
+        const v = originalPlaneB[cellIdx];
+        if (v < 3) continue;
+        const eventIdx = v - 3;
+        const ev = palfils.events[eventIdx];
+        if (!ev || ev.selector < 7 || ev.selector > 10) continue;
+        cellHits++;
+        eventsSeen.add(eventIdx);
+        lineBarriers.arm(ev.param, ev.selector);
+      }
+      distinctEvents += eventsSeen.size;
+      /* Several shipped events can name the SAME record (each with its own
+       * selector, or the same one from a different plane-B cell) — matching
+       * the docs' own "99 cells name 83 distinct EVENTS" phrasing exactly,
+       * distinct events and distinct armed RECORDS (this system's own
+       * 25-slot runtime pool) are different counts; only the former is
+       * expected to hit 83. */
+      totalArmedRecords += lineBarriers.live;
+      unresolved += lineBarriers.unresolvedTile;
+      for (const { col, row } of lineBarriers.cells()) {
+        if (col < 0 || col >= MC || row < 0 || row >= 64) outOfMap++;
+      }
+    }
+    check('99 shipped plane-B cells name 83 distinct events across the 8 '
+      + 'levels (docs/triggers-and-difficulty.md\'s own census, reproduced '
+      + 'independently here)',
+      cellHits === 99 && distinctEvents === 83, `${cellHits} cells, ${distinctEvents} events`);
+    check('every armed barrier\'s drawn footprint stays inside the 128x64 map',
+      outOfMap === 0, `${outOfMap} out of range`);
+    results.push({
+      name: 'distinct armed RECORDS across the 8 levels (<=83, since several '
+        + 'shipped events can share one record) and how many of those found '
+        + 'no borrowable neighbour tile (drawn as collision-only — solid, '
+        + 'but nothing rendered; see line-barriers.js\'s own header for why '
+        + 'this port does not guess the unresolved cases)',
+      note: true, pass: true, detail: `${totalArmedRecords} armed records, ${unresolved} unresolved`,
+    });
   }
 
   return results;

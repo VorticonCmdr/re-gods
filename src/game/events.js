@@ -52,6 +52,7 @@
 import { parseAllTriggers, evalTrigger, verbOf, isLive } from './trigger.js';
 import { fireTrigger } from './trigger-actions.js';
 import { SELECTOR_SPAWN_B, SELECTOR_SPAWN_A, SELECTOR_SPAWN_2, SELECTOR_SPAWN_1 } from './spawn.js';
+import { SELECTOR_PATH_MIN, SELECTOR_PATH_MAX } from './line-barriers.js';
 
 /** ACT5 chain limit — a port-only guard; see dispatchEvent(). */
 export const ACT5_MAX_DEPTH = 16;
@@ -72,10 +73,10 @@ export const SELECTOR_TABLE = [
   { sel: 4,  handler: 0xde08, name: 'activate System-B entity group' },
   { sel: 5,  handler: 0xde42, name: 'activate System-A entity group' },
   { sel: 6,  handler: 0x38f5, name: 'progress / position marker' },
-  { sel: 7,  handler: 0x75fc, name: 'path job (cx=0)' },
-  { sel: 8,  handler: 0x7600, name: 'path job (cx=1)' },
-  { sel: 9,  handler: 0x7605, name: 'path job (cx=2)' },
-  { sel: 10, handler: 0x760a, name: 'path job (cx=3)' },
+  { sel: 7,  handler: 0x75fc, name: 'line barrier (cx=0) — game/line-barriers.js' },
+  { sel: 8,  handler: 0x7600, name: 'line barrier (cx=1) — game/line-barriers.js' },
+  { sel: 9,  handler: 0x7605, name: 'line barrier (cx=2) — game/line-barriers.js' },
+  { sel: 10, handler: 0x760a, name: 'line barrier (cx=3) — game/line-barriers.js' },
   { sel: 11, handler: 0xc49c, name: 'install per-world scripted routine' },
 ];
 export const SELECTOR_TRIGGER = 3;   // CS:0x603A `dec ax` — see the header
@@ -125,6 +126,7 @@ export class EventRunner {
     this.consumedEvents = new Set();   // DS:0x932c record ids — the real key
     this.onSpawnB = null;              // set by the host to receive activations
     this.onSpawnA = null;              // set by the host to receive System-A activations
+    this.onPathJob = null;             // set by the host to arm a line-barriers.js record
     this.actionCtx = null;             // set by the host to EXECUTE the verbs
     this.lastCell = -1;
     this.log = [];
@@ -241,6 +243,17 @@ export class EventRunner {
     if (ev.selector === SELECTOR_SPAWN_1) {
       this.consumedEvents.add(id);
       if (this.onSpawn1) this.onSpawn1(ev.param);
+      return null;
+    }
+
+    /* Selectors 7-10 — the "path job" / line-barrier system
+     * (game/line-barriers.js). `CS:0x760D-0x7679` shares this consume-
+     * before-lookup shape with 1/2/4/5 above: the event is spent whether or
+     * not the record it names turns out to be live. `ev.param` is the
+     * record index (0..24) into PALFILS +0x189C, not a plane-B value. */
+    if (ev.selector >= SELECTOR_PATH_MIN && ev.selector <= SELECTOR_PATH_MAX) {
+      this.consumedEvents.add(id);
+      if (this.onPathJob) this.onPathJob(ev.param, ev.selector);
       return null;
     }
 

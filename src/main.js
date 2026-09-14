@@ -19,8 +19,9 @@ import { runAllChecks, checkDescriptorAnchors, checkHeroSprites,
          checkSelectorsAndObjects, checkSpawn, checkEntityB, checkEntityA, checkSpawnA,
          checkWeaponsProjectiles, checkTriggerActions,
          checkZones, checkPopup, checkLevers, checkSpikes,
-         checkMessages } from './verify/checks.js';
+         checkMessages, checkLineBarriers } from './verify/checks.js';
 import { EventRunner, parsePalfils, palfilsNameFor } from './game/events.js';
+import { LineBarriers, parseLineBarrierRecords } from './game/line-barriers.js';
 import { makeActionContext, makeGates, DOOR_TILES,
          ACTION_NAMES } from './game/trigger-actions.js';
 import { cameraForSpawn } from './game/camera.js';
@@ -181,6 +182,11 @@ async function loadLevel(key) {
    * (game/selector2.js). Same window System-B's own per-world class table
    * loader (CS:0xad62) is unrelated to; this one is level-authored data. */
   const groupsSel2 = parseSelectorTwoClasses(dclDecompress(pfRaw).data);
+  /* PALFILS +0x189C — the selector 7-10 line-barrier system's own 25-record
+   * table (game/line-barriers.js). Parsed unconditionally like the other
+   * PALFILS windows above; whether any record is ever actually reachable
+   * from a shipped plane-B event on this level is decided at arm time. */
+  const lineBarrierRecords = parseLineBarrierRecords(dclDecompress(pfRaw).data);
   /* PALFILS +0x0000 — selector-1's own PGOD0x.PAT spawn descriptors
    * (game/pat-objects.js), 100 records of 8 bytes. Parsed unconditionally
    * (the window exists in every PALFILS file); whether any of the 100
@@ -214,7 +220,7 @@ async function loadLevel(key) {
     dclDecompress(await fetchRaw(`game/PWEAPONS.00${key[0]}`)).data);
 
   return { map, sheet, palette, tiles, tileCount: count, palfils, palfilsRaw: palfilsData, cats, drawObjects,
-           objValues, groupsB, groupsA, groupsSel2, patDescriptors, patDirectory, patBlobBytes,
+           objValues, groupsB, groupsA, groupsSel2, lineBarrierRecords, patDescriptors, patDirectory, patBlobBytes,
            weapons, textPool, hints, world: +key[0] };
 }
 
@@ -354,6 +360,7 @@ async function main() {
     Promise.resolve(checkEntityA()), checkSpawnA(fetchRaw),
     Promise.resolve(checkPopup()), Promise.resolve(checkLevers()),
     Promise.resolve(checkSpikes()), checkMessages(fetchRaw),
+    checkLineBarriers(fetchRaw),
     ]) results.push(...await g);
     renderChecks(results);
     const mh = $('messages');
@@ -706,6 +713,11 @@ async function main() {
    * in which case this stays permanently empty rather than throwing. */
   let patGroups = new PatGroups(level.patDirectory || []);
   patGroups.blobBytes = level.patBlobBytes || null;
+  /* Selectors 7-10 — the "path job" / line-barrier system (game/
+   * line-barriers.js). Mutates level.map.planeB directly (same convention
+   * as the trigger-action verbs' own door/trapdoor writers), so it must be
+   * (re)built against THIS level's own map object every level load. */
+  let lineBarriers = new LineBarriers(level.map, level.lineBarrierRecords);
   /* CS:0x0172 `not byte [0x36c]` — the every-other-frame toggle the nest's
    * hatch animation reads (DS:0x36c). Not modelled elsewhere in this port
    * yet, so it is owned here. */
@@ -737,6 +749,11 @@ async function main() {
       if (!d) return;
       patGroups.activate(d, level.world);
     };
+    /* Selectors 7-10 — arm one game/line-barriers.js record. `param` is a
+     * record index (0..24), `selector` picks which of the record's own 4
+     * target points/types applies (game/line-barriers.js's own
+     * SELECTOR_TO_SLOT). */
+    events.onPathJob = (param, selector) => { lineBarriers.arm(param, selector); };
   };
   wireSpawn();
   /* CS:0xec60, run for every slot in state 2. Deliberately reproduced quirks:
@@ -852,6 +869,7 @@ async function main() {
       brood = new Brood();
       ce64Creatures = new Ce64Creatures(rng); ce64Spits = new Ce64Spits(rng);
       selectorTwo = new SelectorTwoSpawns();
+      lineBarriers = new LineBarriers(level.map, level.lineBarrierRecords);
       patGroups = new PatGroups(level.patDirectory || []);
       patGroups.blobBytes = level.patBlobBytes || null;
       debris = new Debris();
@@ -1713,6 +1731,11 @@ async function main() {
       const camX = cam.snapX, camY = cam.snapY;
       renderer.clear(0);
       renderer.drawTilemap(level.map, level.tiles, camX, camY);
+      /* Selectors 7-10 — the line-barrier system's own footprint (game/
+       * line-barriers.js), drawn in the same pass/order as the tilemap
+       * itself since it fills gaps IN that tilemap (plane A never carries
+       * these tiles; this system draws over plane A's own "empty" cells). */
+      renderer.drawExtraTiles(lineBarriers.cells(), level.tiles, camX, camY);
       /* OBJECTS, with real sprites: `170 + type`, or `302 + (type - 0xC0)` for
        * a weapon pickup. Drawn at (x, y) top-left, in the original's draw
        * order (cat-3/cat-5 behind, ordinary next, weapons on top — graphics
@@ -2073,7 +2096,7 @@ async function main() {
         ` · ${enemiesA.filter((e) => e.alive).length}/${enemiesA.length} sysA` +
         ` · ${nests.live} nests · ${brood.live} brood · ${statues.live} statues` +
         ` · ${ce64Creatures.live} ce64 · ${ce64Spits.count} spits · ${selectorTwo.live} sel2` +
-        ` · ${patGroups.live} pat` +
+        ` · ${patGroups.live} pat · ${lineBarriers.live} barriers` +
         ` · ${shots.live} shots · ${lineHazards.live} hazards · ${debris.live} debris` +
         ` · ${lastSpikeFx.length} spikes` +
         ` · hp ${health.bar}/${health.target > HEALTH_MAX ? HEALTH_MAX : health.target}`        + (health.dead ? ' DEAD' : '') +

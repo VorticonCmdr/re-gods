@@ -37,6 +37,7 @@ const { parseGroupsB, GroupSlots, spriteForEntity, MAX_ENTITIES,
         CREATURE_DESCRIPTOR_BASE } = await import('../src/game/spawn.js');
 const { EntityB, MODE_TABLE, groundBelow } = await import('../src/game/entity.js');
 const { parsePalfils, palfilsNameFor } = await import('../src/game/events.js');
+const { parseLineBarrierRecords, LineBarriers } = await import('../src/game/line-barriers.js');
 const { Player } = await import('../src/game/player.js');
 const { cameraForSpawn } = await import('../src/game/camera.js');
 const { decodeStatusPanel, PANEL_W, PANEL_H, PANEL_Y0 } = await import('../src/game/status-panel.js');
@@ -56,6 +57,30 @@ const count = TILE_COUNTS[key];
 let tiles = sliceTiles(decodePI1(dclDecompress(raw(`PBITS${key}.PI1`)).data)).slice(0, Math.min(count, 120));
 if (count > 120) {
   tiles = tiles.concat(sliceTiles(decodePI1(dclDecompress(raw(`PXTRA${key}.PI1`)).data)).slice(0, count - 120));
+}
+
+/* Selectors 7-10 — the line-barrier system (game/line-barriers.js). This
+ * tool has no per-tick event probe of its own, so every plane-B cell that
+ * names a reachable selector-7-10 event is armed eagerly, once, up front —
+ * matching a level the player has already walked across (the common case
+ * for a comparison screenshot) rather than the exact first-N-ticks state a
+ * live playthrough would be in. See main.js's own EventRunner.step for the
+ * real per-tick probe this simplifies. */
+{
+  const pf = parsePalfils(dclDecompress(raw(palfilsNameFor(key))).data);
+  const barrierRecords = parseLineBarrierRecords(dclDecompress(raw(palfilsNameFor(key))).data);
+  const lineBarriers = new LineBarriers(map, barrierRecords);
+  const originalPlaneB = map.planeB.slice();
+  for (let cell = 0; cell < originalPlaneB.length; cell++) {
+    const v = originalPlaneB[cell];
+    if (v < 3) continue;
+    const ev = pf.events[v - 3];
+    if (!ev || ev.selector < 7 || ev.selector > 10) continue;
+    lineBarriers.arm(ev.param, ev.selector);
+  }
+  for (const { col, row, tileId } of lineBarriers.cells()) {
+    map.planeA[row * MAP_COLS + col] = tileId;   // draw path: same as an ordinary plane-A tile
+  }
 }
 
 const atlases = {}, images = {};

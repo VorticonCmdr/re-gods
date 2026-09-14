@@ -71,6 +71,21 @@ export class Renderer {
     }
   }
 
+  /**
+   * Draw extra plane-A-shaped tiles that are not part of the level's own
+   * static plane A — the selector 7-10 line-barrier system's own footprint
+   * (game/line-barriers.js). Drawn immediately after the tilemap itself, in
+   * the same 1-based tile-id convention as drawTilemap (`tile = tileId-1`).
+   * @param {Iterable<{col:number,row:number,tileId:number}>} cells
+   */
+  drawExtraTiles(cells, tiles, camX, camY) {
+    for (const { col, row, tileId } of cells) {
+      const tile = (tileId >= 1 && tileId <= tiles.length) ? tiles[tileId - 1] : null;
+      if (!tile) continue;
+      this.blitTile(tile, col * TILE_W - camX, row * TILE_H - camY);
+    }
+  }
+
   /** Blit one 32x16 indexed tile, clipped. Index 0 is transparent. */
   blitTile(tile, dx, dy) {
     for (let y = 0; y < TILE_H; y++) {

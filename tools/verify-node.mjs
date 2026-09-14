@@ -263,6 +263,13 @@ for (const r of checkLevers()) {
   console.log(line(r));
 }
 
+console.log('\n  selectors 7-10, the line-barrier system (CS:0x75FC/0x77D6/0x7779):');
+const { checkLineBarriers } = await import('../src/verify/checks.js');
+for (const r of await checkLineBarriers(fetchRaw)) {
+  if (!r.pass && !r.note) bad++;
+  console.log(line(r));
+}
+
 console.log('\n  the retracting spike hazard (CS:0x1B72/0x1AF6, types 50/117/130):');
 const { checkSpikes } = await import('../src/verify/checks.js');
 for (const r of checkSpikes()) {
