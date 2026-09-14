@@ -657,10 +657,22 @@ function parseJoy(buf) {
 }
 
 /* ════════════════════════════════════════════════════════════════════════
- * PALFILS.0{A,B}{1-4} — partial parse: only the sub-tables with a fully
- * documented field layout. The remaining windows (spawn table @0x0000,
- * selector-2 spawner @0x0718, the @0x189C region) are shown as raw hex —
- * CLAUDE.md does not give complete per-field struct layouts for those.
+ * PALFILS.0{A,B}{1-4} — all nine front-region windows now have decoded field
+ * layouts. `spawn` (PAT/selector-1 spawn table) and `spawner2` (selector-2
+ * turret spawner) are transcribed verbatim from gods-web's own ported
+ * parsers (`game/pat-objects.js`'s `parsePatSpawnDescriptor`, `game/
+ * selector2.js`'s `parseClasses`) — this viewer used to show both as raw
+ * hex even though the game engine already decodes them. `driverTbl`
+ * (`+0x189C`, 25 x 0x1c) was genuinely undocumented until a later session:
+ * it is trigger-event selectors 7-10 (`CS:0x75fc`/`0x7600`/`0x7605`/
+ * `0x760a`, one shared body at `CS:0x760d`-`0x7679`) — a second, independent
+ * Bresenham line stepper (`CS:0x7a2a`, sharing the already-documented
+ * line-hazard walker `CS:0x7a0b` with the selector-2/PAT system's own seed
+ * `CS:0xdce1`) that draws/stamps a scripted wall-barrier from a source point
+ * to one of 4 per-selector target points. See CLAUDE.md's
+ * triggers-and-difficulty doc for the full trace and the shipped-data
+ * cross-check. `[STATIC]` — read from the disassembly, not yet confirmed
+ * live under DOSBox.
  * ════════════════════════════════════════════════════════════════════════ */
 const PALFILS_OFF = {
   spawn:     { off: 0x0000, stride: 8,    count: 100 },
@@ -762,6 +774,95 @@ function parsePalfilsGroup(buf, which) {
   return out;
 }
 
+/** `+0x0000`, 8 bytes/record — the PGOD0x.PAT / selector-1 spawn table
+ *  consumed by CS:0xB908. Field layout transcribed verbatim from gods-web's
+ *  own `game/pat-objects.js` (`parsePatSpawnDescriptor`) — see that file's
+ *  header for the full CS:0xB90D-0xB976 trace. */
+function parsePalfilsSpawn(buf) {
+  const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+  const { off, stride, count } = PALFILS_OFF.spawn;
+  const out = [];
+  for (let i = 0; i < count; i++) {
+    const o = off + i * stride;
+    if (o + stride > buf.length) break;
+    const entityCount = buf[o];
+    if (entityCount === 0) continue;
+    const b6 = buf[o + 6];
+    out.push({
+      index: i, entityCount,
+      pathClassIndex: buf[o + 1],
+      staggerStep: dv.getUint16(o + 2, false),
+      key: buf[o + 4],
+      behaviorClassIndex: buf[o + 5],
+      hiNibble: (b6 >> 4) & 0xf, loNibble: b6 & 0xf,
+      extra: buf[o + 7],
+    });
+  }
+  return out;
+}
+
+/** `+0x0718`, 16 bytes/record — the selector-2 stationary-turret class
+ *  descriptor consumed by CS:0xAD0D. Field layout transcribed verbatim from
+ *  gods-web's own `game/selector2.js` (`parseClasses`) — see that file's
+ *  header for the full CS:0xAD0D-0xAD61 trace. */
+function parsePalfilsSpawner2(buf) {
+  const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+  const { off, stride, count } = PALFILS_OFF.spawner2;
+  const out = [];
+  for (let i = 0; i < count; i++) {
+    const o = off + i * stride;
+    if (o + stride > buf.length) break;
+    const entityCount = buf[o + 0x08];
+    if (entityCount === 0) continue;
+    out.push({
+      index: i,
+      spawnX: dv.getUint16(o + 0x00, false), spawnY: dv.getUint16(o + 0x02, false),
+      entityFacing: signed8(buf[o + 0x04]),
+      drawStyle: buf[o + 0x05],
+      staggerStep: dv.getUint16(o + 0x06, false),
+      entityCount,
+      entityState0: buf[o + 0x09],
+      classIndex: dv.getUint16(o + 0x0a, false),
+      facingSelect: buf[o + 0x0c],
+      reloadByte: buf[o + 0x0d],
+      rewardItemId: buf[o + 0x0e],
+    });
+  }
+  return out;
+}
+
+/** `+0x189C`, 0x1c (28) bytes/record — trigger-event selectors 7-10's own
+ *  shared line-barrier table (`CS:0x75fc`-`0x7679`), decoded fresh this
+ *  session — see CLAUDE.md's triggers-and-difficulty doc, "0x189C, selectors
+ *  7-10" for the full trace and the shipped-data cross-check. Liveness
+ *  mirrors the game's own check (`CS:0x761b`-`0x7627`): any of the 4 target
+ *  points' X word nonzero. */
+function parsePalfilsDriverTable(buf) {
+  const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+  const { off, stride, count } = PALFILS_OFF.driverTbl;
+  const out = [];
+  for (let i = 0; i < count; i++) {
+    const o = off + i * stride;
+    if (o + stride > buf.length) break;
+    const points = [0, 1, 2, 3].map((k) => ({
+      x: dv.getUint16(o + 0x06 + 4 * k, false),
+      y: dv.getUint16(o + 0x08 + 4 * k, false),
+    }));
+    if (!points.some((p) => p.x !== 0)) continue;
+    out.push({
+      index: i,
+      srcX: dv.getUint16(o + 0x00, false), srcY: dv.getUint16(o + 0x02, false),
+      steps: buf[o + 0x05] + 1,
+      points,
+      types: [buf[o + 0x16], buf[o + 0x17], buf[o + 0x18], buf[o + 0x19]],
+      widthCells: (buf[o + 0x1a] & 7) + 1,
+      solid: !(buf[o + 0x1a] & 0x80),
+      rows: buf[o + 0x1b] + 1,
+    });
+  }
+  return out;
+}
+
 /* ════════════════════════════════════════════════════════════════════════
  * File classification
  * ════════════════════════════════════════════════════════════════════════ */
@@ -790,7 +891,7 @@ const CATS = [
   ['map', 'Levels (.MAP)', 'Two 128×64 tile planes, 200 object records, 40 messages, 100 trigger records. Rendered with the paired PBITS/PXTRA tile sheet and PLEVEL palette when loaded.'],
   ['weapons', 'Weapons (PWEAPONS.00x)', '11 fixed 80-byte records per world. Three fields are pinned at the EXE-image value and the file\'s own copies are discarded at load — shown for comparison.'],
   ['objects', 'Objects (POBJECTS.00x)', '132 fixed 48-byte records: id, category, value, 16-byte name, 24-byte description.'],
-  ['palfils', 'Level data (PALFILS.0*)', 'Hint text, lever/trapdoor/event tables and per-world entity group descriptors. Only the fully-documented windows are decoded; the rest is raw hex.'],
+  ['palfils', 'Level data (PALFILS.0*)', 'Hint text, lever/trapdoor/event tables, per-world entity group descriptors, the PAT/selector-2 spawn tables, and the trigger-selector 7–10 line-barrier table — all nine windows decoded.'],
   ['music', 'Music (.MUS / .RL)', 'A container of Standard MIDI File blobs (plus a few non-SMF "type 2" blobs whose event payload is still only partially understood).'],
   ['pat', 'Scripted paths (PGOD0x.PAT)', 'Per-class scripted movement: a start position plus a byte-per-tick signed-nibble delta path.'],
   ['joy', 'Recorded input (PJOY*.DAT)', 'Flat, headerless attract-mode joystick/button recordings, terminated by 0xFF.'],
@@ -1374,14 +1475,32 @@ RENDERERS.palfils = (main, entry) => {
         r.stagger != null ? r.stagger : '—', r.costBudget != null ? r.costBudget : '—', r.attackGate != null ? r.attackGate : '—'])));
   }
 
-  main.appendChild(h('h3', null, 'Undecoded windows (raw hex)'));
-  for (const [which, label] of [['spawn', 'spawn table @0x0000 (100×8, fields not fully specified)'],
-                                 ['spawner2', 'selector-2 spawner @0x0718 (100×16)'],
-                                 ['driverTbl', 'driver-handed table @0x189C (25×0x1c)']]) {
-    const spec = PALFILS_OFF[which];
-    main.appendChild(h('details', null, h('summary', null, label),
-      h('pre', { class: 'hex' }, hexDump(buf.subarray(spec.off, Math.min(buf.length, spec.off + spec.stride * spec.count)), 4096))));
-  }
+  const spawns = parsePalfilsSpawn(buf);
+  main.appendChild(h('h3', null, `PAT/selector-1 spawn table (${spawns.length} live of 100)`));
+  main.appendChild(h('p', { class: 'small' }, 'PALFILS +0x0000 (runtime DS:0x9008), 8 bytes/record — feeds CS:0xB908’s PGOD0x.PAT allocator.'));
+  main.appendChild(table(
+    ['#', 'entities', 'PAT dir idx', 'stagger', 'key', 'behavior class', 'hi/lo nibble', 'extra'],
+    spawns.map((s) => [s.index, s.entityCount, s.pathClassIndex, s.staggerStep, s.key,
+      s.behaviorClassIndex, `${s.hiNibble}/${s.loNibble}`, s.extra])));
+
+  const spawner2 = parsePalfilsSpawner2(buf);
+  main.appendChild(h('h3', null, `Selector-2 turret spawner (${spawner2.length} live of 100)`));
+  main.appendChild(h('p', { class: 'small' }, 'PALFILS +0x0718 (runtime DS:0x9720), 16 bytes/record — feeds CS:0xAD0D’s stationary-turret allocator.'));
+  main.appendChild(table(
+    ['#', 'spawn x/y', 'facing', 'drawStyle', 'stagger', 'count', 'state0', 'class idx', 'facingSel', 'reload', 'rewardId'],
+    spawner2.map((s) => [s.index, `${s.spawnX}/${s.spawnY}`, s.entityFacing, s.drawStyle, s.staggerStep,
+      s.entityCount, s.entityState0, s.classIndex, s.facingSelect, s.reloadByte, s.rewardItemId])));
+
+  const driverTbl = parsePalfilsDriverTable(buf);
+  main.appendChild(h('h3', null, `Trigger-selector 7–10 line-barrier table (${driverTbl.length} live of 25)`));
+  main.appendChild(h('p', { class: 'small' },
+    'PALFILS +0x189C (runtime DS:0xa8a4), 0x1c bytes/record. Selectors 7/8/9/10 share this one record, each drawing a Bresenham line-barrier from the source point to its own target point (0 for selector 7, … 3 for selector 10) via a second, independent line stepper (CS:0x7a2a) that shares the already-documented line-hazard walker CS:0x7a0b. Stamps plane B solid unless the width byte’s high bit is set. The obstacle "type" bytes (one per selector) index an 11-entry dispatch table at 2f3d:35ec whose individual handlers are not yet decoded. [STATIC] — see CLAUDE.md’s triggers-and-difficulty doc for the full trace; not yet confirmed live under DOSBox.'));
+  main.appendChild(table(
+    ['#', 'source x/y', 'steps(n)', 'w', 'h', 'solid',
+     'target@sel7', 'target@sel8', 'target@sel9', 'target@sel10', 'type@sel7/8/9/10'],
+    driverTbl.map((d) => [d.index, `${d.srcX}/${d.srcY}`, d.steps, d.widthCells, d.rows, d.solid ? 'yes' : 'no',
+      ...d.points.map((p) => `${p.x}/${p.y}`),
+      d.types.map((t) => (t === 0xff ? '—' : t)).join('/')])));
 };
 
 RENDERERS.map = (main, entry) => {
