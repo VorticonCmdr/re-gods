@@ -8787,6 +8787,61 @@ export async function checkTriggerActions(fetchRaw) {
       opened === 0, 'the conditions are the lock — COND1 (key) AND COND11 (lever)');
   }
 
+  /* --- regression: ACT6 must reach the LIVE draw-object array ------------
+   * This exact bug shipped once: main.js's buildActionCtx() never passed an
+   * `objects` field, so events.actionCtx.objects stayed makeActionContext()'s
+   * own empty-array default forever, and ACT6 ("kill category-4 objects near
+   * the point") found nothing to kill in ANY level — every lever-gated
+   * hazard stayed alive no matter what the player pulled. The check above
+   * can't catch this because it hands ACT6 an all-dead placeholder array and
+   * `categoryOf: () => 1`, so ACT6 would find nothing either way. This one
+   * uses PLEV1A's REAL objects and REAL POBJECTS categories: trigger records
+   * #7/#8 (live, verb 6, cond0 = lever bit0 SET on lever index 3 — the
+   * physical lever object at (416,928)) each kill one of the two type-50
+   * spikes at (443,960)/(462,960). */
+  {
+    const map = parseMap(dclDecompress(await fetchRaw('game/PLEV1A.MAP')).data);
+    const palRaw = dclDecompress(await fetchRaw('game/PALFILS.0A1')).data;
+    const cats = parseObjectCategories(
+      dclDecompress(await fetchRaw('game/POBJECTS.001')).data);
+    const objects = map.objects.map((o) => ({ ...o, dead: false, flag6: 1 }));
+    const runner = new EventRunner(map, parsePalfils(palRaw));
+    runner.actionCtx = makeActionContext({
+      planeA: map.planeA.slice(), planeB: map.planeB.slice(),
+      objects, gates: makeGates(palRaw), tiles: DOOR_TILES[0],
+      messages: map.messages, categoryOf: (t) => cats[t],
+    });
+
+    const triggers = parseAllTriggers(map.bulk);
+    const hazardTriggers = triggers.filter((t) =>
+      isLive(t) && verbOf(t) === 6 && t.condKind[0] === 11 && t.condArg[0] === 3);
+    const spikes = objects.filter((o) => o.type === 50 &&
+      hazardTriggers.some((t) => t.x === o.x && t.y === o.y));
+    check('PLEV1A ships exactly the two lever-3-gated spikes this check targets',
+      hazardTriggers.length === 2 && spikes.length === 2,
+      `${hazardTriggers.length} triggers, ${spikes.length} matching live spikes`);
+
+    const fireAll = (state) => {
+      for (const t of hazardTriggers) {
+        const idx = triggers.indexOf(t);
+        const evId = runner.pal.events.findIndex(
+          (e) => e.selector === SELECTOR_TRIGGER && e.param === idx);
+        runner.lastCell = -1;             // force re-dispatch, as a fresh
+        runner.consumedEvents.delete(evId); // approach would (edge-triggered)
+        runner.dispatchEvent(evId, state, 0);
+      }
+    };
+
+    fireAll(runner.makeState({}));
+    check('...with the lever OFF, walking past both trigger points kills nothing',
+      spikes.every((s) => !s.dead), `dead: [${spikes.map((s) => s.dead)}]`);
+
+    runner.pal.levers[3].type ^= 1;   // pull the physical lever at (416,928)
+    fireAll(runner.makeState({}));
+    check('END TO END: pulling the lever kills BOTH spikes through the real object array',
+      spikes.every((s) => s.dead), `dead: [${spikes.map((s) => s.dead)}]`);
+  }
+
   results.push({
     name: 'what the ACTION verbs now do, and what they still do not',
     note: true, pass: true,

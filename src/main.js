@@ -403,6 +403,17 @@ async function main() {
    * are both per-world. */
   const buildActionCtx = (lvl, inv, ars) => makeActionContext({
     planeA: lvl.map.planeA, planeB: lvl.map.planeB,
+    /* ACT6 (CS:0x3bd1, "kill category-4 objects near the point") walks
+     * ctx.objects directly — unlike ACT0/ACT1, which go through the `alloc`
+     * hook below. Without this the array stays makeActionContext()'s own
+     * empty default forever, so ACT6 always finds nothing to kill: every
+     * lever-gated hazard (e.g. PLEV1A's world-1 spikes at (443,960)/(462,960),
+     * gated on lever index 3) stays alive no matter what the player pulls.
+     * `level.drawObjects` is REASSIGNED (not just mutated) by insertSpawned
+     * after a loot settle or a carried-item drop, so this reference goes
+     * stale mid-level — refreshed every tick just before events.step() runs,
+     * below. */
+    objects: lvl.drawObjects,
     gates: makeGates(lvl.palfilsRaw),
     tiles: DOOR_TILES[lvl.world - 1],
     messages: lvl.map.messages,
@@ -1168,6 +1179,11 @@ async function main() {
        * CS:0x02DB is straight-line in the main loop, and `fr` is null on
        * death/game-over frames, where a message must still count down. */
       messages.step();
+      /* Re-sync ACT6's kill target: level.drawObjects is reassigned (not
+       * mutated) by insertSpawned above on a loot settle / carried-item drop,
+       * which would otherwise leave events.actionCtx.objects pointing at a
+       * stale array. */
+      events.actionCtx.objects = level.drawObjects;
       /* plane-B cell -> event record -> selector 2 -> trigger evaluator */
       const fired = events.step(player.x, player.y,
         events.makeState({ timer: clock.tick, inventory }));
