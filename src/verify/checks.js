@@ -8995,6 +8995,35 @@ export async function checkZones(fetchRaw) {
         (fx.poolReset === (arg === 4));
     }));
 
+  /* --- The ordering invariant main.js's ZONE_EXIT handler depends on ------
+   * main.js captures `completedWorld = levelInfo.world` BEFORE calling
+   * advanceWorld(), then uses THAT captured value (not the post-advance
+   * world) to pick both the password slot and the display text. Nothing in
+   * the pure functions themselves enforces this — advanceWorld(3) and
+   * passwordSlotForWorld(3) are two independent calls that only produce the
+   * right pairing if the caller reads world 3's own completion (not world
+   * 4's) for the slot. This test pins the RELATIONSHIP: completing world 3
+   * fills password slot 2 (index world-1) while the player is being moved
+   * to world 4 — two different worlds read from two different functions,
+   * not a coincidence of one shared argument. If main.js's ZONE_EXIT ever
+   * moved the `completedWorld` capture to AFTER advanceWorld(), this would
+   * still pass (both are pure functions), so it does not replace an
+   * integration test of main.js itself — but it does pin that the two
+   * functions' own outputs are meant to diverge by exactly one world. */
+  const completedWorld3 = 3;
+  const nextWorldAfter3 = advanceWorld(completedWorld3).world;
+  check('passwordSlotForWorld must be keyed to the world just COMPLETED, ' +
+    'not the world advanceWorld() is about to move the player into — ' +
+    'completing world 3 fills slot 2 while the destination is world 4',
+    nextWorldAfter3 === 4 &&
+    passwordSlotForWorld(completedWorld3) === 2 &&
+    passwordSlotForWorld(completedWorld3) !== passwordSlotForWorld(nextWorldAfter3),
+    JSON.stringify({
+      completedWorld3, nextWorldAfter3,
+      slotForCompleted: passwordSlotForWorld(completedWorld3),
+      slotForNext: passwordSlotForWorld(nextWorldAfter3),
+    }));
+
   results.push({
     name: 'what the zone read-side now does, and what is still a placeholder',
     note: true, pass: true,
