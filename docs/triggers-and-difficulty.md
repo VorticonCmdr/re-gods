@@ -209,11 +209,59 @@ The 7000-byte front region — previously `UNKNOWN_alfils_record_fields` — is 
 | `0x15F0` | `0xa5f8` | 6 | 64 | **levers** `{x, y, object_type}`, BE→native at `0x2acf`; `+4` bit0 = state |
 | `0x1770` | `0xa778` | 6 | 30 | `{key, x, y}` lookup at `0x6241` |
 | `0x1824` | `0xa82c` | 6 | **20** | **trap doors** — see below |
-| `0x189C` | `0xa8a4` | `0x1c` | 25 | handed to the driver via `DS:0x7a` |
+| `0x189C` | `0xa8a4` | `0x1c` | 25 | selector-7–10 line-barrier table — see below |
 | `0x1B58` | `0xab60` | 2 | 40 | hint **trigger values** (BE `i16`) |
 | `0x1BA8` | arena `DS:[0x14c]` | `0x28` | 40 | hint **text**, ASCIIZ |
 
 **The accounting closes:** `804 + 1012 + 1600 + 1100 + 1100 + 384 + 180 + 120 + 700 = 7000 = 0x1B58`, and `+80 + 1600 + 80 = 8760`. Every region abuts the next exactly, and each count was taken from a loop immediate in code, not fitted to the data. **6996 of the 7000 front bytes are accounted for**; the only gaps are `UNKNOWN_palfils_0320` — see below — and `UNKNOWN_palfils_tail` (the 80-byte all-zero tail at `0x21E8`).
+
+### `0x189C`, selectors 7–10 — a second, independent line-barrier system, CLOSED `[STATIC]`
+
+⚠️ **Corrects the row's own earlier phrasing.** "Handed to the driver via `DS:0x7a`" was the extent of what was known before this pass — `CS:0x2963 mov word[0x7a],0xa8a4` (and two more sites, `CS:0x2AE0`/`CS:0x76A8`) genuinely stash this table's base pointer there, but nothing downstream of `[0x7a]` was ever traced, and the phrase reads more like a driver-export hand-off than what this actually is.
+
+**Selectors 7–10 (`sel−7 = idx 6–9`) share ONE body**, `CS:0x75FC`/`0x7600`/`0x7605`/`0x760A` → `CS:0x760D`–`0x7679`, entered with `CX = sel−7` (0–3) and the triggering event's own `param` field (`[si+2]`) as the table index:
+
+```
+75FC  sub cx,cx          ; sel 7 -> CX=0
+7600  mov cx,1           ; sel 8 -> CX=1
+7605  mov cx,2           ; sel 9 -> CX=2
+760A  mov cx,3           ; sel 10 -> CX=3
+760D  mov ax,[si+2]      ; index = event param
+7612  di = 0xa8a4 + ax*0x1c
+761B  ax = [di+6] | [di+0xa] | [di+0xe] | [di+0x12]   ; liveness: X of all 4 target points
+7627  jnz 762a / else RET
+762A  [si] = 0xffff      ; consume the event
+7635  self-modify CS:[767a] 0xc3->0x90  ; ARM the per-frame rescan gate (same idiom as CS:0xAD88)
+7669  call 78c2          ; dispatch table25[+0x16+CX] -> obstacle "type" handler
+765a  n = table25[+5]+1; [0x1f0] = n
+7670  call 7a2a          ; the SEED — see below
+```
+
+**The 28-byte record** (fields confirmed by cross-referencing all 8 shipped `PALFILS` files against their own event tables — see below):
+
+| off | width | field |
+|---|---|---|
+| `+0x00` | BE u16 | source X |
+| `+0x02` | BE u16 | source Y |
+| `+0x04` | byte | not read by this code path — `UNKNOWN_189c_field04` |
+| `+0x05` | byte | step budget seed; `n = value+1`, written to `word[0x1f0]` |
+| `+0x06/+0x08` | BE u16 pair | target point 0 (used by **selector 7**) |
+| `+0x0a/+0x0c` | BE u16 pair | target point 1 (used by **selector 8**) |
+| `+0x0e/+0x10` | BE u16 pair | target point 2 (used by **selector 9**) |
+| `+0x12/+0x14` | BE u16 pair | target point 3 (used by **selector 10**) |
+| `+0x16..+0x19` | 4 bytes | obstacle "type", one per selector 7/8/9/10 — signed byte, `CS:0x78C2` doubles it and indexes an SS-table at `2f3d:35ec` |
+| `+0x1a` | byte | low 3 bits = width in cells −1; bit 7 = skip the plane-B solid stamp (`FUN_1000_77d6`'s own test) |
+| `+0x1b` | byte | extra rows −1 |
+
+**The mechanism**, read from `CS:0x760D`–`0x7679` and the per-frame rescan at `CS:0x767B`–`0x76FF` (gated by a self-modifying `nop`/`ret` at `CS:0x767A`, the same idiom already documented for `CS:0xAD88`): this is a **second, independent Bresenham line stepper**. `CS:0x7A2A` is the seed — same shape as the already-documented line-hazard seed `CS:0xDCE1` (classic `dx`/`dy`/sign/`err` math, one of 4 near-identical loop bodies chosen by axis-major/direction, its own entry address written into the runtime slot as a resume pointer) — but its own 4 loop-body addresses (`0x7a4d`/`0x7a90`/`0x7ae8`/`0x7b2c`) are distinct from `0xdce1`'s (`0xdd04`/`0xdd43`/`0xdd95`/`0xddd3`). Per-tick resume is `FUN_1000_7845`, which calls the **shared** walker `CS:0x7A0B` — the exact function the already-documented line-hazard system's own per-tick resume already uses — so this system reuses that one shared walker with its OWN seed. The runtime mirror table is `DS:0x1ca6`, stride `0x18` (24 bytes), 25 slots, `+4` sign bit = free/active.
+
+Each step along the line: `FUN_1000_7720` bounds-checks against a fixed on-screen box and a second, class-relative box (`[si+0x1a]`/`[si+0x1b]` scaled) and sets `byte[0x395]=0xff` on overlap (a hero-hit/hit-test flag); `FUN_1000_77d6` stamps a `width×height` block of plane-B cells solid (skipped when `+0x1a` bit 7 is set); `FUN_1000_7779` draws a matching `width×height` grid of sprites through the shared graphics-export-1 thunk `CS:0x3569` (`FUN_1000_3569`, the same export selector-2's own draw already uses).
+
+**The obstacle "type" dispatch is real but not enumerated.** `2f3d:35ec` (Table 2 — **not** `1000:35ec`, which resolves into code and returns garbage) holds at least 11 valid entries, `0x78e9`/`0x790e`/`0x7933`/`0x794e`/`0x7969`/`0x7984`/`0x790e`(repeat)/`0x799f`/`0x79ba`/`0x79d5`/`0x79f0` — a tightly packed, mostly ~0x1b-byte-spaced cluster of near-identical handler bodies (type 1 and type 6 share the same address). Individual handler bodies were not decompiled this pass; `+0x16..+0x19`'s specific values stay `UNKNOWN_189c_type_dispatch` beyond "a real, ≥11-entry enum."
+
+**Cross-checked against shipped data.** Decompressing all 8 `PALFILS` files and joining the `0x0324` event table (records with selector ∈ {7,8,9,10}) against this table: **live indices span exactly 0–23** (never 24 — matches this document's own already-published selector census, "7–10 → 23/23/13/1" max param), 84 genuinely-authored records total. Most records populate only point 0 (and often point 1); points 2/3 are frequently `(0,0)` or visibly-uninitialized bytes (repeating `0x2020`/`0xffff`, ASCII space pairs) on records whose triggering selector never reaches 9/10 in that file — consistent with selectors 9/10 being rarely authored (the event census already showed selector 10 placed only twice across all 8 files). Observed live-record ranges: step budget `n` ∈ {1..12}, width ∈ {1..5} cells, rows ∈ {1..4}, `solid=false` only on single-point (zero-length, stationary) records. This reads as **scripted, trigger-activated wall/barrier hazards** — a short Bresenham-drawn line from a fixed point, stamped solid and sprite-filled, one to four selectable directions per emitter — plausibly the mechanism behind GODS's scripted diagonal energy-wall obstacles.
+
+Traced from the disassembly (`GAME.EXE`, Ghidra) and cross-validated against all 8 shipped `PALFILS.0{A,B}{1-4}` files (`blast.py` decompression + a byte-level join against the event table) — not yet confirmed live under DOSBox, so tagged `[STATIC]`, not `[PROVEN]`.
 
 ### `UNKNOWN_palfils_0320` — mechanism CLOSED, live-reachability CLOSED (negative) `[PROVEN]`
 
