@@ -35,6 +35,7 @@ This project has accumulated thousands of lines of disassembly-level findings â€
 | [`docs/combat-and-projectiles.md`](docs/combat-and-projectiles.md) | The projectile occupancy-grid collision system and weapon pickup |
 | [`docs/destructible-and-hazards.md`](docs/destructible-and-hazards.md) | Destructible blocks, the world-2 nest creature, enemy-fired projectiles, and inert debris |
 | [`docs/consumables-and-treasure.md`](docs/consumables-and-treasure.md) | The starburst potion's chain reaction, treasure/chest mechanics, and object fall physics |
+| [`docs/message-line.md`](docs/message-line.md) | The status-panel message line: the `CS:0x434e` priority mailbox, its two-page layout, the `PSMLFNT` glyph blit, the object/hint composers and the `DS:0x1fc6` string arena |
 | [`docs/open-questions-history.md`](docs/open-questions-history.md) | The full ranked open-questions list and the resolved-items index â€” historical record of what's been closed and how |
 
 ## Open questions
