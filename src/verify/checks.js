@@ -66,7 +66,8 @@ import { GROUP_SLOTS as PAT_GROUP_SLOTS, SUBRECORDS_PER_GROUP, ABSOLUTE_TAG,
          DEATH_SPRITE_BASE as PAT_DEATH_SPRITE_BASE, DEATH_RETIRE_AT,
          scoreForKey } from '../game/pat-objects.js';
 import { spriteForType, parseObjectCategories, isDeadType, isUnstamped,
-         OBJECT_SPRITE_BASE, STAMPED_TYPES } from '../game/objects.js';
+         OBJECT_SPRITE_BASE, STAMPED_TYPES, ObjectAnimClock, crystalSprite,
+         animatedObjectSprite, CRYSTAL_SPRITE } from '../game/objects.js';
 import { VERDICT, REACHABLE_VERDICTS, VERDICT_NONE, verdictAction, applyVerdict, search, searchable,
          OpenList, OPEN_SLOTS, OPEN_LIMIT, GRID_PITCH, GRID_CELLS, GRID_LIMIT,
          GRID_MARGIN, heroCell, entityCell, SEED_STRATEGIES, SEED_WEIGHT_MASK,
@@ -1852,6 +1853,30 @@ export async function checkSelectorsAndObjects(fetchRaw) {
   }
   check(`POBJECTS' own id field is a clean \`base + type\` ramp in every world`,
     idAgree === idTotal, `${idAgree}/${idTotal}`);
+
+  /* CS:0x1669's sprite-id dispatch, crystal arm (CS:0x16E5-0x16F7): sprite
+   * 224 (type 54) swaps in a frame from the global counter DS:0x3a0 instead
+   * of drawing its base sprite. Phase 0 keeps 224 (`jz 0x1683` leaves CX
+   * alone); phases 1..7 are `add cx,0x193 / dec cx` = 402 + phase. The
+   * counter is `inc` + `and 0x7` (CS:0x148B/0x148F), so one revolution is
+   * exactly 8 ticks and wraps back to the base sprite. */
+  const crystalClock = new ObjectAnimClock();
+  const revolution = [];
+  for (let i = 0; i < 8; i++) { revolution.push(crystalSprite(crystalClock.frame3a0)); crystalClock.step(); }
+  check('the rotating crystal walks [224,403..409] and wraps in 8 ticks '
+    + '(CS:0x16E5-0x16F7 + CS:0x148B/0x148F)',
+    revolution.join(',') === '224,403,404,405,406,407,408,409'
+      && crystalClock.frame3a0 === 0,
+    revolution.join(','));
+
+  /* The dispatch is keyed on the STAMPED SPRITE ID, not the type, and every
+   * other id falls through CS:0x1669's compare chain unchanged. */
+  const c0 = new ObjectAnimClock(); c0.step();          // phase 1
+  check('only sprite 224 animates — every other stamped id draws unchanged',
+    animatedObjectSprite(CRYSTAL_SPRITE, c0) === 403
+      && animatedObjectSprite(170, c0) === 170
+      && animatedObjectSprite(253, c0) === 253,
+    `224->${animatedObjectSprite(CRYSTAL_SPRITE, c0)}, 170->${animatedObjectSprite(170, c0)}`);
 
   /* The per-world bases, stated so the world-4 anomaly is visible rather than
    * averaged away — and so the claim "the EXE stamp is what the game uses"
@@ -5756,6 +5781,23 @@ export async function checkWeaponsProjectiles(fetchRaw) {
           `on its very next tick, converging on the symmetric sprite 25`,
       p3.stateIndex === PS.IDLE && p3.phase === 0 && spriteFor(PS.IDLE, 0) === 25,
       `phase=${p3.phase}`);
+
+    /* CS:0x8C3E `[0x377]:=4` + CS:0x8CAC `[0x36b]:=0` — the LEVEL-LOAD seed.
+     * anim_base(4) = 9 (DS:0xd818 entry 4, read as raw bytes) and 9 is not a
+     * SPRITE_REMAP key, so the spawn pose is sprite 9, the FRONT view — not
+     * state 26's back-view 25. CS:0x5DFE -> CS:0x56CA's solid arm (`56D4 jmp
+     * 0x5e9b`) writes neither [0x377] nor CL, so it HOLDS across ticks and
+     * across an UP press, which state 4 never reads. */
+    const p4 = new Player(2 * 32, 9 * 16);
+    p4.spawnAtLevelStart(2 * 32, 9 * 16);
+    const spawnPose = [p4.stateIndex, p4.phase, spriteFor(p4.stateIndex, p4.renderPhase)];
+    p4.tick(m, IN());
+    p4.tick(m, IN({ up: true }));
+    check('level start seeds state 4 / phase 0 -> sprite 9 (the FRONT pose), and holds it',
+      spawnPose[0] === 4 && spawnPose[1] === 0 && spawnPose[2] === 9
+        && p4.stateIndex === 4 && p4.phase === 0
+        && spriteFor(p4.stateIndex, p4.renderPhase) === 9,
+      `seeded=[${spawnPose}] after=idx${p4.stateIndex}/ph${p4.phase}/#${spriteFor(p4.stateIndex, p4.renderPhase)}`);
   }
 
   /* ── jump ceiling collision — a missing feature, now added ─────────────
@@ -11847,7 +11889,7 @@ export function checkInventoryPanel() {
     const p = new InventoryPanel();
     p.step(false); p.step(true); p.step(true);   // highlight slot 0, visible
 
-    drawInventoryPanel(fakeRenderer, frames, inv, p);
+    drawInventoryPanel(fakeRenderer, frames, inv, p, 0);
     check('draws exactly 4 slot frames + 2 item icons (2 slots are empty)',
       drawn.length === 6, JSON.stringify(drawn));
     check('slot 0 (selected, highlighted) draws the base-1 sprite',
@@ -11866,6 +11908,21 @@ export function checkInventoryPanel() {
       + '((17-16)>>1=0), an 8px-tall one is pushed down ((17-8)>>1=4)',
       icons[0].y === PANEL_ICON_Y && icons[1].y === PANEL_ICON_Y + 4,
       JSON.stringify(icons));
+
+    /* CS:0x1e78 retargets DS:[0x0] to the status-panel buffer (0xacde) and
+     * FUN_1000_2274 (CS:0x02DE) copies that buffer to the screen at
+     * `+0x1b80 = 160*44` — so [0x6] is PANEL-LOCAL and the panel belongs
+     * INSIDE the bottom status band, not over the playfield. */
+    const shifted = [];
+    const shiftedRenderer = { blitSprite(f, x, y) { shifted.push({ x, y }); } };
+    drawInventoryPanel(shiftedRenderer, frames, inv, p, 160);
+    check('panelY0=160 puts the slot frames at screen row 163 and the icons '
+      + 'at 164 / 168 — inside the 160-199 status band, NOT over the '
+      + 'playfield (CS:0x1e78 + CS:0x02DE `add di,0x1b80`)',
+      shifted.slice(0, 4).every((d) => d.y === 160 + PANEL_FRAME_Y)
+      && shifted[4].y === 160 + PANEL_ICON_Y
+      && shifted[5].y === 160 + PANEL_ICON_Y + 4,
+      JSON.stringify(shifted.map((d) => d.y)));
   }
 
   /* ── disclosed cuts, recorded as notes rather than left unstated ───────── */

@@ -28,7 +28,8 @@ import { buildDescriptorMap, GROUP_STEMS, HERO_DESCRIPTOR_MAX } from './formats/
 import { spriteForType, parseObjectCategories, sortForDraw, isDeadType,
          isUnstamped, OBJECT_SLOTS, activationBox,
          activateObjects, insertSpawned,
-         stepObjectFall, isFallEligible, dropCarriedItem } from './game/objects.js';
+         stepObjectFall, isFallEligible, dropCarriedItem,
+         ObjectAnimClock, animatedObjectSprite } from './game/objects.js';
 import { parseObjectRecords, Score, Purse, TreasureBurst,
          INVENTORY_EMPTY } from './game/treasure.js';
 import { CONSUMABLES, WEAPON_ARCS, INVULN_TICKS_SPAWN } from './game/consumables.js';
@@ -366,6 +367,7 @@ async function main() {
 
   let spawn = levelSpawn(level.world);
   let player = new Player(spawn.x, spawn.y);
+  player.spawnAtLevelStart(spawn.x, spawn.y);   // CS:0x8C34 — the level-load seed
   /* THE ACTION CONTEXT — what makes a fired trigger actually do something.
    * planeA/planeB are the live map arrays (subarray views into the bulk), so a
    * door written here is visible to the renderer and to collision on the very
@@ -556,6 +558,10 @@ async function main() {
    * 0x39f are never reset on level load), so every spike across every level
    * this session visits shares one continuous phase. */
   const spikeClock = new SpikeClock();
+  /* CS:0x148B/0x148F — DS:0x3a0, the rotating-crystal counter (type 54,
+   * game/objects.js). Session-persistent for the same reason spikeClock is:
+   * no direct-offset write anywhere in the image resets it. */
+  const objectAnimClock = new ObjectAnimClock();
   /* DS:0x432/0x436/0x43a — the level-select password slots (game/zones.js's
    * `generatePassword`/`passwordSlotForWorld`), written by FUN_1000_69d7 on
    * a real level exit (bit 10 of the destination record's own +0x1e — see
@@ -731,6 +737,7 @@ async function main() {
       catch (e) { console.error('sprites failed to load', e); }
       spawn = levelSpawn(level.world);
       player = new Player(spawn.x, spawn.y);
+      player.spawnAtLevelStart(spawn.x, spawn.y);   // CS:0x8C34 — the level-load seed
       events = new EventRunner(level.map, level.palfils);
       slots = new GroupSlots(); enemies = []; clamped = 0; firedByB = 0;
       slotsA = new GroupSlots(); enemiesA = []; clampedA = 0; firedByA = 0;
@@ -1227,6 +1234,12 @@ async function main() {
        * route through the shared attackHero/creatureScansGrid contact path
        * every creature in this file uses — it applies straight to `health`. */
       spikeClock.step();
+      /* CS:0x148B `inc byte [0x3a0]` / CS:0x148F `and byte [0x3a0],0x7` —
+       * the SAME once-per-frame function (FUN_1000_1432) that advances the
+       * spike counters four instructions earlier, so it steps here. Unlike
+       * DS:0x39c/0x39d/0x39e it is NOT behind CS:0x1450's DS:0x36c gate:
+       * the crystal advances every tick. */
+      objectAnimClock.step();
       lastSpikeFx = stepSpikes(level.drawObjects, spikeClock,
         { x: player.x, y: player.y }, health, { invuln: fx.invuln > 0 });
 
@@ -1584,7 +1597,15 @@ async function main() {
          * animating on THIS object, its sprite comes from the per-world
          * table (game/levers.js), not the ordinary `170+type` formula. */
         const leverSprite = leverToggle.spriteFor(o, level.world);
-        const oid = leverSprite ?? spriteForType(o.type);
+        /* CS:0x1669 — the ordinary category<3 draw dispatches on the STAMPED
+         * SPRITE ID, and sprite 224 (type 54, the rotating crystal) picks a
+         * frame from DS:0x3a0 instead of drawing its base sprite. See
+         * game/objects.js. The lever override still wins: CS:0x1D0E's own
+         * animation is a different, per-object path and must be tested
+         * first, so `animatedObjectSprite` goes INSIDE the `??` fallback,
+         * never wrapped around the finished `oid`. */
+        const oid = leverSprite
+          ?? animatedObjectSprite(spriteForType(o.type), objectAnimClock);
         const of_ = hero && hero.frames[oid];
         if (of_ && !isUnstamped(o.type)) {
           renderer.blitSprite(of_, sx, sy);
@@ -1861,12 +1882,6 @@ async function main() {
         renderer.strokeRect(player.x - camX, player.y - camY, 32, 48, 15);
       }
 
-      /* THE CROUCH/INVENTORY PANEL — CS:0x02C0/0x02C3, game/inventory-
-       * panel.js. Absolute screen position (rows 3-20ish, near the TOP of
-       * the screen), drawn every frame regardless of player state; see that
-       * module's own header for why this is not a crouch-only popup. */
-      drawInventoryPanel(renderer, hero && hero.frames, inventory, inventoryPanel);
-
       /* THE STATUS PANEL. Drawn LAST and opaque across the full width — see
        * renderer.js's own blitStatusPanel and status-panel.js's PROVENANCE
        * note on why that's enough to match the original's 160-row viewport
@@ -1874,6 +1889,19 @@ async function main() {
        * level.palette like everything else this port draws (the panel's own
        * embedded palette is never installed in the original either). */
       if (statusPanel) renderer.blitStatusPanel(statusPanel, STATUS_PANEL_Y0);
+
+      /* THE CROUCH/INVENTORY PANEL — CS:0x02C0/0x02C3, game/inventory-
+       * panel.js. Drawn every frame regardless of player state (not a
+       * crouch-only popup), and PANEL-LOCAL in Y like every other overlay
+       * here: FUN_1000_1e1a retargets the shared destination-segment word
+       * DS:[0x0] to the status-panel buffer 0xacde at CS:0x1e78, and
+       * FUN_1000_2274 (CS:0x02DE) copies that buffer to the screen at
+       * `+0x1b80 = 160*44`. It is the FIRST overlay element the original
+       * draws (CS:0x02C3, before the health bar at CS:0x02C9), onto a
+       * backdrop already in the buffer — hence after blitStatusPanel and
+       * before drawHealthBar here. */
+      drawInventoryPanel(renderer, hero && hero.frames, inventory, inventoryPanel,
+                         STATUS_PANEL_Y0);
 
       /* THE STATUS PANEL'S DYNAMIC OVERLAY — CS:0x02C9-0x02D8, straight-line
        * in the main loop right after the panel's own backdrop refresh

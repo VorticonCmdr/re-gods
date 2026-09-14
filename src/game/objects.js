@@ -445,3 +445,111 @@ export function dropCarriedItem(slots, id, x, y) {
   slot.fallDirty = -1;                               // SS:0x438+idx := 0xFF
   return slot;
 }
+
+/* ── THE ROTATING CRYSTAL — type 54 ("teleport stone"), CS:0x16E5 `[STATIC]` ──
+ *
+ * The ordinary (category < 3) object draw is NOT one flat blit. CS:0x1669
+ * loads the STAMPED SPRITE ID out of the runtime descriptor and dispatches
+ * on it, with four animated arms:
+ *
+ *     1669  mov cx,[di]              ; di = 0x2a4e + type*10 -> sprite 170+type
+ *     166b  cmp cx,0xfd  / jz 1699   ; 253  -> DS:0xdfa6[DS:0x39e mod 5]
+ *     1671  cmp cx,0xe0  / jz 16e5   ; 224  -> THE CRYSTAL, below
+ *     1677  cmp cx,0x117 / jz 16ac   ; 279  -> DS:0xdf9e[DS:0x39d mod 4], y-8
+ *     167d  cmp cx,0x118 / jz 16d1   ; 280  -> DS:0xdf96[DS:0x39d mod 4], y-8
+ *     1683  [0x4]=screenX ; [0x6]=screenY ; [0x8]=sprite
+ *     168e  call 0x177d              ; pickup contact (FIXED offsets — the
+ *                                    ;   animated frame cannot move the box)
+ *     1691  call 0x356e              ; masked blit, export 2
+ *
+ * THE CRYSTAL ARM, CS:0x16E5-0x16F7 — 8 frames, base sprite plus seven:
+ *
+ *     16e5  cmp byte [0x3a0],0 / jz 0x1683   ; phase 0 -> CX unchanged (224)
+ *     16ec  mov cl,[0x3a0] / xor ch,ch
+ *     16f2  add cx,0x193               ; +403
+ *     16f6  dec cx                     ; CX = 402 + phase  -> 403..409
+ *
+ *   frame table = [224, 403, 404, 405, 406, 407, 408, 409]
+ *
+ * The eight frames rendered out of the shipped atlases (POBJ1 #54, then
+ * POBJ2 #72..78) are the same gem at progressively narrower widths, edge-on
+ * around 405-407 and widening again by 408 — one revolution. No Y offset on
+ * this arm (the 0x117/0x118 arms do `sub bx,8` at CS:0x16BB; this one does
+ * not).
+ *
+ * ⚠️ NO POSITION PHASE. Unlike the category-5 scenery idiom
+ * (`((worldX >> 5) + tick) & 3`, docs/destructible-and-hazards.md), the index
+ * here is the GLOBAL counter alone, so every type-54 object in a level spins
+ * in lockstep:
+ *
+ *     CS:0x148B  inc byte [0x3a0]
+ *     CS:0x148F  and byte [0x3a0],0x7      ; once per frame, in FUN_1000_1432
+ *
+ * and that increment sits OUTSIDE the `cmp byte [0x36c],0` parity gate at
+ * CS:0x1450 that wraps DS:0x39c/0x39d/0x39e — so the crystal advances every
+ * tick, 8 ticks (~0.53 s at 15 Hz) per revolution. An exhaustive
+ * search_instructions sweep for the operand `0x3a0` over all 19453
+ * instructions returns exactly four hits — the two above and the two in the
+ * draw arm — so no direct-offset write resets DS:0x3a0 anywhere in the image.
+ * That sweep cannot see a bulk BSS clear (a `rep stosw` spanning 0x3a0 would
+ * not appear as an operand), so "free-runs from BSS zero for the whole
+ * session" is an inference, not a proof; the starting phase is not observable
+ * either way, which is why this port treats it like leverToggle and
+ * spikeClock above it.
+ *
+ * SHIPPED CENSUS: type 54 is placed 14x — PLEV1A (1031,546) and (41,850),
+ * PLEV1B x1, PLEV2A x5, PLEV3A x6 — matching consumables.js's own
+ * independently recorded `placed: 14`. THREE of PLEV3A's six, at world
+ * (70,144), (134,144) and (197,144), are on screen at that level's spawn
+ * camera (0,0), which is where this animation is easiest to see; the spin
+ * frames are 16x16 against the base sprite's 16x15, so at y=144 they occupy
+ * rows 144..159 — the bottom row of the playfield, flush against the status
+ * panel, not clipped by it. PLEV1A's (41,850) stone is fall-eligible and
+ * settles at y=868, so at the world-1 spawn camera (0,864) it draws at screen
+ * (41,4) — fully on screen, measured live in this port by instrumenting the
+ * object draw loop. That is the crystal the DOSBox comparison was made
+ * against.
+ *
+ * ⚠️ THE OTHER THREE ARMS ARE READ BUT DELIBERATELY NOT WIRED.
+ *   · sprite 253 (type 83, placed 8x): table DS:0xdfa6 = {253,433,434,435,436},
+ *     index DS:0x39e mod 5. DS:0x39e only advances on the `[0x36c]==0` branch
+ *     of CS:0x1450, and DS:0x36c's per-frame toggle site is not established
+ *     (three `not byte [0x36c]` sites exist: CS:0x0172, CS:0x6C9E, CS:0x9221).
+ *     Porting it would mean guessing the rate. UNKNOWN_36c_parity.
+ *   · sprites 279/280 (types 109/110): tables DS:0xdf9e = {279,397,398,399}
+ *     and DS:0xdf96 = {280,400,401,402}, index DS:0x39d mod 4, `sub bx,8`,
+ *     export 1; the 0x118 arm also `call 0x16f9` (side effects unread). Both
+ *     types are placed ZERO times in all eight shipped maps, so neither arm is
+ *     reachable from this walk — the same disposition this project already
+ *     recorded for popup ids 0x94/0x95.
+ *   All four tables were read directly (read_memory `1ffd:df96`, 32 bytes) and
+ *   sit end to end with the category-5 jump table at DS:0xdfb0 with zero
+ *   slack — a three-way boundary cross-check.
+ */
+
+/** CS:0x1671 `cmp cx,0xe0` — sprite 224 = 170 + type 54 ("teleport stone"). */
+export const CRYSTAL_SPRITE = 224;
+/** CS:0x16F2 `add cx,0x193` followed by CS:0x16F6 `dec cx` — 403 - 1. */
+export const CRYSTAL_SPIN_BASE = 402;
+/** CS:0x148F `and byte [0x3a0],0x7`. */
+export const CRYSTAL_PERIOD = 8;
+
+/** DS:0x3a0 — CS:0x148B/0x148F. One global 0..7 counter, advanced once per
+ *  frame, unconditional (outside CS:0x1450's DS:0x36c parity gate). */
+export class ObjectAnimClock {
+  constructor() { this.frame3a0 = 0; }
+  step() { this.frame3a0 = (this.frame3a0 + 1) & (CRYSTAL_PERIOD - 1); }
+}
+
+/** CS:0x16E5-0x16F7. Phase 0 is the BASE sprite (the `jz 0x1683` leaves CX
+ *  alone); phases 1..7 are 402 + phase = 403..409. */
+export function crystalSprite(frame3a0) {
+  return frame3a0 === 0 ? CRYSTAL_SPRITE : CRYSTAL_SPIN_BASE + frame3a0;
+}
+
+/** CS:0x1669's sprite-id dispatch, the one arm this port wires: sprite 224
+ *  animates, everything else draws its stamped id unchanged. The other three
+ *  arms (253 / 279 / 280) are documented above and deliberately left out. */
+export function animatedObjectSprite(spriteId, clock) {
+  return spriteId === CRYSTAL_SPRITE ? crystalSprite(clock.frame3a0) : spriteId;
+}

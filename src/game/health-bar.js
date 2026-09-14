@@ -29,7 +29,10 @@
  *
  *     0e93  si = 0x1e00 + (DS:0x312 + 4)*8     ; descriptor #126 (0x7a+4)
  *     0eac  ax = 4 - DS:0x3b4                   ; PUSHED, used after draw #1
- *     0eb5  ES := (DS:0x33&4) ? 0xad4c : 0xacde  ; see NOT PORTED below
+ *     0eb5  ax := (DS:0x33&4) ? 0xad4c : 0xacde  ; the STATUS-PANEL buffer
+ *     0ec9  [0x0] := ax                          ; NOT ES — DS:[0x0] is the
+ *                                                ;   shared destination-SEGMENT
+ *                                                ;   word the blitters read
  *     0ecc  [0x6] := 7 ; [0x4] += (DS:0x33&4)     ; PANEL-LOCAL Y=7, X=15(+0/4)
  *     0ed8  ax := max(DS:0x19a, 0)                ; the health BAR value, 0..24
  *     0ee7  E := (24 - ax) >> 1                    ; "empty" row count, 0..12
@@ -95,14 +98,22 @@
  *   — consistent with `export 18`'s already-documented 352x160 backdrop
  *   save/restore implying the playfield's own VRAM occupies exactly the
  *   first 160 rows, with the panel immediately following in the same linear
- *   address space. `UNKNOWN_status_panel_es_segment` — the exact segment
- *   arithmetic (and SS:0x40A's own real role) is not traced past this; the
- *   +160 offset itself rests on three converging lines of evidence (the
- *   pitch formula, the live capture, and the panel's own established
- *   height), not on tracing that one remaining register.
+ *   address space.
+ *
+ *   ⚠️ UPDATE — the +160 is now PROVEN, not inferred, and
+ *   `UNKNOWN_status_panel_es_segment` is CLOSED. VGA.EXE graphics exports 1
+ *   and 2 (the blitters themselves, table words 0x1d07 / 0x1b86) each do
+ *   `mov di,[0x0] / sub di,0x4 / mov es,di`, compute `di = x/8 + 44*y`, then
+ *   `add di,0x40` (cancelling the -4 paragraphs): the destination segment is
+ *   whatever the caller left in DS:[0x0]. This routine installs the
+ *   status-panel buffer there at CS:0x0ec9, and FUN_1000_2274 (CS:0x02DE)
+ *   copies that buffer to the live page with `add di,0x1b80` = 160*44. See
+ *   inventory-panel.js's header for the full derivation, including VGA.EXE
+ *   export 28's two-page backdrop copy and the segment arithmetic
+ *   (0xacde-0xac7a = 1600 = 40x40; 0xad4c-0xacde = 1760 = 44x40).
  *
  * NOT PORTED (disclosed, not silently dropped):
- *   - `DS:0x33` bit 2 / the ES segment choice (0xacde vs 0xad4c) — the SAME
+ *   - `DS:0x33` bit 2 / the DS:[0x0] segment choice (0xacde vs 0xad4c) — the SAME
  *     unidentified UI-mode flag `inventory-panel.js`'s own header already
  *     discloses skipping (that module's equivalent 4px X shift). Defaulted
  *     to the bit-clear arm here too, for the same reason: ordinary gameplay

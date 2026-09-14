@@ -46,6 +46,59 @@
  *   unconditional. The asymmetry is real and matches the straddle threshold
  *   used elsewhere: the hero's body is ~24-25 px wide inside a 32 px cell, so
  *   moving right it must be tested one step BEFORE it overlaps column+1.
+ *
+ * THE LEVEL-START POSE — a shipped port bug, found by comparison with DOSBox.
+ *   REPORTED: at the very start of PLEV1A the real game shows the hero facing
+ *   the CAMERA (face and chest visible); this port showed his BACK, its own
+ *   HUD reading "state 26 idle - phase 0 - sprite #25".
+ *
+ *   The port had no level-load seed at all. `new Player(x, y)` leaves the
+ *   hero in this file's own uncited ST.FALL / S.FALL_R default, and the first
+ *   ground contact (`_fall`'s landing branch) sets stateIndex = S.IDLE (26),
+ *   phase 0 — anim_base(26) = 52, remapped at CS:0x5F8B to sprite 25: the
+ *   back view.
+ *
+ *   GAME.EXE does it explicitly. FUN_1000_8c34, the level-load routine, seeds
+ *   `8C3E mov byte [0x377],0x4` — state 4, this project's already-documented
+ *   "spawn / arrival idle pose", whose three named entrants are level start
+ *   (CS:0x8C3E), respawn (CS:0x08D6) and teleport arrival (CS:0x1022) —
+ *   together with `8CAA sub ax,ax / 8CAC mov [0x36b],al`, phase 0. The port
+ *   already honoured the other TWO entrants through `teleportTo`, which is
+ *   exactly why respawn and teleport looked right and only level start did not.
+ *
+ *   DS:0xd818 entry 4 = {anim_base 9, handler 0x5DFE}, read as raw bytes at
+ *   file offset 0x1d998 of Gods/analysis/unpacked/TGAME.unpacked.exe. The
+ *   epilogue at CS:0x5F77 gives sprite = 9 + CBW(cl) = 9, and 9 is NOT one of
+ *   CS:0x5F8B's three remap keys (0x34/0x36/0x37) — so the remap this port
+ *   applies was never the problem; being in state 26 at all was. Rendered
+ *   from the shipped PALWAYS1.DAT/.PI1: sprite #9 is the front view, sprite
+ *   #25 the back view.
+ *
+ *   AND THE POSE HOLDS — the half a one-frame seed would miss. State 4's
+ *   handler (CS:0x5DFE) tests ONLY the two direction bits (0x8 RIGHT -> state
+ *   2 with cl=2; 0x4 LEFT -> state 3 with cl=0) and otherwise does `5E16 jmp
+ *   0x56CA`, whose solid-ground arm is a bare `56D4 jmp 0x5e9b`: neither
+ *   [0x377] nor CL is written, so sprite 9 is re-selected every tick for as
+ *   long as the player presses nothing. Its not-solid arm is `56EC mov
+ *   [0x377],0xc / 56F1 xor cl,cl` — state 12 unconditionally, no facing
+ *   consulted.
+ *
+ *   DISCLOSED CUT. `spawnAtLevelStart` parks state 4 in this port's ST.GROUND
+ *   bucket, which runs the whole `_ground` body every tick. That is a strict
+ *   SUPERSET of state 4's eleven instructions, so the hero at a spawn keeps
+ *   four capabilities the original's state 4 does not have — CS:0x5DFE tests
+ *   only bits 0x8/0x4, so RIGHT goes to state 2 and LEFT to state 3 no matter
+ *   what else is held:
+ *     UP alone on a climbable column -> the port enters the ladder
+ *     RIGHT/LEFT + UP                -> the port jumps   (measured: idx 9)
+ *     RIGHT/LEFT + DOWN              -> the port crouches (measured: idx 18)
+ *     RIGHT/LEFT alone               -> the port goes straight to WALK,
+ *                                       skipping turn states 2/3
+ *   All four are one keypress wide (nothing re-enters state 4 but a spawn, a
+ *   respawn or a teleport) and all four are PRE-EXISTING: `teleportTo` has
+ *   shipped with exactly this shape. ST.GROUND here is a port-side bucket,
+ *   NOT a claim that CS:0x56CA installs a "grounded" state — its solid arm
+ *   writes nothing at all.
  */
 
 import { CELL_SOLID, CELL_CLIMBABLE, MAP_COLS } from '../formats/map.js';
@@ -408,6 +461,43 @@ export class Player {
    * @param {number} x  world X, already CS:0x0FF2's `col*32 + 16`
    * @param {number} y  world Y, already CS:0x0FEE's `row*16`
    */
+  /**
+   * CS:0x8C34-0x8CDC (FUN_1000_8c34) — THE LEVEL-LOAD SEED. The first of
+   * state 4's three named entrants; the other two (respawn CS:0x08D6,
+   * teleport arrival CS:0x1022) already route through `teleportTo` below.
+   * Until now the port had NO equivalent: a fresh level used the
+   * constructor's uncited ST.FALL / S.FALL_R default and the first ground
+   * contact turned that into S.IDLE (26) — the BACK view. See this file's
+   * header section "THE LEVEL-START POSE" for the full derivation.
+   *
+   *     8C3E  mov byte [0x377],0x4      ; state 4 — the spawn / arrival pose
+   *     8C43  mov byte [0x378],0x0      ; the ladder-FIRE latch, NOT a facing
+   *     8C48  ax=[0x15a] / [0x17a]=ax   ; the per-world spawn X
+   *     8C4E  bx=[0x15c] / [0x17c]=bx   ; ... and Y
+   *     8CAA  sub ax,ax
+   *     8CAC  mov [0x36b],al            ; animation phase := 0
+   *     8CD0  mov [0x174],ax            ; double-jump flag := 0
+   *     8CDC  mov [0x176],ax            ; fall-damage accumulator := 0
+   *
+   * @param {number} x  the per-world spawn X (DS:0x15a)
+   * @param {number} y  the per-world spawn Y (DS:0x15c)
+   */
+  spawnAtLevelStart(x, y) {
+    this.x = x | 0;                      // CS:0x8C4B  [0x17a]
+    this.y = y | 0;                      // CS:0x8C52  [0x17c]
+    this.state = ST.GROUND;
+    this.fallV = 0; this.airSteps = 0; this.jumpCursor = 0;
+    this.fallDamage = 0;                 // CS:0x8CDC  [0x176] := 0
+    this.doubleJump = false;             // CS:0x8CD0  [0x174] := 0
+    this.fromLadder = false;
+    this.fireState = -1; this.pendingAlloc = null; this.emitted = null;
+    this.ladderFacing = 0;               // CS:0x8C43  [0x378] := 0
+    this.flag356 = false;
+    this.stateIndex = S.ARRIVAL;         // CS:0x8C3E  [0x377] := 4
+    this.phase = 0;                      // CS:0x8CAC  [0x36b] := 0
+    this.renderPhase = 0;
+  }
+
   teleportTo(x, y) {
     this.x = x | 0;
     this.y = y | 0;
@@ -682,7 +772,18 @@ export class Player {
        * "stopped, still facing that way" pose, not idle's back-view sprite 25.
        * Confirmed live: DS:0x377 never became 26 in either direction after a
        * plain key release, and DS:0x36b landed on exactly these two constants. */
-      if (input.up) {
+      if (this.stateIndex === S.ARRIVAL) {
+        /* CS:0x5DFE — state 4 (spawn / arrival) tests ONLY the two direction
+         * bits; with neither held it falls through to `5E16 jmp 0x56CA`,
+         * whose solid-ground arm is a bare `56D4 jmp 0x5e9b` — neither
+         * [0x377] nor CL is written, so the arrival pose HOLDS at
+         * anim_base(4)+0 = sprite 9 for as long as the player presses
+         * nothing. The walk-release block below belongs to states 0/1
+         * (CS:0x5AF2-0x5B35) and must not run here: without this guard the
+         * first UP press at a spawn or teleport arrival set stateIndex =
+         * S.IDLE and flipped the hero to the back view, which state 4 —
+         * having no UP test at all — never does. */
+      } else if (input.up) {
         /* CS:5AF9/5AFB (left) or CS:5B0F/5B11 (right) — the ONLY way a release
          * reaches true idle. State 26's own handler (CS:49CA `sub cl,cl`) zeros
          * the phase again on its very next tick, converging on sprite 25. */
