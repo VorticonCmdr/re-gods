@@ -400,6 +400,33 @@ The verb table above already named `ACT6` "kill ≤2 category-4 objects near the
 3CB6    INC byte[0x3A6] ; == 2 ? stop early : continue the 200-object scan
 ```
 
+#### The queued record is a SMOKE PUFF — `CS:0x3CC7`, sprites 108–114 `[PROVEN]`
+
+The `3C78` line above said "queue a 4-slot effect record" and stopped there; what *consumes* `DS:0x8C3C` was never chased. It is a seven-frame animation, and it is why a neutralised hazard visibly **goes up in smoke** instead of just vanishing:
+
+```
+3CC7  si = 0x8c3c ; cx = 4
+3CCD  cmp word [si],0 / js next      ; a NEGATIVE first word = free slot
+3CD2  ax = [si+2] ; bx = [si+4]      ; the stored point, WORLD space
+3CD8  ax -= [0xa] ; bx -= [0xc]      ; -> screen, recomputed every tick
+3CE0  dx = [si] ; add dx,0x6c        ; sprite = 108 + frame
+3CE5  [0x4]=ax [0x6]=bx [0x8]=dx / 3CF2 call 0x3569   ; graphics EXPORT 1
+3CF7  inc byte [si]                  ; frame++ — AFTER the blit
+3CF9  cmp byte [si],0x7 / jl next    ; seven frames, 0..6
+3CFE  mov word [si],0xffff           ; spent -> free
+3D02  add si,6 / loop 0x3ccd         ; a FULL 4-slot pass, no early out
+```
+
+Three callers (`get_xrefs_to`): `CS:0x0239` in the main loop, `CS:0x0A0E` inside the death routine (so puffs keep animating while the hero dies) and `CS:0x92A7`. `DS:0x8C3C` has exactly **three** references program-wide (`search_instructions` on the operand): `CS:0x3C06` (ACT6's own free-slot search), `CS:0x3CC7` (this walker) and `CS:0x8EC2` (level load, which frees all four slots) — so **ACT6 is the sole producer**; this is not a shared particle pool.
+
+**The artwork confirms the frame count independently.** Cutting ids 108–114 out of the shipped atlases gives `PALWAYS2[69..71]` then `PALWAYS3[0..3]`, sized `32×32, 32×32, 32×32, 32×32, 32×29, 32×18, 32×17` — a pale dome that swells into a cloud, browns, then flattens and scatters, the shrinking heights being the dispersal. **Sprite 115 is an unrelated green box**, so an off-by-one in `cmp 7` would draw furniture: the compare and the art agree on seven frames.
+
+Unlike the sibling debris pool (`DS:0x8b4c`) this walker has **no live-count fast-out, no off-screen cull and no contact test** — the only `CALL` in the body is the blit — and it draws through **export 1** (`CS:0x3569`) where debris uses export 2.
+
+**Two details of the seeding side matter to a port**, both in `CS:0x3C02`–`0x3C18`: the free-slot search runs **once per invocation**, and each kill then writes at the cursor and does `add bp,6` *without searching again*. So (1) with all four slots busy, `CS:0x3C15 sub bp,6` backs up and **overwrites the last slot** rather than dropping the puff, and (2) a second kill in one invocation takes the *next* slot whether or not it is free. If the cursor is already on the last slot, that second write lands one record past the array at `DS:0x8C54` — which is not spare space: the main loop parks a pointer there every frame (`CS:0x0218 mov word [0x1d2],0x8c54`).
+
+**Now implemented in `gods-web`** as `game/kill-smoke.js`, with that out-of-array store clamped rather than reproduced (the same call this port already made for `ACT8`). Before it the port filled the four slots and drew nothing, so a lever-neutralised spike blinked out of existence — the gap was reported from play, not spotted in the bytes.
+
 So the doc's "≤2" figure is now instruction-proven, not inferred: the outer loop always walks up to 200 live objects, but a hard counter (`DS:0x3A6`) stops the function the instant a **second** category-4 kill lands. The "near the point" radius is exactly **±12 px on each axis**, centered on the *trigger record's own* `(x, y)` — not the hazard object's. The kill itself writes `0xFFFF` into the object's type word and zeros its flag word, the identical dead-object convention used everywhere else in this codebase (`CS:0x9000`'s sign test, already documented). This is a pure verb-level effect — it does not touch score, inventory, or the lever table itself (confirmed by reading the full body: no reference to `DS:0x17e`, `0x194`, or `0xa5f8` anywhere in `0x3BD1`–`0x3CC6`).
 
 ### The census: lever-gated `ACT6` records that actually reach a shipped hazard, world 1 `[PROVEN]`
