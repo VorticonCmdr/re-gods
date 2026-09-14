@@ -5,7 +5,12 @@
  * PLEVEL<N><X>.PI1; the original has one hardware palette for everything, so
  * compositing the hero in level colours is a check on the palette source.
  *
- * Usage: node tools/frame-node.mjs [levelKey] [ticks] [out.ppm]
+ * Usage: node tools/frame-node.mjs [levelKey] [ticks] [out.ppm] [tabletX]
+ *
+ * With a 4th argument, the status panel and the message line are composited
+ * too, showing the frame as it looks the instant the hint tablet at that world
+ * X is picked up — i.e. the frame a DOSBox capture of the real game can be held
+ * against. `tabletX` may be `p2` to render the SECOND page instead.
  */
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { join, dirname, resolve } from 'node:path';
@@ -16,6 +21,10 @@ const PUB  = resolve(here, '..', 'public');
 const key   = process.argv[2] || '1A';
 const ticks = +(process.argv[3] || 12);
 const out   = process.argv[4] || `/tmp/gods_frame_${key}.ppm`;
+/* The optional message overlay: a tablet's world X, and optionally `p2` to
+ * advance past page 1's 30-tick dwell before rendering. */
+const tabletX = process.argv[5] ? +process.argv[5] : null;
+const wantPage2 = process.argv[6] === 'p2';
 
 const { dclDecompress } = await import('../src/formats/dcl.js');
 const { decodePI1, sliceTiles, TILE_W, TILE_H, SCREEN_W, SCREEN_H } = await import('../src/formats/pi1.js');
@@ -30,6 +39,10 @@ const { EntityB, MODE_TABLE, groundBelow } = await import('../src/game/entity.js
 const { parsePalfils, palfilsNameFor } = await import('../src/game/events.js');
 const { Player } = await import('../src/game/player.js');
 const { cameraForSpawn } = await import('../src/game/camera.js');
+const { decodeStatusPanel, PANEL_W, PANEL_H, PANEL_Y0 } = await import('../src/game/status-panel.js');
+const { MessageEngine, PRIORITY, Y_LOCAL, ADVANCE, PAGE1_TICKS } = await import('../src/game/message.js');
+const { composeHint } = await import('../src/game/message-compose.js');
+const { buildObjectArena, appendHints, hintOffsetForX, stringAt } = await import('../src/game/text-arena.js');
 
 const raw = (n) => {
   const p = join(PUB, 'game', n);
@@ -163,6 +176,46 @@ for (let y = 0; y < f.h; y++) {
   }
 }
 
+/* THE STATUS PANEL AND THE MESSAGE LINE — the same modules main.js draws
+ * with, so this frame is the port's real output and not a mock-up. */
+let msgText = null;
+if (tabletX !== null) {
+  const panel = decodeStatusPanel(dclDecompress(raw('PSTAT3.PI1')).data);
+  idx.set(panel.indices.subarray(0, PANEL_W * PANEL_H), PANEL_Y0 * SCREEN_W);
+
+  const world = +key[0];
+  const pool = buildObjectArena(dclDecompress(raw(`POBJECTS.00${world}`)).data);
+  const h = appendHints(pool.arena, dclDecompress(raw(palfilsNameFor(key))).data);
+  const off = hintOffsetForX(h.keys, h.offs, tabletX);
+  const eng = new MessageEngine();
+  eng.post(composeHint(off >= 0 ? stringAt(h.arena, off) : null), PRIORITY.hint);
+  if (wantPage2) for (let i = 0; i <= PAGE1_TICKS; i++) eng.step();
+  const page = eng.page();
+  if (page) {
+    /* PSMLFNT, indexed by the raw character byte — game/message.js's own
+     * IDENTITY MAPPING note. */
+    const fa = parseAtlas(dclDecompress(raw('PSMLFNT.DAT')).data);
+    const fi = decodePI1(dclDecompress(raw('PSMLFNT.PI1')).data);
+    let gx = page.x;
+    const gy = PANEL_Y0 + Y_LOCAL;
+    for (const c of page.chars) {
+      const rect = fa.frames[c];
+      const px8 = cutFrame(fi, rect);
+      for (let y = 0; y < rect.h; y++) {
+        const py = gy + y; if (py < 0 || py >= SCREEN_H) continue;
+        for (let x = 0; x < rect.w; x++) {
+          const sx = gx + x; if (sx < 0 || sx >= SCREEN_W) continue;
+          const v = px8[y * rect.w + x]; if (v) idx[py * SCREEN_W + sx] = v;
+        }
+      }
+      gx += ADVANCE;
+    }
+    msgText = [...page.chars].map((c) => (c === 0x11 ? '\u25c6' : c === 0x26 ? '\u2192'
+                                        : String.fromCharCode(c))).join('');
+    msgText = `page ${wantPage2 ? 2 : 1} at x=${page.x}: "${msgText}"`;
+  }
+}
+
 const buf = Buffer.alloc(SCREEN_W * SCREEN_H * 3);
 for (let i = 0; i < idx.length; i++) {
   const c = idx[i] * 4;
@@ -172,3 +225,4 @@ writeFileSync(out, Buffer.concat([Buffer.from(`P6\n${SCREEN_W} ${SCREEN_H}\n255\
 console.log(`PLEV${key} tick ${ticks}: hero (${p.x},${p.y}) state ${p.stateIndex} ` +
             `"${STATE_INFO[p.stateIndex].label}" phase ${p.phase} sprite #${id} ${f.w}x${f.h}, ` +
             `cam (${camX},${camY}), ${drawn} objects + ${drawnE} enemies -> ${out}`);
+if (msgText) console.log(`  message line: ${msgText}`);
