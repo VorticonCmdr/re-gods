@@ -47,6 +47,8 @@ import { VERDICT_NONE } from './game/pathfind.js';
 import { runSearch } from './game/pathfind-producers.js';
 import { GodsRandom } from './game/random.js';
 import { decodeStatusPanel, PANEL_Y0 as STATUS_PANEL_Y0 } from './game/status-panel.js';
+import { stepHealthBarShimmer, drawHealthBar } from './game/health-bar.js';
+import { sliceDigitFrames, clampMoneyForDisplay, drawScore, drawMoney, drawLives } from './game/hud-digits.js';
 import { LeverToggle } from './game/levers.js';
 import { SpikeClock, stepSpikes, spikeSprites, spike130Sprite,
          SPIKE_TYPE, SPIKE117_TYPE, SPIKE130_TYPE } from './game/spikes.js';
@@ -346,8 +348,13 @@ async function main() {
 
   let level = await loadLevel(LEVELS[0]);
   let hero = null;
+  /* CS:0x0df8's own export-21 anchor (formats/descriptors.js, descriptor
+   * #127) — sliced once per hero (re)load into ten 8x7 glyph frames the
+   * score/lives/money digit renderers (game/hud-digits.js) share. */
+  let digitFrames = null;
   try {
     hero = await loadSprites(level.world);
+    digitFrames = sliceDigitFrames(hero.frames);
   } catch (e) { console.error('sprites failed to load', e); }
 
   /* Loaded once, world-independent, exactly like the original (CS:0x38a's
@@ -437,6 +444,11 @@ async function main() {
    * SHORT one: CS:0x085D calls the same helper then subtracts 170. */
   let fx = { invuln: INVULN_TICKS_SPAWN, freeze: 0, giantJump: 0, lives: 2,
              arc: 0, shop: false, stateMachineSuspended: false };
+  /* CS:0x3b4 — the health bar's own filled-segment shimmer phase (game/
+   * health-bar.js). A genuine persistent global in the original (no writer
+   * ever resets it on level load or restart), so it lives here beside
+   * leverToggle/spikeClock/passwordSlots, not inside switchLevel's reset. */
+  let healthBarShimmer = { phase: 0, tick: 0 };
   /* CS:0x01BD's own `jmp 0x9bb` (health.dead, combat.js) — game/death.js.
    * `deathSeq` is non-null for the ~1.2s burst; `gameOverState` is non-null
    * once the THIRD life is lost (CS:0x093E `js`) and freezes the tick loop
@@ -715,7 +727,7 @@ async function main() {
     try {
       sel.value = key;
       level = await loadLevel(key);
-      try { hero = await loadSprites(level.world); }
+      try { hero = await loadSprites(level.world); digitFrames = sliceDigitFrames(hero.frames); }
       catch (e) { console.error('sprites failed to load', e); }
       spawn = levelSpawn(level.world);
       player = new Player(spawn.x, spawn.y);
@@ -855,6 +867,11 @@ async function main() {
        * 0x4993 -> 0x5ea0 -> 0x5ea4). Everything drawn this frame uses the
        * snapshot, so the hero and the background never skew apart. */
       cam.snapshot();
+      /* CS:0x0e83/0x0e8a — the health bar's own shimmer phase (game/health-
+       * bar.js), gated on every OTHER tick in the original; unconnected to
+       * anything else this tick does, so it advances here rather than
+       * threading it through the render callback below. */
+      stepHealthBarShimmer(healthBarShimmer);
       /* CS:0x019D -> 0x01CC -> 0x020F -> 0x0254: latch, clear the grid, move
        * and stamp the projectiles, THEN run the player. That order lives in
        * game/frame.js so the verification suite can drive it — see the note
@@ -1857,6 +1874,17 @@ async function main() {
        * level.palette like everything else this port draws (the panel's own
        * embedded palette is never installed in the original either). */
       if (statusPanel) renderer.blitStatusPanel(statusPanel, STATUS_PANEL_Y0);
+
+      /* THE STATUS PANEL'S DYNAMIC OVERLAY — CS:0x02C9-0x02D8, straight-line
+       * in the main loop right after the panel's own backdrop refresh
+       * (game/health-bar.js, game/hud-digits.js). Drawn last, on top of the
+       * just-blitted backdrop, exactly like the original draws these on top
+       * of whatever the backdrop's own VRAM already held. */
+      drawHealthBar(renderer, hero && hero.frames, health.bar, healthBarShimmer.phase, STATUS_PANEL_Y0);
+      drawLives(renderer, digitFrames, fx.lives, STATUS_PANEL_Y0);
+      clampMoneyForDisplay(purse);
+      drawMoney(renderer, digitFrames, purse, STATUS_PANEL_Y0);
+      drawScore(renderer, digitFrames, score, STATUS_PANEL_Y0);
 
       renderer.present(level.palette);
 

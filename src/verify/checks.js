@@ -22,6 +22,13 @@ import { SpikeClock, spikePingpong, heroInSpikeBox, heroInSpike130Box,
          stepSpikes, spikeSprites, spike130Sprite, SPIKE_OVERLAY,
          SPIKE117_OVERLAY, SPIKE130_ANIM, SPIKE_TYPE, SPIKE117_TYPE,
          SPIKE130_TYPE } from '../game/spikes.js';
+import { HEALTH_EMPTY_SPRITE, HEALTH_FILLED_SPRITE_BASE, HEALTH_FILLED_SPRITE_COUNT,
+HEALTH_BAR_X, HEALTH_BAR_Y_LOCAL, HEALTH_BAR_H, healthBarDraws, drawHealthBar,
+stepHealthBarShimmer } from '../game/health-bar.js';
+import { DIGIT_STRIP_DESCRIPTOR, DIGIT_W, DIGIT_H, DIGIT_STEP, MONEY_CAP,
+SCORE_Y_LOCAL, LIVES_Y_LOCAL, MONEY_Y_LOCAL, RIGHT_ANCHOR_X, LIVES_X,
+SCORE_DIGITS, MONEY_DIGITS, LIVES_CLAMP, sliceDigitFrames, clampMoneyForDisplay,
+drawScore, drawMoney, drawLives } from '../game/hud-digits.js';
 import { InventoryPanel, drawInventoryPanel, panelIconSprite,
          SLOT_FRAME_SPRITE, SLOT_FRAME_HIGHLIGHT_SPRITE, PANEL_SLOT_SPACING,
          PANEL_FRAME_X0, PANEL_FRAME_Y, PANEL_ICON_X0,
@@ -11870,6 +11877,269 @@ export function checkInventoryPanel() {
       + 'first-empty-slot substitution rather than reverted to the original\'s '
       + '"always overwrite the current selector", since reverting would be '
       + 'strictly worse with no way to ever move the selector off slot 0.' });
+
+  return results;
+}
+
+/**
+ * CS:0x0e77/0x0e93 — the status panel's vertical health gauge. Found by
+ * searching for consumers of DS:0x19a beyond the already-documented chase
+ * routine (`FUN_1000_0dff`, combat.js's `Health`); the two-blit crop trick
+ * was verified against the real PALWAYS3.DAT/.PI1 dimensions (16x14, all
+ * five sprites) before writing any port code — see game/health-bar.js's
+ * own header for the full disassembly and the "output rows tile perfectly"
+ * derivation this reproduces.
+ */
+export function checkHealthBar() {
+  const { results, check } = makeChecker();
+
+  check('CS:0x0e7d/0x0ecc/measured dims: X=0xf(15), panel-local Y=7, and '
+    + 'both sprites are 14px tall (measured against real PALWAYS3.DAT/.PI1)',
+    HEALTH_BAR_X === 0xf && HEALTH_BAR_Y_LOCAL === 7 && HEALTH_BAR_H === 14);
+  check('CS:0x0e9e (([0x312]+4)*8, [0x312]=0x7a) -> descriptor 126 for the '
+    + '"top" sprite, and CS:0x0f0d\'s 4-value cycle bases at 122',
+    HEALTH_EMPTY_SPRITE === 126 && HEALTH_FILLED_SPRITE_BASE === 122 &&
+    HEALTH_FILLED_SPRITE_COUNT === 4);
+
+  /* ── the two-crop geometry, at both extremes and a midpoint ────────────── */
+  check('full health (24): top crops just ITS OWN row 0 (E=(24-24)>>1=0, '
+    + 'rows1=1), bottom fills the remaining 13 rows starting at its own row '
+    + '0 (no skip) — CS:0x0eec/0x0efd/0x0f2b',
+    JSON.stringify(healthBarDraws(24, 0)) === JSON.stringify({
+      top: { sprite: 126, rowStart: 0, rowCount: 1, y: 7 },
+      bottom: { sprite: 122, rowStart: 0, rowCount: 13, y: 8 },
+    }));
+  check('zero health (0): top crops rows [0,13) (E=12, rows1=13) and bottom '
+    + 'is SKIPPED entirely — CS:0x0f30\'s own `(E+1)*2==26` bounds check, '
+    + 'not a "nothing to fill" shortcut (the intended 2 more rows would '
+    + 'read past the sprite\'s own 14-row bound)',
+    healthBarDraws(0, 0).bottom === null &&
+    healthBarDraws(0, 0).top.rowCount === 13);
+  check('a below-zero bar value is floored at 0 before the crop math runs '
+    + '(CS:0x0edb-0x0edf `or ax,ax / jns / sub ax,ax`), not clamped to a '
+    + 'different geometry',
+    JSON.stringify(healthBarDraws(-5, 0)) === JSON.stringify(healthBarDraws(0, 0)));
+  check('midpoint (12): the two crops are ADJACENT with no gap and no '
+    + 'overlap — top ends at output row 7, bottom starts its OWN row 6 '
+    + 'there and runs to the sprite\'s own row 13 exactly',
+    JSON.stringify(healthBarDraws(12, 2)) === JSON.stringify({
+      top: { sprite: 126, rowStart: 0, rowCount: 7, y: 7 },
+      bottom: { sprite: 124, rowStart: 6, rowCount: 7, y: 14 },
+    }));
+  check('every health value 0..24 tiles the two crops into EXACTLY 14 '
+    + 'OUTPUT rows when bottom fires, or 13 when it\'s the E=12 skip case '
+    + '— adjacent output ranges, no gap, no overlap. Each sprite\'s own '
+    + 'row 13 (the 14th, last row) is never SOURCE-sampled by either draw '
+    + '(bottom\'s own crop always ends at its source row 13, exclusive) — '
+    + 'a reserved border row in the asset, not a hole in what\'s shown',
+    Array.from({ length: 25 }, (_, h) => h).every((h) => {
+      const { top, bottom } = healthBarDraws(h, 0);
+      if (!bottom) return top.rowCount === 13;
+      const topEnd = top.y + top.rowCount;
+      return topEnd === bottom.y &&                             // adjacent, no gap
+        bottom.rowStart + bottom.rowCount === HEALTH_BAR_H - 1 && // source-ends at row 13
+        top.rowCount + bottom.rowCount === HEALTH_BAR_H;          // 14 OUTPUT rows total
+    }));
+
+  /* ── the shimmer phase — CS:0x0e83/0x0e8a-0x0e8e, every OTHER tick ─────── */
+  {
+    const s = { phase: 0, tick: 0 };
+    stepHealthBarShimmer(s);
+    check('one tick does NOT advance the phase — DS:0x36d gates the '
+      + 'increment to every OTHER tick', s.phase === 0);
+    stepHealthBarShimmer(s);
+    check('the second tick DOES advance it', s.phase === 1);
+    for (let i = 0; i < 6; i++) stepHealthBarShimmer(s);
+    check('the phase wraps at 4 (CS:0x0f0d\'s own 4-descriptor cycle), '
+      + 'never reaching the fifth (dead, out-of-range) descriptor slot',
+      s.phase >= 0 && s.phase < HEALTH_FILLED_SPRITE_COUNT, String(s.phase));
+  }
+
+  /* ── the full draw, against a fake renderer + real-shaped 16x14 frames ─── */
+  {
+    const drawn = [];
+    const fakeRenderer = { blitSprite(f, x, y) { drawn.push({ w: f.w, h: f.h, x, y }); } };
+    const frames = [];
+    for (const id of [122, 123, 124, 125, 126]) {
+      const pixels = new Uint8Array(16 * 14);
+      for (let i = 0; i < pixels.length; i++) pixels[i] = id;   // tag each row-set by sprite id
+      frames[id] = { w: 16, h: 14, pixels };
+    }
+    drawHealthBar(fakeRenderer, frames, 12, 2, 160);
+    check('drawHealthBar issues exactly 2 blits when both crops fire, each '
+      + 'CROPPED to its own rowCount (not the full 14px sprite height)',
+      drawn.length === 2 && drawn[0].h === 7 && drawn[1].h === 7, JSON.stringify(drawn));
+    check('both land at status-panel-Y0(160) + the panel-local y — 167 then '
+      + '174, at the fixed X=15',
+      drawn[0].x === 15 && drawn[0].y === 167 && drawn[1].x === 15 && drawn[1].y === 174,
+      JSON.stringify(drawn));
+
+    drawn.length = 0;
+    drawHealthBar(fakeRenderer, frames, 0, 0, 160);
+    check('at zero health only ONE blit is issued (the skip case)',
+      drawn.length === 1 && drawn[0].h === 13, JSON.stringify(drawn));
+  }
+
+  results.push({ name: 'NOT PORTED', pass: true, note: true,
+    detail: 'DS:0x33 bit 2 (the ES-segment/font-mode choice) and the '
+      + 'original\'s own lack-of-a-dirty-flag for this routine specifically '
+      + '— both irrelevant to a full-redraw-every-frame canvas renderer. '
+      + 'The exact VRAM segment arithmetic behind the +160 panel-Y offset '
+      + '(`UNKNOWN_status_panel_es_segment`) rests on three converging '
+      + 'lines of evidence rather than a traced register — see the module '
+      + 'header.' });
+
+  return results;
+}
+
+/**
+ * CS:0x0bbf (score) / CS:0x0ab1+0x0af0 (lives) / CS:0x0b21+0x0b40 (money) —
+ * the status panel's three digit displays, all sharing the ten-glyph strip
+ * `formats/descriptors.js` already anchors at descriptor #127 (export 21).
+ * See game/hud-digits.js's own header for the full disassembly, including
+ * the raw-bytes correction to the lives digit ORDER the decompiler's
+ * pseudo-C obscures.
+ */
+export function checkHudDigits() {
+  const { results, check } = makeChecker();
+
+  check('the shared digit strip is descriptor #127 (formats/descriptors.js\'s '
+    + 'own already-established export-21 anchor), 8x7 glyph cells',
+    DIGIT_STRIP_DESCRIPTOR === 127 && DIGIT_W === 8 && DIGIT_H === 7 && DIGIT_STEP === 8);
+  check('CS:0x0b85: money is capped at exactly 0x0007a120 = 500000, a real '
+    + 'write-back into the 32-bit total, not a display-only trick',
+    MONEY_CAP === 500000);
+  check('CS:0x0bff/0x0b0c/0x0b9e: score Y=5, lives Y=9, money Y=0x11(17), '
+    + 'all panel-local (see health-bar.js\'s header for the +160 offset)',
+    SCORE_Y_LOCAL === 5 && LIVES_Y_LOCAL === 9 && MONEY_Y_LOCAL === 0x11);
+  check('CS:0x0bf3/0x0b92: score and money share the SAME right anchor '
+    + 'X=0x128(296); CS:0x0afb: lives is clamped to 99',
+    RIGHT_ANCHOR_X === 0x128 && LIVES_X === 0x42 && LIVES_CLAMP === 99);
+  check('score draws 8 digits (4 BCD bytes x 2 nibbles); money draws 6 '
+    + '(CS:0x0ba4 `mov cx,6`)',
+    SCORE_DIGITS === 8 && MONEY_DIGITS === 6);
+
+  /* ── sliceDigitFrames: shape validation only (real-atlas correctness is
+   * checked in main.js's own load path; this function's job is just not to
+   * silently hand back garbage when the strip isn't the expected shape) ── */
+  {
+    const goodStrip = { w: 80, h: 7, pixels: new Uint8Array(80 * 7) };
+    for (let d = 0; d < 10; d++) {
+      for (let y = 0; y < 7; y++) for (let x = 0; x < 8; x++) {
+        goodStrip.pixels[y * 80 + d * 8 + x] = d;   // tag each cell by its own digit value
+      }
+    }
+    const frames = []; frames[127] = goodStrip;
+    const digits = sliceDigitFrames(frames);
+    check('a well-shaped 80x7 strip slices into 10 distinct 8x7 frames, in '
+      + 'glyph order \'0\'..\'9\'',
+      digits && digits.length === 10 &&
+      digits.every((f, i) => f.w === 8 && f.h === 7 && f.pixels.every((v) => v === i)),
+      JSON.stringify(digits && digits.map((f) => [...new Set(f.pixels)])));
+
+    check('a missing or wrong-shaped strip (e.g. before the atlas loads) '
+      + 'returns null rather than slicing garbage', sliceDigitFrames([]) === null);
+    const wrongShape = []; wrongShape[127] = { w: 80, h: 8, pixels: new Uint8Array(80 * 8) };
+    check('...same for a strip whose own dimensions don\'t match 80x7',
+      sliceDigitFrames(wrongShape) === null);
+  }
+
+  /* ── clampMoneyForDisplay — the real write-back ────────────────────────── */
+  {
+    const p = new Purse(); p.total = MONEY_CAP + 12345;
+    clampMoneyForDisplay(p);
+    check('a total over the cap is clamped down to EXACTLY 500000, in place '
+      + '(CS:0x0b85-0x0b8b\'s own write-back into DS:0x194/0x196)',
+      p.total === MONEY_CAP);
+    const p2 = new Purse(); p2.total = 1234;
+    clampMoneyForDisplay(p2);
+    check('a total under the cap is left untouched', p2.total === 1234);
+  }
+
+  /* ── the three draws, against a fake renderer + a real digit-shaped set ─ */
+  {
+    const drawn = [];
+    const fakeRenderer = { blitSprite(f, x, y) { drawn.push({ digit: f.digit, x, y }); } };
+    const digitFrames = Array.from({ length: 10 }, (_, d) => ({ digit: d, w: 8, h: 7, pixels: new Uint8Array(8 * 7) }));
+
+    /* SCORE: BCD bytes, least-significant first (treasure.js's own Score). */
+    const score = new Score();
+    score.add(1234);   // -> bytes = [0x34, 0x12, 0x00, 0x00]
+    drawn.length = 0;
+    drawScore(fakeRenderer, digitFrames, score, 160);
+    check('score 1234 draws its 8 BCD digits right-to-left from X=296, '
+      + 'ones (4) first at the rightmost position, decreasing place value '
+      + 'moving left — matching CS:0x0c05-0x0c79\'s own byte/nibble order',
+      drawn.length === 8 &&
+      drawn[0].digit === 4 && drawn[0].x === RIGHT_ANCHOR_X &&
+      drawn[1].digit === 3 && drawn[1].x === RIGHT_ANCHOR_X - DIGIT_STEP &&
+      drawn[2].digit === 2 && drawn[2].x === RIGHT_ANCHOR_X - 2 * DIGIT_STEP &&
+      drawn[3].digit === 1 && drawn[3].x === RIGHT_ANCHOR_X - 3 * DIGIT_STEP &&
+      drawn.slice(4).every((d) => d.digit === 0) &&
+      drawn.every((d) => d.y === 160 + SCORE_Y_LOCAL),
+      JSON.stringify(drawn));
+
+    /* MONEY: plain decimal, same right-to-left layout, different Y. */
+    const purse = new Purse(); purse.total = 249;
+    drawn.length = 0;
+    drawMoney(fakeRenderer, digitFrames, purse, 160);
+    check('money 249 draws ones(9) at X=296, tens(4) at 288, hundreds(2) at '
+      + '280, then three leading zeros further left — CS:0x0baa\'s own '
+      + 'repeated div-by-10, MSB-first extraction reversed by the draw order',
+      drawn.length === 6 &&
+      drawn[0].digit === 9 && drawn[0].x === RIGHT_ANCHOR_X &&
+      drawn[1].digit === 4 && drawn[1].x === RIGHT_ANCHOR_X - DIGIT_STEP &&
+      drawn[2].digit === 2 && drawn[2].x === RIGHT_ANCHOR_X - 2 * DIGIT_STEP &&
+      drawn.slice(3).every((d) => d.digit === 0) &&
+      drawn.every((d) => d.y === 160 + MONEY_Y_LOCAL),
+      JSON.stringify(drawn));
+
+    /* LIVES: the ONE genuinely different layout — tens THEN ones, left to
+     * right, from a fixed left anchor (see the module header's raw-bytes
+     * correction). */
+    drawn.length = 0;
+    drawLives(fakeRenderer, digitFrames, 47, 160);
+    check('lives 47 draws TENS(4) FIRST at the fixed left anchor X=0x42, '
+      + 'then ONES(7) 8px to the RIGHT — the opposite order and anchor '
+      + 'from score/money (CS:0x0b10-0x0b1d, confirmed from raw bytes, NOT '
+      + 'the decompiler\'s own ambiguous pseudo-C rendering of this loop)',
+      drawn.length === 2 &&
+      drawn[0].digit === 4 && drawn[0].x === LIVES_X &&
+      drawn[1].digit === 7 && drawn[1].x === LIVES_X + DIGIT_STEP &&
+      drawn.every((d) => d.y === 160 + LIVES_Y_LOCAL),
+      JSON.stringify(drawn));
+
+    drawn.length = 0;
+    drawLives(fakeRenderer, digitFrames, 150, 160);
+    check('a lives value over 99 is clamped to 99 before drawing '
+      + '(CS:0x0af3/0x0af8 `cmp ax,0x63 / jl / mov ax,0x63`)',
+      drawn[0].digit === 9 && drawn[1].digit === 9, JSON.stringify(drawn));
+
+    drawn.length = 0;
+    drawLives(fakeRenderer, digitFrames, -3, 160);
+    check('a negative lives value (e.g. mid-game-over, before this port\'s '
+      + 'own gameOverState freeze takes effect) does not draw a garbage '
+      + 'digit or throw — clamped to 0',
+      drawn[0].digit === 0 && drawn[1].digit === 0, JSON.stringify(drawn));
+
+    check('all three draws no-op cleanly when digitFrames isn\'t loaded yet '
+      + '(e.g. the first frame before loadSprites resolves), rather than '
+      + 'throwing on a null dereference', (() => {
+        drawn.length = 0;
+        drawScore(fakeRenderer, null, score, 160);
+        drawMoney(fakeRenderer, null, purse, 160);
+        drawLives(fakeRenderer, null, 47, 160);
+        return drawn.length === 0;
+      })());
+  }
+
+  results.push({ name: 'NOT PORTED', pass: true, note: true,
+    detail: 'DS:0x3e0 (a score-display suppress flag) and all three '
+      + 'dirty-flag pairs (0x6c/0x6d, 0x6e/0x6f, 0x70/0x71) — irrelevant to '
+      + 'this port\'s full-redraw-every-frame renderer, same disclosed '
+      + 'simplification inventory-panel.js already carries. DS:0x33 bit 2 '
+      + '(the ES-segment/font-mode choice) is likewise defaulted to the '
+      + 'bit-clear arm — see the module header.' });
 
   return results;
 }

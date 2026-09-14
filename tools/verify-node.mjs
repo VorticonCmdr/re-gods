@@ -270,6 +270,20 @@ for (const r of checkInventoryPanel()) {
   console.log(line(r));
 }
 
+console.log('\n  the status panel health bar (CS:0x0e77/0x0e93):');
+const { checkHealthBar } = await import('../src/verify/checks.js');
+for (const r of checkHealthBar()) {
+  if (!r.pass && !r.note) bad++;
+  console.log(line(r));
+}
+
+console.log('\n  the status panel score/lives/money digits (CS:0x0bbf/0x0ab1/0x0b40):');
+const { checkHudDigits } = await import('../src/verify/checks.js');
+for (const r of checkHudDigits()) {
+  if (!r.pass && !r.note) bad++;
+  console.log(line(r));
+}
+
 console.log('\n  System-A spawn chain and strategy census:');
 const { checkSpawnA } = await import('../src/verify/checks.js');
 for (const r of await checkSpawnA(fetchRaw)) {
