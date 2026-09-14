@@ -578,13 +578,58 @@ Its hitbox, `CS:0x1B12`-`0x1B41` (screen-space X — both operands share one cam
 
 **Ported in the sibling `gods-web` repo** as `game/spikes.js`, verified live in the browser: the two-part (base+overlay) sprite renders correctly as a hanging spike, and standing a hero inside the box drained a full 24-point health target to 0 in under a second, exactly as the undebounced-damage reading predicts.
 
-### `pobjects-cat-4-5` — category 5 census `[PROVEN, enum meaning still open]`
+### `pobjects-cat-4-5` — category 5 census `[PROVEN]` (membership); meaning closed in the entry below
 
 Decompressed all four `POBJECTS.00{1-4}` (`blast.py`) and read every 48-byte record directly (not via the game's own id-based type formula, which is unsafe for world 4 — see below). **Category 5 has exactly 22 members, identical across all four worlds once the already-documented world-4 `+5` id drift is corrected for**: types `49, 55, 64, 65, 66, 67, 68, 81, 82, 95, 102, 103, 104, 105, 106, 107, 108, 111, 112, 113, 114, 131`. Confirmed self-consistent two ways: worlds 1–3 (base id `170+type`) agree on this set exactly, and world 4's own raw ids (base `175`) read as this same set **minus 5** on every one of the 22 records (`54,60,69,70,71,72,73,86,87,100,107,108,109,110,111,112,113,116,117,118,119,136`), which is precisely the already-documented world-4 `+0x08`/`+0x0c`/`+0x1e`/id authoring-drift pattern applied consistently — not a different, world-specific category-5 roster.
 
 **Every single category-5 record has an empty name, an empty description, and `Value = 0`** — a stronger blank-field pattern than category 4's (which has one named, valued member, `"spike"`). Sprite ids for the 22 types (`170 + type`, or `302+` if ≥`0xC0` — none are) run `219, 225, 234, 235, 236, 237, 238, 251, 252, 265, 272, 273, 274, 275, 276, 277, 278, 281, 282, 283, 284, 301`. No dedicated `cmp cx,<sprite>` dispatch site for any of these 22 values was found in the portion of the object-array walk read this pass (`CS:0x1511`–`0x1CC6`, the same chain that resolved the world-2 nest at sprite `0x11d`/285); a full sweep of every `CMP CX,imm16`/`CMP AX,imm16` in that walker for all 22 sprite ids was not run, so absence of a dedicated handler is not exhaustively proven, only not found where category 4's hits were found.
 
 The one behavioural fact this document already had — category 5 draws behind ordinary objects in the same swap-suppression rule as category 3 (`CS:0x0731 cmp word[si+0x4],5 / jz 0x775 -> no swap`) — still stands and is the only established consequence. Given the total blankness (no name, no description, no value, unlike category 4's one exception), category 5 is at least as plausible a candidate for "purely structural/never-instantiated" filler as it is for a second creature-hazard category; the enum's *meaning* remains open, only its *membership* is now settled.
+
+### `pobjects-cat-5-meaning` — CLOSED: a purely visual, category-level dispatch — never a creature/hazard category `[STATIC]`
+
+⚠️ **The prior search above missed the actual dispatch because it looked for the wrong shape.** It searched for a `CMP CX,<sprite>` chain — the mechanism category 4 uses — inside the object-array walker. Category 5 doesn't use that mechanism at all; it has its own **category-level branch**, reached one step earlier in the same walker, that neither this document nor a plain `CMP`-operand sweep (also re-run this session, zero genuine hits for any of the 22 sprite ids, confirming the chain-search really was empty) could find, because it dispatches through a **jump table**, not a compare chain.
+
+**The branch, read fresh from `CS:0x1600`–`0x162E`:**
+
+```
+160D  cmp byte[di+0x4],3 / jl 0x162e     ; category < 3 leaves this region entirely
+161D  cmp byte[di+0x4],4 / jnz 0x1626    ; category 4 -> its own cmp-cx-sprite chain (jmp 0x1b5b)
+1626  jle 0x162b                          ; category 3 -> jmp 0x1d01 (not traced this pass)
+1628  jmp 0x19ba                          ; category 5 -> HERE
+```
+
+**`CS:0x19BA` is a proper sprite-id-keyed jump table**, not a compare chain:
+
+```
+19ba  si = 0xdfb0 ; dx = [di]  (di = descriptor+0 = the SPRITE ID, per the already-documented stamp loop)
+19bf  cx = 0xd                 ; 13 entries
+19c2  cmp dx,[si] / jz 0x19ce  ; match -> read handler
+19c6  add si,4 / loop 0x19c2
+19cb  sub si,2                 ; no match in all 13 -> fall through to the default pointer
+19ce  si = [si+2] / cx = dx / jmp si     ; CX carries the sprite id INTO the handler
+```
+
+Read directly (`read_memory`, `1ffd:dfb0`, 56 bytes): the table is exactly **13 × 4-byte `{sprite_id, handler}` entries** (`0xdfb0`–`0xdfe3`), immediately followed by a **bare 2-byte default-handler pointer** at `0xdfe4`–`0xdfe5` (`0x19D5`) — not a 14th `{sprite,handler}` pair (the loop's `CX=13` never lets the compare touch that address, so there is no unused sprite-match field to speak of). The very next bytes, `0xdfe6` onward, are already the start of a different, unrelated table (below) — zero slack, the same kind of boundary cross-check this document uses elsewhere. The 13 keyed sprite ids decode to object types `{49, 55, 81, 82, 95, 106, 107, 108, 111, 112, 113, 114, 131}` — all 13 genuine category-5 members, confirming this table belongs to category 5 specifically. The other 9 members (`64, 65, 66, 67, 68, 102, 103, 104, 105`) have no entry and fall to the default pointer.
+
+**Every one of the six distinct handler bodies reachable from this table was read to its own terminating jump (`POP BP / POP SI / JMP 0x1000:14ad`, back into the object-walk loop), and none of them touch anything beyond three per-call scratch words (`[0x4]`/`[0x6]`/`[0x8]`, screen-x/screen-y/sprite-id) and a graphics-export thunk call:**
+
+| handler | members (types) | behaviour |
+|---|---|---|
+| `0x19D5` (default) | `64,65,66,67,68,102,103,104,105` | convert world→screen, draw the base sprite once, via graphics **export 2** |
+| `0x1A1F` | `49,95,106,107,108,111,112,131` | identical shape, via graphics **export 1** instead |
+| `0x1A36` | `82` | **replaces** the drawn sprite with `DS:0xdff6[frame]` — `{252,327,328,327}`, i.e. base→alt→alt2→alt, one draw, export 2 |
+| `0x1A58` | `55` | draws the base sprite (export 2), then a second, **animated** sprite 16px **above** it from `DS:0xdfe6[frame]` = `{316,317,318,317}` (export 2) |
+| `0x1A97` | `81` | same shape as `0x1A58`, own table `DS:0xdfee[frame]` = `{324,325,326,325}` |
+| `0x19EC` | `113,114` | draws the base sprite (export 1), then a second, **fixed** sprite 32px to the **right** — `448` for type 113, `449` for type 114 — (export 2) |
+
+`frame` in every animated handler is computed identically: `((worldX >> 5) + tick) & 3`, where `tick` is a shared global byte (`DS:0x39d`, read by all three animated handlers) and `worldX >> 5` is the object's own position phase — the exact same "position-phased, globally-ticked, 4-entry ping-pong table" idiom this document already established for the destructible spike's overlay animation (`DS:0x39c`/`DS:0x39f`, *The overlay sprite*, above) — `0x39d` sits directly between those two already-documented counters. Every one of the three animated tables reads as a 4-frame cycle that returns to its own first value on the 4th step (`{a,b,c,b}` or `{a,b,c,b}` shape), the same back-and-forth flicker shape as the spike overlay.
+
+**Graphics exports 1 and 2 are already characterized in `docs/drivers-and-memory.md`'s own export table: "Masked sprite blits (descriptor consumers; differ in clip bounds)."** So the one behavioural difference among the six handlers that isn't animation or a second tile — which export a given handler calls — is a known, already-documented distinction (clip bounds), not a new unknown.
+
+**Placement, re-derived independently as a data census, not inferred:** decompressing and parsing all 8 `.MAP` files' 200 six-byte object records (`blast.py` + a fresh parse this session) gives per-map live-object counts of `130/136/170/171/118/115/130/150` (total `1120`, `92` distinct types) — an exact match to this document's own already-published figures (*`UNKNOWN_object_sprite`*, above), which cross-validates the parse. Of category 5's 22 types, **12 are genuinely placed in shipped levels**: `49(×1), 55(×2), 64(×3), 68(×3), 81(×4), 95(×1), 103(×1), 108(×1), 111(×3), 112(×3), 113(×2), 114(×2)` — mostly in world 2 (`PLEV2A`/`PLEV2B`), with single instances in worlds 1, 3 and 4. This overturns the framing two paragraphs above: category 5 is not "at least as plausible a candidate for never-instantiated filler" — it is placed, shipped content, not cut.
+
+**Conclusion.** Category 5 is not a second creature/hazard category — every code path reachable from a category-5 object, without exception, does nothing but resolve a draw position, optionally pick a frame from a small animation table or add a second fixed tile, and call a masked-sprite-blit export. No hero state, health, inventory, score, damage grid, or trigger system is referenced anywhere in this dispatch. That is the category's meaning: **purely visual background scenery, several of its members self-animating** (flicker-style 4-frame cycles, or a fixed two-tile composite), sharing a category-level draw-only dispatch distinct from category 4's per-type gameplay handlers. `[STATIC]` — read from bytes, not executed; a DOSBox visual confirmation (rendering one of the 12 placed instances, e.g. type 81 at `PLEV2A` world coords `(3973,64)`) would promote this to `[PROVEN]` but was not run this pass.
 
 ### `UNKNOWN_ce64_pool` — CLOSED: a sixth creature type, world 3 only, and it is the real reason `DS:0x34` ever reduces starburst/aura damage `[STATIC]`
 
