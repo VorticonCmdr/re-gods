@@ -69,6 +69,7 @@
 
 import { verbOf, consumesInventory, consumesKey } from './trigger.js';
 import { allocObject } from './objects.js';
+import { KillSmoke } from './kill-smoke.js';
 
 /* ── The per-world door / gate tile constants ────────────────────────────────
  * CS:0x2C64 is the ONLY writer of DS:0x14e — an exhaustive scan of the code
@@ -105,7 +106,8 @@ export const ZONE_BASE_SLOTS = 20;    // ACT3 CS:0x3D5B `mov cx,0x14`
 export const EXIT_SCAN_SLOTS = 10;    // ACT4 CS:0x3D17 `mov cx,0xa`
 export const DUP_SCAN_SLOTS  = 10;    // CS:0x425C `mov cx,0xa`
 export const GATE_SLOTS      = 20;    // CS:0x410F `mov cx,0x14`
-export const KILL_SLOTS      = 4;     // CS:0x3C03 `mov cx,0x4`
+/* The DS:0x8c3c slot count lives in game/kill-smoke.js (`SLOTS`), with the
+ * walker that reads it — one owner, so the two cannot drift apart. */
 export const KILL_MAX        = 2;     // CS:0x3CBA `cmp byte [0x3a6],0x2`
 
 export const ZONE_TELEPORT = 1;       // CS:0x3D8A
@@ -117,9 +119,8 @@ const PLANE_A_CELLS = 8192;
 export const makeZones = () =>
   Array.from({ length: ZONE_BASE_SLOTS }, () => ({ x: 0, y: 0, kind: -1, arg: 0 }));
 
-/** Fresh kill list — DS:0x8c3c, 4 x {flag, x, y}; free when flag < 0. */
-export const makeKillList = () =>
-  Array.from({ length: KILL_SLOTS }, () => ({ flag: -1, x: 0, y: 0 }));
+/* The DS:0x8c3c kill list is no longer a bare array: it animates, so it owns
+ * its own walker. See game/kill-smoke.js — `KillSmoke`, imported above. */
 
 /**
  * The gate table, DS:0x2f8c.
@@ -359,6 +360,11 @@ function makeZone(t, ctx, slots, kind) {
 function act6(t, ctx) {
   const x0 = t.x - 12, y0 = t.y - 12, x1 = t.x + 12, y1 = t.y + 12;
   let killed = 0;
+  /* CS:0x3C02-0x3C18 — the free-slot search runs ONCE, before the object
+   * scan, and each kill then writes at the cursor and advances it without
+   * searching again. See game/kill-smoke.js for why that shape is load-
+   * bearing rather than an implementation detail. */
+  let cursor = ctx.killSmoke ? ctx.killSmoke.openCursor() : -1;
   for (const o of ctx.objects) {
     if (killed >= KILL_MAX) break;
     if (o.dead || (o.type & 0x8000)) continue;
@@ -370,12 +376,11 @@ function act6(t, ctx) {
      * the type-96 branch unreachable. */
     const wasType = o.type;
     o.dead = true; o.type = 0xffff; o.flag6 = 0;
-    const free = ctx.killList.findIndex((k) => k.flag < 0);
-    if (free >= 0) {
-      ctx.killList[free].flag = 0;
-      ctx.killList[free].x = (o.x - 8) & 0xffff;
-      /* CS:0x3C89 `sub word [bp-0x2],0x8` — only on the type-0x60 arm. */
-      ctx.killList[free].y = o.y - (wasType === 0x60 ? 8 : 0);
+    if (ctx.killSmoke) {
+      /* CS:0x3C75 `sub ax,8`, and CS:0x3C89 `sub word [bp-0x2],0x8` — the
+       * extra 8 on Y is the type-0x60 arm only. */
+      cursor = ctx.killSmoke.seedAt(cursor, (o.x - 8) & 0xffff,
+                                    o.y - (wasType === 0x60 ? 8 : 0));
     }
     ctx.sfx(SFX.ACT6_KILL);
     killed++;
@@ -519,7 +524,7 @@ export function makeActionContext(over = {}) {
     dirty: new Uint8Array(200),          // DS:0x438
     zones: makeZones(),
     gates: [],
-    killList: makeKillList(),
+    killSmoke: new KillSmoke(),
     inventory: [0xffff, 0xffff, 0xffff, 0xffff],
     weaponSlots: [0xffff, 0xffff, 0xffff],
     tiles: DOOR_TILES[0],

@@ -9,6 +9,9 @@
 import { dclDecompress } from '../formats/dcl.js';
 import { DOOR_TILES, ZONE_TELEPORT, ZONE_EXIT, makeGates, makeActionContext,
          runAction, fireTrigger } from '../game/trigger-actions.js';
+import { KillSmoke, SLOTS as SMOKE_SLOTS, FRAMES as SMOKE_FRAMES,
+         SPRITE_BASE as SMOKE_SPRITE_BASE,
+         SPRITE_LAST as SMOKE_SPRITE_LAST } from '../game/kill-smoke.js';
 import { scanZones, unpackTeleportDest, resolveExitDestination,
          EXIT_DESTINATIONS, EXIT_BIT, exitEffects, advanceWorld,
          clearNonPotionInventory, generatePassword, passwordSlotForWorld,
@@ -8732,13 +8735,66 @@ export async function checkTriggerActions(fetchRaw) {
   const r6 = runAction(T({ action: 6, x: 0x100, y: 0x100 }), k6);
   check('ACT6 kills at most TWO category-4 objects (CS:0x3CBA)',
     r6.killed === 2 && objs.filter((o) => o.dead).length === 197,
-    `killed ${r6.killed}, kill-list entries ${k6.killList.filter((k) => k.flag >= 0).length}`);
+    `killed ${r6.killed}, smoke slots live ${k6.killSmoke.live}`);
+  check('...and seeds one smoke puff per kill, in CONSECUTIVE slots (CS:0x3C86)',
+    k6.killSmoke.live === 2 &&
+    k6.killSmoke.slots[0].frame === 0 && k6.killSmoke.slots[1].frame === 0,
+    `frames [${k6.killSmoke.slots.map((s) => s.frame)}]`);
+  check('...at the object point minus 8 on X, unshifted on Y for a non-0x60 type',
+    k6.killSmoke.slots[0].x === 0x100 - 8 && k6.killSmoke.slots[0].y === 0x100,
+    `(${k6.killSmoke.slots[0].x}, ${k6.killSmoke.slots[0].y})`);
 
   const far = mkObjs(200);
   far[0] = { x: 0x100 + 13, y: 0x100, type: 50, flag6: 1, dead: false, slot: 0 };
   const k6b = makeActionContext({ objects: far, categoryOf: () => 4 });
   check('ACT6 box is +/-12 INCLUSIVE — 13 px away is out',
     runAction(T({ action: 6, x: 0x100, y: 0x100 }), k6b).killed === 0);
+
+  /* --- ACT6's smoke puff, CS:0x3CC7 ------------------------------------- */
+  {
+    const smoke = new KillSmoke();
+    smoke.seedAt(smoke.openCursor(), 100, 200);
+    const cam = { x: 0, y: 0 };
+    const seen = [];
+    for (let t = 0; t < 9; t++) {
+      const d = smoke.step(cam);
+      if (d.length) seen.push(d[0].sprite);
+    }
+    check('a puff draws SEVEN frames, sprites 108..114 (CS:0x3CE2 + CS:0x3CF9)',
+      seen.length === SMOKE_FRAMES && seen[0] === SMOKE_SPRITE_BASE &&
+      seen[seen.length - 1] === SMOKE_SPRITE_LAST,
+      `${seen.length} frames: ${seen.join(',')}`);
+    check('...then frees its slot rather than sticking on the last frame',
+      smoke.live === 0, `live ${smoke.live}`);
+
+    /* The draw is stored in WORLD space and converted every tick — a puff
+     * that stored screen coords would slide with the camera. */
+    const moving = new KillSmoke();
+    moving.seedAt(moving.openCursor(), 100, 200);
+    const a = moving.step({ x: 0, y: 0 })[0];
+    const b = moving.step({ x: 40, y: 10 })[0];
+    check('the stored point is WORLD — the scroll is subtracted per tick (CS:0x3CD8)',
+      a.x === 100 && a.y === 200 && b.x === 60 && b.y === 190,
+      `(${a.x},${a.y}) then (${b.x},${b.y})`);
+
+    /* CS:0x3C15 `sub bp,6` — a full array overwrites the LAST slot; it does
+     * not drop the puff the way a "find a free slot or give up" port would. */
+    const full = new KillSmoke();
+    for (let i = 0; i < SMOKE_SLOTS; i++) full.seedAt(i, i, i);
+    const cursor = full.openCursor();
+    check('with every slot busy the cursor lands on the LAST slot (CS:0x3C15)',
+      cursor === SMOKE_SLOTS - 1, `cursor ${cursor}`);
+    full.seedAt(cursor, 999, 888);
+    check('...and the seed overwrites it, so the kill is never silent',
+      full.slots[SMOKE_SLOTS - 1].x === 999 && full.clobbered === 1,
+      `x ${full.slots[SMOKE_SLOTS - 1].x}, clobbered ${full.clobbered}`);
+
+    /* The one store this port clamps instead of reproducing: a second kill
+     * from the last slot walks one record past the array, onto DS:0x8c54. */
+    const next = full.seedAt(SMOKE_SLOTS - 1 + 1, 1, 1);
+    check('a second kill off the end is CLAMPED, not written (DS:0x8c54 is not spare)',
+      full.dropped === 1 && next === SMOKE_SLOTS + 1, `dropped ${full.dropped}`);
+  }
 
   /* --- the shared prologue --------------------------------------------- */
   check('the key-consume runs only for verbs {2,3,4,7,8}',
@@ -8927,6 +8983,15 @@ export async function checkTriggerActions(fetchRaw) {
     runner.step(416, 944, runner.makeState({}));   // same (x, y) -> same cell
     check('END TO END: step() re-fires at the SAME cell once the lever is on, no re-entry needed',
       spike.dead, `dead: ${spike.dead}`);
+
+    /* ...and the hazard goes up in SMOKE rather than blinking out: the same
+     * kill must have seeded DS:0x8c3c, whose walker (CS:0x3CC7) then draws
+     * the puff over the spot the spike occupied. */
+    const puff = runner.actionCtx.killSmoke.step({ x: 0, y: 0 });
+    check('END TO END: the kill leaves a smoke puff at the spike, sprite 108 (CS:0x3CC7)',
+      puff.length === 1 && puff[0].sprite === SMOKE_SPRITE_BASE &&
+      puff[0].x === 443 - 8 && puff[0].y === 960,
+      puff.length ? `#${puff[0].sprite} at (${puff[0].x},${puff[0].y})` : 'no puff');
   }
 
   results.push({
@@ -8943,7 +9008,9 @@ export async function checkTriggerActions(fetchRaw) {
       'the earlier "cycle the 8 shipped levels" placeholder. ACT0/ACT1 spawn through allocObject, which ' +
       'appends rather than re-ranking, so a runtime object draws on top of ' +
       'the weapon pickups where export 32 puts treasure behind. The kill ' +
-      'list at DS:0x8c3c is filled and never drawn (CS:0x3cc7 is its walker). ' +
+      'list at DS:0x8c3c is now ANIMATED too (game/kill-smoke.js): CS:0x3cc7, ' +
+      'its walker, draws sprites 108-114 over seven ticks and frees the slot, ' +
+      'so a neutralised hazard goes up in smoke instead of blinking out. ' +
       'And the shop summon DS:0x361 is recorded, not honoured.',
   });
 

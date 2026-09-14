@@ -54,6 +54,7 @@ import { decodeStatusPanel, PANEL_Y0 as STATUS_PANEL_Y0 } from './game/status-pa
 import { stepHealthBarShimmer, drawHealthBar } from './game/health-bar.js';
 import { sliceDigitFrames, clampMoneyForDisplay, drawScore, drawMoney, drawLives } from './game/hud-digits.js';
 import { LeverToggle } from './game/levers.js';
+import { KillSmoke } from './game/kill-smoke.js';
 import { SpikeClock, stepSpikes, spikeSprites, spike130Sprite,
          SPIKE_TYPE, SPIKE117_TYPE, SPIKE130_TYPE } from './game/spikes.js';
 /* Contact and the grid scan are reached through game/frame.js, which owns the
@@ -403,6 +404,13 @@ async function main() {
   let spawn = levelSpawn(level.world);
   let player = new Player(spawn.x, spawn.y);
   player.spawnAtLevelStart(spawn.x, spawn.y);   // CS:0x8C34 — the level-load seed
+  /* DS:0x8c3c — ACT6's four-slot smoke puff (game/kill-smoke.js). Held here,
+   * outside the per-level action context, because the walker at CS:0x0239
+   * runs from the main loop rather than from the verb: a puff seeded by the
+   * last trigger before a level switch would otherwise have nothing to tick
+   * it. It IS cleared per level, unlike leverToggle/spikeClock — CS:0x8EC2
+   * and its three siblings free all four slots in the level-load routine. */
+  const killSmoke = new KillSmoke();
   /* THE ACTION CONTEXT — what makes a fired trigger actually do something.
    * planeA/planeB are the live map arrays (subarray views into the bulk), so a
    * door written here is visible to the renderer and to collision on the very
@@ -421,6 +429,9 @@ async function main() {
      * stale mid-level — refreshed every tick just before events.step() runs,
      * below. */
     objects: lvl.drawObjects,
+    /* The one instance above, so a rebuilt context never drops a puff that is
+     * still mid-animation. */
+    killSmoke,
     gates: makeGates(lvl.palfilsRaw),
     tiles: DOOR_TILES[lvl.world - 1],
     messages: lvl.map.messages,
@@ -532,6 +543,7 @@ async function main() {
   let lastBroodFx = [], lastStatueFx = [], lastCe64Fx = [], lastSpitFx = [], lastSelectorTwoFx = [];
   let lastPatFx = [];
   let lastSpikeFx = [];
+  let lastKillSmokeFx = [];
   /* CS:0x0495-0x04A1 — the real boot state: all 4 slots empty. Keys now
    * enter through CROUCH + FIRE (CS:0x6069 -> game/pickup.js's `scanForKey`/
    * `collectKey`, wired into Player._crouch), so this no longer needs a
@@ -909,6 +921,9 @@ async function main() {
       /* CS:0x69B1/0x8E40 restore every broken block, then clear the queue. */
       if (blocks) blocks.restoreAll(level.map.planeA, level.map.planeB);
       blocks = new Destructibles(level.world);
+      /* CS:0x8EC2 and its three siblings free all four DS:0x8c3c slots on a
+       * level load, so a puff never survives into the next level. */
+      killSmoke.clear(); lastKillSmokeFx = [];
       /* A level change is not a restart, so lives carry; the timers do not
        * (the level-start block re-grants the short spawn invulnerability). */
       fx = { ...fx, invuln: INVULN_TICKS_SPAWN, freeze: 0, giantJump: 0,
@@ -1415,6 +1430,13 @@ async function main() {
       lastSpikeFx = stepSpikes(level.drawObjects, spikeClock,
         { x: player.x, y: player.y }, health, { invuln: fx.invuln > 0 });
 
+      /* CS:0x0239 `call 0x3cc7` — ACT6's smoke puffs advance a frame and
+       * draw (game/kill-smoke.js). The walker sits in the main loop between
+       * the starburst step (CS:0x0212) and the player state machine
+       * (CS:0x0254), so a puff draws UNDER the hero and under every entity,
+       * which is where the draw loop below puts it. */
+      lastKillSmokeFx = killSmoke.step(camNow);
+
       /* CS:0xAD88/0xAD0D — the selector-2 stationary shooting turrets
        * (game/selector2.js). `fire`/`spawnHazard` route into the SAME
        * `shots`/`lineHazards` pools every other emitter in this file
@@ -1840,6 +1862,19 @@ async function main() {
         if (sx < -64 || sy < -64 || sx > SCREEN_W || sy > SCREEN_H) continue;
         const bf = hero && hero.frames[spriteForType(r.type)];
         if (bf) renderer.blitSprite(bf, sx, sy);
+      }
+
+      /* ACT6'S SMOKE — CS:0x3CC7, sprites 108-114, the puff left where a
+       * lever-neutralised hazard used to be (game/kill-smoke.js). Already in
+       * screen space: the walker subtracts the scroll itself, every tick, so
+       * a puff stays put in the world while the camera moves. Drawn here
+       * because its walker runs at CS:0x0239 — before the player state
+       * machine at CS:0x0254 and before the entities at CS:0x0285, so a puff
+       * is under both. */
+      for (const d of lastKillSmokeFx) {
+        const kf = hero && hero.frames[d.sprite];
+        if (kf) renderer.blitSprite(kf, d.x, d.y);
+        else { outOfRange++; renderer.strokeRect(d.x, d.y, 32, 32, 14); }
       }
 
       /* ENEMIES — sprite = class_base + MODE_ANIM[mode] + frame (CS:0xf0ae).
