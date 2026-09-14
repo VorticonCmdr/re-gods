@@ -4609,6 +4609,64 @@ The hole **moves**: class 3 in worlds 1 and 3, class 4 in worlds 2 and 4. So Sys
 
 **So this is NOT the sixth cut feature — it is a live, previously-mis-cited hazard-drop attack, fed by exactly the two selector-2 classes (`world 2 idx 2/5/6/7`, `world 3 idx 3`) this document's earlier pass over the same handler pairs called "worth a check, not a conclusion... [b290/b2f3] look reload-only... no emitter call" and left unconfirmed.** The falling-rock walkers themselves (`FUN_1000_b1c2`, `FUN_1000_b3ce`, `FUN_1000_b4e7`) are read correctly above (physics, cull, hero-hit, debris-on-hit) — only their reachability claim was wrong. `gods-web`'s `selector2.js` now ports both trigger pairs (see *the selector-2 spawner* section) as descriptors returned up to the caller; the walker pools themselves (gravity/drag/ground-probe/hero-hit/debris) are a separate module, `rockfall.js`.
 
+### The main-loop call order for the three walkers, and the `DS:0x34` gate correction — `[PROVEN]`
+
+Fresh disassembly of the main loop around `CS:0x022D` settles two things a prior pass of `selector2.js` had left as `NOT VERIFIED` guesses.
+
+**The three calls are sequential, not interleaved, and each runs to full completion before the next starts:**
+
+```
+CS:0x022D  CALL 1000:b1c2      ; the settle/idle pool, DS:0xaccc — runs ENTIRELY first
+CS:0x0230  CALL 1000:b3ce      ; the ad1c burst walker (12 slots) — runs ENTIRELY second
+CS:0x0233  CALL 1000:b4e7      ; the ad94 burst walker (30 slots) — runs ENTIRELY third
+```
+
+All three calls are gated behind the SAME test, `CMP byte[0x34],0x0 / JNZ 0x23c` — i.e. all three are skipped together whenever the scripted-cutscene engine (`DS:0x34`, see *`DS:0x34` is 0 in normal play — CLOSED*) is active. **This corrects `selector2.js`'s own inline comment**, which had guessed the gate was `DS:0x2fa` ("freezes aliens") — it is not; `DS:0x2fa` has no bearing on whether these three walkers run at all.
+
+**The sequential ordering is the resolution of an apparent "double movement" bug.** Because `b3ce` (ad1c) completes fully before `b4e7` (ad94) starts, a child freshly written into the ad94 half by `b3ce`'s own shatter-on-landing path is walked, moved, and drawn by `b4e7` **later in the same tick** — one tick of visible motion the instant it's created, not a stutter or a duplicate-step bug. This is the original's own confirmed behavior; a port that runs the two halves as one unified loop over all 42 slots gets the *architecture* wrong (ad94-shaped children run through ad1c-shaped logic or vice versa) even before this timing detail matters.
+
+### `FUN_1000_db4e` — the settle pool's own hero-damage routine, fully decoded `[PROVEN]`
+
+`1000:db4e`–`1000:dbbf`, called with `BP` = the record pointer. A **second, entirely separate** hero-damage routine from the already-documented `attackHero`/`CS:0xac59` — different box test, different damage, different invulnerability behavior, different debris.
+
+```
+db4e  test byte[hero.state - CROUCH_LO] in range / crouching -> heroTop = hero.y + 0x18   ; CROUCH_LO..CROUCH_HI states raise the top by 0x18 (0x14 for ac59's own box — DIFFERENT constant)
+db68  cmp hotY, heroTop / jl reject          ; POINT-vs-BOX, not box-vs-box
+db79  cmp hotX, hero.x / jl reject
+db7d  cmp hotX, hero.x+0x20 / jg reject
+db8a  cmp hotY, hero.y+0x30 / jg reject
+db95  cmp word[0x172],0 / jnz THROUGH        ; invulnerable -> PASS THROUGH, no consume, no damage
+db99  sub word[0x192],2                       ; flat -2 off the health TARGET (chases down like every other source)
+dba0  mov word[bp+?],0xffff                   ; consume the CALLER'S record (BP-relative — the caller decides which field)
+dbb2  spawn a STATIONARY debris spark (velocity forced to 0,0 internally, regardless of what the caller's own velocity was)
+dbbf  ret
+```
+
+Two confirmed callers, each supplying a different hot point and getting a differently-positioned debris spark:
+
+| caller | hot point | debris spawn point |
+|---|---|---|
+| the settle pool, `CS:0xB236` | `(worldX, worldY+6)` | `(worldX-8, worldY)` |
+| the ad94 fragment walker, `CS:0xB5A6` | `(worldX+8, worldY+6)` | `(worldX, worldY)` |
+
+⚠️ **`db4e`'s crouch raise (`0x18`) does not match `ac59`'s (`0x14`)** — two hero-hit routines in the same game, both crouch-aware, with different magic constants. ⚠️ **`db4e`'s invulnerability behavior is the opposite of `ac59`'s**: `ac59` still reports "hit" (and the caller still kills its attacker) while suppressing only the health subtraction; `db4e` skips the whole branch — no consume, no debris, the hazard passes straight through as if it were never there. ⚠️ **Every `db4e` hit produces a stationary spark, unconditionally** — the caller's own velocity is irrelevant; this is unlike `CS:0xa633`'s other callers, several of which pass the projectile's real velocity through for a moving spark.
+
+Ported as `combat.js`'s `db4eHit(hotX, hotY, hero, health, opts)`, with `DB4E_CROUCH_TOP_RAISE = 0x18` exported alongside it. Wired into both callers: `RockSettlePool.step()` (previously had **no** hero-damage mechanism at all — a genuine gap this session closed) and `RockBurstPool`'s ad94 half.
+
+### `FUN_1000_b4e7` — the ad94 fragment walker, fully decoded, and its 5 divergences from `b3ce` `[PROVEN]`
+
+94 instructions, `1000:b4e7`–`1000:b5e4`, walking 30 slots at `DS:0xad94` (stride 10, contiguous with `b3ce`'s own 12 slots at `DS:0xad1c`). Shares `b3ce`'s tock-gated animation/gravity polarity (`cmp byte[0x36d],0 / jnz skip` — advance only when `0x36d==0`) and its ground-probe formula's general shape, but diverges in five confirmed ways:
+
+1. **Position update (`x+=vx, y+=vy`) runs unconditionally every tick**, not gated behind the tock test the way `b3ce`'s own animation/gravity step is.
+2. **Both scrolling off-screen and landing on solid ground funnel into the SAME exit code** (`CS:0xB5C2`) — free the record and drop a **moving** debris spark carrying the fragment's own current `{vx,vy}`. `b3ce`'s ad1c half instead silently culls off-screen fragments with **no** debris at all — only its own landing path shatters/drops debris.
+3. **Ground probe is `col=(x+5)>>5, row=(y-2)&~0xf`, testing the SAME cell** — unlike `b3ce`'s own `(x+8)>>5, (y+4)&~0xf, +MAP_COLS` (one row below).
+4. **Landing never shatters, ever.** Where `b3ce`'s ad1c half can shatter a landed fragment into three fresh children (written into the ad94 half — see the sequential-ordering note above), `b4e7`'s own landing just frees the slot through the same `CS:0xB5C2` exit as #2.
+5. **Hero-hit test is `db4e`** (`CS:0xB5A6`), not `ac59` — see the previous section.
+
+No drag on ad94's `vx` — unlike ad1c, which decays `vx` toward 0 each tock tick.
+
+Ported as `RockBurstPool`'s two private methods, `#stepAd1c` (the pre-existing ad1c-shaped logic, now correctly scoped to slots `0..AD1C_SLOTS`) and `#stepAd94` (new, slots `AD1C_SLOTS..end`), called in the confirmed original order (`#stepAd1c` then `#stepAd94`) from one public `step()`.
+
 ### `UNKNOWN_cfcc_pool_sharing` — one pool, two tenants `[PROVEN]`
 
 `DS:0xcfcc`'s ten 10-byte slots are shared by **two independent subsystems**, each with its own first-fit allocator, its own walker, and its own self-modifying enable gate:
