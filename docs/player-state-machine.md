@@ -126,6 +126,39 @@ DB68  same test                                   / DB76 add bp,0x18  ; bp = [0x
 
 A port that omits it makes crouching purely cosmetic — the dodge stops working.
 
+**The crouch-entry write zeros the animation phase, unconditionally** `[PROVEN]` — fresh disassembly of both DOWN-check handlers, walked in full while fixing a `gods-web` bug where the gate itself only checked *live* input and so never fired once a walk key had been released:
+
+```
+598a  call 0x5b38 / jc 0x59e5          ; an object at the crouch hot point -> straight to crouch
+598f..59a9                              ; ladder/col+1 priority + direction test, see below
+59e5  mov byte [0x377],0x13             ; state := 19 (CROUCH_L)
+59ea  mov byte [0x341],0x0
+59ef  xor cl,cl                         ; <- phase ZEROED, not carried over
+59f1..59fb                              ; two more latch clears, jmp 0x5e9b
+```
+
+State 1's mirror (`CS:0x5bd2`) lands on the identical shape at `CS:0x5c29`–`0x5c33`, writing state 18 (CROUCH_R) and zeroing `cl` the same way. So the handoff-frame sprite is always `anim_base(18 or 19) + 0` — **29 or 31** — regardless of what `cl` held on the entering tick, not the "destination base, stale cl" convention documented elsewhere in this file for states that don't touch `cl` at all. This one does.
+
+**The ladder-descend-vs-crouch direction gate is a genuine, confirmed ASYMMETRY between states 0 and 1 — not a shared rule** `[PROVEN]`, found chasing the same bug:
+
+```
+state 0 (CS:0x598f-0x59e5), sub = X & 0x1f:
+  sub < 0xc                       -> check col-0 climbable only, no direction test
+  sub in [0xc, 0x20), col+1 climbable -> test LEFT|RIGHT (0x382 & 0xc):
+                                        held -> crouch (59e5) ; not held -> descend, col=1, +0x20 snap (59ab)
+  sub in [0xc, 0x14], col+1 not climbable -> fall to col-0 test, no direction test
+  sub in (0x14, 0x20), col+1 not climbable -> crouch directly, col-0 never checked
+
+state 1 (CS:0x5bd7-0x5c29), sub = X & 0x1f:
+  sub in [0xc, 0x20), col+1 climbable -> descend UNCONDITIONALLY (col=1, +0x20 snap) — no direction test at all
+  otherwise (sub < 0xc, or col+1 not climbable with sub <= 0x14) -> test LEFT|RIGHT FIRST:
+                                        held -> crouch outright, col-0 never checked
+                                        not held -> check col-0 climbable -> descend (col=0, no snap) or crouch
+  sub in (0x14, 0x20), col+1 not climbable -> crouch directly
+```
+
+State 0 gates its **col+1** branch on direction; state 1 gates its **col-0** branch instead — the handlers are not mirrors here despite being mirrors everywhere else in this pair. `gods-web`'s existing `climbableThreeBelowCol` (the col-0/col-1 sub-tile priority alone, thresholds `0xc`/`0x14`) is correct and unaffected; only the direction gate is unported, and stays that way — a first attempt at porting it assumed one shared rule, shipped with the polarity backwards, and was caught and reverted before the two-handler asymmetry above was found. Left as a disclosed cut: with no direction held (the only case newly reachable by the gate-fix itself), both states' behavior already matches the ungated col-priority code exactly.
+
 **State 4 (base 9) is the spawn / arrival idle pose.** Eleven instructions, reading only LEFT and RIGHT — no up, down or fire — and otherwise falling into state 15's ground check. Exactly three entrants (`C6 06 77 03 04`, 3 hits file-wide): `CS:0x8c3e` (level start), `CS:0x8d6` (respawn, in the same routine that does `mov word [0x192],0x18`), `CS:0x1022` (teleport arrival).
 
 ⚠️ **The turn animation is not a symmetric ramp.** An earlier plausible reading had state 2 ramping `cl` 1..3 and state 3 ramping −1..−3. The bytes say otherwise: state 2 does `inc cl / cmp cl,3 / jnl → mov cl,6 / mov [0x377],1`; state 3 does `dec cl / js → mov cl,6 / mov [0x377],0`. Because the epilogue re-reads `[0x377]` *after* the handler, the handoff frame renders the **destination** base. Actual sequences:
@@ -137,7 +170,9 @@ A port that omits it makes crouching purely cosmetic — the dodge stops working
 | state 1 → 3 (`cl=2`) | 2 | **9, 8, 6** |
 | state 4 → 3 (`cl=0`) | 0 | **6** |
 
-There is no `cl` of −1..−3, and no sprite 11, 7 or 5. `[WF]` — the four rendered sequences above come from the workflow and were not re-read here; the `0x499A` gate and the three hitbox sites were.
+There is no `cl` of −1..−3, and no sprite 11, 7 or 5. The `0 → 2` and `1 → 3` rows are now `[PROVEN]` — re-disassembled fresh in a later session (instruction-by-instruction, `CS:0x5dbb`–`0x5ddb` and `CS:0x5dde`–`0x5dfb`, entry sites `CS:0x5979`/`CS:0x5bc1`) while porting these states into `gods-web`, and the hand-computed render sequences from those bytes match this table exactly. The `4 → 2` / `4 → 3` rows (state 4's own direct entry into the turn states) remain `[WF]` — out of scope for that pass, not re-read.
+
+⚠️ **That same re-read found the reversal-cancel branch each handler opens with, which this table's derivation didn't need and so never mentioned.** Before the `cl` ramp, state 2 (`CS:0x5dbb`) does `TEST [0x382],0x4 (LEFT) / JZ 0x5dca`; if LEFT is held it jumps straight to `MOV [0x377],3` (reverse into state 3, mid-turn) rather than running the ramp at all that tick. State 3 (`CS:0x5dde`) mirrors it, testing RIGHT (`0x8`). `gods-web` does not port this cancel branch — a disclosed simplification; a turn there runs to completion (2–3 ticks, ~200ms) regardless of input.
 
 **State 7 is a bare `RET` at `0x593a`.** Handlers are entered by `jmp` with the caller's return address still on the stack, so this returns *past* the `0x5e9b` epilogue — skipping the phase store, the event probe, the camera update, sprite selection **and** the draw. It is a freeze, not a pose; its `anim_base` of 9 is never read. States 27 and 28 are three instructions each and transition immediately, so their bases are never read either.
 
