@@ -19,7 +19,8 @@ import { runAllChecks, checkDescriptorAnchors, checkHeroSprites,
          checkSelectorsAndObjects, checkSpawn, checkEntityB, checkEntityA, checkSpawnA,
          checkWeaponsProjectiles, checkTriggerActions,
          checkZones, checkPopup, checkLevers, checkSpikes,
-         checkMessages, checkLineBarriers, checkTitleMenu, checkTally } from './verify/checks.js';
+         checkMessages, checkLineBarriers, checkTitleMenu, checkTally,
+         checkShop } from './verify/checks.js';
 import { EventRunner, parsePalfils, palfilsNameFor } from './game/events.js';
 import { LineBarriers, parseLineBarrierRecords } from './game/line-barriers.js';
 import { makeActionContext, makeGates, DOOR_TILES,
@@ -87,6 +88,7 @@ import { scanZones, unpackTeleportDest, resolveExitDestination,
 import { DeathBurst, findRespawnPosition, loseLife,
          gameOverPlaceholder } from './game/death.js';
 import { TitleMenu, PasswordEntry } from './game/title-menu.js';
+import { ShopScreen } from './game/shop.js';
 import { TallyScreen } from './game/tally.js';
 
 const LEVELS = ['1A','1B','2A','2B','3A','3B','4A','4B'];
@@ -375,7 +377,7 @@ async function main() {
     Promise.resolve(checkPopup()), Promise.resolve(checkLevers()),
     Promise.resolve(checkSpikes()), checkMessages(fetchRaw),
     checkLineBarriers(fetchRaw), Promise.resolve(checkTitleMenu()),
-    Promise.resolve(checkTally()),
+    Promise.resolve(checkTally()), Promise.resolve(checkShop()),
     ]) results.push(...await g);
     renderChecks(results);
     const mh = $('messages');
@@ -993,6 +995,50 @@ async function main() {
     await switchLevel(key);             // CS:0x914c's own two callers both fall into world 1
   }
 
+  /* CS:0x0643 — DS:0x194:=0x3880, DS:0x196:=1. The FULL 32-bit value (not
+   * the low word alone, an arithmetic mistake this session's own docs
+   * correct — see Gods/docs/shop.md) is 0x1_3880 = 80000. */
+  const SHOP_STARTING_MONEY = 80000;
+
+  /* The one live-captured sample this session got for world 2's shop
+   * roster — real item ids read from a live DOSBox session, NOT the
+   * per-world source table (`DS:0x51aa`, never read — Gods/docs/shop.md's
+   * own `UNKNOWN_shop_roster_source`), and not necessarily reproducible
+   * (two live captures of the same world disagreed on one id, gated by
+   * runtime state this session didn't decode — `UNKNOWN_shop_eligibility_
+   * gates`). Every one of these 12 ids is independently confirmed to be a
+   * real `game/consumables.js` `CONSUMABLES` type — see shop.md's own
+   * cross-check. Worlds 3/4 get an empty (EXIT-only) roster, disclosed
+   * here rather than invented, pending the same data for those worlds. */
+  const SHOP_ROSTER_WORLD_2 = [0, 35, 36, 38, 42, 44, 51, 52, 53, 70, 71, 72];
+  const shopRosterForWorld = (world) => (world === 2 ? SHOP_ROSTER_WORLD_2.slice() : []);
+
+  /**
+   * A correct password takes the player straight into that world's shop,
+   * not the level itself. `FUN_1000_006f`'s own prologue runs the level
+   * loader (`FUN_1000_8c34`) BEFORE its `DS:0x38c`/`DS:0x42` check redirects
+   * into `FUN_1000_0643` (the shop's entry point) — the destination level
+   * is already loaded and sitting in memory when the shop opens, and
+   * leaving the shop does not load anything a second time. See
+   * Gods/docs/shop.md's own "Forcing shop entry live" section for how this
+   * order was established (and why entering the shop directly, skipping
+   * the level load, crashes). No price is charged for anything bought here
+   * — `UNKNOWN_shop_prices`, see shop.js's own header. */
+  async function enterViaPassword(matchWorld) {
+    uiState = 'shop';
+    purse = new Purse(); score = new Score();
+    inventory = [INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY];
+    deathSeq = null; gameOverState = null; lastDeathBurstFx = [];
+    await switchLevel(levelKeyFor(matchWorld, 0));
+    purse.add(SHOP_STARTING_MONEY);
+    shopScreen = new ShopScreen({
+      roster: shopRosterForWorld(matchWorld),
+      inventory,
+      state: { health, arsenal },
+      onDone: () => { uiState = 'game'; shopScreen = null; },
+    });
+  }
+
   sel.addEventListener('change', () => { switchLevel(sel.value); });
 
   /* ── The title screen ─────────────────────────────────────────────────
@@ -1003,9 +1049,10 @@ async function main() {
    * menu (CS:0x2CAF), since nothing about a static menu needs the logic
    * clock. 'exit' is this port's stand-in for QUIT's `INT 21h AH=4Ch` —
    * see Renderer.presentBlack(). */
-  let uiState = 'menu';   // 'menu' | 'password' | 'game' | 'exit'
+  let uiState = 'menu';   // 'menu' | 'password' | 'shop' | 'game' | 'exit'
   const titleMenu = new TitleMenu();
   let passwordEntry = null;
+  let shopScreen = null;
 
   function handleTitleKey(code) {
     if (uiState === 'menu') {
@@ -1030,7 +1077,7 @@ async function main() {
       }
       /* CS:0x2e8a — wrong guess bounces back to the MENU, not a re-prompt. */
       uiState = 'menu';
-      if (matchWorld > 0) { uiState = 'game'; fullRestart(levelKeyFor(matchWorld, 0)); }
+      if (matchWorld > 0) enterViaPassword(matchWorld);
     }
   }
 
@@ -1101,6 +1148,12 @@ async function main() {
         if (tallyScreen.done) tallyScreen.onDone();
         return;
       }
+      /* The shop (game/shop.js) is its own frozen uiState, same reasoning
+       * as the tally screen above but simpler — the shop's own onDone
+       * (enterViaPassword) already handed off into 'game', so nothing here
+       * needs to watch for a state change the way the tally screen's
+       * onDone dispatch does. */
+      if (shopScreen) { shopScreen.step(input); return; }
       /* The title menu / password screen freeze the whole simulation, same
        * as the original's own menu loop never runs FUN_1000_4993 (the
        * per-frame player update) while it has control — see the 'uiState'
@@ -1891,6 +1944,7 @@ async function main() {
         const glyphs = hero && hero.glyphs, logo = hero && hero.frames[169];
         if (uiState === 'menu') titleMenu.draw(renderer, glyphs, logo, titleBackground);
         else if (uiState === 'password') passwordEntry.draw(renderer, glyphs, titleBackground);
+        else if (uiState === 'shop' && shopScreen) shopScreen.draw(renderer, glyphs);
         if (uiState === 'exit') renderer.presentBlack();   // QUIT's stand-in — see Renderer's own header
         /* PBACKSCR's OWN palette, not level.palette — like PSTATUS/PSTAT3
          * (status-panel.js's own PALETTE note), nothing in GAME.EXE installs

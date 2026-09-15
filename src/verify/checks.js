@@ -18,6 +18,8 @@ import { scanZones, unpackTeleportDest, resolveExitDestination,
          passwordWorldForSlot, passwordToString, PASSWORD_LENGTH,
          PASSWORD_SLOTS } from '../game/zones.js';
 import { TitleMenu, PasswordEntry, MENU_OPTIONS } from '../game/title-menu.js';
+import { ShopScreen, GRID_COLS, GRID_ROWS, GRID_SLOTS, EXIT_SLOT, DATA_SLOTS,
+  SELL_ID_BASE } from '../game/shop.js';
 import { TallyScreen, timeBonus, healthBonus, moneyBonus, POOL_STEP,
          WAIT_AFTER_SUMMARY_TICKS, WAIT_AFTER_COUNTDOWN_TICKS,
          SFX_EVERY_N_STEPS } from '../game/tally.js';
@@ -13938,6 +13940,194 @@ export function checkTally() {
     t.draw(stub, null, null);   // no glyphs, no digit frames -> must not throw
     check('draw() with no glyph atlas and no digit frames draws nothing '
       + 'and does not throw', calls.length === 0);
+  }
+
+  return results;
+}
+
+/* ── the shop screen, CS:0x6c19/0x6e62 (Gods/docs/shop.md) ─────────────── */
+export function checkShop() {
+  const { results, check } = makeChecker();
+
+  /* ── the grid shape, CS:0x6cef/0x6e74 ──────────────────────────────── */
+  {
+    check('18 cells, 3 rows x 6 columns', GRID_SLOTS === 18 && GRID_ROWS === 3 && GRID_COLS === 6);
+    check('slot 17 is EXIT, the last cell', EXIT_SLOT === 17 && GRID_SLOTS - 1 === EXIT_SLOT);
+    check('17 addressable data slots before EXIT', DATA_SLOTS === 17);
+    check('the sell-id split is 0xc0, matching the buy/sell dispatch', SELL_ID_BASE === 0xc0);
+  }
+
+  /* ── navigation: clamped, not wrapped, CS:0x6cef-0x6d42 ───────────────── */
+  {
+    const held = (dir) => ({ up: false, down: false, left: false, right: false, fire: false, [dir]: true });
+    const release = { up: false, down: false, left: false, right: false, fire: false };
+
+    const s = new ShopScreen({ roster: [], inventory: [INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY] });
+    check('starts at cursor 0', s.cursor === 0);
+    s.step(held('left')); check('LEFT from column 0 is a no-op (clamped, not wrapped)', s.cursor === 0);
+    s.step(release);
+    s.step(held('up')); check('UP from row 0 is a no-op (clamped, not wrapped)', s.cursor === 0);
+    s.step(release);
+
+    s.step(held('right')); check('RIGHT moves +1', s.cursor === 1);
+    s.step(release);
+    s.step(held('down')); check('DOWN moves +6 (one row)', s.cursor === 7);
+    s.step(release);
+    s.step(held('left')); check('LEFT moves -1', s.cursor === 6);
+    s.step(release);
+    s.step(held('up')); check('UP moves -6 (one row)', s.cursor === 0);
+    s.step(release);
+
+    /* Walk all the way to the last column, then confirm one more RIGHT
+     * doesn't cross into the next row (CS:0x6cf7-0x6d07's own AL=0x11
+     * compare only bounds the ABSOLUTE index, not the row — a plain +1
+     * would silently wrap column 5 of row 0 into column 0 of row 1). */
+    for (let i = 0; i < 6; i++) { s.step(held('right')); s.step(release); }
+    check('RIGHT clamps at the row\'s own last column, does not spill into '
+      + 'the next row', s.cursor === 5);
+
+    const s2 = new ShopScreen({ roster: [], inventory: [INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY] });
+    s2.cursor = 17;   // EXIT, reached by DOWN+DOWN+RIGHT*5 in real play
+    s2.step(held('right'));
+    check('RIGHT from EXIT (last cell) is a no-op — nothing past the grid',
+      s2.cursor === 17);
+
+    const s3 = new ShopScreen({ roster: [], inventory: [INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY] });
+    for (let i = 0; i < 3; i++) { s3.step(held('down')); s3.step(release); }
+    check('DOWN three times from row 0 col 0 clamps at row 2 col 0 (index '
+      + '12) — a fourth +6 step would land past EXIT (18), so it is '
+      + 'suppressed, and DOWN alone never reaches EXIT from column 0',
+      s3.cursor === 12 && s3.cursor !== 17);
+    /* CS:0x6cef's own AX=0x11 bound on DOWN — row 2 col 0 (index 12) is as
+     * far as +6 steps reach; only RIGHT moves from there to EXIT (17). */
+
+    const s4 = new ShopScreen({ roster: [], inventory: [INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY] });
+    s4.step(held('right'));   // the press itself — the one edge in this test
+    check('a single press moves exactly once (edge-triggered, no auto-'
+      + 'repeat — a disclosed simplification, see shop.js\'s own header)',
+      s4.cursor === 1);
+    for (let i = 0; i < 5; i++) s4.step(held('right'));   // held WITHOUT releasing
+    check('holding the SAME direction without releasing does not repeat '
+      + 'the move — the original\'s own 8-tick auto-repeat is not ported',
+      s4.cursor === 1);
+  }
+
+  /* ── empty slots and the two-press buy confirm, CS:0x6e8f-0x6ea2 ──────── */
+  {
+    const roster = new Array(DATA_SLOTS).fill(null);
+    roster[0] = CONSUMABLES[0].type;   // a real, always-shipped health potion
+    const inventory = [INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY];
+    const s = new ShopScreen({ roster, inventory, state: { health: { potion: () => ({ taken: true }) } } });
+
+    const fire = { up: false, down: false, left: false, right: false, fire: true };
+    const release = { up: false, down: false, left: false, right: false, fire: false };
+
+    s.cursor = 1;   // roster[1] is null — everything but slot 0 is empty here
+    s.step(fire); s.step(release);
+    check('a FIRE press on an empty slot does nothing (no preview, no '
+      + 'purchase)', s.previewId === null && s.lastPurchase === null);
+
+    const s2 = new ShopScreen({ roster, inventory, state: { health: { potion: () => ({ taken: true }) } } });
+    s2.step(fire); s2.step(release);
+    /* Type 0, rank 0 — `game/consumables.js`'s own first table row, cited
+     * as a literal rather than `CONSUMABLES[0].type` so this actually
+     * checks the shipped value instead of restating the test's own setup. */
+    check('the FIRST press on a slot only previews it — no purchase yet',
+      s2.previewId === 0 && s2.lastPurchase === null);
+    s2.step(fire); s2.step(release);
+    check('the SECOND press on the SAME slot executes the purchase',
+      s2.lastPurchase && s2.lastPurchase.id === 0
+      && s2.lastPurchase.rank === 0 && s2.previewId === null);
+    check('a completed purchase locks its own rank in DS:0x319\'s own '
+      + 'once-per-visit sense', s2.purchasedCategories.has(0));
+
+    const emptyRoster = new Array(DATA_SLOTS).fill(null);
+    const s3 = new ShopScreen({ roster: emptyRoster, inventory: [INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY] });
+    s3.step(fire); s3.step(release);
+    check('FIRE on a genuinely empty grid cell is a no-op, not a crash',
+      s3.lastPurchase === null && !s3.done);
+  }
+
+  /* ── auto-use dispatch reuses game/consumables.js directly, CS:0x6f39 ─── */
+  {
+    let healed = 0;
+    const entry = CONSUMABLES.find((c) => c.effect === 'health');
+    const roster = new Array(DATA_SLOTS).fill(null);
+    roster[3] = entry.type;
+    const s = new ShopScreen({
+      roster, inventory: [INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY],
+      state: { health: { potion: (n) => { healed = n; return { taken: true }; } } },
+    });
+    const fire = { up: false, down: false, left: false, right: false, fire: true };
+    const release = { up: false, down: false, left: false, right: false, fire: false };
+    s.cursor = 3;
+    s.step(fire); s.step(release);
+    s.step(fire); s.step(release);
+    check('a real CONSUMABLES entry (health) dispatches through '
+      + 'applyConsumable exactly as an in-level pickup would', healed === entry.health);
+  }
+
+  /* ── the give-to-inventory path, CS:0x6f41-0x6f7a (not exercised by any '
+   * real roster this session captured — synthetic ids only, see shop.js's '
+   * own header) ─────────────────────────────────────────────────────── */
+  {
+    const WEAPON_ID = 5000;   // not a real POBJECTS type — a synthetic id for this test only
+    const roster = new Array(DATA_SLOTS).fill(null);
+    roster[0] = WEAPON_ID;
+    const fire = { up: false, down: false, left: false, right: false, fire: true };
+    const release = { up: false, down: false, left: false, right: false, fire: false };
+
+    const inv = [INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY];
+    const s = new ShopScreen({ roster, inventory: inv, selectedSlot: 0 });
+    s.step(fire); s.step(release);
+    s.step(fire); s.step(release);
+    check('an id with no CONSUMABLES rank goes to the give-to-inventory path',
+      s.lastPurchase && s.lastPurchase.id === WEAPON_ID && s.lastPurchase.slot !== undefined);
+    check('the SELECTED slot (index 0 here) is skipped even though it was '
+      + 'empty — DS:0x366\'s own exclusion', s.lastPurchase.slot !== 0 && inv[0] === INVENTORY_EMPTY);
+    check('the item actually landed in some OTHER empty slot', inv.includes(WEAPON_ID));
+
+    const fullInv = [WEAPON_ID, WEAPON_ID, WEAPON_ID, WEAPON_ID];
+    let refused = null;
+    const s2 = new ShopScreen({
+      roster, inventory: fullInv, selectedSlot: -1,
+      onRefused: (text, priority) => { refused = priority; },
+    });
+    s2.step(fire); s2.step(release);
+    s2.step(fire); s2.step(release);
+    check('a full inventory refuses the purchase rather than silently '
+      + 'dropping it — no slot mutated', s2.lastPurchase.refused === true
+      && fullInv.every((v) => v === WEAPON_ID));
+    check('the refusal fires at message priority 0x19 (25), matching '
+      + 'message-line.md\'s own "object messages, shop refusals" row',
+      refused === 0x19);
+  }
+
+  /* ── EXIT, CS:0x6e74-0x6e7e ────────────────────────────────────────── */
+  {
+    let exited = false;
+    const s = new ShopScreen({ roster: [], inventory: [INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY], onDone: () => { exited = true; } });
+    s.cursor = EXIT_SLOT;
+    const fire = { up: false, down: false, left: false, right: false, fire: true };
+    s.step(fire);
+    check('firing on EXIT sets done and calls onDone, before any roster '
+      + 'lookup', s.done && exited);
+    const cursorBefore = s.cursor;
+    s.step({ up: false, down: false, left: false, right: true, fire: false });
+    check('once done, further input is inert', s.cursor === cursorBefore);
+  }
+
+  /* ── draw() smoke test — no icon sprites were RE'd, text-only, see '
+   * shop.js's own header ──────────────────────────────────────────── */
+  {
+    const roster = new Array(DATA_SLOTS).fill(null);
+    roster[0] = CONSUMABLES[0].type;
+    const s = new ShopScreen({ roster, inventory: [INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY] });
+    const calls = [];
+    const stub = { blitSprite: (f, x, y) => calls.push({ x, y }) };
+    s.draw(stub, null);   // no glyph atlas -> must not throw
+    check('draw() with no glyph atlas draws nothing and does not throw',
+      calls.length === 0);
   }
 
   return results;

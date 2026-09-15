@@ -366,6 +366,13 @@ for (const r of checkTally()) {
   console.log(line(r));
 }
 
+console.log('\n  the shop screen (CS:0x6c19/0x6e62):');
+const { checkShop } = await import('../src/verify/checks.js');
+for (const r of checkShop()) {
+  if (!r.pass && !r.note) bad++;
+  console.log(line(r));
+}
+
 console.log(`\n${asserts} assertions + ${notes} notes = ${asserts + notes} rows`);
 console.log(`${bad ? `FAILURES: ${bad}` : 'ALL CHECKS PASS'}`);
 process.exit(bad ? 1 : 0);
