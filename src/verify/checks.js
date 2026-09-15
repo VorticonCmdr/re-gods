@@ -8972,26 +8972,41 @@ export async function checkTriggerActions(fetchRaw) {
       objects, gates: makeGates(palRaw), tiles: DOOR_TILES[0],
       messages: map.messages, categoryOf: (t) => cats[t],
     });
-    const spike = objects.find((o) => o.type === 50 && o.x === 443 && o.y === 960);
+    /* BOTH spikes, because lever 3 gates both #7 and #8 — and their dispatch
+     * cells are on ADJACENT ROWS (40 on row 59, 42 on row 60), which is the
+     * whole point of the three-row probe. */
+    const spikes = [443, 462].map(
+      (sx) => objects.find((o) => o.type === 50 && o.x === sx && o.y === 960));
 
-    // Trigger #7's own dispatch tile: col13,row59 -> world (416,944).
+    // The ledge the lever stands on: col 13, row 59 -> world (416, 944).
     runner.step(416, 944, runner.makeState({}));
     check('standing on the dispatch tile with the lever OFF kills nothing (yet)',
-      !spike.dead, `dead: ${spike.dead}`);
+      spikes.every((s) => !s.dead), `dead: [${spikes.map((s) => s.dead)}]`);
 
     runner.pal.levers[3].type ^= 1;   // pull the lever WITHOUT moving the hero
     runner.step(416, 944, runner.makeState({}));   // same (x, y) -> same cell
     check('END TO END: step() re-fires at the SAME cell once the lever is on, no re-entry needed',
-      spike.dead, `dead: ${spike.dead}`);
+      spikes[0].dead, `dead: ${spikes[0].dead}`);
 
-    /* ...and the hazard goes up in SMOKE rather than blinking out: the same
-     * kill must have seeded DS:0x8c3c, whose walker (CS:0x3CC7) then draws
-     * the puff over the spot the spike occupied. */
-    const puff = runner.actionCtx.killSmoke.step({ x: 0, y: 0 });
-    check('END TO END: the kill leaves a smoke puff at the spike, sprite 108 (CS:0x3CC7)',
-      puff.length === 1 && puff[0].sprite === SMOKE_SPRITE_BASE &&
-      puff[0].x === 443 - 8 && puff[0].y === 960,
-      puff.length ? `#${puff[0].sprite} at (${puff[0].x},${puff[0].y})` : 'no puff');
+    /* ⚠️ THE SECOND SPIKE IS THE REGRESSION. One `step()` at one position has
+     * to take out BOTH, because the hero's 48px body spans rows 59-61 and the
+     * two triggers hang off rows 59 and 60. A single-cell probe kills the one
+     * at his head and leaves the one at his waist standing — which is exactly
+     * what was reported from play ("there are two spike hazards but only one
+     * gets removed"). */
+    check('END TO END: ONE step kills BOTH spikes — the probe spans the hero, not one tile',
+      spikes.every((s) => s.dead), `dead: [${spikes.map((s) => s.dead)}]`);
+
+    /* ...and each goes up in SMOKE rather than blinking out: both kills must
+     * have seeded DS:0x8c3c, whose walker (CS:0x3CC7) draws the puffs over
+     * the spots the spikes occupied. */
+    const puffs = runner.actionCtx.killSmoke.step({ x: 0, y: 0 })
+      .sort((a, b) => a.x - b.x);
+    check('END TO END: each kill leaves a smoke puff at its spike, sprite 108 (CS:0x3CC7)',
+      puffs.length === 2 && puffs.every((p) => p.sprite === SMOKE_SPRITE_BASE) &&
+      puffs[0].x === 443 - 8 && puffs[0].y === 960 &&
+      puffs[1].x === 462 - 8 && puffs[1].y === 960,
+      puffs.map((p) => `#${p.sprite}@(${p.x},${p.y})`).join(' ') || 'no puff');
   }
 
   results.push({

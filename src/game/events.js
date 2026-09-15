@@ -153,52 +153,88 @@ export class EventRunner {
   }
 
   /**
-   * Call once per logic tick with the hero's world position.
-   * Returns the fired trigger entry, or null.
+   * Call once per logic tick with the hero's world position. Dispatches EVERY
+   * probed cell that names an event; returns the first one that actually
+   * fired (for the host's status line), or null.
    * @param {number} x @param {number} y
    * @param {object} state
-   * @param {number} [colOverride] test seam only — lets the verification run
-   *   drive this same code with a different column rule so the two can be
-   *   compared on real level data. Production callers omit it.
+   * @param {number} [colOverride] test seam — tools/verify-node.mjs passes a
+   *   different column rule here (positionally) so the two can be compared on
+   *   real level data. It replaces the PRIMARY column only; the left-column
+   *   probe stays `col - 1` behind its own `x & 31` gate, as in the original.
+   *   Production callers omit it.
    */
   step(x, y, state, colOverride) {
-    /* THE PROBE CELL — CS:0x5fab, called from the epilogue at 0x5ea0:
-     *     5FB2  add ax,0x10          ; X + 16
-     *     5FB5  and ax,0xffe0
-     *     5FB8  and bx,0xfff0        ; Y floored, NOT rounded
-     *     5FBE  sar ax,1 (x5)        ; -> col = (X + 16) >> 5
-     *     5FC8  shl bx,1 (x3)        ; -> row * 128
-     * The axes are deliberately asymmetric: X is rounded to the NEAREST
-     * column (the hero is 32 px wide, so his centre decides), Y is FLOORED to
-     * the row his head is in. This port previously used `x >> 5` for the
-     * column, which shifts every event trigger half a tile to the left. */
+    /* THE PROBE — CS:0x5FAB, called from the epilogue at CS:0x5EA0.
+     *
+     *     5FB2  add ax,0x10 / and ax,0xffe0    ; col = (X + 16) >> 5
+     *     5FB8  and bx,0xfff0                  ; Y FLOORED, not rounded
+     *     5FBE  sar ax,1 (x5) / shl bx,1 (x3)  ; -> col, row*128
+     *     5FD2  cmp byte [si],2 / jbe / call 0x6022     ; (col, row)
+     *     5FDA  add si,0x80 ; cmp/jbe/call               ; (col, row+1)
+     *     5FE6  add si,0x80 ; cmp/jbe/call               ; (col, row+2)
+     *     5FF2  ax = heroX & 0x1f / cmp 0x10 / jl RET   ; the left column,
+     *     5FFD  add si,0xfeff (= -257: back 2 rows, left 1 col)
+     *     6001  cmp/jbe/call ; 6009 add si,0x80 ; ... ; 6019 ...
+     *
+     * The axes are asymmetric on purpose. X is rounded to the NEAREST column
+     * (the hero is 32 px wide, so his centre decides); Y is floored to the
+     * row his HEAD is in, and then three rows are probed — 48 px, the hero's
+     * own height, so the scan covers his whole body rather than one tile.
+     *
+     * ⚠️ IT IS NOT ONE CELL, and that was this port's bug. Probing only
+     * (col, row) fires whichever event sits at the hero's head and misses
+     * any event under his feet. PLEV1A's lever-3 spike kill is exactly that
+     * shape: trigger #7 hangs off a plane-B cell on row 59 and trigger #8 off
+     * one on row 60, and a hero standing on that ledge has row 59 at his head
+     * and row 60 at his waist. The original fires BOTH in one tick and both
+     * spikes go; a single-cell probe removes one spike and leaves the other.
+     *
+     * The second column is the hero's own RAW column: when `x & 31 >= 16` the
+     * `+16` rounding has already pushed `col` one to the right, so `col - 1`
+     * is the tile his left edge is actually in. Below 16 the rounding did not
+     * move, and the original probes nothing extra — an asymmetry this
+     * reproduces rather than tidies.
+     *
+     * ⚠️ There is no cell-change gate anywhere in the body (and CS:0x5EA0,
+     * its caller, has zero xrefs — it is unconditional per-frame code). The
+     * game re-probes every tick and relies on the evaluator's own
+     * consume-on-success (CS:0x39FE marks the event 0xFFFF; CS:0x6034 skips
+     * it forever after) to make repeats free. An earlier revision of this
+     * file gated on `cell === lastCell`, commented "edge-triggered, like the
+     * original", and so never re-fired for a player who pulled a lever
+     * without stepping off the tile. See docs/camera-and-world-nav.md in the
+     * sibling Gods dump for both traces. */
     const col = colOverride === undefined ? (x + 16) >> 5 : colOverride;
     const row = y >> 4;
-    const cell = row * this.map.cols + col;
-    this.lastCell = cell;   // reported for debugging only — not consulted below
+    const cols = this.map.cols;
+    this.lastCell = row * cols + col;   // reported for debugging only
 
-    /* ⚠️ CORRECTION: this was previously gated `if (cell === lastCell) return
-     * null`, commented "edge-triggered, like the original". It is not. Full
-     * disassembly of CS:0x5FAB-0x6021 (the caller, CS:0x5EA0, has zero xrefs
-     * — it's unconditional per-frame code, not gated on movement) shows no
-     * comparison against any previous cell anywhere in the body: the game
-     * re-probes every single tick regardless of whether the hero's cell
-     * changed, and relies on the trigger evaluator's own idempotent
-     * consume-on-success (CS:0x39FE marks the event 0xFFFF; CS:0x6034 skips
-     * a consumed/empty record on every later attempt) to make that safe.
-     * The bug this caused: pull a lever while standing on/beside the
-     * dispatch tile (never crossing a tile boundary afterward) and a
-     * lever-gated trigger — e.g. PLEV1A #7/#8, the lever-3 spike kill —
-     * would never (re-)fire, though the original catches it the very next
-     * frame. See docs/camera-and-world-nav.md in the sibling Gods dump for
-     * the full trace. The real per-frame scan also checks up to 5 more
-     * neighbor cells (2 rows below, and conditionally an adjacent column)
-     * that this single-cell probe still doesn't reach — a further, smaller
-     * fidelity gap left open rather than silently guessed at here. */
+    let first = null;
+    const probe = (c, r) => {
+      /* The original does raw pointer arithmetic with no bounds check. In
+       * practice it stays inside plane B — a hero cannot stand low enough for
+       * row+2 to leave the map, and `col - 1` is only reached when rounding
+       * already pushed col to 1 or more — so rather than model what lies past
+       * the array (the trigger table does), an out-of-range probe reads as 0
+       * here, the same call this port already makes for the respawn search. */
+      const i = r * cols + c;
+      if (c < 0 || c >= cols || i < 0 || i >= this.map.planeB.length) return;
+      const v = this.map.planeB[i];
+      if (v < 3) return;                                  // CS:0x5FD2 `jbe`
+      const res = this.dispatchEvent(v - 3, state, 0);    // CS:0x5FD7
+      if (res && !first) first = res;
+    };
 
-    const v = this.map.planeB[cell];
-    if (v < 3) return null;
-    return this.dispatchEvent(v - 3, state, 0);
+    probe(col, row);                                      // CS:0x5FD2
+    probe(col, row + 1);                                  // CS:0x5FDA
+    probe(col, row + 2);                                  // CS:0x5FE6
+    if ((x & 0x1f) >= 0x10) {                             // CS:0x5FF2 `jl`
+      probe(col - 1, row);                                // CS:0x6001
+      probe(col - 1, row + 1);                            // CS:0x6009
+      probe(col - 1, row + 2);                            // CS:0x6015
+    }
+    return first;
   }
 
   /**
