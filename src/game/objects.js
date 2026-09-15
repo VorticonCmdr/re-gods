@@ -135,6 +135,39 @@ export function sortForDraw(objects, cats) {
     .map((e) => e.o);
 }
 
+/**
+ * The single per-object DRAW sequence, spikes included INLINE at their
+ * already-sorted position — CS:0x1432 (the per-object walker) calls
+ * CS:0x1534, which dispatches category 4 straight to CS:0x1B5B, at the
+ * object's own place in the SAME array-order walk as every other object.
+ * There is no "draw all spikes last" pass in the original — `sortForDraw`'s
+ * stable rank-1 band already interleaves spikes with ordinary objects by
+ * original array index, so a caller that special-cases spikes into a
+ * separate later pass silently puts every spike permanently in front of any
+ * same-or-lower-rank object with a HIGHER array index that should draw
+ * after (in front of) it.
+ *
+ * @param {Array} drawObjects  `sortForDraw`'s own output.
+ * @param {(type:number)=>boolean} isSpikeType
+ * @param {Set} liveSpikeSet  the objects `stepSpikes` marked alive THIS
+ *   tick (its own dead/`flag6` activation-box gate) — a spike-typed object
+ *   absent from this set is omitted entirely, matching the original's
+ *   per-object activation check, not drawn out of position.
+ * @returns {Array<{obj:object, spike:boolean}>}
+ */
+export function buildDrawSequence(drawObjects, isSpikeType, liveSpikeSet) {
+  const seq = [];
+  for (const o of drawObjects) {
+    if (o.dead) continue;
+    if (isSpikeType(o.type)) {
+      if (liveSpikeSet.has(o)) seq.push({ obj: o, spike: true });
+      continue;
+    }
+    seq.push({ obj: o, spike: false });
+  }
+  return seq;
+}
+
 /* ── The RUNTIME object array, DS:0x8314 — 200 records of EIGHT bytes ──────
  *
  * The .MAP's 200 six-byte records are not what the game walks. CS:0x8FEF

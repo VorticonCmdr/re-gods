@@ -116,7 +116,7 @@ import { expandMapObjects, allocObject, OBJECT_SLOTS, activationBox,
          activateObjects, sortForDraw, insertSpawned, CATEGORY, WEAPON_TYPE_MIN,
          stepObjectFall, isFallEligible, BOUNCE_DELTA, FALL_STEP,
          WORLD_HEIGHT, STRADDLE_OFFSET, BOUNCE_TERMINAL, ACTIVATION_MARGIN,
-         dropCarriedItem } from '../game/objects.js';
+         dropCarriedItem, buildDrawSequence } from '../game/objects.js';
 import { GodsRandom } from '../game/random.js';
 import { CLASS_TABLES, EMPTY_CLASS, HAZARD_CLASS, HAZARD_HANDLERS,
          HAZARD_SPRITE_BASE, POOL_SLOTS, POOL_STRIDE,
@@ -11996,6 +11996,50 @@ export function checkSpikes() {
       + 'completely ignored by the spike system',
       stepSpikes([ordinaryObj], clock, hero, health7, {}).length === 0
         && health7.target === 24);
+  }
+
+  /* ── DRAW ORDER: a spike is interleaved at its sorted array position, not
+   * drawn as a separate always-last pass — CS:0x1432 (the per-object walker)
+   * calls CS:0x1534, which dispatches category 4 straight to CS:0x1B5B, at
+   * the object's own place in the SAME array-order walk as every other
+   * object. Live-verified against a PLEV1A world-1 census: object type 5 at
+   * (493,954), original array index 27, sits after both type-50 spikes at
+   * (462,960)/(443,960), indices 6/7 — so in the original it draws AFTER
+   * (in front of) them, not before. ──────────────────────────────────────── */
+  {
+    const isSpikeType = (t) => t === SPIKE_TYPE;
+    const spikeLo = { x: 0, y: 0, type: SPIKE_TYPE, dead: false };   // earlier in array order
+    const ordinaryHi = { x: 0, y: 0, type: 5, dead: false };         // later in array order
+    const drawObjects = [spikeLo, ordinaryHi];   // sortForDraw's own stable rank-1 order
+    const live = new Set([spikeLo]);
+    const seq = buildDrawSequence(drawObjects, isSpikeType, live);
+    check('a same-rank object with a HIGHER original array index than a '
+      + 'spike draws AFTER it (in front), preserving sortForDraw\'s own '
+      + 'stable order — a separate "spikes always last" pass would instead '
+      + 'put every spike permanently in front of this',
+      seq.length === 2 && seq[0].obj === spikeLo && seq[0].spike === true
+        && seq[1].obj === ordinaryHi && seq[1].spike === false,
+      JSON.stringify(seq.map((e) => ({ x: e.obj.x, spike: e.spike }))));
+
+    const ordinaryLo = { x: 1, y: 0, type: 5, dead: false };         // earlier in array order
+    const spikeHi = { x: 1, y: 0, type: SPIKE_TYPE, dead: false };   // later in array order
+    const seq2 = buildDrawSequence([ordinaryLo, spikeHi], isSpikeType, new Set([spikeHi]));
+    check('...and the reverse holds too: an object with a LOWER array index '
+      + 'than a spike still draws BEFORE (behind) it',
+      seq2.length === 2 && seq2[0].obj === ordinaryLo && seq2[1].obj === spikeHi);
+
+    const deadOrdinary = { x: 2, y: 0, type: 5, dead: true };
+    const seq3 = buildDrawSequence([deadOrdinary, spikeLo], isSpikeType, new Set([spikeLo]));
+    check('a dead (runtime-collected) non-spike object is omitted just like '
+      + 'the ordinary loop\'s own `if (o.dead) continue`',
+      seq3.length === 1 && seq3[0].obj === spikeLo);
+
+    const inactiveSpike = { x: 3, y: 0, type: SPIKE_TYPE, dead: false };
+    const seq4 = buildDrawSequence([inactiveSpike, ordinaryHi], isSpikeType, new Set());
+    check('a spike-typed object ABSENT from the live set (dead, or flag6 '
+      + 'clear — stepSpikes\' own activation-box gate) is omitted entirely, '
+      + 'not drawn out of position',
+      seq4.length === 1 && seq4[0].obj === ordinaryHi && seq4[0].spike === false);
   }
 
   /* ── shipped-data placement, re-derived from the 8 maps this project ships

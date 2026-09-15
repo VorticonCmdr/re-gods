@@ -29,7 +29,7 @@ import { spriteFor, STATE_INFO, UNMODELLED_PHASE_STATES } from './game/states.js
 import { buildDescriptorMap, GROUP_STEMS, HERO_DESCRIPTOR_MAX,
          LEVEL_LOAD_ORDER } from './formats/descriptors.js';
 import { spriteForType, parseObjectCategories, sortForDraw, isDeadType,
-         isUnstamped, OBJECT_SLOTS, activationBox,
+         isUnstamped, OBJECT_SLOTS, activationBox, buildDrawSequence,
          activateObjects, insertSpawned,
          stepObjectFall, isFallEligible, dropCarriedItem,
          ObjectAnimClock, animatedObjectSprite } from './game/objects.js';
@@ -1777,19 +1777,25 @@ async function main() {
        * a weapon pickup. Drawn at (x, y) top-left, in the original's draw
        * order (cat-3/cat-5 behind, ordinary next, weapons on top — graphics
        * export 32). Dead slots are removed by a SIGN test at load, matching
-       * CS:0x9000 `cmp word [si+0x4],0 / jns`. */
-      for (const o of level.drawObjects) {
-        /* CS:0x1924 writes 0xFFFF into the slot's type and 0 into its live
-         * word; CS:0x9000 then tests the SIGN, not equality with 0xFFFF. A
-         * collected object stops being drawn from that tick on. */
-        if (o.dead) continue;
-        /* CS:0x1B5D/0x1B63/0x1B69 — the retracting-spike hazard dispatches
-         * these three sprite ids to its OWN draw (below), never the ordinary
-         * `170+type` single-blit path: types 50/117 need a base+overlay
-         * pair at an animated offset, and type 130 shares one animation
-         * counter with 117's own overlay. See game/spikes.js. */
-        if (o.type === SPIKE_TYPE || o.type === SPIKE117_TYPE
-            || o.type === SPIKE130_TYPE) continue;
+       * CS:0x9000 `cmp word [si+0x4],0 / jns`. The retracting spike hazard
+       * (game/spikes.js) is included INLINE via `buildDrawSequence` — see
+       * game/objects.js for why it is not a separate pass in the original. */
+      const isSpikeType = (t) => t === SPIKE_TYPE || t === SPIKE117_TYPE || t === SPIKE130_TYPE;
+      const drawSeq = buildDrawSequence(level.drawObjects, isSpikeType, new Set(lastSpikeFx));
+      for (const { obj: o, spike } of drawSeq) {
+        if (spike) {
+          const draw = (o.type === SPIKE130_TYPE)
+            ? [spike130Sprite(o, spikeClock)]
+            : (() => { const s = spikeSprites(o, spikeClock); return [s.base, s.overlay]; })();
+          for (const d of draw) {
+            const sx = d.x - camX, sy = d.y - camY;
+            if (sx < -64 || sy < -64 || sx > SCREEN_W || sy > SCREEN_H) continue;
+            const sf = hero && hero.frames[d.sprite];
+            if (sf) renderer.blitSprite(sf, sx, sy);
+            else renderer.strokeRect(sx - 2, sy - 2, 5, 5, 14);
+          }
+          continue;
+        }
         const sx = o.x - camX, sy = o.y - camY;
         if (sx < -64 || sy < -64 || sx > SCREEN_W || sy > SCREEN_H) continue;
         /* CS:0x1D0E-0x1D86 — while a delayed special-lever toggle is
@@ -1813,23 +1819,6 @@ async function main() {
            * covers — zero such objects ship. Marked, never guessed. */
           unstamped++;
           renderer.strokeRect(sx - 2, sy - 2, 5, 5, 14);
-        }
-      }
-
-      /* The retracting spike hazard (game/spikes.js). `lastSpikeFx` is the
-       * set of live type-50/117/130 objects `stepSpikes` already applied
-       * damage for this tick — drawing from that list, not `drawObjects`
-       * directly, keeps the draw and the damage/animation state in sync. */
-      for (const o of lastSpikeFx) {
-        const draw = (o.type === SPIKE130_TYPE)
-          ? [spike130Sprite(o, spikeClock)]
-          : (() => { const s = spikeSprites(o, spikeClock); return [s.base, s.overlay]; })();
-        for (const d of draw) {
-          const sx = d.x - camX, sy = d.y - camY;
-          if (sx < -64 || sy < -64 || sx > SCREEN_W || sy > SCREEN_H) continue;
-          const sf = hero && hero.frames[d.sprite];
-          if (sf) renderer.blitSprite(sf, sx, sy);
-          else renderer.strokeRect(sx - 2, sy - 2, 5, 5, 14);
         }
       }
 
