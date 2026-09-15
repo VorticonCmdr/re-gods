@@ -86,6 +86,7 @@ import { scanZones, unpackTeleportDest, resolveExitDestination,
          passwordToString, PASSWORD_SLOTS } from './game/zones.js';
 import { DeathBurst, findRespawnPosition, loseLife,
          gameOverPlaceholder } from './game/death.js';
+import { TitleMenu, PasswordEntry } from './game/title-menu.js';
 
 const LEVELS = ['1A','1B','2A','2B','3A','3B','4A','4B'];
 
@@ -949,21 +950,60 @@ async function main() {
    * CS:0x0473/CS:0x8DD9 — the full game restart CS:0x914c's own header
    * comment already names as the ONLY thing that clears the weapon slots,
    * money, score and inventory (a level change, `switchLevel`, deliberately
-   * carries all four). Reached here on game over (see the death-fork logic
-   * in the tick loop below) via the R key, since this port has no title
-   * screen of its own to route "new game" through — see game/death.js's own
-   * header for why the original's hiscore/attract-mode game-over sequence
-   * itself is not reproduced.
+   * carries all four). Reached both from BEGIN QUEST (key='1A', the menu's
+   * own cursor-0 dispatch: `world:=1, sublevel:='a'`) and from a correct
+   * password guess (key = that world's own 'A' sublevel — CS:0x2ea0/0x2ead
+   * sets the world directly, then falls into the SAME `sublevel:=0; JMP
+   * 0x1000:2a37` tail BEGIN QUEST uses).
    */
-  async function fullRestart() {
+  async function fullRestart(key = '1A') {
     fx.lives = 2;                       // CS:0x8DD9's own starting value
     purse = new Purse(); score = new Score();          // CS:0x0487/0x8D91
     inventory = [INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY]; // CS:0x0498/0x8D80
     deathSeq = null; gameOverState = null; lastDeathBurstFx = [];
-    await switchLevel('1A');            // CS:0x914c's own two callers both fall into world 1
+    await switchLevel(key);             // CS:0x914c's own two callers both fall into world 1
   }
 
   sel.addEventListener('change', () => { switchLevel(sel.value); });
+
+  /* ── The title screen ─────────────────────────────────────────────────
+   * `uiState` gates BOTH the tick and render callbacks below: only 'game'
+   * runs the original's own per-tick simulation. 'menu'/'password' are
+   * purely keydown-driven (see handleTitleKey) — there is no equivalent
+   * poll-every-15Hz-frame loop for them here, unlike the original's own
+   * menu (CS:0x2CAF), since nothing about a static menu needs the logic
+   * clock. 'exit' is this port's stand-in for QUIT's `INT 21h AH=4Ch` —
+   * see Renderer.presentBlack(). */
+  let uiState = 'menu';   // 'menu' | 'password' | 'game' | 'exit'
+  const titleMenu = new TitleMenu();
+  let passwordEntry = null;
+
+  function handleTitleKey(code) {
+    if (uiState === 'menu') {
+      const action = titleMenu.onKeyDown(code);
+      if (action === 'begin') { uiState = 'game'; fullRestart('1A'); }
+      else if (action === 'password') { uiState = 'password'; passwordEntry = new PasswordEntry(); }
+      else if (action === 'exit') { uiState = 'exit'; }
+      return;
+    }
+    if (uiState === 'password') {
+      const result = passwordEntry.onKeyDown(code);
+      if (!result) return;
+      passwordEntry = null;
+      if (result.cancel) { uiState = 'menu'; return; }   // port-only convenience, ESC
+      /* CS:0x2e6c-0x2e93: byte-for-byte against each stored password; an
+       * empty (never-generated) slot never matches — zones.js's own
+       * `passwordSlots[i]` is `null` until that world is first completed. */
+      let matchWorld = -1;
+      for (let i = 0; i < passwordSlots.length; i++) {
+        const pw = passwordSlots[i];
+        if (pw && passwordToString(pw) === result.submit) { matchWorld = i + 2; break; }
+      }
+      /* CS:0x2e8a — wrong guess bounces back to the MENU, not a re-prompt. */
+      uiState = 'menu';
+      if (matchWorld > 0) { uiState = 'game'; fullRestart(levelKeyFor(matchWorld, 0)); }
+    }
+  }
 
   const input = { left: false, right: false, up: false, down: false, fire: false };
   const KEYMAP = {
@@ -971,11 +1011,18 @@ async function main() {
     KeyA: 'left', KeyD: 'right', KeyW: 'up', KeyS: 'down', Space: 'fire',
   };
   addEventListener('keydown', (e) => {
+    if (uiState !== 'game') {
+      if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space', 'Enter', 'Escape', 'Backspace']
+        .includes(e.code)) e.preventDefault();
+      handleTitleKey(e.code);
+      return;
+    }
     const k = KEYMAP[e.code]; if (k) { input[k] = true; e.preventDefault(); }
-    /* Not an original-machine control — this port has no title screen to
-     * route "new game" through after CS:0x0943's own game-over sequence
-     * (see fullRestart()'s own header). */
-    if (e.code === 'KeyR' && gameOverState) { e.preventDefault(); fullRestart(); }
+    /* CS:0x0943's own game-over sequence exits into the title/attract-mode
+     * system — this port has no attract-mode/hiscore cascade, but it does
+     * now have the title menu that system itself falls into, so R returns
+     * there rather than instant-restarting past it. */
+    if (e.code === 'KeyR' && gameOverState) { e.preventDefault(); uiState = 'menu'; gameOverState = null; }
   });
   addEventListener('keyup', (e) => {
     const k = KEYMAP[e.code]; if (k) { input[k] = false; e.preventDefault(); }
@@ -1012,12 +1059,19 @@ async function main() {
 
   const clock = new Clock(
     () => {
+      /* The title menu / password screen freeze the whole simulation, same
+       * as the original's own menu loop never runs FUN_1000_4993 (the
+       * per-frame player update) while it has control — see the 'uiState'
+       * header comment above. */
+      if (uiState !== 'game') return;
       if (transitioning) return;    // a level load is in flight — hold the frame
       /* Not modelled from a specific address: the original's own game-over
-       * path (CS:0x0943-0x0993) exits into a title/attract-mode system this
-       * port doesn't have. Freezing the tick loop here is this port's own
-       * substitute for "nothing the player does matters until they restart"
-       * — see fullRestart() and game/death.js's header. */
+       * path (CS:0x0943-0x0993) exits into the title/attract-mode system
+       * this port's own title menu now stands in for (see the 'KeyR'
+       * handler above). Freezing the tick loop here, between the death test
+       * below setting `gameOverState` and the player pressing R, is this
+       * port's own substitute for "nothing the player does matters until
+       * they restart" — see fullRestart() and game/death.js's header. */
       if (gameOverState) return;
       /* Per-tick order is the original's: snapshot the scroll origin, run the
        * state machine, probe plane B, then update the camera (CS:0x023f ->
@@ -1765,6 +1819,20 @@ async function main() {
       cam.update(player.x, player.y, levelInfo);
     },
     () => {
+      /* uiState !== 'game': draw the title screen instead of the world.
+       * `hero.frames[169]` is the 208x46 GODS title logo — descriptor #169
+       * in the "always" atlas group (PALWAYS1+2+3+PGODFONT), loaded by
+       * loadSprites() for every world, so it and `hero.glyphs` (PSMLFNT)
+       * are already available here with no extra fetch — see loadSprites()'s
+       * own header for the #169 anchor. */
+      if (uiState !== 'game') {
+        const glyphs = hero && hero.glyphs, logo = hero && hero.frames[169];
+        if (uiState === 'menu') titleMenu.draw(renderer, glyphs, logo);
+        else if (uiState === 'password') passwordEntry.draw(renderer, glyphs);
+        if (uiState === 'exit') renderer.presentBlack();   // QUIT's stand-in — see Renderer's own header
+        else renderer.present(level.palette);
+        return;
+      }
       const camX = cam.snapX, camY = cam.snapY;
       renderer.clear(0);
       renderer.drawTilemap(level.map, level.tiles, camX, camY);

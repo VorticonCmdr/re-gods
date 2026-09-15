@@ -173,4 +173,16 @@ export class Renderer {
     const dw = SCREEN_W * scale, dh = SCREEN_H * scale;
     this.ctx.drawImage(this.off, ((cw - dw) / 2) | 0, ((ch - dh) / 2) | 0, dw, dh);
   }
+
+  /**
+   * Solid black, bypassing the palette entirely. The original's "QUIT" is a
+   * plain `INT 21h AH=4Ch` DOS terminate (docs/dynamic-trace-and-runtime-
+   * data.md's title-screen section) — a browser tab cannot exit, so this is
+   * the port's own stand-in: not modelling any original mechanism, same as
+   * this file's own header already discloses for the tilemap renderer.
+   */
+  presentBlack() {
+    this.ctx.fillStyle = '#000';
+    this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+  }
 }
