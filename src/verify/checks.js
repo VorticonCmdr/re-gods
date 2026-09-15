@@ -15,7 +15,9 @@ import { KillSmoke, SLOTS as SMOKE_SLOTS, FRAMES as SMOKE_FRAMES,
 import { scanZones, unpackTeleportDest, resolveExitDestination,
          EXIT_DESTINATIONS, EXIT_BIT, exitEffects, advanceWorld,
          clearNonPotionInventory, generatePassword, passwordSlotForWorld,
-         passwordToString, PASSWORD_LENGTH, PASSWORD_SLOTS } from '../game/zones.js';
+         passwordWorldForSlot, passwordToString, PASSWORD_LENGTH,
+         PASSWORD_SLOTS } from '../game/zones.js';
+import { TitleMenu, PasswordEntry, MENU_OPTIONS } from '../game/title-menu.js';
 import { consumesKey } from '../game/trigger.js';
 import { PI1_SIZE, decodePI1, TILE_COUNT } from '../formats/pi1.js';
 import { decodeStatusPanel, PANEL_W, PANEL_H, PANEL_Y0 } from '../game/status-panel.js';
@@ -9463,12 +9465,13 @@ export async function checkZones(fetchRaw) {
       'block sub-step is correctly a no-op here too, matching the ' +
       'original\'s own world!=3 gate on it; two further sub-resets — a ' +
       '"spawn flash" pool and the pickup-sparkle array — have no port-side ' +
-      'module at all, `UNKNOWN_pool_reset_unmodelled_subpools`). Not ' +
-      'reproduced: an "ENTER A PASSWORD" grid-entry screen to type a ' +
-      'generated password back in (`UNKNOWN_password_entry_ui` — the ' +
-      'generate-and-store half is real; there is no consumer UI in this ' +
-      'port) and the familiar reposition (CS:0x0FFC, no Familiar entity ' +
-      'exists in this port yet). The three CALLs at CS:0x100F-0x1015 are ' +
+      'module at all, `UNKNOWN_pool_reset_unmodelled_subpools`). The ' +
+      '"ENTER A PASSWORD" grid-entry screen to type a generated password ' +
+      'back in is now reproduced too (`UNKNOWN_password_entry_ui` is ' +
+      'CLOSED — game/title-menu.js\'s PasswordEntry, dispatched from the ' +
+      'title screen main.js now has). Still not reproduced: the familiar ' +
+      'reposition (CS:0x0FFC, no Familiar entity exists in this port yet). ' +
+      'The three CALLs at CS:0x100F-0x1015 are ' +
       'traced (see game/zones.js): 0x100F is the level-load/respawn camera ' +
       'init (Gods/CLAUDE.md UNKNOWN_camera_init, now CLOSED and ported as ' +
       'cameraForSpawn — a teleport IS a hard camera cut), 0x1012 clears the ' +
@@ -12888,6 +12891,119 @@ export function checkLevers() {
       + 'table; a special-sprite type with no lever-table entry does not — '
       + 'exactly the split this scan\'s own CS:0x1099 gate produces',
       matched === 4);
+  }
+
+  return results;
+}
+
+/**
+ * game/title-menu.js — the title screen this port previously had none of.
+ * Pure logic only (TitleMenu/PasswordEntry take zero DOM/canvas dependency),
+ * so this exercises the exact classes main.js drives, not a re-implementation
+ * of them. Locks CS:0x2C82-0x2E26's own proven shape (UP/DOWN CLAMP, not
+ * wrap; the 3-option dispatch order) and the slot<->world round trip the
+ * title screen's password path depends on but had never actually run
+ * end-to-end in a browser session (every unlockable world requires first
+ * completing the one before it).
+ */
+export function checkTitleMenu() {
+  const { results, check } = makeChecker();
+
+  /* ── TitleMenu — CS:0x2D09's own UP/DOWN clamp and FIRE dispatch ─────── */
+  {
+    check('exactly 3 options, in the proven order — BEGIN QUEST/ENTER A '
+      + 'PASSWORD/QUIT (CS:0x2D50\'s own cursor 0/1/2 dispatch)',
+      MENU_OPTIONS.length === 3 && MENU_OPTIONS[0] === 'BEGIN QUEST'
+      && MENU_OPTIONS[2] === 'EXIT TO DOS', JSON.stringify(MENU_OPTIONS));
+
+    const m = new TitleMenu();
+    check('starts at cursor 0', m.cursor === 0);
+    check('UP clamps at 0, does not wrap to the last option — CS:0x2D18',
+      m.onKeyDown('ArrowUp') === null && m.cursor === 0);
+    check('DOWN advances one at a time', m.onKeyDown('ArrowDown') === null && m.cursor === 1);
+    m.onKeyDown('ArrowDown');
+    check('DOWN clamps at the last option, does not wrap — CS:0x2D28',
+      m.cursor === 2 && m.onKeyDown('ArrowDown') === null && m.cursor === 2);
+    check('FIRE at cursor 2 dispatches "exit"', m.onKeyDown('Space') === 'exit');
+
+    const m2 = new TitleMenu();
+    check('FIRE at cursor 0 dispatches "begin"', m2.onKeyDown('Space') === 'begin');
+    const m3 = new TitleMenu();
+    m3.onKeyDown('ArrowDown');
+    check('FIRE at cursor 1 dispatches "password"', m3.onKeyDown('Space') === 'password');
+  }
+
+  /* ── PasswordEntry — the grid, CS:0x2e2f-0x2ea8's own buffer/submit shape */
+  {
+    const p = new PasswordEntry();
+    check('starts empty, at the grid\'s first cell', p.buffer.length === 0 && p.row === 0 && p.col === 0);
+    check('LEFT/UP clamp at 0, not wrap',
+      p.onKeyDown('ArrowLeft') === null && p.onKeyDown('ArrowUp') === null
+      && p.row === 0 && p.col === 0);
+
+    /* Type exactly PASSWORD_LENGTH letters via RIGHT+FIRE, matching the
+     * 'B','C','D' sequence this session verified live in a browser. */
+    const typed = [];
+    for (let i = 0; i < PASSWORD_LENGTH; i++) {
+      p.onKeyDown('ArrowRight');
+      p.onKeyDown('Space');
+      typed.push(p.buffer[p.buffer.length - 1]);
+    }
+    check(`fills exactly PASSWORD_LENGTH (${PASSWORD_LENGTH}) letters, one per FIRE`,
+      p.buffer.length === PASSWORD_LENGTH, JSON.stringify(p.buffer));
+    check('typed letters are the grid cells actually stepped through, in order',
+      typed.join('') === 'BCD', typed.join(''));
+
+    p.onKeyDown('ArrowRight');
+    p.onKeyDown('Space');
+    check('FIRE past a full buffer is a no-op, not a 4th letter',
+      p.buffer.length === PASSWORD_LENGTH);
+
+    check('DEL (Backspace) pops the last letter', (() => {
+      p.onKeyDown('Backspace');
+      return p.buffer.length === PASSWORD_LENGTH - 1;
+    })());
+    p.buffer.push('D');   // restore, so the submit test below sees BCD again
+
+    /* Navigate to the '=' (OK) cell — row 3, col 6 — and submit. */
+    for (let i = 0; i < 3; i++) p.onKeyDown('ArrowDown');
+    for (let i = 0; i < 3; i++) p.onKeyDown('ArrowRight');
+    const submitResult = p.onKeyDown('Space');
+    check('OK at a full buffer submits the typed string, joined in cell order',
+      submitResult && submitResult.submit === 'BCD', JSON.stringify(submitResult));
+
+    const escResult = new PasswordEntry().onKeyDown('Escape');
+    check('ESC cancels (a port-only convenience — the original grid has no '
+      + 'back, only the wrong-guess bounce CS:0x2e8a already reproduces)',
+      escResult && escResult.cancel === true);
+  }
+
+  /* ── The slot<->world round trip main.js's title-screen dispatch relies
+   * on, isolated from the browser session this was verified in (which can
+   * only ever generate/consume ONE world's password per playthrough since
+   * each requires completing the world before it — this closes that gap
+   * for worlds 2 and 3 too, not just the one path a session can reach). */
+  {
+    for (const completedWorld of [1, 2, 3]) {
+      const slot = passwordSlotForWorld(completedWorld);
+      const unlockedWorld = passwordWorldForSlot(slot);
+      check(`completing world ${completedWorld} fills slot ${slot}, which unlocks `
+        + `world ${completedWorld + 1} — not any other slot/world`,
+        unlockedWorld === completedWorld + 1,
+        JSON.stringify({ completedWorld, slot, unlockedWorld }));
+    }
+    check('the 3 slots map to 3 DISTINCT worlds — no accidental collision',
+      new Set([0, 1, 2].map(passwordWorldForSlot)).size === 3);
+
+    /* generatePassword -> passwordToString -> the grid's own submitted
+     * format must round-trip: same alphabet (A-Z), same length. */
+    const rng = new GodsRandom(1);
+    const pw = generatePassword(rng);
+    const str = passwordToString(pw);
+    check('a generated password, once stringified, is exactly PASSWORD_LENGTH '
+      + 'uppercase A-Z letters — the exact format PasswordEntry.onKeyDown\'s '
+      + 'own submit string must match to unlock anything',
+      str.length === PASSWORD_LENGTH && /^[A-Z]+$/.test(str), str);
   }
 
   return results;

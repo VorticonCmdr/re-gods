@@ -350,6 +350,14 @@ for (const r of checkDeath()) {
   console.log(line(r));
 }
 
+console.log('\n  the title screen — menu clamp/dispatch and the password '
+  + 'grid (CS:0x2C82-0x2E26/0x2e2f-0x2ea8):');
+const { checkTitleMenu } = await import('../src/verify/checks.js');
+for (const r of checkTitleMenu()) {
+  if (!r.pass && !r.note) bad++;
+  console.log(line(r));
+}
+
 console.log(`\n${asserts} assertions + ${notes} notes = ${asserts + notes} rows`);
 console.log(`${bad ? `FAILURES: ${bad}` : 'ALL CHECKS PASS'}`);
 process.exit(bad ? 1 : 0);

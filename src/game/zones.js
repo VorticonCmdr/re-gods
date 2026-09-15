@@ -306,13 +306,12 @@ export function clearNonPotionInventory(inventory, cats) {
  *
  * DS:0x432/0x436/0x43a — three 3-character passwords, one per unlockable
  * world (2/3/4), generated for the JUST-COMPLETED world (1/2/3) when bit 10
- * fires and that world's own slot is still empty. This port has no
- * "ENTER A PASSWORD" screen to consume these (CLAUDE.md's own closure notes
- * that mechanism was never wired to a producer until this pass either), so
- * they are stored in a plain 3-slot array main.js owns and surfaced as
- * text — the generate-and-store half of the mechanism is real and ported;
- * the grid-entry UI that would let a player TYPE one back in is a disclosed
- * gap, `UNKNOWN_password_entry_ui`. */
+ * fires and that world's own slot is still empty. They are stored in a
+ * plain 3-slot array main.js owns. `UNKNOWN_password_entry_ui` is CLOSED —
+ * game/title-menu.js's `PasswordEntry` is the grid-entry UI that types one
+ * of these back in; main.js's own title-screen dispatch checks a submitted
+ * guess against `passwordToString(passwordSlots[i])` for each slot and, on
+ * a match, calls `passwordWorldForSlot(i)` for the world to jump to. */
 export const PASSWORD_LENGTH = 3;     // 3 chars per world, DS:0x432/0x436/0x43a
 export const PASSWORD_SLOTS = 3;      // one per unlockable world: 2, 3, 4
 
@@ -325,6 +324,18 @@ export const PASSWORD_SLOTS = 3;      // one per unlockable world: 2, 3, 4
  */
 export function passwordSlotForWorld(completedWorld) {
   return completedWorld - 1;
+}
+
+/**
+ * The exact inverse of `passwordSlotForWorld`: which world a CORRECT guess
+ * against `passwordSlots[slot]` should jump to (DS:0x42a's own table entry
+ * ordering, `dl==1 -> 2` folded in — see the header table above: slot 0's
+ * password unlocks world 2, slot 1's world 3, slot 2's world 4).
+ * @param {number} slot 0..2, PASSWORD_SLOTS index
+ * @returns {number} 2..4
+ */
+export function passwordWorldForSlot(slot) {
+  return slot + 2;
 }
 
 /**

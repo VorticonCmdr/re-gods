@@ -9,7 +9,7 @@
  *   data.md, "The title screen — a 3-option menu...": `FUN_1000_2c82`/
  *   `FUN_1000_317d`, read in full under DOSBox. Three options, exactly:
  *     cursor 0 -> BEGIN QUEST     (world 1, sublevel A)
- *     cursor 1 -> ENTER PASSWORD  (FUN_1000_2e2f, the letter-grid screen)
+ *     cursor 1 -> ENTER A PASSWORD (FUN_1000_2e2f, the letter-grid screen)
  *     cursor 2 -> QUIT            (INT 21h AH=4Ch — DOS terminate)
  *   UP/DOWN CLAMP (not wrap) against the option count; FIRE confirms.
  *   "QUIT" cannot terminate a browser tab, so per this port's own brief it is
@@ -52,7 +52,7 @@ import { PASSWORD_LENGTH } from './zones.js';
 export const ADVANCE = 0x0a;    // 10 — the same per-glyph step message.js uses
 export const DIAMOND = '\x11';  // CS:0x4443's own separator glyph, reused as a cursor
 
-export const MENU_OPTIONS = ['BEGIN QUEST', 'ENTER PASSWORD', 'EXIT TO DOS'];
+export const MENU_OPTIONS = ['BEGIN QUEST', 'ENTER A PASSWORD', 'EXIT TO DOS'];
 
 function textWidth(text) { return text.length * ADVANCE; }
 
@@ -163,7 +163,9 @@ export class PasswordEntry {
 
   draw(renderer, glyphs) {
     renderer.clear(0);
-    drawCentered(renderer, glyphs, 'ENTER PASSWORD', 16);
+    /* `"ENTER A PASSWORD"`, 1ffd:eb96 (CS:0x2e2f's own message pointer —
+     * see the header and zones.js's own citation of this exact string). */
+    drawCentered(renderer, glyphs, 'ENTER A PASSWORD', 16);
 
     /* The typed buffer, blank slots shown as the diamond placeholder — see
      * the header's glyph-safety note for why not '_' or '-'. */

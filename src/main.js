@@ -19,7 +19,7 @@ import { runAllChecks, checkDescriptorAnchors, checkHeroSprites,
          checkSelectorsAndObjects, checkSpawn, checkEntityB, checkEntityA, checkSpawnA,
          checkWeaponsProjectiles, checkTriggerActions,
          checkZones, checkPopup, checkLevers, checkSpikes,
-         checkMessages, checkLineBarriers } from './verify/checks.js';
+         checkMessages, checkLineBarriers, checkTitleMenu } from './verify/checks.js';
 import { EventRunner, parsePalfils, palfilsNameFor } from './game/events.js';
 import { LineBarriers, parseLineBarrierRecords } from './game/line-barriers.js';
 import { makeActionContext, makeGates, DOOR_TILES,
@@ -83,7 +83,7 @@ import { pickUpWeapon } from './game/pickup.js';
 import { scanZones, unpackTeleportDest, resolveExitDestination,
          ZONE_TELEPORT, ZONE_EXIT, exitEffects, advanceWorld,
          clearNonPotionInventory, generatePassword, passwordSlotForWorld,
-         passwordToString, PASSWORD_SLOTS } from './game/zones.js';
+         passwordWorldForSlot, passwordToString, PASSWORD_SLOTS } from './game/zones.js';
 import { DeathBurst, findRespawnPosition, loseLife,
          gameOverPlaceholder } from './game/death.js';
 import { TitleMenu, PasswordEntry } from './game/title-menu.js';
@@ -362,7 +362,7 @@ async function main() {
     Promise.resolve(checkEntityA()), checkSpawnA(fetchRaw),
     Promise.resolve(checkPopup()), Promise.resolve(checkLevers()),
     Promise.resolve(checkSpikes()), checkMessages(fetchRaw),
-    checkLineBarriers(fetchRaw),
+    checkLineBarriers(fetchRaw), Promise.resolve(checkTitleMenu()),
     ]) results.push(...await g);
     renderChecks(results);
     const mh = $('messages');
@@ -708,10 +708,12 @@ async function main() {
    * overwritten by HISCORES.BIN's own load/save round-trip at CS:0x3211/
    * 0x3445; that file round-trip is the one writer this port doesn't have,
    * not something to "fix" by clearing passwordSlots on restart.) Index
-   * 0/1/2 = the password that unlocks world 2/3/4. This port has no "ENTER
-   * A PASSWORD" grid-entry screen to type one back into
-   * (`UNKNOWN_password_entry_ui`), so a generated password is only ever
-   * surfaced as event text — see the ZONE_EXIT branch below. */
+   * 0/1/2 = the password that unlocks world 2/3/4 (game/zones.js's
+   * `passwordWorldForSlot`). A generated password is surfaced both as event
+   * text (see the ZONE_EXIT branch below) and — `UNKNOWN_password_entry_ui`
+   * is now CLOSED — as a real target for the title screen's own "ENTER A
+   * PASSWORD" grid (game/title-menu.js's `PasswordEntry`, dispatched from
+   * `handleTitleKey` below). */
   let passwordSlots = new Array(PASSWORD_SLOTS).fill(null);
   /* CS:0x7F0D — the world-3 DS:0xce64 creature and its "spit" sub-projectile
    * (game/ce64.js). Unlike nest.js/statue.js this module calls combat.js
@@ -997,7 +999,7 @@ async function main() {
       let matchWorld = -1;
       for (let i = 0; i < passwordSlots.length; i++) {
         const pw = passwordSlots[i];
-        if (pw && passwordToString(pw) === result.submit) { matchWorld = i + 2; break; }
+        if (pw && passwordToString(pw) === result.submit) { matchWorld = passwordWorldForSlot(i); break; }
       }
       /* CS:0x2e8a — wrong guess bounces back to the MENU, not a re-prompt. */
       uiState = 'menu';
