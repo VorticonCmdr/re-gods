@@ -20,11 +20,14 @@
  *     corroborated by live purchases: the actual `DS:0x194` money deduction
  *     matched the decoded price exactly for every id bought (650 for id 70
  *     is a unique match against every other decoded price in the table, not
- *     just a plausible-looking number). Ids outside `PRICES` (any world
- *     3/4 roster would need) remain unpriced — the live table's own
- *     ids 0-131 were all read and landmark-verified, but only these 12 were
- *     purchase-confirmed, and no world 3/4 roster exists in this port yet
- *     to need them.
+ *     just a plausible-looking number), and the table itself was confirmed
+ *     GLOBAL rather than per-world/level-scoped by a direct re-read: the
+ *     same 2048-byte range read during an ordinary world-1 start and again
+ *     with the world-2 shop open came back byte-for-byte identical. Ids
+ *     outside `PRICES` (any world 3/4 roster would need) remain unpriced —
+ *     the live table's own ids 0-131 were all read and landmark-verified,
+ *     but only these 12 were purchase-confirmed, and no world 3/4 roster
+ *     exists in this port yet to need them.
  *   - Sell (raw item id `>= SELL_ID_BASE`) is not ported at all —
  *     `UNKNOWN_shop_tradein_value`. `roster` here should only ever contain
  *     ids below `SELL_ID_BASE`; the EXIT slot is the only non-buy cell.
