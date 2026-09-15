@@ -285,6 +285,14 @@ So every frame this probes **3 cells** (the hero's own column, one and two rows 
 
 **A port that gates this on cell-entry (`if (currentCell === lastCell) return`) is not faithful** — it will miss exactly that case: flip a lever while standing on or beside the dispatch cell without stepping off and back on, and the kill/spawn/etc. never (re-)fires, even though the original would catch it on the next frame. This was caught because `gods-web`'s own `events.js` `step()` has exactly that gate, commented "edge-triggered, like the original" — which this pass shows is not so; see the port-side note below.
 
+#### The three rows are the hero's body, and adjacent-row triggers fire together — confirmed live `[PROVEN]`
+
+Rows `R`, `R+1`, `R+2` span 48 px, which is exactly the hero's height (the same 48 px the lever toggle's own proximity box uses, `heroY ∈ [objY−32, objY+16]`). So the scan covers the hero's whole body, and **two triggers on adjacent rows both fire on the same tick**. That is not a corner case — it is how `PLEV1A`'s lever-3 spike pair is authored: trigger #7 hangs off a plane-B cell on **row 59** (value 40) and trigger #8 off one on **row 60** (value 42), and a hero standing on that ledge (world `y = 944`) has row 59 at his head and row 60 at his waist. One probe removes both spikes.
+
+Verified under DOSBox rather than inferred, on a level already past those triggers: both event records were re-armed by hand (`DS:0x932c + 37*4` and `+ 39*4` restored to `{3,7}` and `{3,8}`), the hero was placed at `(416, 944)` with lever 3's bit set, and **exactly one** probe was run — breakpoints on the body's entry (`CS:0x5FAB`) and its `RET` (`CS:0x6021`), so no other frame could interfere. Both records came back consumed (`0xFFFF`) from that single invocation, and `SI` ended at `0x6E91` = plane-B base + col 13 + row 61 × 128, the exact end of a three-row walk. `416 & 31 = 0`, so the left-column arm was correctly skipped.
+
+**This is the second half of the same port bug.** `gods-web` probed one cell, so it killed the spike at the hero's head and left the one at his waist — reported from play as "there are two spike hazards but only one gets removed". Fixed in `game/events.js`; the regression check drives `step()` itself and asserts both spikes die from a single call.
+
 ## Randomness — a replayed table, not a PRNG `[PROVEN]`
 
 `GAME.EXE` has only 14 `MUL`/`IMUL` instructions total, all register-operand: **there is no LCG or multiply-based generator.**
