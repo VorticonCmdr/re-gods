@@ -13929,10 +13929,8 @@ export function checkTally() {
       (() => { t2.step(false); return t2.step(true) === 0 && t2.done; })());
   }
 
-  /* ── draw() never throws with no renderer/glyph atlas, and picks the '
-   * right lines for the right phase — a smoke test, not a pixel check '
-   * (this module reuses PSMLFNT as a disclosed font substitution; see its '
-   * own header). ─────────────────────────────────────────────────────── */
+  /* ── draw() never throws with no renderer/glyph atlas — a smoke test,
+   * not a pixel check. ─────────────────────────────────────────────── */
   {
     const calls = [];
     const stub = { blitSprite: (f, x, y) => calls.push({ x, y }) };

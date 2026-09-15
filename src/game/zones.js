@@ -311,7 +311,11 @@ export function clearNonPotionInventory(inventory, cats) {
  * game/title-menu.js's `PasswordEntry` is the grid-entry UI that types one
  * of these back in; main.js's own title-screen dispatch checks a submitted
  * guess against `passwordToString(passwordSlots[i])` for each slot and, on
- * a match, calls `passwordWorldForSlot(i)` for the world to jump to. */
+ * a match, calls `passwordWorldForSlot(i)` for the world to jump to. The
+ * freshly-generated code is also shown to the player immediately, as part
+ * of the same bonus-tally sequence this world-advance is deferred into —
+ * see `game/tally.js`'s own header ("LEVEL 2 PASSWORD" / code / "FIRE TO
+ * CONTINUE", `FUN_1000_69d7`'s reveal, live-confirmed under DOSBox). */
 export const PASSWORD_LENGTH = 3;     // 3 chars per world, DS:0x432/0x436/0x43a
 export const PASSWORD_SLOTS = 3;      // one per unlockable world: 2, 3, 4
 
