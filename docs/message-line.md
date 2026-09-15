@@ -327,9 +327,8 @@ actually connect to remains unresolved — no direct call from either reaches
 unidentified indirect/table dispatch. `[WF]`, not independently re-verified
 byte-for-byte beyond the `DS:0x3ab` writer census and the `6c19` xref check
 above (both spot-checked directly); the shop's own internal mechanics (item
-roster, buy/sell, layout) are characterized in a subagent pass not yet
-promoted past `[WF]` — see the port project's own backlog for the pending
-write-up.
+grid, buy/sell dispatch, the roster filter pipeline) are now fully
+disassembled and partly live-confirmed — see `docs/shop.md`.
 
 Type `0x53` (the shop potion) jumps past **both** the world gate and the bitmap,
 from the ordinary in-level pickup path, in any world, every time.
