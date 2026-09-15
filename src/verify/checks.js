@@ -24,7 +24,7 @@ import { LeverToggle, heroNearLever, SPECIAL_LEVER_SPRITES,
 import { SpikeClock, spikePingpong, heroInSpikeBox, heroInSpike130Box,
          stepSpikes, spikeSprites, spike130Sprite, SPIKE_OVERLAY,
          SPIKE117_OVERLAY, SPIKE130_ANIM, SPIKE_TYPE, SPIKE117_TYPE,
-         SPIKE130_TYPE, BASE_VISIBLE_ROWS } from '../game/spikes.js';
+         SPIKE130_TYPE, BASE_SRC_ROW_OFFSET } from '../game/spikes.js';
 import { HEALTH_EMPTY_SPRITE, HEALTH_FILLED_SPRITE_BASE, HEALTH_FILLED_SPRITE_COUNT,
 HEALTH_BAR_X, HEALTH_BAR_Y_LOCAL, HEALTH_BAR_H, healthBarDraws, drawHealthBar,
 stepHealthBarShimmer } from '../game/health-bar.js';
@@ -11906,14 +11906,31 @@ export function checkSpikes() {
     check('the overlay sprite at frame 0 is 220 — CS:0xdffe\'s own first word, '
       + 'read live, which is ALSO 170+50 (the object\'s own ordinary sprite)',
       s.overlay.sprite === 220);
-    check('the base record asks the renderer for only its bottom 16 rows — '
-      + 'sprite 220/287 ship as a COMPLETE 16x32 standalone crown+shaft, and '
-      + 'the overlay already draws its own crown 16px above; a full-height '
-      + 'base composites as a duplicate crown then shaft, verified WRONG '
-      + 'against a DOSBox screenshot of this exact PLEV1A scene — only the '
-      + '"bottom 16 rows" composite matches it',
-      s.base.visibleRows === BASE_VISIBLE_ROWS && BASE_VISIBLE_ROWS === 16,
-      `visibleRows=${s.base.visibleRows}`);
+    check('at pingpong=0 the base record draws just 1 row, starting 16 rows '
+      + 'into its own frame — sprite 220/287 ship as a COMPLETE 16x32 '
+      + 'standalone crown+shaft, and the overlay already draws its own '
+      + 'crown 16px above, so only rows 16+ (the shaft) may ever show',
+      s.base.rows === 1 && s.base.srcRowOffset === BASE_SRC_ROW_OFFSET
+        && BASE_SRC_ROW_OFFSET === 16,
+      JSON.stringify({ rows: s.base.rows, srcRowOffset: s.base.srcRowOffset }));
+    check('...and its BOTTOM EDGE (y + rows) is objY+32 — the pit-floor '
+      + 'boundary this project\'s own PLEV1A census found (row 62, y=992, '
+      + 'a uniform floor-slab tile immediately below the two live spikes '
+      + 'at y=960) — not `y + a fixed 16`, which would sink into it',
+      s.base.y + s.base.rows === obj.y + 32, `${s.base.y}+${s.base.rows}`);
+
+    const clockMax = new SpikeClock();
+    clockMax.raw39b = 15;                          // pingpong=15, max extension
+    const sMax = spikeSprites(obj, clockMax);
+    check('at pingpong=15 the base draws all 16 of its shaft rows (16..31)',
+      sMax.base.rows === 16 && sMax.base.srcRowOffset === 16,
+      JSON.stringify(sMax.base));
+    check('...and the bottom edge is STILL objY+32 — verified WRONG against '
+      + 'a DOSBox screenshot of this exact scene at both a fixed-16-row '
+      + 'window (sank into the floor slab at low pingpong) and a full-'
+      + '32-row window (duplicate crown at every pingpong) before landing '
+      + 'on this bottom-pinned, pingpong+1-row window',
+      sMax.base.y + sMax.base.rows === obj.y + 32, `${sMax.base.y}+${sMax.base.rows}`);
 
     const obj117 = { ...obj, type: SPIKE117_TYPE };
     const s117 = spikeSprites(obj117, clock);

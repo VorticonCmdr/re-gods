@@ -187,35 +187,56 @@ export function stepSpikes(objects, clock, hero, health, opts = {}) {
 }
 
 /**
- * The base sprite (170+type: 220/287, both shipped as 16x32) is drawn from
- * only its BOTTOM 16 rows, not the full frame. Both the overlay (16 tall,
- * `CS:0x1C10`) and the base (32 tall, `CS:0x1BE1`) are drawn at ADJACENT,
- * non-overlapping world Y ranges — `[tipY, tipY+16)` then `[tipY+16,
- * tipY+48)` — so a full-height base composites as overlay-crown, then a
- * SECOND static crown (the base frame's own top 16 rows — sprite 220/287
- * draw a complete standalone crown+shaft, not a shaft alone), then shaft.
- * Live-verified against a DOSBox reference screenshot of this exact scene
- * (PLEV1A, the two spikes beside the lever at 416,928): the "bottom 16 rows
- * only" composite (one crown, then shaft, total 32px) matches it pixel-for-
- * pixel; the full-32-row composite shows the extra duplicate crown the
- * reference does not have — see the `buildDrawSequence`/draw-order fix this
- * accompanies for how that duplicate was first mistaken for a z-order bug.
- * The exact register-level mechanism in `CS:0x1BF0`'s `byte[0x411]=0x40`
- * override (export 2, `VGA:0x1B86`) was traced and ruled out as its cause —
- * it is a numeric no-op for a naturally-32-tall sprite — so what in the
- * original actually produces the 16-row crop remains open
- * (`UNKNOWN_spike_base_crop_mechanism`); the CROPPED RESULT itself is
- * `[PROVEN]` by the screenshot match, independent of the mechanism.
+ * The base sprite (170+type: 220/287, both shipped as 16x32) is NOT drawn
+ * whole, and NOT as a fixed-size window sliding with pingpong — the base's
+ * BOTTOM EDGE is PINNED at `objY+32` and it grows/shrinks from there as the
+ * hazard extends/retracts, drawing only its own rows `[16, 16+pingpong]`
+ * (`pingpong+1` rows, sourced starting 16 rows into the frame — rows 0-15
+ * are the sprite's own separate, complete crown, per the pixel census
+ * below; only rows 16+ are shaft).
+ *
+ * Two things this port got wrong before landing on this, both caught
+ * against a DOSBox reference screenshot of this exact scene (PLEV1A, the
+ * two spikes beside the lever at 416,928):
+ *   1. Drawing the FULL 32-row frame composited a SECOND, static crown
+ *      16px below the animated overlay's own (the overlay and base draw at
+ *      adjacent, non-overlapping world-Y ranges, so nothing masks it).
+ *   2. Drawing a FIXED 16-row window (the frame's own bottom half) fixed
+ *      the duplicate crown, but that window's bottom edge is
+ *      `objY+31-pingpong+16 = objY+47-pingpong` — NOT pinned, so at low
+ *      pingpong (near-retracted) it sinks up to 15px into the solid floor
+ *      tile immediately below the pit (this project's own census: PLEV1A
+ *      row 62, `y=992`, is a uniform floor-slab tile abutting the pit
+ *      exactly at `objY+32`).
+ * A `pingpong+1`-row, bottom-pinned window keeps the base's bottom edge at
+ * the constant `objY+32` for every pingpong value, matching a spike that
+ * visibly grows out of / shrinks back into a fixed hole in the floor,
+ * which is what "retracting" means for an object that never moves in X or
+ * Y — and it reproduces the reference screenshot at every phase checked
+ * live, not just the one this project first tested.
+ *
+ * `CS:0x1B9F MOV word SS:[SI+0x2],DX` (DX = pingpong) and `CS:0x1BE4 ADD
+ * word SS:[SI+0x4],0x20` (`CS:0x1C0B` undoes it after) write the pingpong
+ * and a 16-row (32-byte, 16px-wide) source-pointer advance into the SAME
+ * 8-byte per-type record (`SI = 0x1e00 + type*8`, `CS:0x1B7E-0x1B81`) that
+ * `CS:0x1C15 MOV byte SS:[SI+0x2],0x10` resets to a fixed 16 before the
+ * overlay call — `[STATIC]`, consistent with this geometry (a per-call
+ * height override plus a fixed 16-row source skip) but NOT independently
+ * confirmed to be the same record export 2 reads its own descriptor from
+ * (its `SI` is computed from the SPRITE id, not the object TYPE, and this
+ * pass could not establish live whether the two coincide) — the geometry
+ * itself is `[PROVEN]` by the screenshot match at multiple pingpong phases,
+ * the wiring to this specific code is `[STATIC]`.
  */
-export const BASE_VISIBLE_ROWS = 16;
+export const BASE_SRC_ROW_OFFSET = 16;
 
 /**
  * CS:0x1BE1-0x1C6C. The two sprites (base, overlay) and their world
  * positions for a type-50/117 object at the clock's current phase. The
- * base record's `visibleRows` tells the renderer to draw only that many
- * rows, taken from the BOTTOM of the base sprite's frame (skipping
- * `f.h - visibleRows` rows off the top before blitting) — see
- * `BASE_VISIBLE_ROWS` above.
+ * base record's `srcRowOffset`/`rows` tell the renderer to draw only
+ * `rows` rows starting `srcRowOffset` rows into the base sprite's frame —
+ * see `BASE_SRC_ROW_OFFSET` above for why (bottom edge pinned at `objY+32`
+ * regardless of pingpong).
  */
 export function spikeSprites(obj, clock) {
   const pingpong = clock.pingpong;
@@ -225,7 +246,8 @@ export function spikeSprites(obj, clock) {
     ? SPIKE_OVERLAY[clock.frame39c]
     : SPIKE117_OVERLAY[clock.frame39f];
   return {
-    base: { x: obj.x, y: baseY, sprite: 170 + obj.type, visibleRows: BASE_VISIBLE_ROWS },
+    base: { x: obj.x, y: baseY, sprite: 170 + obj.type,
+             srcRowOffset: BASE_SRC_ROW_OFFSET, rows: pingpong + 1 },
     overlay: { x: obj.x, y: overlayY, sprite: overlay },
   };
 }

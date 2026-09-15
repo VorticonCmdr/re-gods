@@ -1791,15 +1791,14 @@ async function main() {
             const sx = d.x - camX, sy = d.y - camY;
             if (sx < -64 || sy < -64 || sx > SCREEN_W || sy > SCREEN_H) continue;
             let sf = hero && hero.frames[d.sprite];
-            /* game/spikes.js: the base sprite's declared frame (220/287,
-             * 16x32) draws a COMPLETE standalone crown+shaft; only the
-             * bottom `visibleRows` are shown here, or the composite gets a
-             * second, duplicate crown 16px below the animated overlay's
-             * own — live-verified against a DOSBox screenshot of this
-             * exact scene. */
-            if (sf && d.visibleRows && d.visibleRows < sf.h) {
-              const skip = sf.h - d.visibleRows;
-              sf = { w: sf.w, h: d.visibleRows, pixels: sf.pixels.subarray(skip * sf.w) };
+            /* game/spikes.js: the base sprite's bottom edge is pinned at
+             * objY+32 — draws `rows` rows starting `srcRowOffset` rows into
+             * the frame, not the whole thing, or the composite gets a
+             * duplicate crown and/or sinks into the floor tile below the
+             * pit as pingpong changes — live-verified against a DOSBox
+             * screenshot of this exact scene, at multiple pingpong phases. */
+            if (sf && d.rows != null && d.rows < sf.h) {
+              sf = { w: sf.w, h: d.rows, pixels: sf.pixels.subarray(d.srcRowOffset * sf.w) };
             }
             if (sf) renderer.blitSprite(sf, sx, sy);
             else renderer.strokeRect(sx - 2, sy - 2, 5, 5, 14);
