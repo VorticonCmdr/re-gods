@@ -156,22 +156,35 @@ going up (`CS:0x5663`, reached only when the input byte equals exactly `0x02`).
 sheet; `npm run frame` composites a full game frame. Both write a PPM, no browser
 needed — the point is that the mapping can be *looked at*, not only asserted.
 
-**Two hero state-machine gaps found and closed in the same session.** Crouch
-(states 18/19) was fully implemented but unreachable the ordinary way: the entry
-gate checked LIVE input (`input.left || input.right`) instead of the PERSISTED
-walk state, so "walk, stop, press DOWN" — normal play — did nothing, because by
-the time DOWN lands neither direction key is still held. Fixed to gate on the same
-persisted-state proxy the adjacent fire test already used; this also made
-`CS:0x59a4-0x59a9`'s col+1 ladder-descend condition (needs a direction ALSO held)
-observable for the first time, so it's now ported instead of a disclosed cut.
-Separately, the **turn animation (states 2/3)** didn't exist at all — reversing
-direction mid-walk snapped instantly from `WALK_L` to `WALK_R` instead of the
-original's brief stationary pivot. Fresh disassembly of both handlers
-(`CS:0x5dbb`-`0x5ddb`, `CS:0x5dde`-`0x5dfb`) resolved a standing conflict between
-two prior notes on this project — one had the input-bit reversal test, the other
-(tagged `[WF]`) had the 3-tick `cl` counter; both were partial reads of the same
-handler. Now ported as `Player._turn()`. Fourteen new `checks.js` assertions
-cover both.
+**Two hero state-machine gaps found and closed in the same session, plus a
+same-session self-correction worth recording.** Crouch (states 18/19) was fully
+implemented but unreachable the ordinary way: the entry gate checked LIVE input
+(`input.left || input.right`) instead of the PERSISTED walk state, so "walk, stop,
+press DOWN" — normal play — did nothing, because by the time DOWN lands neither
+direction key is still held. Fixed to gate on the same persisted-state proxy the
+adjacent fire test already used. **The fix's first cut also tried to port
+`CS:0x59a4-0x59a9`'s col+1 ladder-descend/crouch condition and got it backwards** —
+shipped with the polarity inverted, caught by a follow-up disassembly pass before
+it reached this file. The real mechanism, confirmed fresh against BOTH handlers,
+is a genuine asymmetry neither prior attempt captured: state 0's col+1 branch
+gates on direction (held -> crouch, not held -> descend); state 1's col+1 branch
+is unconditional (always descends when climbable) and instead gates its col-0
+branch the same way. Left unported, same as before this session, now precisely
+characterized instead of guessed at. **The same pass also found the crouch-entry
+write (`CS:0x59e5`/`0x5c29`) zeros the animation phase** (`XOR CL,CL` at
+`CS:0x59ef`/`0x5c33`) — an existing citation in this project claimed it was left
+untouched, which was never wrong enough to notice for the ordinary (moving) entry
+path (a walk-cycle phase is always small enough to stay in range), but would have
+rendered a genuinely out-of-range sprite (`spriteFor(18, 0x2d) = 74`, against this
+project's own `HERO_DESCRIPTOR_MAX = 57`) for one tick on the new stopped-pose
+entry path. Fixed alongside the gate. Separately, the **turn animation (states
+2/3)** didn't exist at all — reversing direction mid-walk snapped instantly from
+`WALK_L` to `WALK_R` instead of the original's brief stationary pivot. Fresh
+disassembly of both handlers (`CS:0x5dbb`-`0x5ddb`, `CS:0x5dde`-`0x5dfb`) resolved
+a standing conflict between two prior notes on this project — one had the
+input-bit reversal test, the other (tagged `[WF]`) had the 3-tick `cl` counter;
+both were partial reads of the same handler. Now ported as `Player._turn()`.
+Sixteen `checks.js` assertions cover all three findings.
 
 **What's still open in the state machine**, ranked by how likely a player is to
 notice: **states 16/17** (one-tick "land" poses) are a disclosed simplification —

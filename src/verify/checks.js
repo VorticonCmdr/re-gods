@@ -8072,6 +8072,8 @@ export async function checkWeaponsProjectiles(fetchRaw) {
         right.tick(flat, I({ down: true }));   // DOWN ALONE, no direction held
         check('...and DOWN ALONE from that stopped pose now crouches (CS:0x598a)',
           right.state === ST.CROUCH && right.stateIndex === PS.CROUCH_R);
+        check('...rendering IN RANGE (CS:0x59ef zeros CL) — not stranded on the locked sentinel',
+          right.phase === 0 && spriteFor(right.stateIndex, right.phase) <= HERO_DESCRIPTOR_MAX);
 
         const left = new Player(2 * 32, 9 * 16);
         for (let i = 0; i < 4; i++) left.tick(flat, I());
@@ -8079,7 +8081,7 @@ export async function checkWeaponsProjectiles(fetchRaw) {
         left.tick(flat, I());
         left.tick(flat, I({ down: true }));
         check('mirror: stopped-pose DOWN alone crouches facing left too (CS:0x5bd2)',
-          left.state === ST.CROUCH && left.stateIndex === PS.CROUCH_L);
+          left.state === ST.CROUCH && left.stateIndex === PS.CROUCH_L && left.phase === 0);
 
         /* Idle+DOWN must still be refused — state 26 (true idle, reached only
          * when UP is held at the exact release instant) has NO down check at
@@ -8094,22 +8096,37 @@ export async function checkWeaponsProjectiles(fetchRaw) {
         check('...and DOWN alone from TRUE idle still does not crouch (CS:0x59e5/0x5c29 unreachable)',
           idle.state !== ST.CROUCH && idle.stateIndex === PS.IDLE);
 
-        /* CS:0x59a4-0x59a9 — the col+1 (approach-from-the-left) ladder branch
-         * needs a direction STILL held alongside DOWN; only col-0 (the
-         * hero's own column) is unconditional. This is only observable now
-         * that the stopped pose can reach the down-check with no direction
-         * held at all — force that exact position (col+1 match, no input)
-         * and confirm it crouches instead of mis-descending the ladder. */
+        /* CS:0x59a4-0x59a9 (state 0) / CS:0x5be5-0x5c20 (state 1) — fresh
+         * disassembly of BOTH handlers this pass found a genuine, CONFIRMED
+         * asymmetry, not a shared "direction held -> crouch" rule: state 0
+         * gates its col+1 branch on direction (held -> crouch, not held ->
+         * descend); state 1's col+1 branch is UNCONDITIONAL (always
+         * descends when climbable) and instead gates its col-0 branch
+         * (held -> crouch outright, not held -> check col-0). An earlier
+         * attempt at this fix got the polarity backwards and asserted the
+         * OPPOSITE of both — caught here before it shipped. `player.js`'s
+         * own comment at this call site has the full derivation; this port
+         * still doesn't implement the direction gate at all (pre-existing,
+         * disclosed), so only the NOT-held arm — which is what the new
+         * stopped-pose entry path actually reaches — is asserted below;
+         * both states' NOT-held arm is "defer to col-priority", which is
+         * exactly what the ungated code already does. */
         const ladderMap2 = { planeA: new Uint8Array(N), planeB: new Uint8Array(N), widthPx: 4096, heightPx: 1024 };
         for (let r = 4; r < 16; r++) ladderMap2.planeB[r * MAP_COLS + 3] = CELL_CLIMBABLE;
         /* x = 80: sub = 80 & 0x1f = 0x10 (>= 0x0c, the col+1 branch's own
          * gate — see climbableThreeBelowCol); (80 & 0xFFE0) >> 5 = 2, so
          * `si+1` lands on column 3, the one just marked climbable above. */
-        const stoppedNearLadder = new Player(80, 9 * 16);
-        stoppedNearLadder.state = ST.GROUND; stoppedNearLadder.stateIndex = PS.WALK_R; stoppedNearLadder.facing = +1;
-        stoppedNearLadder.tick(ladderMap2, I({ down: true }), null, 1, null);
-        check('col+1 ladder descend needs a direction ALSO held — DOWN alone crouches instead',
-          stoppedNearLadder.state === ST.CROUCH);
+        const stoppedR = new Player(80, 9 * 16);
+        stoppedR.state = ST.GROUND; stoppedR.stateIndex = PS.WALK_R; stoppedR.facing = +1;
+        stoppedR.tick(ladderMap2, I({ down: true }), null, 1, null);
+        check('state 1, col+1, no direction held: descends (state 1\'s col+1 is unconditional)',
+          stoppedR.state === ST.CLIMB);
+
+        const stoppedL = new Player(80, 9 * 16);
+        stoppedL.state = ST.GROUND; stoppedL.stateIndex = PS.WALK_L; stoppedL.facing = -1;
+        stoppedL.tick(ladderMap2, I({ down: true }), null, 1, null);
+        check('state 0, col+1, no direction held: also descends (state 0\'s NOT-held arm)',
+          stoppedL.state === ST.CLIMB);
       }
 
       /* ── The turn animation, states 2/3 — a MISSING sequence, now ported ──

@@ -298,6 +298,20 @@ export function emittableStates() {
     [I({ left: true }), 5],    // reverse back: 3 turn ticks + settle into WALK_L
   ]);
 
+  /* CS:0x598a/0x5bd2 — the ordinary way a player ducks: walk, RELEASE the
+   * direction (the stopped pose leaves stateIndex at WALK_L/WALK_R), then
+   * press DOWN alone with no direction held at all. */
+  run(new Player(2 * 32, 9 * 16), [
+    [I(), 4],
+    [I({ right: true }), 4],
+    [I(), 1],                       // release -> locked stopped pose
+    [I({ down: true }), 3],
+    [I(), 4],
+    [I({ left: true }), 4],
+    [I(), 1],
+    [I({ down: true }), 3],
+  ]);
+
   return { pairs: [...seen.values()], map };
 }
 
@@ -933,17 +947,37 @@ export class Player {
        * near the crouch hot point sends the hero straight to crouch without
        * the map ever being consulted. */
       const nearObject = pickup ? objectNearHotPoint(pickup.objects, this) : false;
-      let descendCol = nearObject ? null : climbableThreeBelowCol(map, this.x, this.y);
-      /* CS:0x59a4-0x59a9 — NOW PORTED (was disclosed-cut before the gate fix
-       * above made it reachable): the col+1 (approach-from-the-left) ladder
-       * branch additionally requires a horizontal direction STILL held
-       * alongside DOWN; only the col-0 (the hero's own column) match is
-       * unconditional. Previously the only way to reach this code at all was
-       * `moving === true`, which already implied a direction held, so the
-       * distinction was unobservable. It is live now: the stopped pose can
-       * reach here with no direction held, and without this the port would
-       * mis-descend a ladder from col+1 where the original crouches instead. */
-      if (descendCol === 1 && !moving) descendCol = null;
+      const descendCol = nearObject ? null : climbableThreeBelowCol(map, this.x, this.y);
+      /* ⚠️ NOT PORTED, confirmed by fresh disassembly of BOTH handlers this
+       * pass (a real fix attempted here first got the polarity backwards —
+       * caught before shipping). The direction gate around the col+1/col-0
+       * priority is a genuine, CONFIRMED ASYMMETRY between the two states,
+       * not a simple "direction held -> crouch" rule either state applies
+       * uniformly:
+       *   state 0 (CS:0x59a4-0x59a9): col+1 climbable -> test direction ->
+       *     HELD -> crouch, NOT held -> descend (col=1, snap). col-0 is
+       *     reached only when col+1 doesn't match and is NEVER direction-
+       *     gated.
+       *   state 1 (CS:0x5be5/0x5c1b-0x5c20): col+1 climbable -> descend
+       *     UNCONDITIONALLY, no direction test at all. Direction is instead
+       *     tested BEFORE col-0 is even consulted: HELD -> crouch outright
+       *     (col-0 never checked), NOT held -> check col-0, descend if
+       *     climbable else crouch.
+       * i.e. state 0 gates its col+1 branch; state 1 gates its col-0 branch
+       * — the mirror is not a mirror here. `climbableThreeBelowCol`'s
+       * existing col-0/col-1 priority (verified against both handlers'
+       * sub-tile thresholds, 0xc and 0x14) is correct on its own; porting
+       * the direction gate needs it to know WHICH state's rule applies, not
+       * a single post-hoc `descendCol === 1 ? ...` check. Left as this
+       * priority alone, ungated — the same simplification since before this
+       * session, now precisely characterized instead of vaguely disclosed.
+       * This does NOT affect the new stopped-pose crouch-entry path below:
+       * that path only runs with `!moving` (no direction held), which is
+       * the "NOT held" arm for BOTH states above, and both states' "NOT
+       * held" arm is exactly "defer to col-priority, no override" — so the
+       * ungated code already gives the right answer whenever it's reached
+       * with no direction held. The unfixed case (a direction ALSO held)
+       * was already reachable before this session and remains as it was. */
       if (descendCol !== null) {
         /* CS:0x59ab (walk-left) / CS:0x5bf3 (walk-right) — descend onto a
          * ladder three rows (48 px) below. The port's ladder is simplified
@@ -958,24 +992,27 @@ export class Player {
         this.fromLadder = false;
         return;
       }
-      /* CS:0x59e5 / CS:0x5c29 — crouch, facing the direction just walked.
-       * `phase` is deliberately left untouched: on the handoff tick it
-       * still renders with the OLD (walk-cycle) value, exactly as the
-       * original's own "destination anim_base, stale cl" convention
-       * (states.js) predicts — `_crouch` pins it to 1 on its own first
-       * tick, CS:0x4B11/0x4B86.
-       * `UNKNOWN_crouch_from_stopped_phase`: reachable only via the gate fix
-       * just above (entering from the persisted stopped pose, not a live
-       * walk step) — "OLD (walk-cycle) value" no longer means a 0..7 walk
-       * frame, it means the locked stopped-pose sentinel (0x2d/0x39), one
-       * tick before `_crouch`'s own pin. Whether CS:0x598a/0x5bd2 truly runs
-       * with that stale sentinel still in CL on a stopped tick, or an
-       * untraced earlier write resets it first, is not established — no
-       * fresh disassembly of that ordering was done this pass. Left
-       * unmodelled rather than guessed: `emittableStates()` does not exercise
-       * this entry path, so no check asserts a sprite id for it either. */
+      /* CS:0x59e5-0x59f1 (walk-left) / CS:0x5c29-0x5c35 (walk-right) —
+       * crouch, facing the direction just walked. ⚠️ CORRECTED — an earlier
+       * revision of this fix, and an existing citation elsewhere in this
+       * project, claimed `phase` is "deliberately left untouched" at this
+       * transition, inheriting the OLD value. Fresh disassembly this pass
+       * shows that's wrong: BOTH sites do `XOR CL,CL` (CS:0x59ef / 0x5c33)
+       * immediately after writing `[0x377]`, unconditionally — CL is
+       * zeroed, not preserved, regardless of what it held on entry (a live
+       * walk-cycle phase 0..7, or the locked stopped-pose sentinel
+       * 0x2d/0x39 when entering from a stop). This matters concretely: the
+       * stopped-pose entry this session's gate fix newly makes reachable
+       * would otherwise render `spriteFor(18, 0x2d)=74` / `spriteFor(19,
+       * 0x39)=88` for one tick — both well outside this project's own
+       * established hero range of [0, HERO_DESCRIPTOR_MAX=57]. With CL
+       * correctly zeroed here, that tick renders `spriteFor(18,0)=29` /
+       * `spriteFor(19,0)=31` instead — in range, and `_crouch` pins phase
+       * to 1 on the very next tick (CS:0x4B11/0x4B86) either way, so this
+       * is a one-tick (~67ms) correction, not a new mechanic. */
       this.state = ST.CROUCH;
       this.stateIndex = this.facing < 0 ? S.CROUCH_L : S.CROUCH_R;
+      this.phase = 0;
       return;
     }
     if (input.up) {
