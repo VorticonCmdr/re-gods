@@ -18,6 +18,9 @@ import { scanZones, unpackTeleportDest, resolveExitDestination,
          passwordWorldForSlot, passwordToString, PASSWORD_LENGTH,
          PASSWORD_SLOTS } from '../game/zones.js';
 import { TitleMenu, PasswordEntry, MENU_OPTIONS } from '../game/title-menu.js';
+import { TallyScreen, timeBonus, healthBonus, moneyBonus, POOL_STEP,
+         WAIT_AFTER_SUMMARY_TICKS, WAIT_AFTER_COUNTDOWN_TICKS,
+         SFX_EVERY_N_STEPS } from '../game/tally.js';
 import { consumesKey } from '../game/trigger.js';
 import { PI1_SIZE, decodePI1, TILE_COUNT } from '../formats/pi1.js';
 import { decodeStatusPanel, PANEL_W, PANEL_H, PANEL_Y0 } from '../game/status-panel.js';
@@ -13810,6 +13813,133 @@ export async function checkMessages(fetchRaw) {
       blits2.length === 20 && blits2[0].x === 64
         && blits2[0].y === PANEL_Y0 + Y_LOCAL,
       `${blits2.length} @ ${blits2.length ? blits2[0].x : '-'}`);
+  }
+
+  return results;
+}
+
+/**
+ * game/tally.js — the inter-level "LEVEL X COMPLETED" bonus-tally screen and
+ * its password-reveal overlay, CS:0x6553/0x69d7. Driven tick-by-tick exactly
+ * as main.js's own Clock callback drives it (a real gameplay loop, not
+ * isolated formula calls) — see that module's own header for the full
+ * disassembly citation and the live DOSBox capture this reproduces:
+ * "LEVEL ONE COMPLETED" / "2 X 2000" / "24 X 80" / "BONUS 005920" for a
+ * lives=2, health=24, money=0 exit, then "LEVEL 2 PASSWORD" / a 3-letter
+ * code / "FIRE TO CONTINUE".
+ */
+export function checkTally() {
+  const { results, check } = makeChecker();
+
+  /* ── The three bonus formulas, CS:0x67b8 — each zero unless positive ──── */
+  {
+    check('time bonus is lives*2000', timeBonus(2) === 4000);
+    check('time bonus is 0 for 0 lives, not a negative/zero-crossing value',
+      timeBonus(0) === 0);
+    check('health bonus is health*80', healthBonus(24) === 1920);
+    check('health bonus is 0 for 0 health', healthBonus(0) === 0);
+    check('money bonus is floor(money/8)', moneyBonus(65) === 8);
+    check('money bonus is 0 for 0 money', moneyBonus(0) === 0);
+    check('the live-captured exit (lives=2, health=24, money=0) sums to '
+      + 'exactly 5920 — the DOSBox capture\'s own "BONUS 005920"',
+      timeBonus(2) + healthBonus(24) + moneyBonus(0) === 5920);
+  }
+
+  /* ── A full sequence, no password: summary -> countdown -> wait -> done ── */
+  {
+    const t = new TallyScreen({ title: 'LEVEL  ONE', lives: 2, health: 24, moneyTotal: 0, password: null });
+    check('starts in the summary phase, pool already summed (visible '
+      + 'immediately, matching the live capture — not built up over ticks)',
+      t.phase === 'summary' && t.pool === 5920);
+    check('no award on the very first step (still summarizing)',
+      t.step(false) === 0 && t.phase === 'summary');
+
+    for (let i = 1; i < WAIT_AFTER_SUMMARY_TICKS - 1; i++) t.step(false);
+    check(`still in 'summary' one tick before the ${WAIT_AFTER_SUMMARY_TICKS}-tick wait elapses`,
+      t.phase === 'summary');
+    t.step(false);   // the WAIT_AFTER_SUMMARY_TICKS-th step — the wait elapses on this call
+    check("moves to 'countdown' the instant the summary wait elapses",
+      t.phase === 'countdown');
+
+    let totalAwarded = 0, steps = 0, sfxFired = 0;
+    while (t.phase === 'countdown' && steps < 1000) {
+      const before = t.pool;
+      const award = t.step(false);
+      totalAwarded += award;
+      if (t.sfxPending) sfxFired++;
+      check('each countdown step decrements by at most POOL_STEP (90) — '
+        + 'CS:0x66fd-0x6798', before - t.pool <= POOL_STEP && before - t.pool > 0);
+      steps++;
+    }
+    check('the countdown terminates (does not run away)', steps < 1000);
+    check('the pool reaches EXACTLY 0, never negative — the original\'s own '
+      + '90/10/1 downgrade exists precisely so this lands on zero',
+      t.pool === 0);
+    check('every point removed from the pool is returned as an award — '
+      + 'nothing is dropped or invented', totalAwarded === 5920);
+    check('at least one sfx cue fired during the countdown (every 3rd step, '
+      + `SFX_EVERY_N_STEPS=${SFX_EVERY_N_STEPS})`, sfxFired > 0);
+    check("countdown -> 'wait' the instant the pool hits 0",
+      t.phase === 'wait');
+
+    for (let i = 0; i < WAIT_AFTER_COUNTDOWN_TICKS - 1; i++) {
+      check(`still in 'wait' before the ${WAIT_AFTER_COUNTDOWN_TICKS}-tick post-countdown pause elapses (tick ${i})`,
+        t.phase === 'wait');
+      check('a step during the post-countdown wait awards nothing further',
+        t.step(false) === 0);
+    }
+    check("still in 'wait' one tick before the pause elapses", t.phase === 'wait');
+    t.step(false);   // the WAIT_AFTER_COUNTDOWN_TICKS-th step in 'wait' — the pause elapses on this call
+    check("with no password to reveal, 'wait' resolves straight to 'done' "
+      + '— no password phase is ever entered', t.phase === 'done' && t.done);
+  }
+
+  /* ── The password-reveal phase — real, input-gated (CS:0x252c) ────────── */
+  {
+    const t = new TallyScreen({
+      title: 'LEVEL  ONE', lives: 0, health: 0, moneyTotal: 0,
+      password: { worldNumber: 2, code: 'PME' },
+    });
+    // Drive straight through summary+countdown+wait (pool is 0 throughout,
+    // so countdown is skipped entirely — see the empty-pool branch below).
+    check('a zero-bonus exit skips the countdown phase entirely (summary '
+      + 'goes straight to wait, matching CS:0x66fd never firing when the '
+      + 'pool is already 0)',
+      (() => { for (let i = 0; i < WAIT_AFTER_SUMMARY_TICKS; i++) t.step(false); return t.phase === 'wait'; })());
+    for (let i = 0; i < WAIT_AFTER_COUNTDOWN_TICKS; i++) t.step(false);
+    check("a pending password moves 'wait' to 'password', not 'done'",
+      t.phase === 'password' && !t.done);
+    check('not done merely by sitting in the password phase',
+      t.step(false) === 0 && t.phase === 'password' && !t.done);
+    check('a FIRE press (not merely held) finishes the sequence',
+      t.step(true) === 0 && t.phase === 'done' && t.done);
+
+    const t2 = new TallyScreen({
+      title: 'LEVEL  ONE', lives: 0, health: 0, moneyTotal: 0,
+      password: { worldNumber: 2, code: 'PME' },
+    });
+    /* Hold FIRE continuously, including the exact tick that transitions
+     * 'wait' -> 'password' — the real scenario this guards against (a
+     * player already pressing FIRE when the reveal appears). */
+    for (let i = 0; i < WAIT_AFTER_SUMMARY_TICKS + WAIT_AFTER_COUNTDOWN_TICKS; i++) t2.step(true);
+    check("holding FIRE across the transition into 'password' does NOT "
+      + 'finish it — CS:0x252c waits for a PRESS edge, not a held key',
+      t2.phase === 'password' && !t2.done);
+    check('releasing then re-pressing FIRE — a real press edge — finishes it',
+      (() => { t2.step(false); return t2.step(true) === 0 && t2.done; })());
+  }
+
+  /* ── draw() never throws with no renderer/glyph atlas, and picks the '
+   * right lines for the right phase — a smoke test, not a pixel check '
+   * (this module reuses PSMLFNT as a disclosed font substitution; see its '
+   * own header). ─────────────────────────────────────────────────────── */
+  {
+    const calls = [];
+    const stub = { blitSprite: (f, x, y) => calls.push({ x, y }) };
+    const t = new TallyScreen({ title: 'LEVEL  ONE', lives: 2, health: 24, moneyTotal: 0, password: null });
+    t.draw(stub, null, null);   // no glyphs, no digit frames -> must not throw
+    check('draw() with no glyph atlas and no digit frames draws nothing '
+      + 'and does not throw', calls.length === 0);
   }
 
   return results;

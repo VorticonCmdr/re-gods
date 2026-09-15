@@ -19,7 +19,7 @@ import { runAllChecks, checkDescriptorAnchors, checkHeroSprites,
          checkSelectorsAndObjects, checkSpawn, checkEntityB, checkEntityA, checkSpawnA,
          checkWeaponsProjectiles, checkTriggerActions,
          checkZones, checkPopup, checkLevers, checkSpikes,
-         checkMessages, checkLineBarriers, checkTitleMenu } from './verify/checks.js';
+         checkMessages, checkLineBarriers, checkTitleMenu, checkTally } from './verify/checks.js';
 import { EventRunner, parsePalfils, palfilsNameFor } from './game/events.js';
 import { LineBarriers, parseLineBarrierRecords } from './game/line-barriers.js';
 import { makeActionContext, makeGates, DOOR_TILES,
@@ -87,6 +87,7 @@ import { scanZones, unpackTeleportDest, resolveExitDestination,
 import { DeathBurst, findRespawnPosition, loseLife,
          gameOverPlaceholder } from './game/death.js';
 import { TitleMenu, PasswordEntry } from './game/title-menu.js';
+import { TallyScreen } from './game/tally.js';
 
 const LEVELS = ['1A','1B','2A','2B','3A','3B','4A','4B'];
 
@@ -374,6 +375,7 @@ async function main() {
     Promise.resolve(checkPopup()), Promise.resolve(checkLevers()),
     Promise.resolve(checkSpikes()), checkMessages(fetchRaw),
     checkLineBarriers(fetchRaw), Promise.resolve(checkTitleMenu()),
+    Promise.resolve(checkTally()),
     ]) results.push(...await g);
     renderChecks(results);
     const mh = $('messages');
@@ -734,6 +736,12 @@ async function main() {
    * PASSWORD" grid (game/title-menu.js's `PasswordEntry`, dispatched from
    * `handleTitleKey` below). */
   let passwordSlots = new Array(PASSWORD_SLOTS).fill(null);
+  /* The inter-level bonus-tally + password-reveal sequence, game/tally.js.
+   * Non-null while active — see the tick/render callbacks below for how it
+   * gates the normal per-tick simulation, and `finishTallyScreen` for the
+   * deferred exit effects (world advance, key clear, `switchLevel`) the
+   * ZONE_EXIT branch used to run synchronously on the zone hit itself. */
+  let tallyScreen = null;
   /* CS:0x7F0D — the world-3 DS:0xce64 creature and its "spit" sub-projectile
    * (game/ce64.js). Unlike nest.js/statue.js this module calls combat.js
    * directly, so main.js just hands it the real health/grid/decodeTag rather
@@ -1080,6 +1088,19 @@ async function main() {
 
   const clock = new Clock(
     () => {
+      /* The inter-level tally/password sequence (game/tally.js) suspends
+       * the normal per-tick simulation entirely, matching the original's
+       * own state-machine-frozen tally screen (CS:0x6553's caller never
+       * reaches FUN_1000_4993 while it runs) — see tally.js's own header.
+       * `input.fire` is read directly rather than threaded through a
+       * dedicated handler since the keydown listener below already sets it
+       * while uiState stays 'game' throughout this sequence. */
+      if (tallyScreen) {
+        const award = tallyScreen.step(input.fire);
+        if (award) purse.add(award);
+        if (tallyScreen.done) tallyScreen.onDone();
+        return;
+      }
       /* The title menu / password screen freeze the whole simulation, same
        * as the original's own menu loop never runs FUN_1000_4993 (the
        * per-frame player update) while it has control — see the 'uiState'
@@ -1370,67 +1391,87 @@ async function main() {
         groupsA = [];
         enemiesA = [];
         $('event').textContent = `teleport zone -> (${dest.x}, ${dest.y})`;
-      } else if (zoneHit && zoneHit.kind === ZONE_EXIT && !transitioning) {
+      } else if (zoneHit && zoneHit.kind === ZONE_EXIT && !transitioning && !tallyScreen) {
         const dest = resolveExitDestination(zoneHit.arg);
         if (!dest) {
           $('event').textContent =
             `level exit — arg ${zoneHit.arg} out of range, inert (CS:0x0FC8)`;
         } else {
-          /* CS:0x6553's own +0x1e bit dispatch (CS:0x694d) — see
-           * game/zones.js's header for the full closure. `completedWorld`
-           * is captured before advanceWorld() runs below, since password
-           * generation and the key clear are both keyed to the world being
-           * LEFT, not the one being entered. */
+          /* CS:0x0FAC-0x0FDC in the original only sets DS:0x178/DS:0x36a —
+           * the real dispatch (world advance, key clear, password reveal)
+           * runs from the main loop's own post-frame check (CS:0x02F0, `call
+           * 0x6553`), AFTER the tally screen's own bonus countdown, not on
+           * the zone hit itself. `game/tally.js`'s own header covers the
+           * full citation; everything below that used to run synchronously
+           * here (`clearNonPotionInventory`, the pool reset, `advanceWorld`+
+           * `switchLevel`) is now deferred into `finishTallyScreen`, called
+           * once `tallyScreen.done` goes true (see the tick callback). */
           const fx2 = exitEffects(dest.bits);
           const completedWorld = levelInfo.world;
-          if (fx2.clearKeys) clearNonPotionInventory(inventory, level.cats);
-          if (fx2.poolReset) {
-            /* FUN_1000_6992, LEVEL THREE only (see the table in zones.js's
-             * header — bit 9 is set on no other record). The original
-             * re-runs a chunk of FUN_1000_8c34's own level-init sequence:
-             * destructible blocks, System-A's entity-group runtime, and
-             * several small hazard-pool clears. The destructible-block
-             * restore/clear pair in THAT sequence is itself gated
-             * `world != 3`, so at the world this handler fires from (3) it
-             * is already a no-op in the ORIGINAL — `blocks` is correctly
-             * left untouched here, not an omission. What genuinely resets:
-             * System-A's entity-group runtime (the same three-structure
-             * mirror of FUN_1000_de6f the teleport-zone branch above
-             * already uses) and the line-hazard pool (FUN_1000_dbfb,
-             * game/line-hazard.js). Two further sub-resets in the
-             * original's own sequence — a "spawn flash" pool at DS:0xac90
-             * and the pickup-sparkle array at DS:0xb578 — have no port-side
-             * module at all yet; the world-2 nest pool (DS:0xcfcc) is
-             * world-2-specific and already empty by world 3 in ordinary
-             * play. None of those three are reproduced here. */
-            slotsA = new GroupSlots();
-            groupsA = [];
-            enemiesA = [];
-            lineHazards = new LineHazards();
-          }
-          let passwordNote = '';
+          /* FUN_1000_69d7 — generate-if-empty, keyed to the world being
+           * LEFT. Generated here rather than at tally-screen completion (a
+           * disclosed simplification: this port's own `rng` draws no other
+           * randomness during the tally sequence, so the exact tick the
+           * draw happens on doesn't change the result) but only SHOWN if
+           * this call is what freshly filled the slot — CS:0x69e3's own
+           * `cmp byte[SI],0/jnz` bails silently on a slot that already had
+           * one, which this mirrors via `wasEmpty`. */
+          let passwordReveal = null;
           if (fx2.genPassword) {
-            /* FUN_1000_69d7 / CS:0x6A6B — generate-if-empty, for the world
-             * being LEFT (so completing PLEV1B fills the slot that unlocks
-             * world 2). See zones.js's own header for why the divisor is
-             * kept and why there is no "ENTER A PASSWORD" screen here to
-             * type this back into. */
             const passwordSlot = passwordSlotForWorld(completedWorld);
-            if (passwordSlot >= 0 && passwordSlot < passwordSlots.length &&
-                !passwordSlots[passwordSlot]) {
-              passwordSlots[passwordSlot] = generatePassword(rng);
+            const wasEmpty = passwordSlot >= 0 && passwordSlot < passwordSlots.length &&
+              !passwordSlots[passwordSlot];
+            if (wasEmpty) passwordSlots[passwordSlot] = generatePassword(rng);
+            if (wasEmpty) {
+              passwordReveal = {
+                worldNumber: completedWorld + 1,             // CS:0x69f7 `inc cl` — see tally.js header
+                code: passwordToString(passwordSlots[passwordSlot]),
+              };
             }
-            const pw = passwordSlots[passwordSlot];
-            if (pw) passwordNote =
-              ` — password for world ${completedWorld + 1}: ${passwordToString(pw)}`;
           }
-          $('event').textContent = `level exit -> "${dest.text.trim()}"${passwordNote}`;
-          if (fx2.advance) {
-            /* FUN_1000_6b00 — the ENTIRE advance rule: +1, wrapped 5->1,
-             * sublevel FORCED to A. Never a jump to a specific world. */
-            const next = advanceWorld(completedWorld);
-            switchLevel(levelKeyFor(next.world, next.sublevel));  // fire-and-forget
-          }
+          tallyScreen = new TallyScreen({
+            title: dest.text.trim().replace(/\s+/g, ' '),
+            lives: fx.lives,
+            health: health.target,          // DS:0x192, not the chasing bar (DS:0x19a) — see combat.js's Health
+            moneyTotal: purse.total,
+            password: passwordReveal,
+          });
+          const finishTallyScreen = () => {
+            if (fx2.clearKeys) clearNonPotionInventory(inventory, level.cats);
+            if (fx2.poolReset) {
+              /* FUN_1000_6992, LEVEL THREE only (see the table in zones.js's
+               * header — bit 9 is set on no other record). The original
+               * re-runs a chunk of FUN_1000_8c34's own level-init sequence:
+               * destructible blocks, System-A's entity-group runtime, and
+               * several small hazard-pool clears. The destructible-block
+               * restore/clear pair in THAT sequence is itself gated
+               * `world != 3`, so at the world this handler fires from (3) it
+               * is already a no-op in the ORIGINAL — `blocks` is correctly
+               * left untouched here, not an omission. What genuinely resets:
+               * System-A's entity-group runtime (the same three-structure
+               * mirror of FUN_1000_de6f the teleport-zone branch above
+               * already uses) and the line-hazard pool (FUN_1000_dbfb,
+               * game/line-hazard.js). Two further sub-resets in the
+               * original's own sequence — a "spawn flash" pool at DS:0xac90
+               * and the pickup-sparkle array at DS:0xb578 — have no port-side
+               * module at all yet; the world-2 nest pool (DS:0xcfcc) is
+               * world-2-specific and already empty by world 3 in ordinary
+               * play. None of those three are reproduced here. */
+              slotsA = new GroupSlots();
+              groupsA = [];
+              enemiesA = [];
+              lineHazards = new LineHazards();
+            }
+            $('event').textContent = `level exit -> "${dest.text.trim()}"`;
+            if (fx2.advance) {
+              /* FUN_1000_6b00 — the ENTIRE advance rule: +1, wrapped 5->1,
+               * sublevel FORCED to A. Never a jump to a specific world. */
+              const next = advanceWorld(completedWorld);
+              switchLevel(levelKeyFor(next.world, next.sublevel));  // fire-and-forget
+            }
+            tallyScreen = null;
+          };
+          tallyScreen.onDone = finishTallyScreen;   // read by the tick callback below
         }
       }
 
@@ -2222,6 +2263,13 @@ async function main() {
        * same panel page every overlay above writes to, after them. */
       drawMessage(renderer, hero && hero.glyphs, messages, STATUS_PANEL_Y0,
                   { loadStage: 0, shopActive: false, world: level.world });
+
+      /* The tally/password overlay draws LAST, on top of the fully-composed
+       * frame — matching the original, which draws it over whatever the
+       * still-running game world already left in VRAM (see tally.js's own
+       * header: both live captures show the hero and level tiles visible
+       * underneath the text). */
+      if (tallyScreen) tallyScreen.draw(renderer, hero && hero.glyphs, digitFrames);
 
       renderer.present(level.palette);
 

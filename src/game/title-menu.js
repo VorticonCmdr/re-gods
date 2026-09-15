@@ -96,7 +96,7 @@ export function drawText(renderer, glyphs, text, x, y) {
 }
 
 /** Draw `text` horizontally centred on the 320px screen at row `y`. */
-function drawCentered(renderer, glyphs, text, y) {
+export function drawCentered(renderer, glyphs, text, y) {
   const x = ((SCREEN_W - textWidth(text)) / 2) | 0;
   drawText(renderer, glyphs, text, x, y);
 }

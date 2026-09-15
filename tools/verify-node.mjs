@@ -358,6 +358,14 @@ for (const r of checkTitleMenu()) {
   console.log(line(r));
 }
 
+console.log('\n  the inter-level tally/bonus screen and password reveal '
+  + '(CS:0x6553/0x69d7):');
+const { checkTally } = await import('../src/verify/checks.js');
+for (const r of checkTally()) {
+  if (!r.pass && !r.note) bad++;
+  console.log(line(r));
+}
+
 console.log(`\n${asserts} assertions + ${notes} notes = ${asserts + notes} rows`);
 console.log(`${bad ? `FAILURES: ${bad}` : 'ALL CHECKS PASS'}`);
 process.exit(bad ? 1 : 0);
