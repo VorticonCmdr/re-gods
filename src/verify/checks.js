@@ -8051,6 +8051,67 @@ export async function checkWeaponsProjectiles(fetchRaw) {
           far.state === ST.CLIMB);
       }
 
+      {
+        /* THE REPORTED BUG: "walk, stop, press DOWN" — the ordinary way a
+         * player ducks — used to gate on live `moving` (input.left ||
+         * input.right), which is false the instant the walk key is
+         * released. CS:0x598a/0x5bd2 belong to state 0/1's OWN handler,
+         * which keeps running every tick the PERSISTED state is 0/1 —
+         * including the "stopped pose" (stateIndex left at WALK_L/WALK_R,
+         * phase locked to the facing-specific sentinel), so DOWN alone in
+         * that pose must reach the same crouch check the fire test three
+         * lines up already gates on `this.stateIndex`, not `moving`. */
+        const flat = { planeA: new Uint8Array(N), planeB, widthPx: 4096, heightPx: 1024 };
+
+        const right = new Player(2 * 32, 9 * 16);
+        for (let i = 0; i < 4; i++) right.tick(flat, I());
+        for (let i = 0; i < 4; i++) right.tick(flat, I({ right: true }));
+        right.tick(flat, I());   // release, no UP held -> locked stopped pose
+        check('walk right, release (no UP) -> stopped pose keeps stateIndex WALK_R',
+          right.state === ST.GROUND && right.stateIndex === PS.WALK_R);
+        right.tick(flat, I({ down: true }));   // DOWN ALONE, no direction held
+        check('...and DOWN ALONE from that stopped pose now crouches (CS:0x598a)',
+          right.state === ST.CROUCH && right.stateIndex === PS.CROUCH_R);
+
+        const left = new Player(2 * 32, 9 * 16);
+        for (let i = 0; i < 4; i++) left.tick(flat, I());
+        for (let i = 0; i < 4; i++) left.tick(flat, I({ left: true }));
+        left.tick(flat, I());
+        left.tick(flat, I({ down: true }));
+        check('mirror: stopped-pose DOWN alone crouches facing left too (CS:0x5bd2)',
+          left.state === ST.CROUCH && left.stateIndex === PS.CROUCH_L);
+
+        /* Idle+DOWN must still be refused — state 26 (true idle, reached only
+         * when UP is held at the exact release instant) has NO down check at
+         * all in the original; only the persisted WALK_L/WALK_R states do. */
+        const idle = new Player(2 * 32, 9 * 16);
+        for (let i = 0; i < 4; i++) idle.tick(flat, I());
+        for (let i = 0; i < 4; i++) idle.tick(flat, I({ right: true }));
+        idle.tick(flat, I({ up: true }));   // UP held at release -> true idle
+        check('sanity: UP held at release reaches true idle (state 26)',
+          idle.stateIndex === PS.IDLE);
+        idle.tick(flat, I({ down: true }));
+        check('...and DOWN alone from TRUE idle still does not crouch (CS:0x59e5/0x5c29 unreachable)',
+          idle.state !== ST.CROUCH && idle.stateIndex === PS.IDLE);
+
+        /* CS:0x59a4-0x59a9 — the col+1 (approach-from-the-left) ladder branch
+         * needs a direction STILL held alongside DOWN; only col-0 (the
+         * hero's own column) is unconditional. This is only observable now
+         * that the stopped pose can reach the down-check with no direction
+         * held at all — force that exact position (col+1 match, no input)
+         * and confirm it crouches instead of mis-descending the ladder. */
+        const ladderMap2 = { planeA: new Uint8Array(N), planeB: new Uint8Array(N), widthPx: 4096, heightPx: 1024 };
+        for (let r = 4; r < 16; r++) ladderMap2.planeB[r * MAP_COLS + 3] = CELL_CLIMBABLE;
+        /* x = 80: sub = 80 & 0x1f = 0x10 (>= 0x0c, the col+1 branch's own
+         * gate — see climbableThreeBelowCol); (80 & 0xFFE0) >> 5 = 2, so
+         * `si+1` lands on column 3, the one just marked climbable above. */
+        const stoppedNearLadder = new Player(80, 9 * 16);
+        stoppedNearLadder.state = ST.GROUND; stoppedNearLadder.stateIndex = PS.WALK_R; stoppedNearLadder.facing = +1;
+        stoppedNearLadder.tick(ladderMap2, I({ down: true }), null, 1, null);
+        check('col+1 ladder descend needs a direction ALSO held — DOWN alone crouches instead',
+          stoppedNearLadder.state === ST.CROUCH);
+      }
+
     }
   }
 

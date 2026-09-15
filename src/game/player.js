@@ -823,31 +823,42 @@ export class Player {
      *     for a climbable cell; climb if found.
      *   - UP alone with no climbable cell -> nothing happens this tick
      *     (CS:0x5a64 / CS:0x4a6a `jmp 0x5e9b`) — NOT a jump. */
-    if (moving && input.down) {
+    /* ⚠️ FIXED — this gate used to be bare `moving`, which is LIVE input
+     * (input.left || input.right). CS:0x598a (walk-left) / CS:0x5bd2
+     * (walk-right) belong to state 0/1's OWN handler, which keeps running
+     * every tick the PERSISTED state is 0/1 — including the "stopped pose"
+     * above, where the walk key has been released but stateIndex is
+     * deliberately left at WALK_L/WALK_R (see that block's own comment).
+     * Gating on live `moving` alone made "walk, stop, press DOWN" — the
+     * ordinary way a player ducks — do nothing, because by the time DOWN is
+     * pressed neither input.left nor input.right is held. Mirrors the fire
+     * test nine lines up, which already uses this same persisted-state proxy.
+     * `get_xrefs_to` on both crouch-entry write sites (CS:0x59e5, 0x5c29)
+     * returns exactly three conditional jumps each, all inside this same
+     * walk-state handler pair, and an exhaustive scan of every
+     * `MOV [0x377],...` in the binary found no register-sourced (computed)
+     * writer anywhere — every one is a literal immediate. Idle+DOWN (true
+     * idle, state 26) still cannot reach crouch in the original at all —
+     * only WALK_L/WALK_R's own persisted handler has this check. */
+    const inWalkState = moving
+      || this.stateIndex === S.WALK_L || this.stateIndex === S.WALK_R;
+    if (inWalkState && input.down) {
       /* CS:0x598a (walk-left) / CS:0x5bd2 (walk-right) — `call 0x5b38 / jc`
        * has PRIORITY over the ladder-descend check below: an object sitting
        * near the crouch hot point sends the hero straight to crouch without
-       * the map ever being consulted. `moving` really is the whole gate —
-       * `get_xrefs_to` on both crouch-entry write sites (CS:0x59e5, 0x5c29)
-       * returns exactly three conditional jumps each, all inside this same
-       * walk-state handler pair, and an exhaustive scan of every
-       * `MOV [0x377],...` in the binary found no register-sourced (computed)
-       * writer anywhere — every one is a literal immediate. Idle+DOWN cannot
-       * reach crouch in the original at all. */
+       * the map ever being consulted. */
       const nearObject = pickup ? objectNearHotPoint(pickup.objects, this) : false;
-      const descendCol = nearObject ? null : climbableThreeBelowCol(map, this.x, this.y);
-      /* ⚠️ NOT PORTED, and deliberately: CS:0x59a4-0x59a9 also sends the col+1
-       * (approach-from-the-left) ladder branch to crouch when a horizontal
-       * direction is ALSO held alongside DOWN. In the original that is a real
-       * extra condition, because state 0/1 is PERSISTED — the hero can be
-       * "in walk-left" with LEFT already released. In this port `moving`
-       * (used above as the walk-state proxy) is computed from LIVE input each
-       * tick, so it is impossible to reach this code at all with neither
-       * `input.left` nor `input.right` true — porting that test verbatim
-       * would make the col+1 approach permanently unreachable, silently
-       * turning a rare edge case in the original into a total regression
-       * here. Left as the col-0/col-1 priority from `climbableThreeBelowCol`
-       * alone, which is the part that does not depend on persisted state. */
+      let descendCol = nearObject ? null : climbableThreeBelowCol(map, this.x, this.y);
+      /* CS:0x59a4-0x59a9 — NOW PORTED (was disclosed-cut before the gate fix
+       * above made it reachable): the col+1 (approach-from-the-left) ladder
+       * branch additionally requires a horizontal direction STILL held
+       * alongside DOWN; only the col-0 (the hero's own column) match is
+       * unconditional. Previously the only way to reach this code at all was
+       * `moving === true`, which already implied a direction held, so the
+       * distinction was unobservable. It is live now: the stopped pose can
+       * reach here with no direction held, and without this the port would
+       * mis-descend a ladder from col+1 where the original crouches instead. */
+      if (descendCol === 1 && !moving) descendCol = null;
       if (descendCol !== null) {
         /* CS:0x59ab (walk-left) / CS:0x5bf3 (walk-right) — descend onto a
          * ladder three rows (48 px) below. The port's ladder is simplified
@@ -867,7 +878,17 @@ export class Player {
        * still renders with the OLD (walk-cycle) value, exactly as the
        * original's own "destination anim_base, stale cl" convention
        * (states.js) predicts — `_crouch` pins it to 1 on its own first
-       * tick, CS:0x4B11/0x4B86. */
+       * tick, CS:0x4B11/0x4B86.
+       * `UNKNOWN_crouch_from_stopped_phase`: reachable only via the gate fix
+       * just above (entering from the persisted stopped pose, not a live
+       * walk step) — "OLD (walk-cycle) value" no longer means a 0..7 walk
+       * frame, it means the locked stopped-pose sentinel (0x2d/0x39), one
+       * tick before `_crouch`'s own pin. Whether CS:0x598a/0x5bd2 truly runs
+       * with that stale sentinel still in CL on a stopped tick, or an
+       * untraced earlier write resets it first, is not established — no
+       * fresh disassembly of that ordering was done this pass. Left
+       * unmodelled rather than guessed: `emittableStates()` does not exercise
+       * this entry path, so no check asserts a sprite id for it either. */
       this.state = ST.CROUCH;
       this.stateIndex = this.facing < 0 ? S.CROUCH_L : S.CROUCH_R;
       return;
