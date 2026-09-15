@@ -277,11 +277,14 @@ async function loadSprites(world) {
            palette: images.PALWAYS1.palette, total: map.length };
 }
 
-/* The status panel. CS:0x38a's own latch loads it exactly once, the first
- * time the real per-tick game loop runs (game/status-panel.js) — not per
- * level and not per world, so this port loads it once at startup too. */
-async function loadStatusPanel() {
-  const raw = dclDecompress(await fetchRaw('game/PSTAT3.PI1')).data;
+/* The status panel. CS:0x38a's own latch loads PSTAT3 exactly once, the
+ * first time the real per-tick game loop runs (game/status-panel.js) — not
+ * per level and not per world, so this port loads it once at startup too.
+ * `name` defaults to PSTAT3 (gameplay); the title screen below loads
+ * PSTATUS instead — the file CS:0x2a01 actually shows at boot, before that
+ * one-time latch ever fires (see status-panel.js's own header). */
+async function loadStatusPanel(name = 'PSTAT3') {
+  const raw = dclDecompress(await fetchRaw(`game/${name}.PI1`)).data;
   return decodeStatusPanel(raw);
 }
 
@@ -401,6 +404,17 @@ async function main() {
   try {
     statusPanel = await loadStatusPanel();
   } catch (e) { console.error('status panel failed to load', e); }
+
+  /* PSTATUS.PI1 — the file CS:0x2a01 actually shows behind rows 160-199
+   * during the title screen, before the gameplay loop's own one-time latch
+   * (CS:0x38a) ever fires and permanently replaces it with PSTAT3 above.
+   * status-panel.js's own header names this exact gap
+   * (`this port has no boot-time/title/menu/hiscore screen`) — now closed
+   * by the title screen below. */
+  let titleStatusPanel = null;
+  try {
+    titleStatusPanel = await loadStatusPanel('PSTATUS');
+  } catch (e) { console.error('title status panel failed to load', e); }
 
   let spawn = levelSpawn(level.world);
   let player = new Player(spawn.x, spawn.y);
@@ -1829,8 +1843,8 @@ async function main() {
        * own header for the #169 anchor. */
       if (uiState !== 'game') {
         const glyphs = hero && hero.glyphs, logo = hero && hero.frames[169];
-        if (uiState === 'menu') titleMenu.draw(renderer, glyphs, logo);
-        else if (uiState === 'password') passwordEntry.draw(renderer, glyphs);
+        if (uiState === 'menu') titleMenu.draw(renderer, glyphs, logo, titleStatusPanel);
+        else if (uiState === 'password') passwordEntry.draw(renderer, glyphs, titleStatusPanel);
         if (uiState === 'exit') renderer.presentBlack();   // QUIT's stand-in — see Renderer's own header
         else renderer.present(level.palette);
         return;

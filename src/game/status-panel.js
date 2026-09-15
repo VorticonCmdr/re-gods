@@ -114,12 +114,13 @@
  *   panel (index 15, pure black, in both files) — a plausible future
  *   anchor, not yet wired to anything.
  *
- *   PSTATUS_PATH: this port has no boot-time/title/menu/hiscore screen — it
- *   starts directly in gameplay — so PSTATUS.PI1's own boot-time appearance
- *   is never actually reachable here. It is still copied and decodable
- *   (`decodeStatusPanel`) so the finding is not lost, but `main.js` only
- *   ever loads and draws PSTAT3, matching what a player of the original
- *   sees for the entire time this port's own gameplay loop is what's shown.
+ *   PSTATUS_PATH: `main.js` now has a title screen (game/title-menu.js), so
+ *   PSTATUS.PI1's own boot-time appearance IS reachable here — loaded once
+ *   via `loadStatusPanel('PSTATUS')` and drawn behind the title menu and
+ *   password grid, exactly the window CS:0x38a's own latch bounds it to in
+ *   the original. `main.js` still loads and draws PSTAT3 for gameplay
+ *   proper, matching what a player sees from the moment "BEGIN QUEST" (or
+ *   a correct password) actually starts a level.
  */
 
 import { decodePI1 } from '../formats/pi1.js';

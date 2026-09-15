@@ -44,10 +44,26 @@
  *   message-line.md's own byte count (130 records, "91 cells in 0x20..0x7A")
  *   already implies that whole printable range is populated real artwork,
  *   just not individually catalogued the way the "notable slots" are.
+ *
+ *   THE BACKDROP is [PROVEN], not this module's own invention:
+ *   game/status-panel.js's own header establishes that `PSTATUS.PI1` loads
+ *   once at `GAME.EXE` boot (`CS:0x2a01`) and is visible behind rows
+ *   160-199 for exactly this window — "title screen, hiscores, 'ENTER A
+ *   PASSWORD'" — until the gameplay loop's one-time latch (`CS:0x38a`)
+ *   permanently swaps it for `PSTAT3`. main.js loads it once (as
+ *   `titleStatusPanel`) and passes it into every `draw()` below, which is
+ *   why every layout here keeps its own content above row `PANEL_Y0` (160)
+ *   — that band is the proven ornate-border backdrop, not free canvas.
+ *   Rows 0-159 have no established background image of their own — a
+ *   GAME.EXE-owned asset, `PBACKSCR.PI1`, is a plausible but UNCONFIRMED
+ *   candidate (only its palette is proven to feed a generic fade helper,
+ *   not that its bitmap is ever blitted anywhere), so it is deliberately
+ *   not drawn here rather than guessed.
  */
 
 import { SCREEN_W } from '../formats/pi1.js';
 import { PASSWORD_LENGTH } from './zones.js';
+import { PANEL_Y0 } from './status-panel.js';
 
 export const ADVANCE = 0x0a;    // 10 — the same per-glyph step message.js uses
 export const DIAMOND = '\x11';  // CS:0x4443's own separator glyph, reused as a cursor
@@ -94,8 +110,9 @@ export class TitleMenu {
     return null;
   }
 
-  draw(renderer, glyphs, logo) {
+  draw(renderer, glyphs, logo, statusPanel) {
     renderer.clear(0);
+    if (statusPanel) renderer.blitStatusPanel(statusPanel, PANEL_Y0);   // rows 160-199, [PROVEN] — see the header
     let y = 8;
     if (logo) {
       renderer.blitSprite(logo, ((SCREEN_W - logo.w) / 2) | 0, y);
@@ -107,7 +124,7 @@ export class TitleMenu {
       drawCentered(renderer, glyphs, marker + MENU_OPTIONS[i], y);
       y += 20;
     }
-    drawCentered(renderer, glyphs, 'ARROWS SELECT  SPACE CONFIRM', 170);
+    drawCentered(renderer, glyphs, 'ARROWS SELECT  SPACE CONFIRM', 140);
   }
 }
 
@@ -124,7 +141,9 @@ const GRID_CELLS = [
   'V', 'W', 'X', 'Y', 'Z', '<', '=',
 ];
 const CELL_DEL = '<', CELL_OK = '=';
-const GRID_X0 = 34, GRID_Y0 = 60, GRID_COL_W = 36, GRID_ROW_H = 20;
+/* Rows kept tight (16px pitch, vs. the menu's own 20px) so all 4 grid rows
+ * plus 3 footer lines fit above PANEL_Y0 (160) — see the header. */
+const GRID_X0 = 34, GRID_Y0 = 54, GRID_COL_W = 36, GRID_ROW_H = 16;
 
 /**
  * CS:0x2e2f/0x2e6c-0x2ea8 — the letter-grid password entry. `onKeyDown`
@@ -161,8 +180,9 @@ export class PasswordEntry {
     return null;
   }
 
-  draw(renderer, glyphs) {
+  draw(renderer, glyphs, statusPanel) {
     renderer.clear(0);
+    if (statusPanel) renderer.blitStatusPanel(statusPanel, PANEL_Y0);   // rows 160-199, [PROVEN] — see the header
     /* `"ENTER A PASSWORD"`, 1ffd:eb96 (CS:0x2e2f's own message pointer —
      * see the header and zones.js's own citation of this exact string). */
     drawCentered(renderer, glyphs, 'ENTER A PASSWORD', 16);
@@ -181,8 +201,8 @@ export class PasswordEntry {
       }
     }
 
-    drawCentered(renderer, glyphs, '<  DELETE     =  CONFIRM', 148);
-    drawCentered(renderer, glyphs, 'ARROWS MOVE  SPACE SELECT', 164);
-    drawCentered(renderer, glyphs, 'ESC BACK TO MENU', 180);
+    drawCentered(renderer, glyphs, '<  DELETE     =  CONFIRM', 122);
+    drawCentered(renderer, glyphs, 'ARROWS MOVE  SPACE SELECT', 136);
+    drawCentered(renderer, glyphs, 'ESC BACK TO MENU', 150);
   }
 }
