@@ -156,6 +156,41 @@ going up (`CS:0x5663`, reached only when the input byte equals exactly `0x02`).
 sheet; `npm run frame` composites a full game frame. Both write a PPM, no browser
 needed — the point is that the mapping can be *looked at*, not only asserted.
 
+**Two hero state-machine gaps found and closed in the same session.** Crouch
+(states 18/19) was fully implemented but unreachable the ordinary way: the entry
+gate checked LIVE input (`input.left || input.right`) instead of the PERSISTED
+walk state, so "walk, stop, press DOWN" — normal play — did nothing, because by
+the time DOWN lands neither direction key is still held. Fixed to gate on the same
+persisted-state proxy the adjacent fire test already used; this also made
+`CS:0x59a4-0x59a9`'s col+1 ladder-descend condition (needs a direction ALSO held)
+observable for the first time, so it's now ported instead of a disclosed cut.
+Separately, the **turn animation (states 2/3)** didn't exist at all — reversing
+direction mid-walk snapped instantly from `WALK_L` to `WALK_R` instead of the
+original's brief stationary pivot. Fresh disassembly of both handlers
+(`CS:0x5dbb`-`0x5ddb`, `CS:0x5dde`-`0x5dfb`) resolved a standing conflict between
+two prior notes on this project — one had the input-bit reversal test, the other
+(tagged `[WF]`) had the 3-tick `cl` counter; both were partial reads of the same
+handler. Now ported as `Player._turn()`. Fourteen new `checks.js` assertions
+cover both.
+
+**What's still open in the state machine**, ranked by how likely a player is to
+notice: **states 16/17** (one-tick "land" poses) are a disclosed simplification —
+both `_jump`'s early-land and `_fall`'s landing go straight to `GROUND`/`IDLE`
+rather than inventing a timed pose neither has verified frame-accurately; **mid-air
+ladder entry** (holding UP/DOWN while airborne, tile-aligned, over a climbable
+cell drops into climb state 13/14 with `Y &= 0xfff8`) is decoded but not wired;
+**`UNKNOWN_ladder_mount_free_tick`** (every ladder mount seeds a high phase that
+performs one automatic `CLIMB_STEP`-sized Y move before real input is read) needs
+its own verification against this port's tick/tock architecture before landing a
+fix; **state 10** ("fall, ladder family") has exactly one entrant (`CS:0x56af`,
+gated on a cell-type-2 test three rows below, reached from the climb handlers'
+own code range) — decoded this session but not yet wired; **state 15** ("ladder
+drop check") has **zero** entrants anywhere in the binary (an exhaustive
+`MOV [0x377],0xF` search found none) — narrowed, not fully closed, since a
+register-sourced writer wasn't separately ruled out for this one state, but the
+likely read is that it's dead code, matching this project's existing finding that
+no computed writer to `[0x377]` exists anywhere.
+
 ## Enemies
 
 Placed by the real chain, not by hand: a plane-B cell dispatches selector 4 →
