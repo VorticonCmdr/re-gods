@@ -174,6 +174,7 @@ export const ST = { GROUND: 'ground', JUMP: 'jump', FALL: 'fall', CLIMB: 'climb'
 /* Original state indices this port emits. See states.js for the proofs. */
 export const S = {
   WALK_L: 0, WALK_R: 1,
+  TURN_LR: 2, TURN_RL: 3,   // turn left->right / right->left — CS:0x5dbb/0x5dde
   JUMP_L: 8, JUMP_R: 9,
   FALL_L: 11, FALL_R: 12,
   CLIMB: 14,
@@ -286,6 +287,15 @@ export function emittableStates() {
     [I({ left: true }), 4],
     [I({ left: true, down: true }), 3],
     [I({ left: true }), 3],
+  ]);
+
+  /* The turn animation, states 2/3: walk one way, reverse, and complete
+   * both full turns (each exits into the opposite WALK_* automatically). */
+  run(new Player(10 * 32, 9 * 16), [
+    [I(), 4],
+    [I({ left: true }), 4],
+    [I({ right: true }), 5],   // 3 turn ticks + settle into WALK_R
+    [I({ left: true }), 5],    // reverse back: 3 turn ticks + settle into WALK_L
   ]);
 
   return { pairs: [...seen.values()], map };
@@ -724,7 +734,68 @@ export class Player {
     return true;
   }
 
+  /**
+   * CS:0x5dbb (state 2, turn left->right, base 8) / CS:0x5dde (state 3,
+   * turn right->left, base 8) — fresh instruction-by-instruction
+   * disassembly of both handler bodies:
+   *
+   *   state 2 (CS:0x5dbb-0x5ddb):
+   *     5dbb  TEST [0x382],0x4 (LEFT) / JZ 5dca
+   *     5dc2    MOV [0x377],3            ; LEFT held -> reverse into state 3
+   *     5dca  INC CL / CMP CL,3 / JGE 5dd4
+   *     5dd1    JMP 5e9b                 ; cl<3 -> stay, render w/ incremented cl
+   *     5dd4    MOV CL,6 / MOV [0x377],1 / JMP 5e9b   ; cl>=3 -> exit to WALK_R
+   *
+   *   state 3 (CS:0x5dde-0x5dfb) is the byte-identical mirror: TEST RIGHT
+   *   (0x8) first, else `DEC CL / JS` (exits on the SIGN flag, not a CMP)
+   *   to WALK_L with CL:=6.
+   *
+   * Entry, also fresh: state 0 -> 2 at CS:0x5979 (CL:=0, an XOR); state
+   * 1 -> 3 at CS:0x5bc1 (CL:=2 — asymmetric with 0->2's own entry). Hand-
+   * computed render sequences from these exact bytes match the previously
+   * `[WF]`-tagged table in `Gods/docs/player-state-machine.md`, now
+   * independently confirmed: 0->2 renders sprites 9,10,17; 1->3 renders
+   * 9,8,6. No X step, no fire/jump/crouch test anywhere in either body —
+   * the turn is a stationary pivot, committed for its 2-3 ticks.
+   *
+   * NOT MODELLED: the LEFT/RIGHT-held branch above (`5dc2` / its state-3
+   * mirror) cancels an in-progress turn back into the OTHER turn state.
+   * This port lets a turn run to completion regardless of input during its
+   * ~200ms window (2-3 ticks at 15Hz) — a disclosed simplification, not a
+   * guess at the byte-level fallthrough into the shared counter tail,
+   * which was not resolved with full confidence this pass.
+   */
+  _turn() {
+    if (this.stateIndex === S.TURN_LR) {
+      this.phase += 1;
+      if (this.phase >= 3) {
+        this.phase = 6;
+        this.stateIndex = S.WALK_R;
+        this.facing = +1;
+      }
+    } else {
+      this.phase -= 1;
+      if (this.phase < 0) {
+        this.phase = 6;
+        this.stateIndex = S.WALK_L;
+        this.facing = -1;
+      }
+    }
+  }
+
   _ground(map, input, fire, pickup) {
+    /* CS:0x5dbb (state 2, turn left->right) / CS:0x5dde (state 3, turn
+     * right->left) — a brief, STATIONARY pivot the original inserts on a
+     * genuine direction reversal (see the entry check below), not present
+     * at all in an earlier revision of this port, which instantly flipped
+     * WALK_L<->WALK_R on any direction switch. Dispatched first, before
+     * anything else in this function, exactly as states 2/3 have no fire,
+     * jump or crouch test of their own — see `_turn`'s own header for the
+     * fresh disassembly this rests on. */
+    if (this.stateIndex === S.TURN_LR || this.stateIndex === S.TURN_RL) {
+      this._turn();
+      return;
+    }
     const moving = input.left || input.right;
     /* ⚠️ EVERY GROUND STATE HAS ITS OWN FIRE TEST, and each one means
      * something different — see hero-fire.js's own header. State 0/1's own
@@ -736,6 +807,20 @@ export class Player {
      * away from "object pickup" by pickup.js. A stationary hero with fire
      * held throws a switch; pickup itself has no fire gate at all. */
     if (moving) {
+      /* CS:0x5979 (state 0 -> 2, entry CL:=0) / CS:0x5bc1 (state 1 -> 3,
+       * entry CL:=2 — asymmetric with 0->2's own entry, confirmed fresh).
+       * Only a genuine reversal enters the turn — continuing in the SAME
+       * direction, or a first press from a dead standstill, goes straight
+       * to WALK as before. `UNKNOWN_turn_reversal_priority`: whether this
+       * pre-empts state 0/1's own fire test (CS:0x5A64/0x5CA8) in the
+       * original, or fire wins when both are pressed on the same tick, was
+       * not established this pass — this port checks the reversal first. */
+      if (this.stateIndex === S.WALK_L && input.right) {
+        this.stateIndex = S.TURN_LR; this.phase = 0; return;
+      }
+      if (this.stateIndex === S.WALK_R && input.left) {
+        this.stateIndex = S.TURN_RL; this.phase = 2; return;
+      }
       this.facing = input.right ? +1 : -1;
       if (this._tryFire(this.facing > 0 ? 5 : 6, input, fire)) return;
     } else if (this.stateIndex === S.WALK_L || this.stateIndex === S.WALK_R) {

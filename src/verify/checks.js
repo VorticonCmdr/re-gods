@@ -8112,6 +8112,58 @@ export async function checkWeaponsProjectiles(fetchRaw) {
           stoppedNearLadder.state === ST.CROUCH);
       }
 
+      /* ── The turn animation, states 2/3 — a MISSING sequence, now ported ──
+       * CS:0x5dbb (state 2, turn left->right) / CS:0x5dde (state 3, turn
+       * right->left): a brief stationary pivot on a genuine direction
+       * reversal while walking. Fresh disassembly (both handler bodies) and
+       * their entry sites (CS:0x5979, CS:0x5bc1) are cited in full in
+       * player.js's own `_turn()` header. */
+      {
+        const flat = { planeA: new Uint8Array(N), planeB, widthPx: 4096, heightPx: 1024 };
+
+        const p = new Player(10 * 32, 9 * 16);
+        for (let i = 0; i < 4; i++) p.tick(flat, I());
+        for (let i = 0; i < 4; i++) p.tick(flat, I({ left: true }));
+        check('walking left, reversing to RIGHT enters the turn (state 2), not an instant flip',
+          p.state === ST.GROUND && p.stateIndex !== PS.WALK_R);
+        p.tick(flat, I({ right: true }));
+        check('...landing on state 2 (turn left->right) with entry cl=0 (CS:0x5979)',
+          p.stateIndex === PS.TURN_LR && p.phase === 0);
+        p.tick(flat, I({ right: true }));
+        p.tick(flat, I({ right: true }));
+        check('the turn runs 3 ticks, incrementing cl (CS:0x5dca)',
+          p.stateIndex === PS.TURN_LR && p.phase === 2);
+        p.tick(flat, I({ right: true }));
+        check('...then exits to WALK_R with cl:=6, facing right (CS:0x5dd4)',
+          p.state === ST.GROUND && p.stateIndex === PS.WALK_R
+            && p.phase === 6 && p.facing === 1);
+
+        const q = new Player(10 * 32, 9 * 16);
+        for (let i = 0; i < 4; i++) q.tick(flat, I());
+        for (let i = 0; i < 4; i++) q.tick(flat, I({ right: true }));
+        q.tick(flat, I({ left: true }));
+        check('mirror: reversing right->left enters state 3 with entry cl=2 (CS:0x5bc1, asymmetric)',
+          q.stateIndex === PS.TURN_RL && q.phase === 2);
+        for (let i = 0; i < 3; i++) q.tick(flat, I({ left: true }));
+        check('...and exits to WALK_L with cl:=6, facing left (state 3 mirrors state 2 exactly)',
+          q.state === ST.GROUND && q.stateIndex === PS.WALK_L
+            && q.phase === 6 && q.facing === -1);
+
+        const r = new Player(10 * 32, 9 * 16);
+        for (let i = 0; i < 4; i++) r.tick(flat, I());
+        for (let i = 0; i < 8; i++) r.tick(flat, I({ right: true }));
+        check('continuing the SAME direction never enters a turn state',
+          r.state === ST.GROUND && r.stateIndex === PS.WALK_R);
+
+        const fromStop = new Player(10 * 32, 9 * 16);
+        for (let i = 0; i < 4; i++) fromStop.tick(flat, I());
+        for (let i = 0; i < 4; i++) fromStop.tick(flat, I({ left: true }));
+        fromStop.tick(flat, I());   // release -> stopped pose, stateIndex stays WALK_L
+        fromStop.tick(flat, I({ right: true }));
+        check('reversing from the STOPPED pose (not actively walking) also enters the turn',
+          fromStop.stateIndex === PS.TURN_LR);
+      }
+
     }
   }
 

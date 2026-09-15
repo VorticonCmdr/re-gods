@@ -106,8 +106,8 @@ export const STATE_TABLE = [
 export const STATE_INFO = [
   /*  0 */ { label: 'walk left',            proof: 'closure(0) -> 8 (-X); 5AA8 sub X,4; cycle 5AD8 inc cl / and cl,7' },
   /*  1 */ { label: 'walk right',           proof: 'closure(1) -> 9 (+X); mirror of state 0' },
-  /*  2 */ { label: 'turn left->right',     proof: '5DBB: LEFT -> state 3, else inc cl; entered from 0 (5979)' },
-  /*  3 */ { label: 'turn right->left',     proof: '5DDE: RIGHT -> state 2, else dec cl; entered from 1 (5BC1)' },
+  /*  2 */ { label: 'turn left->right',     proof: '5DBB: LEFT held -> reverse to state 3 (5DC2); else inc cl / cmp cl,3 / jge -> cl:=6, state:=1 (5DD4). Entered from state 0 at 5979 (cl:=0). Ported: player.js _turn()' },
+  /*  3 */ { label: 'turn right->left',     proof: '5DDE: RIGHT held -> reverse to state 2; else dec cl / js -> cl:=6, state:=0. Entered from state 1 at 5BC1 (cl:=2, asymmetric with 0->2). Ported: player.js _turn()' },
   /*  4 */ { label: 'spawn / arrival idle',  proof: '5DFE reads LEFT/RIGHT only, else falls into 15. Entered from level start (8c3e), respawn (8d6) and teleport arrival (1022)' },
   /*  5 */ { label: 'walk right + fire',    proof: 'tail-jumps into state 1; calls 0x9734 (fire right)' },
   /*  6 */ { label: 'walk left + fire',     proof: 'tail-jumps into state 0; calls 0x97ce (fire left)' },
