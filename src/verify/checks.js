@@ -24,7 +24,7 @@ import { LeverToggle, heroNearLever, SPECIAL_LEVER_SPRITES,
 import { SpikeClock, spikePingpong, heroInSpikeBox, heroInSpike130Box,
          stepSpikes, spikeSprites, spike130Sprite, SPIKE_OVERLAY,
          SPIKE117_OVERLAY, SPIKE130_ANIM, SPIKE_TYPE, SPIKE117_TYPE,
-         SPIKE130_TYPE } from '../game/spikes.js';
+         SPIKE130_TYPE, BASE_VISIBLE_ROWS } from '../game/spikes.js';
 import { HEALTH_EMPTY_SPRITE, HEALTH_FILLED_SPRITE_BASE, HEALTH_FILLED_SPRITE_COUNT,
 HEALTH_BAR_X, HEALTH_BAR_Y_LOCAL, HEALTH_BAR_H, healthBarDraws, drawHealthBar,
 stepHealthBarShimmer } from '../game/health-bar.js';
@@ -11906,6 +11906,14 @@ export function checkSpikes() {
     check('the overlay sprite at frame 0 is 220 — CS:0xdffe\'s own first word, '
       + 'read live, which is ALSO 170+50 (the object\'s own ordinary sprite)',
       s.overlay.sprite === 220);
+    check('the base record asks the renderer for only its bottom 16 rows — '
+      + 'sprite 220/287 ship as a COMPLETE 16x32 standalone crown+shaft, and '
+      + 'the overlay already draws its own crown 16px above; a full-height '
+      + 'base composites as a duplicate crown then shaft, verified WRONG '
+      + 'against a DOSBox screenshot of this exact PLEV1A scene — only the '
+      + '"bottom 16 rows" composite matches it',
+      s.base.visibleRows === BASE_VISIBLE_ROWS && BASE_VISIBLE_ROWS === 16,
+      `visibleRows=${s.base.visibleRows}`);
 
     const obj117 = { ...obj, type: SPIKE117_TYPE };
     const s117 = spikeSprites(obj117, clock);

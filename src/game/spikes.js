@@ -187,8 +187,35 @@ export function stepSpikes(objects, clock, hero, health, opts = {}) {
 }
 
 /**
+ * The base sprite (170+type: 220/287, both shipped as 16x32) is drawn from
+ * only its BOTTOM 16 rows, not the full frame. Both the overlay (16 tall,
+ * `CS:0x1C10`) and the base (32 tall, `CS:0x1BE1`) are drawn at ADJACENT,
+ * non-overlapping world Y ranges — `[tipY, tipY+16)` then `[tipY+16,
+ * tipY+48)` — so a full-height base composites as overlay-crown, then a
+ * SECOND static crown (the base frame's own top 16 rows — sprite 220/287
+ * draw a complete standalone crown+shaft, not a shaft alone), then shaft.
+ * Live-verified against a DOSBox reference screenshot of this exact scene
+ * (PLEV1A, the two spikes beside the lever at 416,928): the "bottom 16 rows
+ * only" composite (one crown, then shaft, total 32px) matches it pixel-for-
+ * pixel; the full-32-row composite shows the extra duplicate crown the
+ * reference does not have — see the `buildDrawSequence`/draw-order fix this
+ * accompanies for how that duplicate was first mistaken for a z-order bug.
+ * The exact register-level mechanism in `CS:0x1BF0`'s `byte[0x411]=0x40`
+ * override (export 2, `VGA:0x1B86`) was traced and ruled out as its cause —
+ * it is a numeric no-op for a naturally-32-tall sprite — so what in the
+ * original actually produces the 16-row crop remains open
+ * (`UNKNOWN_spike_base_crop_mechanism`); the CROPPED RESULT itself is
+ * `[PROVEN]` by the screenshot match, independent of the mechanism.
+ */
+export const BASE_VISIBLE_ROWS = 16;
+
+/**
  * CS:0x1BE1-0x1C6C. The two sprites (base, overlay) and their world
- * positions for a type-50/117 object at the clock's current phase.
+ * positions for a type-50/117 object at the clock's current phase. The
+ * base record's `visibleRows` tells the renderer to draw only that many
+ * rows, taken from the BOTTOM of the base sprite's frame (skipping
+ * `f.h - visibleRows` rows off the top before blitting) — see
+ * `BASE_VISIBLE_ROWS` above.
  */
 export function spikeSprites(obj, clock) {
   const pingpong = clock.pingpong;
@@ -198,7 +225,7 @@ export function spikeSprites(obj, clock) {
     ? SPIKE_OVERLAY[clock.frame39c]
     : SPIKE117_OVERLAY[clock.frame39f];
   return {
-    base: { x: obj.x, y: baseY, sprite: 170 + obj.type },
+    base: { x: obj.x, y: baseY, sprite: 170 + obj.type, visibleRows: BASE_VISIBLE_ROWS },
     overlay: { x: obj.x, y: overlayY, sprite: overlay },
   };
 }
