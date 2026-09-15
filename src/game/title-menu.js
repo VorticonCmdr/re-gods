@@ -5,15 +5,27 @@
  * a player TYPE one back in is a disclosed gap").
  *
  * PROVENANCE
- *   The menu itself is [PROVEN] — see Gods/docs/dynamic-trace-and-runtime-
- *   data.md, "The title screen — a 3-option menu...": `FUN_1000_2c82`/
- *   `FUN_1000_317d`, read in full under DOSBox. Three options, exactly:
+ *   The menu's DISPATCH is [PROVEN] — see Gods/docs/dynamic-trace-and-
+ *   runtime-data.md's "The title screen — a 3-option menu..." section:
+ *   `FUN_1000_2c82`/`FUN_1000_317d`, read in full under DOSBox. Three
+ *   options, exactly:
  *     cursor 0 -> BEGIN QUEST     (world 1, sublevel A)
- *     cursor 1 -> ENTER A PASSWORD (FUN_1000_2e2f, the letter-grid screen)
+ *     cursor 1 -> ENTER PASSWORD  (FUN_1000_2e2f, the letter-grid screen)
  *     cursor 2 -> QUIT            (INT 21h AH=4Ch — DOS terminate)
  *   UP/DOWN CLAMP (not wrap) against the option count; FIRE confirms.
  *   "QUIT" cannot terminate a browser tab, so per this port's own brief it is
  *   reproduced as a permanent blackout instead — see Renderer.presentBlack().
+ *
+ *   The menu's VISUAL APPEARANCE is also [PROVEN] — confirmed live in a
+ *   DOSBox session this pass (`GODS.EXE`->`INTROV.EXE`->`GAME.EXE`, no
+ *   breakpoints, straight to a screenshot): a full-screen `PBACKSCR.PI1`
+ *   backdrop (a brick wall with a large skull motif — NOT `PSTATUS.PI1`'s
+ *   40-row status border, an earlier revision of this module's own wrong
+ *   guess, reasoning only from load ORDER — see Gods/docs/drivers-and-
+ *   memory.md's own corrected `UNKNOWN_backscr_pi1_loader` entry), the menu
+ *   option's own text reading exactly `"ENTER PASSWORD"` (no `"A"` — see
+ *   below), and the selected option flanked by inward-pointing arrows on
+ *   both sides (`> BEGIN QUEST <`), not a single leading marker.
  *
  *   The password screen's UNDERLYING MECHANISM is [PROVEN] (CS:0x2e2f/
  *   0x2e6c-0x2ea8): a 3-character buffer compared against up to three stored
@@ -23,52 +35,52 @@
  *   wrong (or, in a session where that world's password was never generated,
  *   an empty) guess bounces back to the TITLE MENU, not a re-prompt
  *   (CS:0x2e8a `JMP 0x1000:2caf`) — reproduced exactly in main.js's own
- *   dispatch.
+ *   dispatch. Its own screen TITLE is a DIFFERENT string from the menu
+ *   option's own label — `"ENTER A PASSWORD"` (`1ffd:eb96`, CS:0x2e2f's own
+ *   message pointer), confirmed both by static citation and by the same
+ *   live capture above.
  *
- *   The grid's exact VISUAL geometry (cell arrangement, on-screen layout) is
- *   NOT established — no disassembly pass has pinned FUN_1000_2eb0's own
- *   draw coordinates, and the interactive session that proved the mechanism
- *   (Gods/docs/dynamic-trace-and-runtime-data.md's hiscore-entry trace) only
- *   confirms cursor INDICES (0..39, "+"=39=confirm), not a row/column shape.
- *   `UNKNOWN_password_grid_layout`. This port's own 7x4 A-Z+DEL+OK grid is a
- *   port-level design choice, not a claim of pixel fidelity — the same
- *   disclosure renderer.js's own header already makes for the tilemap
- *   renderer.
+ *   The grid's exact VISUAL geometry — `UNKNOWN_password_grid_layout` — is
+ *   now [PROVEN] too, CLOSED this same session: an 8-column x 5-row, 40-cell
+ *   grid (`A-H`/`I-P`/`Q-X`/`Y Z . <space> 0 1 2 3`/`4 5 6 7 8 9` then an
+ *   erase icon then a confirm icon), read directly off a live capture and
+ *   CROSS-VALIDATED against Gods/docs/dynamic-trace-and-runtime-data.md's
+ *   own earlier, independent finding — a different session moved the
+ *   cursor "from index 34 to 39" via "5x KBD_right" while completing a real
+ *   hiscore entry, and row-major index 34 in THIS grid is row 4 col 2 while
+ *   39 is row 4 col 7, exactly 5 columns apart. See `GRID_CELLS` below for
+ *   the full citation and the two genuinely-still-open loose ends (the
+ *   erase/confirm icons' own sprite source, and one obscured cell read from
+ *   alphabet ordering rather than a clean pixel match).
  *
  *   GLYPH SAFETY: every string this module draws is built ONLY from
  *   characters Gods/docs/message-line.md's own "notable slots" table names
- *   individually — 0x11 (the solid diamond, reused here as the cursor/
- *   placeholder glyph), 0x20 (space) and 0x41-0x5A (A-Z) — plus `<`/`=`
- *   (0x3C/0x3D) for the grid's DEL/OK cells, checked live in a running port
- *   (both render as real, legible glyphs, not blanks) rather than assumed:
+ *   individually — 0x11 (the solid diamond, reused here as the grid
+ *   cursor/placeholder glyph), 0x20 (space) and 0x41-0x5A (A-Z) — plus
+ *   `<`/`=`/`>`/digits/`.` , all checked live in a running port (each
+ *   renders as a real, legible glyph, not a blank) rather than assumed:
  *   message-line.md's own byte count (130 records, "91 cells in 0x20..0x7A")
  *   already implies that whole printable range is populated real artwork,
  *   just not individually catalogued the way the "notable slots" are.
  *
- *   THE BACKDROP is [PROVEN], not this module's own invention:
- *   game/status-panel.js's own header establishes that `PSTATUS.PI1` loads
- *   once at `GAME.EXE` boot (`CS:0x2a01`) and is visible behind rows
- *   160-199 for exactly this window — "title screen, hiscores, 'ENTER A
- *   PASSWORD'" — until the gameplay loop's one-time latch (`CS:0x38a`)
- *   permanently swaps it for `PSTAT3`. main.js loads it once (as
- *   `titleStatusPanel`) and passes it into every `draw()` below, which is
- *   why every layout here keeps its own content above row `PANEL_Y0` (160)
- *   — that band is the proven ornate-border backdrop, not free canvas.
- *   Rows 0-159 have no established background image of their own — a
- *   GAME.EXE-owned asset, `PBACKSCR.PI1`, is a plausible but UNCONFIRMED
- *   candidate (only its palette is proven to feed a generic fade helper,
- *   not that its bitmap is ever blitted anywhere), so it is deliberately
- *   not drawn here rather than guessed.
+ *   main.js loads `PBACKSCR.PI1` once (as `titleBackground`, blitted full-
+ *   screen via `Renderer.blitBackground`) and passes it, plus its OWN
+ *   embedded palette (not the currently-loaded level's — see main.js's own
+ *   render-callback comment), into every `draw()` below.
  */
 
 import { SCREEN_W } from '../formats/pi1.js';
 import { PASSWORD_LENGTH } from './zones.js';
-import { PANEL_Y0 } from './status-panel.js';
 
 export const ADVANCE = 0x0a;    // 10 — the same per-glyph step message.js uses
 export const DIAMOND = '\x11';  // CS:0x4443's own separator glyph, reused as a cursor
 
-export const MENU_OPTIONS = ['BEGIN QUEST', 'ENTER A PASSWORD', 'EXIT TO DOS'];
+/* CONFIRMED against a live DOSBox capture of the real title screen: the
+ * menu's own option 1 reads "ENTER PASSWORD" (no "A") — a DIFFERENT string
+ * from the password-entry SCREEN's own title, "ENTER A PASSWORD"
+ * (1ffd:eb96, drawn by FUN_1000_2e2f — see PasswordEntry.draw below). Two
+ * distinct strings for two distinct UI elements, not one reused label. */
+export const MENU_OPTIONS = ['BEGIN QUEST', 'ENTER PASSWORD', 'EXIT TO DOS'];
 
 function textWidth(text) { return text.length * ADVANCE; }
 
@@ -110,40 +122,51 @@ export class TitleMenu {
     return null;
   }
 
-  draw(renderer, glyphs, logo, statusPanel) {
-    renderer.clear(0);
-    if (statusPanel) renderer.blitStatusPanel(statusPanel, PANEL_Y0);   // rows 160-199, [PROVEN] — see the header
-    let y = 8;
+  draw(renderer, glyphs, logo, background) {
+    if (background) renderer.blitBackground(background);
+    else renderer.clear(0);
+    let y = 10;
     if (logo) {
       renderer.blitSprite(logo, ((SCREEN_W - logo.w) / 2) | 0, y);
       y += logo.h;
     }
-    y += 24;
+    y += 28;
     for (let i = 0; i < MENU_OPTIONS.length; i++) {
-      const marker = i === this.cursor ? DIAMOND + ' ' : '  ';
-      drawCentered(renderer, glyphs, marker + MENU_OPTIONS[i], y);
-      y += 20;
+      /* CONFIRMED against the live capture: the selected option is flanked
+       * by inward-pointing arrows on BOTH sides ("> LABEL <"), not a single
+       * leading marker. */
+      const line = i === this.cursor
+        ? `>  ${MENU_OPTIONS[i]}  <`
+        : `   ${MENU_OPTIONS[i]}   `;
+      drawCentered(renderer, glyphs, line, y);
+      y += 32;
     }
-    drawCentered(renderer, glyphs, 'ARROWS SELECT  SPACE CONFIRM', 140);
+    drawCentered(renderer, glyphs, 'ARROWS SELECT  SPACE CONFIRM', 182);
   }
 }
 
-/* 26 letters + DEL('<') + OK('=') — every cell exactly one glyph wide, so a
- * fixed column pitch never has to fit "DEL"/"OK" against single letters. 7
- * columns x 4 rows. The grid's SHAPE (which world-2/3/4 unlock this
- * reproduces) is proven; this specific 7x4 arrangement is not — see the
- * header's `UNKNOWN_password_grid_layout` note. */
-const GRID_COLS = 7, GRID_ROWS = 4;
+/* `UNKNOWN_password_grid_layout` is CLOSED — 8 columns x 5 rows = 40 cells,
+ * confirmed live in a DOSBox session this pass (A-X across 3 full rows,
+ * then Y/Z/./space/0/1/2/3, then 4-9/erase/confirm), and CROSS-VALIDATED
+ * against Gods/docs/dynamic-trace-and-runtime-data.md's own earlier
+ * finding: that session moved the cursor "from index 34 to 39" via
+ * "5x KBD_right" — row-major index 34 is column 2 of this grid's row 4
+ * (the '6' cell) and index 39 is column 7 of row 4 (confirm), exactly 5
+ * columns apart. Two cells are a port-level substitution, not a claim of
+ * pixel fidelity: the real erase/confirm cells are a left-arrow icon and a
+ * distinct circular icon (not a PSMLFNT glyph — reading it precisely would
+ * need locating its own sprite asset, not attempted this pass), reproduced
+ * here as '<'/'=' for the same glyph-safety reasons the header explains. */
+const GRID_COLS = 8, GRID_ROWS = 5;
 const GRID_CELLS = [
-  'A', 'B', 'C', 'D', 'E', 'F', 'G',
-  'H', 'I', 'J', 'K', 'L', 'M', 'N',
-  'O', 'P', 'Q', 'R', 'S', 'T', 'U',
-  'V', 'W', 'X', 'Y', 'Z', '<', '=',
+  'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H',
+  'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P',
+  'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X',
+  'Y', 'Z', '.', ' ', '0', '1', '2', '3',
+  '4', '5', '6', '7', '8', '9', '<', '=',
 ];
 const CELL_DEL = '<', CELL_OK = '=';
-/* Rows kept tight (16px pitch, vs. the menu's own 20px) so all 4 grid rows
- * plus 3 footer lines fit above PANEL_Y0 (160) — see the header. */
-const GRID_X0 = 34, GRID_Y0 = 54, GRID_COL_W = 36, GRID_ROW_H = 16;
+const GRID_X0 = 16, GRID_Y0 = 40, GRID_COL_W = 36, GRID_ROW_H = 18;
 
 /**
  * CS:0x2e2f/0x2e6c-0x2ea8 — the letter-grid password entry. `onKeyDown`
@@ -180,18 +203,26 @@ export class PasswordEntry {
     return null;
   }
 
-  draw(renderer, glyphs, statusPanel) {
-    renderer.clear(0);
-    if (statusPanel) renderer.blitStatusPanel(statusPanel, PANEL_Y0);   // rows 160-199, [PROVEN] — see the header
+  draw(renderer, glyphs, background) {
+    if (background) renderer.blitBackground(background);
+    else renderer.clear(0);
     /* `"ENTER A PASSWORD"`, 1ffd:eb96 (CS:0x2e2f's own message pointer —
-     * see the header and zones.js's own citation of this exact string). */
-    drawCentered(renderer, glyphs, 'ENTER A PASSWORD', 16);
+     * see the header and zones.js's own citation of this exact string) —
+     * this screen's own title, DISTINCT from the menu option's own label
+     * "ENTER PASSWORD" (MENU_OPTIONS' own header note above). */
+    drawCentered(renderer, glyphs, 'ENTER A PASSWORD', 8);
 
-    /* The typed buffer, blank slots shown as the diamond placeholder — see
-     * the header's glyph-safety note for why not '_' or '-'. */
+    /* The typed buffer. NOT confirmed live: a DOSBox session this pass
+     * found a row of diamond glyphs below the real grid that does NOT
+     * change as cells are fired (screenshotted before/after) — a fixed
+     * decorative border, not a buffer readout, so the real screen's own
+     * typed-feedback mechanism (if any) is still unlocated. This line is a
+     * port-only UX affordance, not a fidelity claim: shown so a player can
+     * see what they have typed. Blank slots use the diamond placeholder —
+     * see the header's glyph-safety note for why not '_' or '-'. */
     const slots = [];
     for (let i = 0; i < PASSWORD_LENGTH; i++) slots.push(this.buffer[i] || DIAMOND);
-    drawCentered(renderer, glyphs, slots.join(' '), 36);
+    drawCentered(renderer, glyphs, slots.join(' '), 24);
 
     for (let r = 0; r < GRID_ROWS; r++) {
       for (let c = 0; c < GRID_COLS; c++) {
@@ -201,8 +232,8 @@ export class PasswordEntry {
       }
     }
 
-    drawCentered(renderer, glyphs, '<  DELETE     =  CONFIRM', 122);
-    drawCentered(renderer, glyphs, 'ARROWS MOVE  SPACE SELECT', 136);
-    drawCentered(renderer, glyphs, 'ESC BACK TO MENU', 150);
+    drawCentered(renderer, glyphs, '<  DELETE     =  CONFIRM', 140);
+    drawCentered(renderer, glyphs, 'ARROWS MOVE  SPACE SELECT', 158);
+    drawCentered(renderer, glyphs, 'ESC BACK TO MENU', 176);
   }
 }

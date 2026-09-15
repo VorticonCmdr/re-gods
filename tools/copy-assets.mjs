@@ -58,6 +58,12 @@ const WANTED = [
   // DEGAS images whose only real content is rows 160-199 — the rest is
   // never converted (CS:0x2a23's own SI=0x6422 skips straight to it).
   'PSTATUS.PI1','PSTAT3.PI1',
+  // PBACKSCR.PI1 — the title screen's own full-320x200 background, drawn
+  // behind the menu/password grid (game/title-menu.js). A GAME.EXE-owned
+  // asset (Table 1 Block B, "backscr.pi1"); confirmed against a live
+  // DOSBox capture of the real title screen, not merely inferred from its
+  // palette — see title-menu.js's own header.
+  'PBACKSCR.PI1',
 ];
 
 if (!existsSync(SRC)) {

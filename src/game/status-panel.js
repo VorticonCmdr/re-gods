@@ -114,13 +114,19 @@
  *   panel (index 15, pure black, in both files) — a plausible future
  *   anchor, not yet wired to anything.
  *
- *   PSTATUS_PATH: `main.js` now has a title screen (game/title-menu.js), so
- *   PSTATUS.PI1's own boot-time appearance IS reachable here — loaded once
- *   via `loadStatusPanel('PSTATUS')` and drawn behind the title menu and
- *   password grid, exactly the window CS:0x38a's own latch bounds it to in
- *   the original. `main.js` still loads and draws PSTAT3 for gameplay
- *   proper, matching what a player sees from the moment "BEGIN QUEST" (or
- *   a correct password) actually starts a level.
+ *   PSTATUS_PATH: `main.js` has a title screen (game/title-menu.js) but does
+ *   NOT draw PSTATUS.PI1 on it — an earlier revision tried that, reasoning
+ *   from the "visible... during the title screen" claim two paragraphs up,
+ *   and a live DOSBox capture of the real title screen refuted it: the menu
+ *   shows one continuous full-screen image (PBACKSCR.PI1 — see game/title-
+ *   menu.js's own header) with no distinct HUD strip at the bottom at all.
+ *   PSTATUS's boot-time VRAM write is still real (CS:0x2a01 genuinely runs),
+ *   just transient: PBACKSCR's own full-screen load evidently happens AFTER
+ *   it and overwrites rows 160-199 along with everything else, before a
+ *   player ever actually sees the menu. `main.js` still loads and draws
+ *   PSTAT3 for gameplay proper, matching what a player sees from the moment
+ *   "BEGIN QUEST" (or a correct password) actually starts a level — that
+ *   half of this file's own claim was never in question.
  */
 
 import { decodePI1 } from '../formats/pi1.js';

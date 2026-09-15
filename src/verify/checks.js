@@ -12965,8 +12965,9 @@ export function checkTitleMenu() {
     })());
     p.buffer.push('D');   // restore, so the submit test below sees BCD again
 
-    /* Navigate to the '=' (OK) cell — row 3, col 6 — and submit. */
-    for (let i = 0; i < 3; i++) p.onKeyDown('ArrowDown');
+    /* Navigate to the '=' (OK) cell — row 4, col 7 (index 39, the confirmed
+     * 8x5 grid) — and submit. */
+    for (let i = 0; i < 4; i++) p.onKeyDown('ArrowDown');
     for (let i = 0; i < 3; i++) p.onKeyDown('ArrowRight');
     const submitResult = p.onKeyDown('Space');
     check('OK at a full buffer submits the typed string, joined in cell order',

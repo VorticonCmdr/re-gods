@@ -135,6 +135,17 @@ export class Renderer {
     this.buf.set(panel.indices.subarray(0, panel.w * panel.h), dy * SCREEN_W);
   }
 
+  /**
+   * Blit a full 320x200 decoded image (formats/pi1.js's `decodePI1` shape)
+   * as an opaque backdrop, e.g. the title screen's PBACKSCR.PI1. Unlike
+   * blitTile/blitSprite, index 0 is NOT transparent here — a full-screen
+   * background has nothing beneath it to show through.
+   * @param {{indices:Uint8Array}} image
+   */
+  blitBackground(image) {
+    this.buf.set(image.indices.subarray(0, SCREEN_W * SCREEN_H));
+  }
+
   /** Debug rectangle in a palette index (used for the hero box). */
   fillRect(x, y, w, h, index) {
     for (let yy = y; yy < y + h; yy++) {
