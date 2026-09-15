@@ -290,11 +290,46 @@ digits built by five `cwd`/`idiv 10` steps with the remainders stacked.
 ```
 
 `DS:0x3ab` is the **shop-active** flag — its live setter, `CS:0x6c58`, sits three
-instructions before the shop main loop — and the shop is entered only when the
-world is *not* 1 (`CS:0x00c4`). So the two halves partition: **world 1 shows
-object messages in-level; worlds 2–4 show them on the shop screen between
-levels.** Both halves are load-bearing. Reading this as "world 1 only" ships
-silence in three worlds.
+instructions before the shop main loop. Both halves of the OR are load-bearing:
+reading this gate as "world 1 only" ships silence in three worlds. The
+"world != 1" half comes from `CS:0x461d cmp byte[0x42],0x1` — a plain world-number
+test, *not* `CS:0x00c4` as an earlier revision of this section cited; `0x00c4`
+is a different `FUN_1000_006f`-prologue check entirely (`cmp byte[0x42],0x1`
+gating a title-screen-entry flag, `DS:0x38c` — see the correction below).
+
+⚠️ **Correction: the shop is not an automatic between-level screen in worlds
+2–4.** An earlier revision of this section read the gate above as "worlds 2–4
+show [object messages] on the shop screen between levels," implying the shop
+itself opens routinely. An exhaustive program-wide search for every writer of
+`DS:0x3ab` (`search_instructions`, mnemonic `MOV`, operand `0x3ab`) finds
+exactly four sites: `CS:0x4846` (an orphan block with zero referencing
+instructions — dead), `CS:0x484e` (clears it), `CS:0x6c58` (`FUN_1000_6c19`,
+the one live *setter*), `CS:0x6db2` (`FUN_1000_6d7b`, clears it on exit). And
+`get_xrefs_to(1000:6c19)` returns **exactly one** reference program-wide:
+`CS:0x0693`, an unconditional `CALL` from `FUN_1000_0643` — not from the
+level-exit tally screen, not from the shop-potion pickup (`CS:0x61e9`), not
+from the trigger-summon path (`CS:0x3dd6`/`DS:0x361`). `FUN_1000_0643` is
+itself reached only from `FUN_1000_006f`'s `CS:0x00cb JMP`, gated on
+`DS:0x38c` — a flag set once, at title-screen entry (`CS:0x2c8a`), and cleared
+only by the BEGIN QUEST dispatch (`CS:0x2d99`) or the attract-mode demo
+cycler (`CS:0x2e13`) — **never by a successful password entry.** So the shop
+opens **exactly once per game**: immediately after a correct password takes
+the player straight into world 2, 3 or 4 (after `FUN_1000_0643` grants a
+fixed starting stash, `DS:0x194:=0x3880`), never on an ordinary level exit and
+never automatically per-level. In ordinary, non-password play, this gate's
+practical effect in worlds 2–4 is therefore just **silence** — object/treasure
+pickup messages are dropped (except the category-2 key and type-0x53
+shop-potion bypasses `CS:0x4613`/`0x4618` already document above), not shown
+on some other screen. What the type-0x53 potion / trigger-summon paths
+(`DS:0x361`/`0x363`, a separate "shopkeeper NPC" state tested at `CS:0x0248`)
+actually connect to remains unresolved — no direct call from either reaches
+`FUN_1000_6c19`, so if they open the shop at all it is through an
+unidentified indirect/table dispatch. `[WF]`, not independently re-verified
+byte-for-byte beyond the `DS:0x3ab` writer census and the `6c19` xref check
+above (both spot-checked directly); the shop's own internal mechanics (item
+roster, buy/sell, layout) are characterized in a subagent pass not yet
+promoted past `[WF]` — see the port project's own backlog for the pending
+write-up.
 
 Type `0x53` (the shop potion) jumps past **both** the world gate and the bitmap,
 from the ordinary in-level pickup path, in any world, every time.

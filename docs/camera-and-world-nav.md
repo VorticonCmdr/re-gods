@@ -252,6 +252,65 @@ Every offset in the "address" column is arithmetic (`0xe6ea + offset`), not a se
 
 The resolved mechanism (`FUN_1000_6b00`'s world-advance, `FUN_1000_6ad4`'s key-inventory clear, `FUN_1000_69d7`'s password generation, `FUN_1000_6992`'s pool reset — all four gated on the correct `+0x1e` bits of the correct, arg-selected destination record) is what a port's `zones.js` should implement in place of the "cycles the 8 shipped `.MAP` files in a fixed order" placeholder; see the project's own backlog memory for the port-side follow-up.
 
+### The tally/bonus screen body and the password-reveal overlay, `CS:0x656e`–`0x6a5a` — fully disassembled and live-confirmed `[PROVEN]`
+
+This section closes the bracketed, un-cited summary an earlier pass of this doc left for `FUN_1000_6553`'s own body (`656e`–`67b0`): `[full tally UI: time bonus from lives [0x224], health bonus [0x192], money/score digit display, "cha-ching" sfx 0x52f looped]`. By this project's own evidence-discipline rule, a bracket like that is an admission, not a citation. It is now fully disassembled and cross-checked live under DOSBox — a fresh boot straight into world 1, paused mid-frame, then `DS:0x178`/`DS:0x36a` set by hand to the `LEVEL ONE` destination record (the same isolated-write technique already used elsewhere in this document for the world-3 camera latch), continued, and screenshotted at each stage. No scripted play was needed.
+
+**Correction to this section's own earlier citation of the `+0x4`/`+0x1e` record layout.** `CS:0x6562 cmp word[SI+4],0x0` was previously read as testing a field the header table above calls "always0" (`+2`, per the earlier `param`/`always0`/`param2`/`text` framing) and described as skippable "never true for the shipped records." A direct decompile of `FUN_1000_6553` refutes the field mapping, not the practical conclusion: the four fields are `+0` param, `+2` a genuinely-always-zero field the function never reads, and **`+4` is `param2`** (2500/2500/2500/25000, matching this doc's own already-published `param2` column) — so `CS:0x6565`'s `jnz 0x656e` fires on `param2 != 0`, which is true for all four shipped records, and the tally body always runs on a real exit exactly as previously concluded, just for the right reason.
+
+**The three bonuses, confirmed both by decompile and by a live pixel match:**
+
+| bonus | formula | source | live capture |
+|---|---|---|---|
+| time | `lives[0x224] × 2000`, added once if lives≠0 | `FUN_1000_67b8` | `"2 X 2000"` |
+| health | `clamp(health[0x192],0,∞) × 80`, added once if health≠0 | `FUN_1000_67b8` | `"24 X 80"` |
+| money | `floor(money32[0x194:0x196] / 8)`, added once if nonzero (⚠️ only the low word of the quotient is added — the high word is dropped; unproven unsafe at shipped money totals, just unguarded) | a real 32-bit divide, three `RCR DX:AX` — **not** the 3×`SAR` bug already documented elsewhere in this project | not exercised (money was 0 at capture) |
+
+All three feed one shared 32-bit accumulator, `DS:0x234:0x236`. The screenshot (world 1, lives=2, health=24) shows `"LEVEL ONE COMPLETED"`, the two bonus lines above with their own icons, and `"BONUS 005920"` — `2×2000 + 24×80 = 5920`, an exact match, live pixels against the disassembled arithmetic. **No `PPAYOFF.PI1` (or any other) background blit exists anywhere in `FUN_1000_6553`'s own body** — confirmed both statically (no export-3/4 graphics-load pair in the disassembly; the function's two `CALLF` sites resolve to sound exports 10/11 via `(slot-0x52f6)/4`, not graphics) and live: the capture shows the tally text drawn directly over the still-visible game world (the hero and level tiles are visible underneath), not over a dedicated backdrop. `PPAYOFF.PI1`'s own consumer remains unlocated — a residual, not resolved by this pass.
+
+**The bonus pool then counts DOWN, not up, while the HUD digits count up in lockstep.** A loop (`0x66fd`–`0x6798`) decrements the shared accumulator by 90/tick (dropping to 10, then 1, near zero so it lands exactly on 0), drawing it at a fixed position (x=172–252, six 16px-spaced digit cells, y=136, sprite=`digit+0x9c`) via `FUN_1000_67da` — a dedicated copy of the generic digit blitter, not a call into the shared one. Each successful step also calls `FUN_1000_0bbf`/`FUN_1000_0ab1`, the **same status-panel score/money digit blitters** `docs/drivers-and-memory.md` already names, so the HUD's own score/money figures visibly climb while the bonus pool drains — the live capture's post-tally HUD reads `005920`, i.e. the whole bonus landed in the displayed total. The `0x52f` "cha-ching" sfx (`FUN_1000_22ca(0x52f)`, the same generic sound-export call `zones.js` already cites for the teleport chime) fires once after each of the three static bonus-adds and once every 3rd countdown step — a fixed cadence, not a continuous loop despite the word "looped" in the earlier bracketed summary. `FUN_1000_6553`'s own body is fully open-loop otherwise: two hardcoded busy-waits (`FUN_1000_64d7`, 30 ticks after the time-bonus add, 50 ticks at the very end) plus one wait per countdown step, no keypress anywhere — duration scales with the size of the bonus pool.
+
+**The password reveal is real, and it is a separate, input-gated overlay — not part of `6553`'s own body.** `6553`'s tail (`67b0`–`67b7`) hands off through the already-documented bit-dispatch (`FUN_1000_694d`) into `FUN_1000_6b00` (world-advance) and — earlier in dispatch order, since bit 10 is iteration 2 of the 32-iteration walk while bit 1 is iteration 11, so `DS:0x42` still holds the just-completed world when this runs — `FUN_1000_69d7` (bit 10, password-gen). Read in full (`1000:69d7`–`0x6a5a`, 45 instructions):
+
+```
+69d7  SI := word[0x42a + (world-1)*2]         ; this world's own password-slot pointer
+69e3  CMP byte[SI],0 / JNZ 0x6a48 (RET)        ; slot already filled -> nothing to do
+69e8  CALL 0x6a6b                              ; generate: AX/BX carry the 3 raw 1-26 codes
+69eb  word[SI]  := BX                          ; chars 1-2
+69ed  byte[SI+2]:= AL                          ; char 3
+69f1  CALL 0x921b                              ; ONE ordinary game tick+render (keeps the
+                                                ;   world visibly moving/drawing underneath)
+69f7  CL := byte[0x42] + 1 + 0x5d              ; = (completedWorld+1) + 0x9c after 224e's
+                                                ;   own "+0x3f" glyph bias -- lands EXACTLY
+                                                ;   on the digit-sprite base (0x9c=156) this
+                                                ;   same document's tally-body section just
+                                                ;   established; a second, independent check
+                                                ;   on the dispatch-order claim above
+6a00  byte[0xed28] := CL                       ; patches the digit into a fixed template
+6a04-6a2f  draw 3 lines via FUN_1000_646f (walks a NUL-terminated string, glyph=byte+0x3f
+           via FUN_1000_224e -- the STATUS-PANEL font convention, not PSMLFNT's identity
+           map), reading a template pool at 1ffd:0xed22 directly off the image:
+             "LEVEL   PASSWORD\0"   (0xed22, the middle space patched at ed28 with the digit)
+             "   \0"                (0xed33, the 3-char password slot, converted from raw
+                                      1-26 codes to real 'A'-'Z' ASCII by FUN_1000_6a5b
+                                      in between the first and second draw)
+             "FIRE TO CONTINUE\0"   (0xed37)
+6a35  SI := 0x43e                              ; CLOSES UNKNOWN_ds_43e_palette (see below)
+6a3a  CALL 0x3596                              ; palette fade-in, this document's own
+                                                ;   already-established 8-pass thunk
+6a3d  CALL 0x24f0                              ; flush stale keyboard input
+6a40  CALL 0x252c                              ; BLOCKS: wait for FIRE press, then release
+                                                ;   (two poll loops on byte[0x382] bit 7) --
+                                                ;   this is the actual "FIRE TO CONTINUE" gate
+6a43  CALL 0x3211 / JC 0x6a49                  ; disk-save path, see aside below
+```
+
+Live-confirmed by the same forced sequence: after the tally screen's countdown finished, the next capture reads `"LEVEL 2 PASSWORD"` / `"PME"` / `"FIRE TO CONTINUE"`, drawn over the same still-visible game world, and firing/releasing space actually advanced play (into a `"LOADING THE TEMPLE"` interstitial, then live world-2 gameplay) — an end-to-end confirmation of the whole chain from a single forced write, not three separate guesses. This closes the question left open by the tally-body section above ("does anything draw the password") and **overturns the framing in `zones.js`'s own header comment**, which says "there is no 'ENTER A PASSWORD' screen here to type this back into" as if the game never shows it — it does, just not as a dedicated screen: it is a HUD-style overlay shown once, the first time a world is freshly completed, gated on an actual keypress. Port-side, `zones.js`'s `generatePassword()` is a reasonable simplification of `FUN_1000_6a6b` (three `random/2521+1` draws) but does **not** reproduce that function's own up-to-100-retry uniqueness check against the other two stored passwords — a known, minor divergence, not chased further.
+
+**`UNKNOWN_ds_43e_palette` — CLOSED.** This document previously found a sixth palette-fade call site with `si=0x43e` (instead of the five other sites' `si=0x86`) and left its own source table untraced. It is exactly this password-reveal fade (`6a35`/`6a3a` above) — closed by this same live trace, not a separate pass.
+
+**Aside, `[STATIC]`, not pursued further per this pass's own scope:** `FUN_1000_3211`/`FUN_1000_27e5` (reached only when `DS:0x384 > 1`) XOR-obfuscate the 3 password slots into a second 16-byte block (`DS:0x526`–`0x534`) and write it out; on failure (`JC` back in `69d7`), a template at `1ffd:0xed48` — `"\x11\x11 disk error - password not saved..."` — posts through the already-documented `CS:0x434e` priority mailbox. `DS:0x384` is almost certainly the already-known "installed to hard disk" mode this project's own top-level `CLAUDE.md` already cites from `READ.ME` ("high-score/password saving work only when installed to hard disk, not from the low-density 3.5\" floppy"). None of this has a port-side equivalent — a browser port has no disk write to fail — so it is recorded here for completeness and not carried into `zones.js`.
+
 ## The plane-B event probe rounds X but floors Y `[PROVEN]`
 
 `0x5fab`, called from the epilogue at `0x5ea0`:
