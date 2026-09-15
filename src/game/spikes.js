@@ -248,7 +248,18 @@ export function spikeSprites(obj, clock) {
   return {
     base: { x: obj.x, y: baseY, sprite: 170 + obj.type,
              srcRowOffset: BASE_SRC_ROW_OFFSET, rows: pingpong + 1 },
-    overlay: { x: obj.x, y: overlayY, sprite: overlay },
+    /* Frame 0 of BOTH overlay tables (`SPIKE_OVERLAY[0]`/`SPIKE117_OVERLAY[0]`)
+     * is the SAME sprite id as `170+type` — the base's own full 16x32 frame,
+     * not a dedicated 16x16 one. Capped to its own top 16 rows (its
+     * standalone crown, rows 0-15 — the SAME rows the base crop above skips
+     * PAST) for every overlay frame: a no-op for the genuinely-16-tall
+     * frames 1-3/1-5, and on frame 0 it was otherwise drawing the full 32
+     * rows at `overlayY`, whose bottom (`overlayY+32 = objY+47-pingpong`)
+     * overshoots the `objY+32` floor boundary by `15-pingpong` px at every
+     * pingpong below max — the exact one-frame-in-four flicker this project
+     * caught live (the base's own analogous bug, fixed above, but recurring
+     * here because the overlay record never carried a crop at all). */
+    overlay: { x: obj.x, y: overlayY, sprite: overlay, srcRowOffset: 0, rows: 16 },
   };
 }
 

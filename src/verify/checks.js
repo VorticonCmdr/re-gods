@@ -11932,6 +11932,28 @@ export function checkSpikes() {
       + 'on this bottom-pinned, pingpong+1-row window',
       sMax.base.y + sMax.base.rows === obj.y + 32, `${sMax.base.y}+${sMax.base.rows}`);
 
+    /* frame 0 of SPIKE_OVERLAY/SPIKE117_OVERLAY is 220/287 — the SAME
+     * sprite id as the base's own full 16x32 frame, not a dedicated 16x16
+     * one. Reported live: the shaft visibly flickered "in front of, then
+     * behind" the floor tile every ~4th tick (frame39c's own period) except
+     * at maximum extension — this is why: an uncropped overlay draw at
+     * frame39c=0 put a SECOND 32-row image at overlayY, whose bottom
+     * overshot objY+32 at every pingpong below max. */
+    const clockMid = new SpikeClock();
+    clockMid.raw39b = 6;                            // pingpong=6, mid-retraction
+    clockMid.frame39c = 0;                           // the sprite-220 overlay frame
+    const sMid = spikeSprites(obj, clockMid);
+    check('the overlay is capped to 16 rows from its own row 0 even when '
+      + 'its resolved sprite (frame 0, id 220/287) is the base\'s own 32-'
+      + 'tall frame — a no-op for the genuinely-16-tall frames 1-3/1-5',
+      sMid.overlay.sprite === 220 && sMid.overlay.rows === 16 && sMid.overlay.srcRowOffset === 0,
+      JSON.stringify(sMid.overlay));
+    check('...so its bottom edge (y + rows) never exceeds objY+32, matching '
+      + 'the base\'s own pinned bottom — at pingpong=6 an UNCROPPED 32-row '
+      + 'draw would have overshot by 9px (y=9, 9+32=41 > 32)',
+      sMid.overlay.y + sMid.overlay.rows <= obj.y + 32,
+      `${sMid.overlay.y}+${sMid.overlay.rows}=${sMid.overlay.y + sMid.overlay.rows}, floor=${obj.y + 32}`);
+
     const obj117 = { ...obj, type: SPIKE117_TYPE };
     const s117 = spikeSprites(obj117, clock);
     check('type 117\'s overlay at frame 0 is 287 (170+117, CS:0xe006\'s own '
