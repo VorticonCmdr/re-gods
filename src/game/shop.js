@@ -11,14 +11,20 @@
  *     shop.md. `main.js` feeds this class the one live-captured sample this
  *     session got for world 2 (a real, byte-observed set of item ids), not
  *     an invented list, and an empty (EXIT-only) roster for worlds 3/4.
- *   - Prices are NOT ported. `UNKNOWN_shop_prices` in shop.md explains why
- *     the one live capture of the price table can't be trusted — a
- *     transcription of a 730-byte dump that a sort-order cross-check caught
- *     as wrong, even after fixing an unrelated arithmetic mistake (the
- *     starting-money value) that had wrongly seemed to confirm the same
- *     bug. Every purchase here is free. This is a bigger simplification
- *     than the usual "close enough" ones in this project and is called out
- *     as such rather than shipping an invented economy.
+ *   - Prices ARE now ported for the 12 ids this session has a roster for —
+ *     `UNKNOWN_shop_prices` is CLOSED, see shop.md. A machine-parsed (base64
+ *     dump, decoded by script — not hand-transcribed) live read of
+ *     `DS:0x2a4e` found a clean, unbroken 132-record table (a per-record
+ *     tag byte increments by exactly 1 every record, wrapping at 0xff, with
+ *     zero deviation), and the 12 prices below were independently
+ *     corroborated by live purchases: the actual `DS:0x194` money deduction
+ *     matched the decoded price exactly for every id bought (650 for id 70
+ *     is a unique match against every other decoded price in the table, not
+ *     just a plausible-looking number). Ids outside `PRICES` (any world
+ *     3/4 roster would need) remain unpriced — the live table's own
+ *     ids 0-131 were all read and landmark-verified, but only these 12 were
+ *     purchase-confirmed, and no world 3/4 roster exists in this port yet
+ *     to need them.
  *   - Sell (raw item id `>= SELL_ID_BASE`) is not ported at all —
  *     `UNKNOWN_shop_tradein_value`. `roster` here should only ever contain
  *     ids below `SELL_ID_BASE`; the EXIT slot is the only non-buy cell.
@@ -79,12 +85,25 @@ export const SELL_ID_BASE = 0xc0;                      // CS:0x6ead/0x6ed7 — n
 export const BUY_CONFIRM_SFX = 0x333;                  // CS:0x6ee1, CS:0x22ca's own SFX primitive
 export const REFUSAL_MESSAGE_PRIORITY = 0x19;          // matches message-line.md's own table (25)
 
+/* `FUN_1000_7392`'s table, DS:0x2a4e + id*10, price word at +6/+7 (byte-
+ * swapped) — live-read this session (base64 dump, script-decoded) and
+ * purchase-confirmed for every id below (`DS:0x194` money delta on a real
+ * buy exactly matched the decoded value). Only the 12 ids this port's own
+ * world-2 roster (`main.js`'s `SHOP_ROSTER_WORLD_2`) actually shows are
+ * listed — see shop.md's `UNKNOWN_shop_prices` for the full 132-record
+ * table this was drawn from. */
+export const PRICES = {
+  0: 4000, 35: 8000, 36: 10000, 38: 5000, 42: 20000, 44: 4000,
+  51: 1000, 52: 1000, 53: 1000, 70: 650, 71: 1300, 72: 1000,
+};
+
 export class ShopScreen {
   /**
    * @param {(number|null)[]} roster up to DATA_SLOTS raw item ids (<SELL_ID_BASE),
-   *   already the caller's own filtered/sorted choice — this class does not
-   *   itself filter by affordability or eligibility (`UNKNOWN_shop_
-   *   eligibility_gates`); short rosters are padded with `null` (empty slots)
+   *   already the caller's own sorted choice — short rosters are padded with
+   *   `null` (empty slots). This class DOES prune by affordability and
+   *   per-visit category lockout (see `#pruneRoster`), but not by the two
+   *   still-unresolved eligibility gates (`UNKNOWN_shop_eligibility_gates`)
    * @param {number[]} inventory the 4-slot weapon/item array, `INVENTORY_EMPTY`
    *   marks an empty slot (mirrors `DS:0x17e/0x180/0x182/0x184`'s own `-1`
    *   sentinel — this port already represents that as the unsigned
@@ -95,17 +114,22 @@ export class ShopScreen {
    * @param {object} state passed straight through to `applyConsumable` as its
    *   own `state` argument for an auto-use purchase (the same shape
    *   `game/pickup.js` already builds for an in-level pickup)
+   * @param {{total:number, add:(v:number)=>any}} [purse] the game's money —
+   *   `game/treasure.js`'s `Purse` already has exactly this shape. Omit it
+   *   (as a synthetic test might) to skip pricing entirely: every item is
+   *   then free and always eligible, the pre-pricing behavior.
    * @param {(text:string, priority:number)=>void} [onRefused] called when a
    *   give-to-inventory purchase finds no eligible empty slot; the reference
    *   text is not ported (`CS:0xec8b` was never read this session) so the
    *   caller decides what to show, if anything
    * @param {()=>void} [onDone] called once, when the EXIT cell is confirmed
    */
-  constructor({ roster, inventory, selectedSlot = -1, state = {}, onRefused, onDone }) {
+  constructor({ roster, inventory, selectedSlot = -1, state = {}, purse = null, onRefused, onDone }) {
     this.roster = Array.from({ length: DATA_SLOTS }, (_, i) => roster?.[i] ?? null);
     this.inventory = inventory;
     this.selectedSlot = selectedSlot;
     this.state = state;
+    this.purse = purse;
     this.onRefused = onRefused;
     this.onDone = onDone;
 
@@ -116,6 +140,8 @@ export class ShopScreen {
     this.done = false;
     this.firePrev = false;
     this.dirPrev = { up: false, down: false, left: false, right: false };
+
+    this.#pruneRoster();         // an unaffordable starting item is never shown, CS:0x72c9
   }
 
   /** The item id under the cursor, or `null` on an empty cell / EXIT. */
@@ -175,11 +201,21 @@ export class ShopScreen {
   }
 
   #buy(id) {
+    const cost = PRICES[id] ?? 0;
+    if (this.purse && this.purse.total < cost) {
+      /* CS:0x72c9's own affordability filter would never have left this id
+       * selectable in the first place; reachable here only if money changed
+       * out from under an already-previewed slot. Refuse rather than let
+       * the purse go negative. */
+      return this.lastPurchase = { id, cost, refused: true, reason: 'unaffordable' };
+    }
     const rank = CONSUMABLES.findIndex((c) => c.type === id);
     if (rank >= 0) {
       this.purchasedCategories.add(rank);
+      if (this.purse) this.purse.add(-cost);         // CS:0x6ef7 — deduct on confirm
       const result = safeApplyConsumable(CONSUMABLES[rank], this.state);
-      return this.lastPurchase = { id, rank, effect: CONSUMABLES[rank].effect, result };
+      this.#pruneRoster();
+      return this.lastPurchase = { id, rank, cost, effect: CONSUMABLES[rank].effect, result };
     }
     /* A weapon-type id (no CONSUMABLES rank) — DS:0x5060[category]==0 in the
      * original. There is no established category id for a non-consumable
@@ -188,10 +224,35 @@ export class ShopScreen {
     const slot = this.inventory.findIndex((v, i) => v === INVENTORY_EMPTY && i !== this.selectedSlot);
     if (slot < 0) {
       if (this.onRefused) this.onRefused('', REFUSAL_MESSAGE_PRIORITY);
-      return this.lastPurchase = { id, refused: true };
+      return this.lastPurchase = { id, cost, refused: true };
     }
+    if (this.purse) this.purse.add(-cost);
     this.inventory[slot] = id;
-    return this.lastPurchase = { id, slot };
+    this.#pruneRoster();
+    return this.lastPurchase = { id, slot, cost };
+  }
+
+  /* Not eligible once its category is locked out for this visit (`DS:0x319`)
+   * or its price now exceeds the purse (`FUN_1000_7392` via `CS:0x72c9`).
+   * The full original rebuild also re-applies two still-unresolved
+   * eligibility gates (`UNKNOWN_shop_eligibility_gates`) — not reproduced
+   * here, disclosed rather than guessed at. */
+  #isEligible(id) {
+    if (id == null) return false;
+    const rank = CONSUMABLES.findIndex((c) => c.type === id);
+    if (this.purchasedCategories.has(rank >= 0 ? rank : id)) return false;
+    const cost = PRICES[id];
+    if (cost != null && this.purse && this.purse.total < cost) return false;
+    return true;
+  }
+
+  /* CS:0x7233/0x7276 rebuild the visible grid after every purchase — a
+   * bought-out category or a now-unaffordable item drops out rather than
+   * staying selectable. */
+  #pruneRoster() {
+    for (let i = 0; i < DATA_SLOTS; i++) {
+      if (this.roster[i] != null && !this.#isEligible(this.roster[i])) this.roster[i] = null;
+    }
   }
 
   /** Text-only rendering — no shop-icon sprite sheet was RE'd this session,
@@ -203,6 +264,7 @@ export class ShopScreen {
     if (!glyphs) return;
     if (renderer.clear) renderer.clear(0);   // no backdrop bitmap was RE'd — plain background
     drawCentered(renderer, glyphs, 'SHOP', 8);
+    if (this.purse) drawText(renderer, glyphs, `$${this.purse.total}`, 16, 8);
     for (let row = 0; row < GRID_ROWS; row++) {
       for (let col = 0; col < GRID_COLS; col++) {
         const slot = row * GRID_COLS + col;
@@ -212,7 +274,9 @@ export class ShopScreen {
         const rank = CONSUMABLES.findIndex((c) => c.type === id);
         const label = (rank >= 0 ? CONSUMABLES[rank].name : `#${id}`).toUpperCase();
         const marker = slot === this.cursor ? (this.previewId === id ? '>>' : '>') : '  ';
-        drawText(renderer, glyphs, `${marker}${label}`, 16, 32 + slot * 12);
+        const price = PRICES[id];
+        const priceText = price != null ? ` ${price}` : '';
+        drawText(renderer, glyphs, `${marker}${label}${priceText}`, 16, 32 + slot * 12);
       }
     }
     drawCentered(renderer, glyphs, this.cursor === EXIT_SLOT ? '>EXIT<' : 'EXIT', 188);

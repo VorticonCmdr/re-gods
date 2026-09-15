@@ -1022,8 +1022,8 @@ async function main() {
    * leaving the shop does not load anything a second time. See
    * Gods/docs/shop.md's own "Forcing shop entry live" section for how this
    * order was established (and why entering the shop directly, skipping
-   * the level load, crashes). No price is charged for anything bought here
-   * — `UNKNOWN_shop_prices`, see shop.js's own header. */
+   * the level load, crashes). Real prices are charged — `UNKNOWN_shop_
+   * prices` is closed, see shop.js's own `PRICES` table and shop.md. */
   async function enterViaPassword(matchWorld) {
     uiState = 'shop';
     purse = new Purse(); score = new Score();
@@ -1035,6 +1035,7 @@ async function main() {
       roster: shopRosterForWorld(matchWorld),
       inventory,
       state: { health, arsenal },
+      purse,
       onDone: () => { uiState = 'game'; shopScreen = null; },
     });
   }

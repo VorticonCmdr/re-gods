@@ -19,7 +19,7 @@ import { scanZones, unpackTeleportDest, resolveExitDestination,
          PASSWORD_SLOTS } from '../game/zones.js';
 import { TitleMenu, PasswordEntry, MENU_OPTIONS } from '../game/title-menu.js';
 import { ShopScreen, GRID_COLS, GRID_ROWS, GRID_SLOTS, EXIT_SLOT, DATA_SLOTS,
-  SELL_ID_BASE } from '../game/shop.js';
+  SELL_ID_BASE, PRICES } from '../game/shop.js';
 import { TallyScreen, timeBonus, healthBonus, moneyBonus, POOL_STEP,
          WAIT_AFTER_SUMMARY_TICKS, WAIT_AFTER_COUNTDOWN_TICKS,
          SFX_EVERY_N_STEPS } from '../game/tally.js';
@@ -14101,6 +14101,50 @@ export function checkShop() {
     check('the refusal fires at message priority 0x19 (25), matching '
       + 'message-line.md\'s own "object messages, shop refusals" row',
       refused === 0x19);
+  }
+
+  /* ── prices, live DS:0x2a4e + purchase-confirmed — UNKNOWN_shop_prices
+   * is CLOSED, see shop.md ─────────────────────────────────────────── */
+  {
+    /* Literals independently cited from this session's live purchase-delta
+     * capture (shop.md), not derived from PRICES itself — the same pattern
+     * "GRID_SLOTS === 18" above already uses for a shipped constant. */
+    check('id 70 costs exactly 650 — the live DS:0x194 purchase delta this '
+      + 'session observed, unique among all 12 known prices', PRICES[70] === 650);
+    check('id 0 costs exactly 4000 — live purchase-confirmed', PRICES[0] === 4000);
+    check('id 42 costs exactly 20000 — the highest of the 12 known prices, '
+      + 'live-read from DS:0x2a4e', PRICES[42] === 20000);
+
+    const makePurse = (total) => ({ total, add(v) { this.total += v; } });
+    const fire = { up: false, down: false, left: false, right: false, fire: true };
+    const release = { up: false, down: false, left: false, right: false, fire: false };
+
+    const roster = new Array(DATA_SLOTS).fill(null);
+    roster[0] = 70;   // price 650
+    const purse = makePurse(80000);
+    const s = new ShopScreen({ roster, inventory: [INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY], purse, state: {} });
+    s.step(fire); s.step(release);
+    s.step(fire); s.step(release);
+    check('a real purchase deducts exactly its price from the purse '
+      + '(CS:0x6ef7), independently confirmed live this session',
+      purse.total === 80000 - 650);
+    check('the purchased slot is pruned from the roster afterward — its '
+      + 'category is locked out for the rest of this visit (DS:0x319)',
+      s.roster[0] === null);
+
+    const poorRoster = new Array(DATA_SLOTS).fill(null);
+    poorRoster[0] = 42;   // price 20000
+    const poorPurse = makePurse(100);
+    const s2 = new ShopScreen({ roster: poorRoster, inventory: [INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY], purse: poorPurse, state: {} });
+    check('an unaffordable item is pruned from the roster at construction '
+      + '(CS:0x72c9\'s own affordability filter) — never shown as buyable',
+      s2.roster[0] === null);
+
+    const freeRoster = new Array(DATA_SLOTS).fill(null);
+    freeRoster[0] = 42;
+    const s3 = new ShopScreen({ roster: freeRoster, inventory: [INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY], state: {} });
+    check('omitting purse skips pricing entirely — every item stays '
+      + 'eligible, the pre-pricing behavior', s3.roster[0] === 42);
   }
 
   /* ── EXIT, CS:0x6e74-0x6e7e ────────────────────────────────────────── */
