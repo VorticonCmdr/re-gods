@@ -7976,6 +7976,8 @@ export async function checkWeaponsProjectiles(fetchRaw) {
         p.tick(map, I({ right: true, down: true }), null, 1, pickup);
         check('crouch entry lands on the facing-specific state (18=right)',
           p.state === ST.CROUCH && p.stateIndex === PS.CROUCH_R);
+        check('...with phase zeroed too (CS:0x59ef), same shared path the stopped-pose entry uses',
+          p.phase === 0);
 
         p.tick(map, I({ down: true }), null, 1, pickup);
         check('crouching with FIRE released does NOT collect the key',
