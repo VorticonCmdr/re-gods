@@ -15,10 +15,11 @@ opens exactly once per game, via password entry only" claim looks unfamiliar.
 > grid and slot-17-is-EXIT were additionally **live-confirmed under DOSBox**: forced
 > into the world-2 shop via the isolated-write technique (below), screenshotted, and
 > the on-screen icon layout matches the disassembled cursor math exactly. Item
-> **prices are not established** — see `UNKNOWN_shop_prices` — despite the price
-> *formula* being fully disassembled; that gap and how it happened are recorded
-> honestly rather than papered over, because a wrong number here would be worse
-> than none.
+> **prices are now established** for the 12 ids this port's own world-2 roster
+> uses — see `UNKNOWN_shop_prices`, closed in a later session via a machine-parsed
+> live memory dump (not a hand transcription) plus independent live purchase
+> confirmation. The fuller table (ids 0-131) is read and landmark-verified but not
+> purchase-confirmed past those 12.
 
 ## Forcing shop entry live, without a real password
 
@@ -42,7 +43,29 @@ shop eventually crashes solid (CS:EIP lands executing the interrupt
 vector table's own bytes as code) after enough ticks. Routing through `006f`
 survived; direct-to-`0643` did not. `DS:0x42` (world) is set to `2`/`3`/`4`
 before the injection; `DS:0x38c` is already `1` from title-screen entry and
-does not need touching.
+does not need touching. (A later session found the `DS:0x432` slot-0
+password write described above is not actually load-bearing — setting only
+`DS:0x42`/confirming `DS:0x38c` and injecting is sufficient; it may have been
+a leftover from an earlier, abandoned real-password attempt.)
+
+**The patch must be one-shot, not left permanent — a second failure mode,
+distinct from the `006f`-vs-`0643` one above.** `FUN_1000_241d` is called
+from every idle/menu/**shop** loop, so leaving the far-call bytes in place
+means the first time anything inside `006f`'s own world calls the input
+poller again — including the shop's own loop, once it starts — execution
+lands right back on the patched address and re-enters `006f`, runaway,
+corrupting the stack. This manifests as the emulator's frame counter still
+advancing while the screen is permanently stuck (not a hard crash) — a
+distinct symptom from the `006f`-vs-`0643` crash above, discovered when a
+later session replayed this exact recipe without the fix and hung at the
+high-score screen with input dead. **Fix**: add a second execute breakpoint
+at the far-call's own target (`FUN_1000_006f`'s live address) before
+resuming from the `0x241d` breakpoint. When it fires, `EIP` is already past
+the consumed far call; restore the original 5 bytes at `0x241d` (captured
+from the first breakpoint hit's own `code_bytes`, e.g. `53 50 52 51 56` —
+`PUSH BX/AX/DX/CX/SI`) before continuing. `006f` then runs, calls the level
+loader, and opens the shop with an intact input poller for its own loop to
+keep using.
 
 ## The grid: 18 cells, 3×6, clamped not wrapped, slot 17 is EXIT
 
@@ -275,45 +298,72 @@ and the buy-confirm price deduction (`CS:0x6ef7`-`0x6efc`, byte-swapped via
 different instruction sequence) call. The **formula is `[PROVEN]`** — read
 directly off two independent call sites' own disassembly, not the decompiler.
 
-## `UNKNOWN_shop_prices`
+## `UNKNOWN_shop_prices` — CLOSED for the 12 ids this port's roster uses
 
-The table **contents** at `DS:0x2a54` (stride 10, price at the record's own
-first word, byte-swapped) were captured once, live, as a 730-byte dump
-covering ids `0`-`72`. This session initially flagged that capture as
-disproven by the affordability filter — but that check used the wrong money
-value (`14464`, the low word only; see the correction above, the real figure
-is `80000`), and against `80000` every decoded price for the 12 relevant ids
-is in fact affordable. That specific objection doesn't hold.
+**History of two retracted objections, kept for the record.** An earlier
+pass of this session hand-transcribed a 730-byte dump of `DS:0x2a54` (stride
+10, price at the record's own first word, byte-swapped) into a file to parse
+with a script, and flagged it as untrustworthy twice: first, that several
+decoded prices exceeded the observed starting money (`14464`) — wrong, that
+was only the low word of a 32-bit value whose real figure is `80000`, and
+against `80000` every decoded price for the 12 relevant ids is affordable;
+second, that `FUN_1000_7276`'s ascending sort of survivors by
+`FUN_1000_7392`'s value should make a live capture's buy-only subsequence
+monotonic, and it wasn't — also wrong, since `FUN_1000_7392` reads a
+*different* table for `id >= 0xc0` (sell-side, `DS:0xe2b6`, never
+calibrated), and both live captures interleave sell ids into the same
+sorted list, so checking monotonicity of only the buy-only subsequence of a
+jointly-sorted list proves nothing. Both objections are retracted. What
+actually remained wrong with that pass was narrower and real: the
+transcription was independently known to be short by one element (729 of
+730), and, being a single hand-copy nobody had re-read, no number from it
+should have been trusted regardless.
 
-A second objection was raised and retracted this session: that
-`FUN_1000_7276`'s ascending sort of its surviving candidates by
-`FUN_1000_7392`'s return value should make the buy-only subsequence of a live
-capture's on-screen order monotonic, and it wasn't. That check is **invalid**,
-not merely inconclusive — `FUN_1000_7392` returns a value from a *different*
-table for `id >= 0xc0` (`DS:0xe2b6 + (id-0xc0)*80`, sell-side, a scale never
-established this session), and both live captures interleave sell ids into
-the same sorted list (run 2 has three at positions 7, 8, and 13). Sorting buy
-and sell keys together and then checking only the buy-only subsequence for
-monotonicity is not a valid test — removing interleaved elements from a
-jointly-sorted sequence does not preserve order in what remains. So this
-objection is retracted, not just weakened.
+**Closed in a later session, by not trusting a hand transcription at all.**
+`DS:0x2a4e` (the record start; price is at each record's own `+6`/`+7`) was
+read live via the DOSBox bridge's `mem_read` in `base64` view and decoded
+by a script straight from that base64 string — no manual retyping of any
+byte anywhere in the pipeline, the exact failure mode of the earlier pass.
+Two reads (2048 bytes total) cover records `0`-`204`; a per-record tag byte
+at each record's own offset `+0` increments by exactly 1 every record,
+wrapping `0xff -> 0x00`, with **zero deviation for 132 consecutive
+records** (ids `0`-`131`, tag `0xaa` through `0xff` then `0x00`-`0x2d`) —
+far stronger self-consistency than the old dump's 71-record run with a
+known one-element defect. Record `132` breaks the pattern, marking where
+this table actually ends (**not** id `72` as the old, incomplete
+transcription assumed).
 
-What actually keeps this item open is narrower: the 730-byte dump is a
-**single, unverified, hand-transcribed capture**, never independently re-read.
-A record-boundary landmark (a monotonic counter at each record's own offset
-`+3`) confirms the record *boundaries* were right for ids `1`-`72`, but a
-landmark elsewhere in a record proves alignment, not that every byte in the
-record was copied correctly, and the transcription is independently known to
-be short by one element (729 of 730, isolated to record `0` or record `72`'s
-tail — see the transcription note above). That's a real, if narrow, defect;
-absent a second independent read, no specific price number from this capture
-should be trusted. **No specific price number from that capture is cited
-anywhere in this file or in the `gods-web` port** — the formula
-(`FUN_1000_7392`) is solid and cited; the values are not. A future session
-should re-read `DS:0x2a54` (id `<0xc0`) and `DS:0xe2b6` (id `>=0xc0`, stride
-80) directly with a machine-verified parse (e.g. a script fed the tool's own
-JSON output programmatically, not a hand-copy) rather than trying to revive
-the sort-order check.
+**Independently corroborated by four live purchases**, a check the earlier
+pass never ran: with a fresh `80000`-money shop open, the actual `DS:0x194`
+money deduction on a real two-press buy matched the freshly-decoded price
+exactly, for four different ids —
+
+| id (slot bought) | decoded price | live `DS:0x194` delta |
+|---|---|---|
+| 70 | 650 | 650 |
+| one of `{51,52,53,72}` | 1000 | 1000 |
+| one of `{51,52,53,72}` | 1000 | 1000 |
+| one of `{0,44}` | 4000 | 4000 |
+
+The first is a **unique** match — `650` appears nowhere else in the decoded
+table — so this is not "a plausible-looking number," it is the game's own
+buy-confirm code path (`CS:0x6ef7`) independently agreeing with a plain
+memory read, through no shared code or shared transcription between the two.
+
+**The 12 prices this port's world-2 roster needs**, all live-read and the
+first live-purchase-confirmed as above (see `gods-web`'s `game/shop.js`
+`PRICES`):
+
+| id | 0 | 35 | 36 | 38 | 42 | 44 | 51 | 52 | 53 | 70 | 71 | 72 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| price | 4000 | 8000 | 10000 | 5000 | 20000 | 4000 | 1000 | 1000 | 1000 | 650 | 1300 | 1000 |
+
+The broader table (ids `0`-`131`, all landmark-verified but only these 12
+purchase-confirmed) is not ported anywhere — no world 3/4 roster exists yet
+to need it (`UNKNOWN_shop_roster_source` is still open) — but is available
+for a future session that reads `DS:0x51aa`'s real per-world lists. Sell-side
+values (`DS:0xe2b6`, id `>=0xc0`) remain entirely unresolved — a different
+item, `UNKNOWN_shop_tradein_value`.
 
 ## `UNKNOWN_shop_roster_source`
 
@@ -356,6 +406,9 @@ machinery by matching `type` — real, byte-grounded content, not invented, but
 explicitly a *sample* filtered under one runtime state, not the definitive
 per-world list (`UNKNOWN_shop_roster_source`, `UNKNOWN_shop_eligibility_gates`).
 Worlds 3/4 get an empty (EXIT-only) roster, disclosed in code, pending the same
-data for those worlds. No price is shown or charged anywhere in the port
-(`UNKNOWN_shop_prices`) — purchases are free. Sell is not ported — see
-`UNKNOWN_shop_tradein_value`.
+data for those worlds. Real prices ARE now shown and charged for those 12 ids
+(`game/shop.js`'s `PRICES` table, `UNKNOWN_shop_prices` closed — see above);
+the visible grid also re-prunes itself after every purchase for the category
+lockout and current affordability, a partial port of the original's own
+roster rebuild (the two `UNKNOWN_shop_eligibility_gates` predicates are not
+reproduced). Sell is not ported — see `UNKNOWN_shop_tradein_value`.
