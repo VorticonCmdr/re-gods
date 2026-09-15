@@ -139,8 +139,11 @@ covers whether any shipped world roster is ever long enough to trigger it.
 
 ### Two independent live captures of world 2, and why they disagree
 
-Both forced via the same technique (money `0x3880`=14464, fresh spawn, no
-prior purchases):
+Both forced via the same technique (fresh spawn, no prior purchases, money set
+by `FUN_1000_0643` itself: `DS:0x194:=0x3880`, `DS:0x196:=1` — the FULL 32-bit
+value is `0x1_3880 = 80000`, **not** `0x3880` alone; an earlier pass in this
+session read only the low word and treated `14464` as the starting stash,
+which is wrong and is corrected here):
 
 | Run | Survivors (`0x408c`, in on-screen order) |
 |---|---|
@@ -156,6 +159,27 @@ never decoded, so the SAME world's shop can legitimately show a different item
 count from one boot to the next. **Do not treat either list as "the" world-2
 roster** — both are one filtered sample of it, taken at different eligibility
 states. The raw source (`DS:0x51aa`'s own 4 pointers) was never read.
+
+### The 12 buy ids are exactly 12 `gods-web` `CONSUMABLES` types — independent cross-check
+
+`{0,35,36,38,42,44,51,52,53,70,71,72}` — the full stable-core buy set from both
+runs above — is **exactly** the set of `type` values already present in
+`gods-web`'s own `game/consumables.js` `CONSUMABLES` table (ranks 0, 3, 4, 6,
+10, 12, 14, 15, 16, 19, 20, 21 respectively: health, health, starburst,
+invulnerable, extraLife, freeze, three weaponArc ranks, and three more health
+ranks). Twelve items, twelve exact matches, zero misses. That table was built
+from a completely different investigation (in-level consumable pickups, an
+earlier session, no connection to the shop work this session) and uses the
+POBJECTS object-type numbering throughout the rest of this project. This is
+strong, independent confirmation that **the shop's own item ids are POBJECTS
+type numbers** — not a separate shop-only id space — and, as a side effect,
+that this session's own `0x408c` reads (the 12 ids themselves, as opposed to
+their prices, below) are correct: 12 essentially-arbitrary-looking numbers
+landing on exactly the auto-use consumable ranks already on record is not
+plausible by chance. It also explains `DS:0x5060` cheaply: every one of these
+12 is a "give effect immediately" type (`0x5060[category] != 0` in every
+observed case for world 2) — the give-to-inventory branch was not exercised by
+either live capture.
 
 Ids `≥0xc0` (`194`, `197`, `201` here) are **not** extra high-priced buy items —
 `FUN_1000_6e62` (below) routes any id `≥0xc0` to the sell path unconditionally,
@@ -255,21 +279,41 @@ directly off two independent call sites' own disassembly, not the decompiler.
 
 The table **contents** at `DS:0x2a54` (stride 10, price at the record's own
 first word, byte-swapped) were captured once, live, as a 730-byte dump
-covering ids `0`-`72`. That capture cannot be trusted: several ids that the
-SAME live session's own affordability filter had already accepted into the
-visible roster (with starting money `14464`) decode, under the proven formula
-above, to prices far exceeding `14464` (`id 51 → 59454`, `id 70 → 62597`) —
-direct proof that this session's own hand-transcription of the 730-number
-tool result into a file (done to parse it with a script, since eyeballing a
-flat 730-element array reliably is not something to trust either) dropped or
-mis-copied bytes somewhere the record-boundary landmark (a monotonic counter
-byte at each record's own offset `+3`, confirmed unbroken for ids `1`-`72`)
-did not happen to catch. **No number from that capture is cited anywhere in
-this file or in the `gods-web` port.** The formula is solid; the specific
-prices for any item are not established. A future session should re-read
-`DS:0x2a54` (id `<0xc0`) and `DS:0xe2b6` (id `>=0xc0`, stride 80) directly with
-a machine-verified parse (e.g. a script fed the tool's own JSON, not a
-hand-copy) rather than trusting a manual transcription of a 730-number array.
+covering ids `0`-`72`. This session initially flagged that capture as
+disproven by the affordability filter — but that check used the wrong money
+value (`14464`, the low word only; see the correction above, the real figure
+is `80000`), and against `80000` every decoded price for the 12 relevant ids
+is in fact affordable. That specific objection doesn't hold.
+
+A second objection was raised and retracted this session: that
+`FUN_1000_7276`'s ascending sort of its surviving candidates by
+`FUN_1000_7392`'s return value should make the buy-only subsequence of a live
+capture's on-screen order monotonic, and it wasn't. That check is **invalid**,
+not merely inconclusive — `FUN_1000_7392` returns a value from a *different*
+table for `id >= 0xc0` (`DS:0xe2b6 + (id-0xc0)*80`, sell-side, a scale never
+established this session), and both live captures interleave sell ids into
+the same sorted list (run 2 has three at positions 7, 8, and 13). Sorting buy
+and sell keys together and then checking only the buy-only subsequence for
+monotonicity is not a valid test — removing interleaved elements from a
+jointly-sorted sequence does not preserve order in what remains. So this
+objection is retracted, not just weakened.
+
+What actually keeps this item open is narrower: the 730-byte dump is a
+**single, unverified, hand-transcribed capture**, never independently re-read.
+A record-boundary landmark (a monotonic counter at each record's own offset
+`+3`) confirms the record *boundaries* were right for ids `1`-`72`, but a
+landmark elsewhere in a record proves alignment, not that every byte in the
+record was copied correctly, and the transcription is independently known to
+be short by one element (729 of 730, isolated to record `0` or record `72`'s
+tail — see the transcription note above). That's a real, if narrow, defect;
+absent a second independent read, no specific price number from this capture
+should be trusted. **No specific price number from that capture is cited
+anywhere in this file or in the `gods-web` port** — the formula
+(`FUN_1000_7392`) is solid and cited; the values are not. A future session
+should re-read `DS:0x2a54` (id `<0xc0`) and `DS:0xe2b6` (id `>=0xc0`, stride
+80) directly with a machine-verified parse (e.g. a script fed the tool's own
+JSON output programmatically, not a hand-copy) rather than trying to revive
+the sort-order check.
 
 ## `UNKNOWN_shop_roster_source`
 
@@ -302,8 +346,16 @@ condition returns" statement. Do not guess a refund formula from this.
 See the port's own `game/shop.js` header for the current state — built and
 tested as a state machine (grid navigation, the two-press buy confirm, the
 `0x319` category lockout, the `0x5060` auto-use-vs-inventory branch, the
-selected-slot skip, the priority-`0x19` refusal message), fed roster and price
-data through an explicit constructor parameter rather than a hardcoded
-per-world table, specifically because `UNKNOWN_shop_roster_source` and
-`UNKNOWN_shop_prices` above are both still open. Sell is not ported — see
+selected-slot skip, the priority-`0x19` refusal message), fed roster data
+through an explicit constructor parameter rather than a hardcoded per-world
+table, specifically because `UNKNOWN_shop_roster_source` is still open. For
+world 2, `main.js` wires it with the live-captured 12-id buy set from this
+session (`{0,35,36,38,42,44,51,52,53,70,71,72}`, cross-checked above) dispatched
+straight into the existing `game/consumables.js` `CONSUMABLES`/`applyConsumable`
+machinery by matching `type` — real, byte-grounded content, not invented, but
+explicitly a *sample* filtered under one runtime state, not the definitive
+per-world list (`UNKNOWN_shop_roster_source`, `UNKNOWN_shop_eligibility_gates`).
+Worlds 3/4 get an empty (EXIT-only) roster, disclosed in code, pending the same
+data for those worlds. No price is shown or charged anywhere in the port
+(`UNKNOWN_shop_prices`) — purchases are free. Sell is not ported — see
 `UNKNOWN_shop_tradein_value`.
