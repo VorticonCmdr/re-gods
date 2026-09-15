@@ -350,6 +350,19 @@ table — so this is not "a plausible-looking number," it is the game's own
 buy-confirm code path (`CS:0x6ef7`) independently agreeing with a plain
 memory read, through no shared code or shared transcription between the two.
 
+**Confirmed global, not per-world/level-scoped, by a direct re-read.** The
+132-record dump above was captured during an ordinary world-1 start (no shop
+injection); the four purchase deltas were captured separately, in a
+world-2 shop. Those two facts alone leave open whether `DS:0x2a4e`'s
+*content* could differ by world even though its *address* doesn't — the
+same open question this file's own "Forcing shop entry" section already
+raises for level-scoped tables in general. Settled directly: the identical
+2048-byte range (`DS:0x2a4e`, records `0`-`204`) was re-read live with the
+world-2 shop actually open and diffed byte-for-byte against the world-1
+capture — **an exact match, all 2048 bytes**. The price table is populated
+once with the same fixed content regardless of which world's level loaded
+it, not a level-scoped economy that varies per world.
+
 **The 12 prices this port's world-2 roster needs**, all live-read and the
 first live-purchase-confirmed as above (see `gods-web`'s `game/shop.js`
 `PRICES`):
