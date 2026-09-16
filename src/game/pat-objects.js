@@ -307,13 +307,12 @@
  *     table's own world 1/4 rows first. A class index past what any world
  *     transcribes still resolves to `null` and is silently inert (matching
  *     spawn.js's own `CLASS_TABLES_B` convention), not a guess.
- *   - No `PGOD0{1..4}.PAT` file is vendored into this port's asset
- *     directory (`public/game/` has no `.PAT` files today), so nothing
- *     currently calls `parsePatFile`/`PatGroups.activate` from a real
- *     level load — the module is complete and unit-tested against
- *     synthetic bytes, but INERT in the live game until those four files
- *     are added and wired into `main.js`'s own level loader. Flagged
- *     explicitly rather than left to look silently finished.
+ *   - ⚠️ STALE NOTE REMOVED. This header used to claim no `PGOD0{1..4}.PAT`
+ *     file was vendored and that the module was "INERT in the live game".
+ *     Both halves are long out of date: `public/game/PGOD01..04.PAT` are
+ *     present, `main.js`'s level loader fetches one per world, and
+ *     `main.js` calls `PatGroups.activate` from its selector-1 handler.
+ *     The module is live on every level that dispatches selector 1.
  */
 
 import { attackHero, creatureScansGrid } from './combat.js';
@@ -600,8 +599,28 @@ export class PatGroups {
         continue;
       }
 
-      for (const s of slot.subs) {
-        if (s.key === 0) continue;                      // CS:0xBA5B/BA61 — fully retired
+      /* CS:0xBB6E `CMP DX,word ptr [SI]` — the sub-record walk is bounded by
+       * the group's OWN seeded count, not by the 10-entry array. `#seed`
+       * seeds only `entityCount` of them and `freeSub()` leaves the tail at
+       * `key: 0`, so walking all ten would count the unseeded tail as
+       * "finished" and release the slot on its first run tick — re-activating
+       * a new group on top of live enemies. The bound is the CLAMPED count
+       * (`#seed` clamps the same way at its own loop): with a descriptor
+       * count above 10 the raw count could never be reached and the slot
+       * would leak forever, which is the very bug this block removes. */
+      const n = Math.min(slot.desc.entityCount, SUBRECORDS_PER_GROUP);
+      let finished = 0;
+      for (let i = 0; i < n; i++) {
+        const s = slot.subs[i];
+        /* CS:0xBA5B `CMP word ptr [DI+0xc],0` / `JNZ ba64` / `JMP bbbe` —
+         * an already-retired sub-record jumps to the `INC CX` tail, so it
+         * re-counts EVERY tick. That is what lets a fully-killed group
+         * release at all: the death-completion retire at CS:0xBBE2 falls to
+         * the bare loop tail (CS:0xBB6A) and is NOT counted on its own
+         * frame. This sits above the freeze gate deliberately — CS:0xBA7A
+         * skips movement while frozen but CS:0xBBB2 is still reached, so a
+         * fully-retired group must still be able to release while frozen. */
+        if (s.key === 0) { finished++; continue; }       // CS:0xBA5B/BA61 -> BBBE
 
         if (s.key < 0) {                                  // CS:0xBA64 `JNS ba69` fallthrough -> JMP bbd6
           const d = this.#deathDraw(slot, s, cam);
@@ -618,9 +637,12 @@ export class PatGroups {
           this.#move(slot, s, cam);
         }
 
-        if (s.key === 0) continue;                        // #move just retired it — CS:0xBAB5 jumps
-                                                            // straight to the loop tail, skipping the
-                                                            // hunter-list append, both handlers AND draw
+        /* #move just retired it — CS:0xBAB6 falls to CS:0xBAC1 `JMP bbbe`,
+         * the same `INC CX` tail, so an off-screen retirement counts on the
+         * very tick it happens as well as on every tick after. */
+        if (s.key === 0) { finished++; continue; }         // CS:0xBAB6 -> BAC1 -> BBBE
+                                                            // skips the hunter-list append,
+                                                            // both handlers AND the draw
         const screenX = s.x - cam.x, screenY = s.y - cam.y;
         if (huntTargets) {
           huntTargets.push({ x: screenX, y: screenY, key: s.key });   // CS:0xBB0F-BB1A
@@ -636,6 +658,33 @@ export class PatGroups {
         if (health) this.#contactAndDamage(slot, s, cam, hero, health, grid, decodeTag, opts);
 
         drawn.push({ x: screenX, y: screenY, sprite: slot.cls.spriteBase }); // UNKNOWN_pat_animation_frame — see header
+      }
+
+      /* CS:0xBBB2-0xBBB6 — RELEASE THE GROUP SLOT.
+       *
+       *     bbb2  CMP  CX, word ptr [SI]       ; retired tally vs entityCount
+       *     bbb4  JL   0x1000:bbbb             ; not all retired -> keep it
+       *     bbb6  MOV  word ptr [SI+0x4], 0x0  ; <- back on the free list
+       *
+       * The predicate is `>=`, not `==`: identical for well-formed data, but
+       * an entityCount-0 group would park a slot forever under `==`.
+       *
+       * This port had NO release at all — `active` went false only in
+       * `clear()` at level reset — so the 5-slot pool was a budget of FIVE
+       * PAT GROUPS EVER, not five concurrent. Level 1A dispatches 16 distinct
+       * selector-1 activations, 1B 18, 4A 22; every one past the fifth was
+       * consumed-and-lost (the allocator consumes its event record at
+       * CS:0xB908 before it ever looks for a slot, so a refusal is
+       * permanent). That was the single biggest missing-enemy channel on
+       * level 1. See tools/spawn-census.mjs.
+       *
+       * Both bits of the CS:0xBBB6 word write are cleared, mirroring the
+       * bitfield at slot+0x04 (bit1 = allocated, bit0 = seeded); `activate()`
+       * also resets `materialised`, but clearing it here keeps the release
+       * self-contained rather than depending on that. */
+      if (finished >= n) {                                // CS:0xBBB4 `JL`
+        slot.active = false;                              // CS:0xBBB6, bit 1
+        slot.materialised = false;                        // CS:0xBBB6, bit 0
       }
     }
     return drawn;

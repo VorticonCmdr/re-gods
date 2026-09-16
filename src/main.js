@@ -42,7 +42,7 @@ import { Destructibles } from './game/destructible.js';
 import { resetWeaponArc, setWeaponArc, projectileSprite, FIRE_SFX,
          TERRAIN_SFX, AXE_BOUNCE_SFX } from './game/projectiles.js';
 import { parseGroupsB, parseGroupsA, GroupSlots, spriteForEntity, MAX_ENTITIES,
-         CREATURE_DESCRIPTOR_BASE } from './game/spawn.js';
+         CREATURE_DESCRIPTOR_BASE, groupSlotReleasable } from './game/spawn.js';
 import { EntityB, MODE, MODE_TABLE, groundBelow, isDying, EST,
 DEATH_SPRITE_BASE, DEATH_FRAMES, stealAttemptB, stepCarriedItemB,
 groupRewardPosition } from './game/entity.js';
@@ -204,20 +204,36 @@ async function loadLevel(key) {
    * groupsSel2 are also parsed in full above. */
   const patDescriptors = Array.from({ length: 100 },
     (_, i) => parsePatSpawnDescriptor(palfilsData, i));
-  /* CS:0x3855 — `PGOD0<world>.PAT` loads ONLY on sublevel 'a'
-   * (`cmp byte [0x43],0 / jnz`). `key[1]` is 'A' or 'B' (palfilsNameFor's
-   * own convention), so this mirrors that gate exactly. A fetch failure
-   * (e.g. the asset genuinely missing) leaves both `null` rather than
-   * throwing — the level still loads, just with zero PAT objects. */
+  /* CS:0x3855 — the `PGOD0<world>.PAT` FILE READ is skipped on sublevel 'b'
+   * (`cmp byte [0x43],0 / jnz 386a`, so 385c-3867's `CALL 0x257e` load runs
+   * only for 'a').
+   *
+   * ⚠️ THAT IS NOT "no PAT objects on B sublevels", and reading it that way
+   * cost this port 75 enemies across 1B/2B/4B. The load's destination is the
+   * FIXED buffer DS:0x500 (CS:0x385F `mov bx,0x500`), which is exactly where
+   * the per-frame walker reads its directory from (CS:0xB9B8 `mov bp,0x500 /
+   * add bp,ax`). Nothing clears that buffer between sublevels, and the file
+   * is per-WORLD — 1A and 1B both want PGOD01.PAT — so on entering 1B the
+   * blob loaded for 1A is still resident and the walker seeds from it
+   * normally. The skip is a don't-reload-the-same-file optimisation, not a
+   * feature gate.
+   *
+   * Loading it for both sublevels therefore reproduces the bytes the
+   * original has in memory during ordinary play, in which a world's 'a'
+   * always precedes its 'b'. (Entering a 'b' level cold via password leaves
+   * DS:0x500 holding whatever the previous world left there — genuinely
+   * stale data the original reads anyway. That is not modelled; this port
+   * serves the correct world's blob in every case.)
+   *
+   * A fetch failure leaves both `null` rather than throwing — the level
+   * still loads, just with zero PAT objects. */
   let patDirectory = null, patBlobBytes = null;
-  if (key[1] === 'A') {
-    try {
-      const patRaw = await fetchRaw(`game/PGOD0${key[0]}.PAT`);
-      patBlobBytes = dclDecompress(patRaw).data;
-      patDirectory = parsePatDirectory(patBlobBytes);
-    } catch (e) {
-      console.warn(`PGOD0${key[0]}.PAT failed to load — PAT objects inert on this level`, e);
-    }
+  try {
+    const patRaw = await fetchRaw(`game/PGOD0${key[0]}.PAT`);
+    patBlobBytes = dclDecompress(patRaw).data;
+    patDirectory = parsePatDirectory(patBlobBytes);
+  } catch (e) {
+    console.warn(`PGOD0${key[0]}.PAT failed to load — PAT objects inert on this level`, e);
   }
   const drawObjects = sortForDraw(map.objects.filter((o) => !isDeadType(o.type)), cats);
 
@@ -735,10 +751,14 @@ async function main() {
    * `UNKNOWN_sysA_0x1f4_elimination_detector`) — a distinct mechanism from
    * System-B's above, not a duplicate, despite the identical +0x10 offset
    * on a different 50-record descriptor table. Same reward-fire condition
-   * as System B (dead-or-dying === count, CS:0xDFC4); the original's
-   * STRICTER dead-only slot-free condition (CS:0xDFF5) is not modelled
-   * here either, for the same reason System B's own block above doesn't:
-   * this port's GroupSlots has no fixed runtime-slot cap to recycle. */
+   * as System B (dead-or-dying === count, CS:0xDFC4). The original's
+   * STRICTER dead-only slot-free condition IS now modelled — see the
+   * release loop that follows the reward loop below.
+   * ⚠️ This comment used to end "this port's GroupSlots has no fixed
+   * runtime-slot cap to recycle", which was simply false: GroupSlots has
+   * ten (spawn.js RUNTIME_SLOTS), activate() refuses when they are all
+   * busy, and nothing ever freed one — so the pool filled and later
+   * activations were consumed-and-lost. That was the bug. */
   let groupsA = [];
   /* Stage 6 (CS:0xe659) is ported and now wired end to end for BOTH entity
    * systems: the reload timer, facing test and muzzle computation feed the
@@ -902,8 +922,13 @@ async function main() {
       }
       /* CS:0xEDAA/0xEDA6 — this batch's own "reward already given" latch,
        * tracked here since GroupSlots has no per-entity membership of its
-       * own. See spawn.js's `rewardId` and the file-header note on `popup`. */
-      groupsB.push({ desc: d, members, rewardGiven: false });
+       * own. See spawn.js's `rewardId` and the file-header note on `popup`.
+       * `slot` is carried so the group can RELEASE it on completion
+       * (CS:0xEDB1) — without that the 10-slot pool fills and every later
+       * selector-4 activation is consumed-and-lost. `released` latches the
+       * free so a stale group record can never zero a slot that a NEWER
+       * activation has since taken. */
+      groupsB.push({ desc: d, members, rewardGiven: false, slot, released: false });
       slot.state = 1;
     }
   };
@@ -930,8 +955,10 @@ async function main() {
       }
       /* CS:0xDFED/DFDB — System-A's own "reward already given" latch, the
        * same shape as groupsB's above (this port has no group-runtime slot
-       * of its own to hang it off, unlike CS:0xdf39's own `[bp+0x10]`). */
-      groupsA.push({ desc: d, members, rewardGiven: false });
+       * of its own to hang it off, unlike CS:0xdf39's own `[bp+0x10]`).
+       * `slot`/`released` carry System-A's own slot release (CS:0xDFF9) for
+       * the same reason System B's do — see that block. */
+      groupsA.push({ desc: d, members, rewardGiven: false, slot, released: false });
       slot.state = 1;
     }
   };
@@ -2028,6 +2055,39 @@ async function main() {
           popup.spawn(x, y, g.desc.rewardId, level.drawObjects);
         }
       }
+      /* CS:0xEDAA-0xEDB1 — RELEASE THE RUNTIME SLOT. Read fresh off the
+       * binary this session, because the predicate is NOT the reward's:
+       *
+       *     ed78  mov cl,[0x3c3]      ; members that are fully FREE
+       *     ed7c  add cl,[0x1f4]      ; + members still DYING
+       *     ed80  cmp cl,[si] / jnz   ; == count  -> the REWARD above
+       *     edaa  mov al,[0x3c3]      ; fully-FREE members ONLY, no dying
+       *     edad  cmp al,[si]
+       *     edaf  jl  edb6            ; fewer than count -> keep the slot
+       *     edb1  mov word [bp+0],0   ; <- free it
+       *
+       * So the reward fires on (FREE|DYING) === count but the slot frees
+       * only on FREE >= count: a group mid-death-animation has already paid
+       * its reward and still holds its slot. Reusing the reward predicate
+       * here would free the slot one death-fade early.
+       *
+       * The port had NO release at all, and main.js's own comment claimed
+       * GroupSlots had "no fixed runtime-slot cap to recycle" — it has ten
+       * (spawn.js RUNTIME_SLOTS). Levels 2A/3A/4A/4B activate 25-38 distinct
+       * System-B groups, so the pool filled and every later activation was
+       * consumed-and-lost. See tools/spawn-census.mjs for the per-level count.
+       *
+       * `[si]` is the DESCRIPTOR's own count, not the materialised member
+       * total; they differ only if count > MAX_ENTITIES, which no shipped
+       * descriptor does (measured counts are {1,2,3,4,5,10}). Comparing
+       * against members.length would silently change the predicate if that
+       * ever stopped being true, so the descriptor's count is what is used. */
+      for (const g of groupsB) {
+        if (g.released) continue;
+        if (!groupSlotReleasable(g.members, g.desc.count, EST.FREE)) continue;
+        g.released = true;
+        g.slot.state = 0;                                 // CS:0xEDB1
+      }
       /* `UNKNOWN_sysA_0x1f4_elimination_detector` — System-A's OWN, separate
        * group-elimination reward. Same dead-or-dying-vs-count shape as
        * System B's loop above (CS:0xDFC4), but with the bias arrangement
@@ -2051,6 +2111,23 @@ async function main() {
           const { x, y } = groupRewardPositionA(g.members);
           popup.spawn(x, y, g.desc.rewardId, level.drawObjects);
         }
+      }
+      /* CS:0xDFF1-0xDFF9 — System A's own slot release, structurally
+       * identical to System B's above and read off the binary the same way:
+       *
+       *     dfc0  add cl,[0x1f4] / dfc4 cmp cl,[si] / jnz   ; reward
+       *     dff1  mov cl,[0x3c3]      ; fully-FREE members ONLY
+       *     dff5  cmp cl,[si]
+       *     dff7  jl  dffe            ; keep the slot
+       *     dff9  mov word [bp+0],0   ; <- free it
+       *
+       * ⚠️ This project's docs cite "CS:0xDFF5" for this free; that address
+       * is the CMP. The store is at CS:0xDFF9. */
+      for (const g of groupsA) {
+        if (g.released) continue;
+        if (!groupSlotReleasable(g.members, g.desc.count, ESTA.FREE)) continue;
+        g.released = true;
+        g.slot.state = 0;                                 // CS:0xDFF9
       }
       /* Drain selector2.js's own group-elimination rewards (`CS:0xAED0`-
        * `0xAF0F`) into the SAME single-slot popup — previously computed

@@ -266,6 +266,38 @@ export function spriteForEntity(world, cls, mode, frame, MODE_ANIM) {
   return rec.base + MODE_ANIM[mode] + frame;
 }
 
+/** CS:0xEDAA-0xEDB1 (System B) and CS:0xDFF1-0xDFF9 (System A) — the
+ *  slot-release predicate, which is NOT the group-reward predicate.
+ *
+ *      ed78  mov cl,[0x3c3]     ; members whose state word is exactly 0
+ *      ed7c  add cl,[0x1f4]     ; + members still running a death fade
+ *      ed80  cmp cl,[si] / jnz  ; == count -> pay the group REWARD
+ *      edaa  mov al,[0x3c3]     ; the FREE tally alone, no dying
+ *      edad  cmp al,[si]
+ *      edaf  jl  edb6           ; fewer than count -> the slot stays busy
+ *      edb1  mov word [bp+0],0  ; <- released
+ *
+ *  So a group mid-death-animation has already paid its reward and still
+ *  holds its slot. `[0x3c3]` is incremented at exactly one site (CS:0xED4B),
+ *  reached only from `cmp word [di+8],0 / jz`, so it counts state === 0 and
+ *  nothing else — WAITING (-2) and MATERIALISING (-3) are not free either.
+ *
+ *  Lives here rather than inline in main.js so the suite can drive it; the
+ *  same reason frame.js exists.
+ *
+ *  @param members the group's materialised entities
+ *  @param count   the DESCRIPTOR's own entity count — `[SI]`, not
+ *    `members.length`. They differ only when count > MAX_ENTITIES, which no
+ *    shipped descriptor does; comparing against members.length would
+ *    silently change the predicate if that ever stopped being true.
+ *  @param FREE    the system's own FREE sentinel (EST.FREE, 0 in both)
+ */
+export function groupSlotReleasable(members, count, FREE) {
+  let free = 0;
+  for (const e of members) if (e.state === FREE) free++;
+  return free >= count;                      // CS:0xEDAF / 0xDFF7 `jl`
+}
+
 /** Runtime group slot — SS:0x36b4, 10 slots of 0x12 bytes. */
 export class GroupSlots {
   constructor() {

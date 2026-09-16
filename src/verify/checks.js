@@ -61,7 +61,7 @@ import { MODE, MODE_TABLE, EntityB, hopDelta, hopCursorNext, EST,
          stealAttemptB, carryOffsetB, stepCarriedItemB,
          groupRewardPosition } from '../game/entity.js';
 import { parseGroupsB, parseGroupsA, GroupSlots, spriteForEntity, CLASS_TABLES_B,
-         CREATURE_DESCRIPTOR_BASE, MAX_ENTITIES } from '../game/spawn.js';
+         CREATURE_DESCRIPTOR_BASE, MAX_ENTITIES, groupSlotReleasable } from '../game/spawn.js';
 import { EntityA, CLASS_TABLES_A, spriteForEntityA, rollStrategy,
          stageAccelerate, stageApply, stageFacingAndFire,
          SPRITE_BASE_8FRAME, SPRITE_BASE_6FRAME,
@@ -3187,6 +3187,56 @@ export function checkEntityA() {
 export async function checkSpawn(fetchRaw) {
   const { results, check } = makeChecker();
   const keys = ['1A','1B','2A','2B','3A','3B','4A','4B'];
+
+  /* ---- CS:0xEDAA-0xEDB1 / CS:0xDFF1-0xDFF9, THE SLOT RELEASE ----------
+   * The port used to have none at all: GroupSlots.activate() demands
+   * state===0, runSpawns() parked the slot at 1, and nothing returned it.
+   * Both pools are ten slots, so selector-4 activations past the tenth were
+   * consumed-and-lost for the rest of the level (2A=15, 3A=20, 4A=28, 4B=27
+   * lost on a full sweep — see tools/spawn-census.mjs). */
+  {
+    const FREE = 0, DYING = -1, WAITING = -2, MATERIALISING = -3;
+    const mk = (...states) => states.map((s) => ({ state: s }));
+
+    check('CS:0xEDB1 — a group whose every member is FREE releases its runtime slot',
+      groupSlotReleasable(mk(FREE, FREE, FREE), 3, FREE) === true);
+    check('CS:0xEDAF `jl` — one member short of the count keeps the slot busy',
+      groupSlotReleasable(mk(FREE, FREE), 3, FREE) === false);
+
+    /* THE ONE THAT MATTERS. The reward at CS:0xED80 counts [0x3c3]+[0x1f4]
+     * (free PLUS dying); the release at CS:0xEDAD counts [0x3c3] alone.
+     * Reusing the reward predicate for the release — the obvious wrong
+     * implementation, and what main.js's reward loop right above it does —
+     * frees the slot a whole death animation early, letting a new group
+     * activate while the old one is still fading on screen. */
+    check('CS:0xEDAD vs CS:0xED80 — a DYING member does NOT count toward the release, so the slot '
+      + 'outlives the death fade the group reward has already been paid for',
+      groupSlotReleasable(mk(FREE, FREE, DYING), 3, FREE) === false);
+    check('the hatch states are not free either — WAITING(-2)/MATERIALISING(-3) are routed away from '
+      + 'the [0x3c3] tally at CS:0xED64 just as DYING is',
+      groupSlotReleasable(mk(FREE, WAITING), 2, FREE) === false
+      && groupSlotReleasable(mk(FREE, MATERIALISING), 2, FREE) === false);
+
+    /* The comparand is the DESCRIPTOR's count (`[SI]`), not members.length —
+     * `jl` not `jz`, so an over-full group still releases rather than
+     * parking its slot forever. */
+    check('CS:0xEDAF is a signed `jl`, not an equality test: more free members than the descriptor '
+      + 'counts still releases the slot instead of leaking it',
+      groupSlotReleasable(mk(FREE, FREE, FREE), 2, FREE) === true);
+
+    /* End to end through the real pool: ten activations exhaust it, and a
+     * release makes the eleventh succeed where it used to be lost. */
+    const pool = new GroupSlots();
+    const desc = { count: 1, live: true };
+    for (let i = 0; i < 10; i++) pool.activate(desc);
+    check('ten activations exhaust GroupSlots and the eleventh is refused and counted '
+      + '(CS:0xDE2A — and the event was already consumed at CS:0xDE08, so it is lost for good)',
+      pool.activate(desc) === false && pool.lostActivations === 1);
+    pool.slots[3].state = 0;                       // what the release loop does
+    check('releasing one slot makes the next activation succeed — the fix turns a ten-groups-EVER '
+      + 'budget back into ten concurrent',
+      pool.activate(desc) === true && pool.lostActivations === 1);
+  }
 
   let live = 0, refs = 0, badRef = 0, outOfMap = 0, overCount = 0;
   const counts = new Set(), speeds = new Set(), perFile = [];
@@ -11914,6 +11964,60 @@ export async function checkPatObjects(fetchRaw) {
         const refused = groups.activate(desc, 1) === false;
         return refused && groups.lostActivations === before + 1;
       })());
+
+    /* ---- CS:0xBBB2-0xBBB6, THE GROUP-SLOT RELEASE ----------------------
+     * The port had none: `active` went false only in clear(), so the 5-slot
+     * pool was a budget of five PAT groups EVER, not five concurrent. Level
+     * 1A dispatches 16 distinct selector-1 activations and the allocator
+     * consumes its event record before looking for a slot (CS:0xB908), so
+     * 11 of them were consumed-and-lost permanently. These checks pin the
+     * release and, more importantly, pin the way it can be got wrong in the
+     * OVER-spawning direction. */
+    {
+      /* A 1-member group on a 2-byte path walks off the end of its blob and
+       * out of HOLD_BOX, retiring the sub-record (CS:0xBAB6); that must then
+       * release the whole slot. */
+      const runTicks = (entityCount, ticks) => {
+        const g = new PatGroups(directory);
+        g.blobBytes = blob;
+        g.activate({ entityCount, pathClassIndex: 0, staggerStep: 0, key: 7,
+                     behaviorClassIndex: 0, hiNibble: 0, loNibble: 0 }, 1);
+        const c = { x: 0, y: 0 }, h = { x: 0, y: 0 };
+        const sh = new EnemyShots(), lh = new LineHazards();
+        for (let i = 0; i < ticks; i++) g.step(c, 0, sh, lh, h, () => 0, 0, null);
+        return g;
+      };
+
+      /* 200 ticks because retirement is NOT immediate on path exhaustion:
+       * CS:0xBAB2's in-box branch backs the cursor off (`DEC BP`) and
+       * re-applies the last delta forever, so this sub-record creeps at
+       * dy=+1 from y=101 and only leaves HOLD_BOX (yMax 0xc4 = 196) ~96
+       * ticks later. That hold IS the mechanism — a group that never leaves
+       * the screen never releases its slot, in the original too. */
+      const done = runTicks(1, 200);
+      check('CS:0xBBB6 — a PAT group whose every sub-record has retired RELEASES its runtime slot, '
+        + 'so the 5-slot pool recycles instead of being a five-groups-ever budget',
+        done.slots[0].active === false, `active=${done.slots[0].active}`);
+      check('the release clears the seeded bit too — CS:0xBBB6 writes the whole WORD at slot+0x4 '
+        + '(bit1 allocated, bit0 seeded), so a reusing group re-seeds rather than resuming',
+        done.slots[0].materialised === false);
+      check('the released slot is genuinely back on the free list: a later activation reuses it '
+        + 'without being refused (CS:0xB918 tests the same word CS:0xBBB6 clears)',
+        done.activate(desc, 1) === true && done.lostActivations === 0);
+
+      /* THE REGRESSION GUARD, and the reason CS:0xBB6E bounds the walk.
+       * `subs` is a fixed 10-entry array but `#seed` fills only entityCount
+       * of them, leaving the tail at `key: 0` — the SAME value a retired
+       * sub-record carries. Counting the whole array (the obvious wrong
+       * implementation) makes a 2-member group look 8/10 finished on its
+       * first run tick and frees a slot with live enemies still in it,
+       * letting a new group activate on top of them. */
+      const live = runTicks(2, 2);   // seed tick + one run tick
+      check('CS:0xBB6E — the release walk is bounded by the group\'s OWN entityCount, so the eight '
+        + 'never-seeded `subs` entries (key 0, indistinguishable from retired) cannot make a live '
+        + '2-member group look finished and free its slot early',
+        live.slots[0].active === true);
+    }
 
     const g2 = new PatGroups(directory);
     g2.blobBytes = blob;
