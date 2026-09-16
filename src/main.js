@@ -1805,6 +1805,63 @@ async function main() {
         { x: box.x, y: box.y, w: box.w, h: box.h, strength: box.hp },
         { x: player.x, y: player.y, state: player.stateIndex }, health,
         { invuln: fx.invuln > 0 }).strengthOut;
+      /* CS:0xC041, via objects.js's dropCarriedItem — steal-and-carry's own
+       * periodic and death-time drops both land here, for BOTH entity
+       * systems (moved above the System-B loop, which now also needs it —
+       * see CS:0xEE61/EEB1/F054/F059, entity.js's own stepCarriedItemB and
+       * the DYING branch). Re-ranks the object array on a successful drop,
+       * same reason as the treasure-burst loot settle below: allocObject
+       * reuses a dead slot in place, but this port's own draw order is a
+       * one-time sort at load, not a per-frame partition like the
+       * original's export 32.
+       *
+       * Hoisted above the popup tick below, which needs it. */
+      const dropCarriedIntoWorld = (id, x, y) => {
+        const dropped = dropCarriedItem(level.drawObjects, id, x, y);
+        if (dropped) {
+          level.drawObjects = insertSpawned(
+            level.drawObjects.filter((o) => o !== dropped), level.cats, dropped);
+        }
+      };
+
+      /* ── THE SINGLE POPUP SLOT, AND WHO GETS IT ──────────────────────────
+       *
+       * Every "award an item on a kill" in the game contends for ONE slot
+       * (DS:0x1a0). A loser is not queued and not lost: CS:0xBF6B lands it
+       * immediately, right where it was awarded, instead of tossing it. So
+       * WHICH channel wins a contended frame is observable — it decides
+       * which reward arcs and which appears in place.
+       *
+       * The frame loop FUN_1000_006f fixes that priority by call order, and
+       * this file now follows it exactly. Every entry below is a call site
+       * inside 006f, read off the binary this session:
+       *
+       *     0x0209  CALL bf80   the TICK            <- here
+       *     0x0223  CALL ad88   selector-2          (aefa)
+       *     0x0285  CALL ed15   System B            (eda0, f068)
+       *     0x028b  CALL df39   System A            (dfe7, e27d)
+       *     0x0294  CALL b987   selector-1 PAT      (bba8)
+       *     0x029a  CALL 7b68   the awakened statue (7ca2)
+       *
+       * ⚠️ The port previously ran this list almost exactly BACKWARDS —
+       * statue first, tick last. Two consequences, both now fixed. The tick
+       * frees the slot when an arc ends (CS:0xBFE9/0xC03B), so running it
+       * last meant an award on the landing frame always saw a busy slot and
+       * diverted, every single time. And PAT beat System A/B to the slot
+       * when the original has PAT losing to both.
+       *
+       * The PAT walker is worth spelling out because it is the one channel
+       * that can contend with ITSELF: CS:0xB977 is a bare 5-iteration loop
+       * (`pop di / pop si / add si,0x1c / add di,0xc8 / dec [0x3a9] / jnz
+       * b992`, RET at 0xB986) with NO tick call inside it, so when two
+       * scripted groups finish on the same frame the first takes the slot
+       * and the second diverts. pat-objects.js queues drops in slot-walk
+       * order and the drain below replays that order, so both halves of
+       * that behaviour survive the port. */
+      popup.step();
+      for (const l of popup.landed) dropCarriedIntoWorld(l.id, l.x, l.y);
+      popup.landed.length = 0;
+
       statues.checkTrigger(camNow, level.map.planeA, levelInfo.world, health,
                             statueTriggerProbe, rng);
       const statueResult = statues.step(
@@ -1812,9 +1869,9 @@ async function main() {
         nestContact, statueScanGrid, tock);
       score.add(statueResult.score);
       lastStatueFx = statueResult.drawn;
-      /* CS:0xBF5F — the awakened statue's own kill award, drained into the
-       * SAME single-slot popup every other reward source shares. */
-      for (const p of statueResult.popups) popup.spawn(p.x, p.y, p.id);
+      /* The statue's own kill award (CS:0xBF5F) is NOT drained here: its
+       * walker is CS:0x029A, the LAST popup channel in the frame. The drain
+       * lives at the bottom of this tick, past both entity systems. */
 
       /* CS:0x7F0D — the world-3 DS:0xce64 creature and its "spit". Neither
        * module needs injected callbacks (see ce64.js's own header for why it
@@ -1864,6 +1921,17 @@ async function main() {
         (wx, wy, n, cam) => lineHazards.spawn(wx, wy, player.x + 8, player.y + 6, n),
         { invuln: fx.invuln > 0, score, debris, planeB: level.map.planeB,
           sfx: (id) => audio.play(id) }).drawn;
+      /* CS:0x0223 / CS:0xAED0-0xAF0F — drain selector2.js's own group-
+       * elimination rewards into the SAME single-slot popup. FIRST of the
+       * six channels (the walker is CS:0xAD88, earlier in the frame than
+       * either entity system), so on a contended frame selector-2 is the
+       * one that gets to arc. It used to be drained last, after System A/B
+       * and PAT had already taken the slot. */
+      for (const r of selectorTwo.rewards) {
+        const id = r.itemType !== null ? r.itemType + 0xb : r.popupValue;
+        popup.spawn(r.x, r.y, id);
+      }
+      selectorTwo.rewards.length = 0;
 
       /* CS:0xB987 — the PGOD0x.PAT scripted objects (game/pat-objects.js).
        * Reuses the SAME `shots`/`lineHazards` pools every other emitter in
@@ -1881,47 +1949,6 @@ async function main() {
           sfx: (id) => audio.play(id) });
 
       runSpawns();
-      /* CS:0xC041, via objects.js's dropCarriedItem — steal-and-carry's own
-       * periodic and death-time drops both land here, for BOTH entity
-       * systems (moved above the System-B loop, which now also needs it —
-       * see CS:0xEE61/EEB1/F054/F059, entity.js's own stepCarriedItemB and
-       * the DYING branch). Re-ranks the object array on a successful drop,
-       * same reason as the treasure-burst loot settle below: allocObject
-       * reuses a dead slot in place, but this port's own draw order is a
-       * one-time sort at load, not a per-frame partition like the
-       * original's export 32. */
-      const dropCarriedIntoWorld = (id, x, y) => {
-        const dropped = dropCarriedItem(level.drawObjects, id, x, y);
-        if (dropped) {
-          level.drawObjects = insertSpawned(
-            level.drawObjects.filter((o) => o !== dropped), level.cats, dropped);
-        }
-      };
-      /* CS:0xBB87-0xBBA8 — drain the selector-1 GROUP drops queued by
-       * pat-objects.js when a whole scripted group has been killed. The
-       * queued position is SCREEN-relative (the original caches it that way
-       * at CS:0xBBC1 and adds the camera back at CS:0xBB8E), plus the +8 on
-       * BOTH axes that CS:0xBB96/0xBB99 apply.
-       *
-       * This is what makes level 1A's class-2 flying monster hand over its
-       * knife: its descriptor byte +7 is 0, and `dropCarriedItem`'s own
-       * CS:0xC059 split turns an id below 0x0B into weapon type id + 0xC0 —
-       * object type 192, weapon index 0, "knife". Picking it up increments
-       * the weapon's `count`, and volleySize() = count - base + 1 takes the
-       * hero from one thrown knife to two.
-       *
-       * `UNKNOWN_pat_drop_pop_arc` — CLOSED. CS:0xBBA8 calls CS:0xBF5F, the
-       * SAME toss the System-A/B/selector-2/nest rewards use, so the drop
-       * goes through popup.spawn() rather than straight into the object
-       * array: it arcs up and lands ~11px higher (15px for a weapon), and
-       * only then becomes an object. Routing it here also means the PAT
-       * drop now shares the single-slot and busy-divert semantics with
-       * every other reward, instead of being the one path that bypassed
-       * them. */
-      for (const d of patGroups.drops) {
-        popup.spawn(d.x + camNow.x + 8, d.y + camNow.y + 8, d.id);
-      }
-      patGroups.drops.length = 0;
       /* THE HUNT. CS:0xf11f/0xf1e5 run the pathfinder only from the two walk
        * modes, only on a tile crossing, and only when standing on ground —
        * so the verdict is sticky for a whole tile and an airborne or falling
@@ -2163,21 +2190,50 @@ async function main() {
         g.released = true;
         g.slot.state = 0;                                 // CS:0xDFF9
       }
-      /* Drain selector2.js's own group-elimination rewards (`CS:0xAED0`-
-       * `0xAF0F`) into the SAME single-slot popup — previously computed
-       * correctly but grown forever and never rendered. */
-      for (const r of selectorTwo.rewards) {
-        const id = r.itemType !== null ? r.itemType + 0xb : r.popupValue;
-        popup.spawn(r.x, r.y, id);
+      /* CS:0x0294 / CS:0xBB87-0xBBA8 — drain the selector-1 GROUP drops
+       * queued by pat-objects.js when a whole scripted group has been
+       * killed. The queued position is SCREEN-relative (the original caches
+       * it that way at CS:0xBBC1 and adds the camera back at CS:0xBB8E),
+       * plus the +8 on BOTH axes that CS:0xBB96/0xBB99 apply.
+       *
+       * This is what makes level 1A's class-2 flying monster hand over its
+       * knife: its descriptor byte +7 is 0, and `dropCarriedItem`'s own
+       * CS:0xC059 split turns an id below 0x0B into weapon type id + 0xC0 —
+       * object type 192, weapon index 0, "knife". Picking it up increments
+       * the weapon's `count`, and volleySize() = count - base + 1 takes the
+       * hero from one thrown knife to two.
+       *
+       * `UNKNOWN_pat_drop_pop_arc` — CLOSED. CS:0xBBA8 calls CS:0xBF5F, the
+       * SAME toss the System-A/B/selector-2/nest rewards use, so the drop
+       * goes through popup.spawn() rather than straight into the object
+       * array: it arcs up and lands ~11px higher (15px for a weapon), and
+       * only then becomes an object. Routing it here also means the PAT
+       * drop now shares the single-slot and busy-divert semantics with
+       * every other reward, instead of being the one path that bypassed
+       * them.
+       *
+       * ⚠️ Drained HERE, after both entity systems, because the walker runs
+       * at CS:0x0294 — later than System B (0x0285) and System A (0x028b).
+       * PAT LOSES the slot to both; it does not win it. See the priority
+       * table at the popup tick above. */
+      for (const d of patGroups.drops) {
+        popup.spawn(d.x + camNow.x + 8, d.y + camNow.y + 8, d.id);
       }
-      selectorTwo.rewards.length = 0;
-      popup.step();
-      /* CS:0xC041 — THE LANDING. Every reward that finishes its toss (and
-       * every one diverted by a busy slot, and the CS:0xBF59 snap case)
-       * becomes a real, collectable object here. Before this, System-A,
+      patGroups.drops.length = 0;
+
+      /* CS:0x029A / CS:0x7CA2 — the awakened statue's own kill award. LAST
+       * of the six channels, so it is the one most likely to find the slot
+       * busy and land in place. */
+      for (const p of statueResult.popups) popup.spawn(p.x, p.y, p.id);
+
+      /* CS:0xC041 — THE LANDING, second pass. The pass above the statue
+       * block handled arcs that ENDED this frame (CS:0xBFE9/0xC03B); this
+       * one handles the busy-slot DIVERTS the six channels just queued,
+       * which CS:0xBF6B lands within the same frame rather than deferring.
+       * Both passes are needed: one drain alone would hold one of the two
+       * cases over to the next tick. Before any of this, System-A,
        * System-B, selector-2, nest and statue awards were drawn and then
-       * discarded — `UNKNOWN_popup_reward_not_collectable`. Drained after
-       * step() so a landing is created on the same tick the arc ends. */
+       * discarded — `UNKNOWN_popup_reward_not_collectable`. */
       for (const l of popup.landed) dropCarriedIntoWorld(l.id, l.x, l.y);
       popup.landed.length = 0;
       /* CS:0x02BA — enemy shots move and hit, AFTER every emitter that can

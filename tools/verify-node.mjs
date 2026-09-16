@@ -380,6 +380,81 @@ for (const r of await checkMusic(fetchRaw)) {
   console.log(line(r));
 }
 
+/* ── THE SINGLE POPUP SLOT'S PRIORITY ORDER ──────────────────────────────
+ *
+ * Every kill reward contends for ONE slot (DS:0x1a0) and the loser is landed
+ * in place rather than tossed (CS:0xBF6B), so the ORDER the channels run in
+ * is observable behaviour, not a style choice. The frame loop FUN_1000_006f
+ * fixes that order by call-site address:
+ *
+ *     0x0209 bf80 tick · 0x0223 ad88 selector-2 · 0x0285 ed15 System B
+ *     0x028b df39 System A · 0x0294 b987 PAT · 0x029a 7b68 statue
+ *
+ * main.js once ran this almost exactly BACKWARDS — statue first, tick last —
+ * which made every award on a landing frame divert, and let PAT beat both
+ * entity systems to the slot. Nothing caught it, because the suite drives
+ * modules directly and never executes main.js's tick. This check closes that
+ * hole the only way available from outside: by reading main.js's own source
+ * and asserting the six channels still appear in the binary's order.
+ *
+ * ⚠️ What this does NOT assert: the sub-order of each system's per-ENTITY
+ * drop against its per-GROUP reward. System B's group reward lives in
+ * FUN_1000_f030, reached from the shared FUN_1000_ff20 rather than from
+ * ed15 directly, so "all of B before all of A" was not established — the
+ * anchors below deliberately use each system's entity pass only. */
+{
+  const mainSrc = readFileSync(join(here, '..', 'src', 'main.js'), 'utf8');
+  const at = (needle) => {
+    const i = mainSrc.indexOf(needle);
+    if (i < 0) throw new Error(`verify-node: popup-order anchor missing from main.js: ${needle}`);
+    return i;
+  };
+  const chain = [
+    ['tick       CS:0x0209', at('popup.step();')],
+    ['selector-2 CS:0x0223', at('for (const r of selectorTwo.rewards) {')],
+    ['System B   CS:0x0285', at('stealAttemptB(')],
+    ['System A   CS:0x028b', at('const carried = stepCarriedItem(e, e.desc')],
+    ['PAT        CS:0x0294', at('for (const d of patGroups.drops) {')],
+    ['statue     CS:0x029A', at('for (const p of statueResult.popups)')],
+  ];
+  const outOfOrder = chain.filter((c, i) => i > 0 && chain[i - 1][1] >= c[1]);
+  const popupOrder = [{
+    pass: outOfOrder.length === 0,
+    name: "the six popup channels run in FUN_1000_006f's own call order",
+    detail: outOfOrder.length
+      ? `out of order: ${outOfOrder.map((c) => c[0]).join(', ')}`
+      : chain.map((c) => c[0].replace(/\s+CS:.*$/, '')).join(' < '),
+  }];
+
+  /* The tick frees the slot when an arc ends (CS:0xBFE9/0xC03B). Running it
+   * after ANY award means that award never sees the slot it should have. */
+  const spawnSites = [...mainSrc.matchAll(/popup\.spawn\(/g)].map((m) => m.index);
+  popupOrder.push({
+    pass: spawnSites.length > 0 && spawnSites.every((i) => i > chain[0][1]),
+    name: 'the popup tick precedes every popup.spawn in the tick',
+    detail: `${spawnSites.length} spawn sites, earliest at ${Math.min(...spawnSites)}, tick at ${chain[0][1]}`,
+  });
+
+  /* Two landing drains, not one: the first turns arcs that ENDED into
+   * objects, the second turns this frame's busy-slot DIVERTS into objects
+   * within the same frame, which is what CS:0xBF6B does. One drain alone
+   * would hold one of the two cases over to the next tick. */
+  const drains = [...mainSrc.matchAll(/for \(const l of popup\.landed\)/g)].map((m) => m.index);
+  popupOrder.push({
+    pass: drains.length === 2 && drains[0] > chain[0][1]
+          && drains[0] < chain[1][1] && drains[1] > chain[5][1],
+    name: 'a landing drain sits after the tick AND after the last channel',
+    detail: `${drains.length} drain(s) at ${drains.join(', ')}`,
+  });
+
+  console.log('\n  the single popup slot — who wins it, and when it lands '
+    + '(FUN_1000_006f call order):');
+  for (const r of popupOrder) {
+    if (!r.pass && !r.note) bad++;
+    console.log(line(r));
+  }
+}
+
 console.log(`\n${asserts} assertions + ${notes} notes = ${asserts + notes} rows`);
 console.log(`${bad ? `FAILURES: ${bad}` : 'ALL CHECKS PASS'}`);
 process.exit(bad ? 1 : 0);
