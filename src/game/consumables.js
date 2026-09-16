@@ -277,9 +277,17 @@ export const UNIMPLEMENTED_TYPE = 43;
  * hint keys. Nothing new here.
  */
 export const NOT_WIRED_REASON = Object.freeze({
-  familiar:      'types 39/40/41 are placed ZERO times in all 8 maps',
-  familiarWings: 'types 39/40/41 are placed ZERO times in all 8 maps',
-  familiarClaws: 'types 39/40/41 are placed ZERO times in all 8 maps',
+  /* ⚠️ CORRECTED: these three are placed as MAP pickups zero times, but that
+   * is not the same as unreachable. Type 39 is itself purchasable in the
+   * shop's own world-3/4 roster (Gods/docs/shop.md, UNKNOWN_shop_
+   * eligibility_gates — CLOSED) — buying it is the shipped, designed path
+   * to a live familiar, which in turn is what gate 2 checks to allow
+   * 40/41's own purchase. None of the three has an applyConsumable effect
+   * wired here yet (this port has no familiar entity at all), which is the
+   * real reason they're unimplemented — not that they're unreachable. */
+  familiar:      'no familiar entity in this port; reachable via a world 3/4 shop purchase',
+  familiarWings: 'no familiar entity in this port; reachable via a world 3/4 shop purchase',
+  familiarClaws: 'no familiar entity in this port; reachable via a world 3/4 shop purchase',
   teleport:      'decoded and proven; needs level transitions the port lacks',
   /* ⚠️ THIS ENTRY USED TO READ "already ported as the PALFILS hint system",
    * and that was FALSE — the hint TABLE had been decoded (docs/asset-formats
@@ -306,12 +314,17 @@ export const NOT_WIRED_REASON = Object.freeze({
  * target list when `[0x168] >= 0` OR a hunter is held, because a live familiar
  * needs targets for the same reason the hunter does.
  *
- * ⚠️ WHICH KILLS A BEHAVIOUR THIS PORT SHIPPED. Over-healing at CS:0x6377
- * banks the excess at 32 a point into DS:0x168 — but CS:0x6384 is
+ * ⚠️ CORRECTED — this is reachable, not dead. Over-healing at CS:0x6377
+ * banks the excess at 32 a point into DS:0x168 — CS:0x6384 is
  * `cmp word [0x168],0 / JNS`, so it only banks while the familiar is ALIVE.
- * CS:0xC470 sets -1 and is called from both full restarts, and the only thing
- * that lifts it is a familiar potion, which no map places. So the banking is
- * real code and UNREACHABLE IN SHIPPED PLAY: over-healing is discarded.
+ * CS:0xC470 sets -1 and is called from both full restarts, and the only
+ * thing that lifts it is a familiar potion (type 39) — an earlier revision
+ * of this note said "which no map places" and stopped there, missing that
+ * `39` is itself purchasable in world 3/4's own shop (Gods/docs/shop.md's
+ * UNKNOWN_shop_eligibility_gates, CLOSED). So the banking is real code that
+ * a player who buys the familiar there CAN reach — it just needs the
+ * familiar-summon effect to actually be wired (see NOT_WIRED_REASON above)
+ * before this port's own over-heal path can exercise it.
  */
 export const FAMILIAR_ENERGY_DS = 0x168;
 export const FAMILIAR_START_ENERGY = 0x3e8;       // CS:0xC347
@@ -319,8 +332,9 @@ export const FAMILIAR_DEAD = -1;                  // CS:0xC470
 export const FAMILIAR_CLEAR_SITES = Object.freeze([0x047d, 0x8ddf]);
 
 /** True when over-healing is banked rather than discarded — CS:0x6384 `jns`.
- *  False for the whole of shipped play, because nothing can summon a familiar
- *  when no map places one. */
+ *  False in this port today because summoning a familiar (buying type 39 in
+ *  the world 3/4 shop) isn't wired to set `familiarEnergy` yet — see
+ *  NOT_WIRED_REASON.familiar — not because no shipped path can reach it. */
 export const banksOverheal = (familiarEnergy) => familiarEnergy >= 0;
 
 /* ── Applying an effect ───────────────────────────────────────────────────

@@ -3727,7 +3727,10 @@ export async function checkSpawn(fetchRaw) {
   /* ⚠️ CORRECTED. An earlier revision of this check asserted the banking as
    * live behaviour. CS:0x6384 gates it on DS:0x168 >= 0 — the FAMILIAR'S
    * energy — which is -1 at both full restarts and can only be lifted by a
-   * "familiar" potion, type 39, placed ZERO times in all eight maps. */
+   * "familiar" potion, type 39: placed ZERO times as a map pickup, but
+   * purchasable in world 3/4's own shop (Gods/docs/shop.md's UNKNOWN_shop_
+   * eligibility_gates, CLOSED) — reachable in shipped play that way, just
+   * not yet exercised by this port's own tick loop. */
   const withFamiliar = new Health(HEALTH_MAX, HEALTH_MAX);
   withFamiliar.target = HEALTH_MAX - 2; withFamiliar.familiarEnergy = 1000;
   const fed = withFamiliar.potion(0x18);
@@ -3738,9 +3741,10 @@ export async function checkSpawn(fetchRaw) {
     `the same ${0x18 - 2} wasted points bank ${fed.banked} with a familiar ` +
     `and ${brimmed.banked} without. CS:0x6377 shifts the excess left five ` +
     `times, but CS:0x6384 \`cmp word [0x168],0 / jns\` skips the credit when ` +
-    `DS:0x168 is negative — and CS:0xC470 sets -1 at both full restarts. So ` +
-    `the banking is real code that NO shipped level can reach, and quoting ` +
-    `it as what over-healing does was wrong`);
+    `DS:0x168 is negative — and CS:0xC470 sets -1 at both full restarts. No ` +
+    `shipped map PICKUP raises it, but buying the familiar (type 39) in ` +
+    `world 3/4's own shop does, so the banking is reachable there even ` +
+    `though this port doesn't wire that purchase's effect yet`);
 
   /* The hurt sound is a ONE-SHOT per descent, not one per tick. */
   const noisy = new Health(HEALTH_MAX, HEALTH_MAX);
@@ -6913,9 +6917,13 @@ export async function checkWeaponsProjectiles(fetchRaw) {
         && never.length === 7
         && never.map((h) => h.type).join() === '39,40,41,43,44,70,71',
       `re-derived from the eight .MAP files: types ${never.map((h) => h.type).join(', ')} ` +
-      `are placed ZERO times. That includes the ENTIRE familiar chain ` +
-      `(39 summon / 40 wings / 41 claws), which is why this port decodes ` +
-      `CS:0xC2F6 and does not build it — the iron-chest call with more surface`);
+      `are placed ZERO times as MAP pickups. That includes the ENTIRE ` +
+      `familiar chain (39 summon / 40 wings / 41 claws) — but 39 is ` +
+      `separately purchasable in the shop's own world 3/4 roster (Gods/ ` +
+      `docs/shop.md's UNKNOWN_shop_eligibility_gates, CLOSED), so this ` +
+      `census alone does not make the chain unreachable; this port decodes ` +
+      `CS:0xC2F6 and does not build it because it has no familiar entity, ` +
+      `not because no shipped path can reach it`);
 
     check(`UNKNOWN_DS_0168 is the familiar's energy, and it starts dead`,
       FAMILIAR_ENERGY_DS === 0x168 && banksOverheal(-1) === false
@@ -6927,7 +6935,10 @@ export async function checkWeaponsProjectiles(fetchRaw) {
       '(CS:0xC2FD), drained by damage (CS:0xAB4D), -1 when it dies ' +
       '(CS:0xC470). CS:0xC440 is called from CS:0x047D and CS:0x8DDF — the ' +
       'two FULL RESTARTS — so it is -1 from the start, and type 39 never ' +
-      'ships. That is what makes the over-healing bank unreachable');
+      'ships as a MAP pickup (placed[39] above). But it does ship as a shop ' +
+      'purchase in worlds 3/4 (Gods/docs/shop.md, CLOSED) — the over-' +
+      'healing bank is reachable there, just not yet in this port\'s own ' +
+      'tick loop, which has no familiar-summon effect wired');
   }
 
   /* ── DESTRUCTIBLE BLOCKS: CS:0x73EC / CS:0x7500 ─────────────────────────── */
@@ -7169,8 +7180,10 @@ export async function checkWeaponsProjectiles(fetchRaw) {
         `${w4A.join(',')} and NOTHING else, in both PALFILS.0A4 and .0B4. ` +
         `\`call 0xbd38\` and \`call 0xbd0b\` occur ZERO times image-wide, so ` +
         `the class table is the only way in — and nothing takes it. This is ` +
-        `the FOURTH cut feature found, after the flame weapon, the iron chest ` +
-        `and the entire familiar chain`);
+        `the FOURTH cut-as-a-MAP-PICKUP feature found, after the flame ` +
+        `weapon, the iron chest and the familiar chain (39/40/41 — though ` +
+        `39 is separately reachable via the shop, Gods/docs/shop.md's ` +
+        `UNKNOWN_shop_eligibility_gates, CLOSED)`);
 
       check(`System A class 3: empty in worlds 1 and 3, populated in 2 and 4, used in NONE`,
         CLASS_TABLES[0][0][3].spriteBase === EMPTY_CLASS
@@ -14122,8 +14135,10 @@ export function checkShop() {
       + 'for world 3/4, not the full 18-id raw candidate list',
       Object.keys(PRICES).length === 14);
     check('ids 2, 3, 40, 41 are deliberately NOT priced/shown — they are '
-      + 'real raw-list ids (UNKNOWN_shop_roster_source) gated on runtime '
-      + 'state this project has not read',
+      + 'real raw-list ids gated on the hero\'s weapon slots / familiar '
+      + 'energy (UNKNOWN_shop_eligibility_gates, CLOSED — Gods/docs/shop.md) '
+      + 'that this port tracks (arsenal.slots, health.familiarEnergy) but '
+      + 'does not yet consult here',
       PRICES[2] === undefined && PRICES[3] === undefined
       && PRICES[40] === undefined && PRICES[41] === undefined);
 

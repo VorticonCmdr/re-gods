@@ -15,14 +15,20 @@
  *     session; worlds 3/4 get a 14-id set (the same 12 plus `37`/`39`) —
  *     deliberately NOT the full 18-id raw candidate list `SS:0x51aa`
  *     actually has for those worlds, because 4 of those ids (`2`,`3`,`40`,
- *     `41`) are gated by two still-unresolved eligibility checks
- *     (`UNKNOWN_shop_eligibility_gates`) on runtime state this project has
- *     never read — world 2's own two live captures disagreed on id `2`'s
- *     visibility, so no fixed default can be assumed either way — and the
- *     full 18 would also exceed this grid's 17-slot capacity (the
- *     original's own `0x25c` scroll path, not ported here). World 1 also
- *     has a real entry in the table but is never wired in — the shop is
- *     provably unreachable for world 1 (no password can target it).
+ *     `41`) are gated by two eligibility checks — `UNKNOWN_shop_
+ *     eligibility_gates` is now CLOSED (see shop.md): gate 1 (ids `2`/`3`,
+ *     power potions) reads the hero's own weapon slots (`arsenal.slots`
+ *     below — `DS:0xdd10`/`0xdda2`/`0xde34` in the original) and opens once
+ *     he holds any weapon; gate 2 (ids `40`/`41`, familiar boosts) reads the
+ *     familiar's energy (`health.familiarEnergy` — `DS:0x168`) and opens
+ *     once a familiar is alive, reachable in worlds 3/4 by buying id `39`
+ *     (the familiar itself) in this same shop. Both gates are genuinely
+ *     reachable in ordinary play, not dead state — this port already
+ *     tracks the exact fields each one needs, it just doesn't consult them
+ *     here yet. The full 18 would also exceed this grid's 17-slot capacity
+ *     (the original's own `0x25c` scroll path, not ported here). World 1
+ *     also has a real entry in the table but is never wired in — the shop
+ *     is provably unreachable for world 1 (no password can target it).
  *   - Prices ARE ported for all 14 ids across worlds 2/3/4 —
  *     `UNKNOWN_shop_prices` is CLOSED, see shop.md. A machine-parsed (base64
  *     dump, decoded by script — not hand-transcribed) live read of
@@ -116,8 +122,11 @@ export class ShopScreen {
    * @param {(number|null)[]} roster up to DATA_SLOTS raw item ids (<SELL_ID_BASE),
    *   already the caller's own sorted choice — short rosters are padded with
    *   `null` (empty slots). This class DOES prune by affordability and
-   *   per-visit category lockout (see `#pruneRoster`), but not by the two
-   *   still-unresolved eligibility gates (`UNKNOWN_shop_eligibility_gates`)
+   *   per-visit category lockout (see `#pruneRoster`), but not yet by the
+   *   two eligibility gates — `UNKNOWN_shop_eligibility_gates` is CLOSED
+   *   (Gods/docs/shop.md): they read `state.arsenal.slots` (any weapon
+   *   held) and `state.health.familiarEnergy` (a familiar alive), both
+   *   already passed in here as `state`
    * @param {number[]} inventory the 4-slot weapon/item array, `INVENTORY_EMPTY`
    *   marks an empty slot (mirrors `DS:0x17e/0x180/0x182/0x184`'s own `-1`
    *   sentinel — this port already represents that as the unsigned
@@ -248,9 +257,11 @@ export class ShopScreen {
 
   /* Not eligible once its category is locked out for this visit (`DS:0x319`)
    * or its price now exceeds the purse (`FUN_1000_7392` via `CS:0x72c9`).
-   * The full original rebuild also re-applies two still-unresolved
-   * eligibility gates (`UNKNOWN_shop_eligibility_gates`) — not reproduced
-   * here, disclosed rather than guessed at. */
+   * The full original rebuild also re-applies two eligibility gates —
+   * `UNKNOWN_shop_eligibility_gates` is CLOSED (Gods/docs/shop.md): weapon-
+   * slot occupancy for ids 2/3, familiar energy for ids 40/41 — not
+   * reproduced here yet (this class's `roster` never contains those four
+   * ids today), disclosed rather than guessed at. */
   #isEligible(id) {
     if (id == null) return false;
     const rank = CONSUMABLES.findIndex((c) => c.type === id);

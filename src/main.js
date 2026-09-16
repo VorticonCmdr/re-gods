@@ -1010,16 +1010,18 @@ async function main() {
 
   /* Worlds 3/4's shop roster — `SS:0x51aa`'s own raw list for these worlds
    * has 18 buy ids (this 12 plus `2,3,37,39,40,41`, all six independently
-   * confirmed as real CONSUMABLES types too), but `2`/`3`/`40`/`41` are
-   * gated by two still-unresolved eligibility checks (`UNKNOWN_shop_
-   * eligibility_gates`) on runtime state this project has never read —
-   * world 2's own two live captures disagreed on id `2`'s visibility, so no
-   * fixed default can be assumed — and 18 would exceed this grid's 17-slot
-   * capacity anyway (the original's own `0x25c` scroll path, not ported
-   * here — see shop.md). So only the 14 ids that pass regardless of those
-   * gates' runtime state are shown: this port's own 12 plus `37`/`39`.
-   * Worlds 3 and 4 share an identical raw list, so they share this same
-   * 14-id set. */
+   * confirmed as real CONSUMABLES types too). `2`/`3`/`40`/`41` are gated by
+   * two eligibility checks, `UNKNOWN_shop_eligibility_gates` — now CLOSED,
+   * see Gods/docs/shop.md: gate 1 (`2`/`3`) opens once the hero holds any
+   * weapon (`arsenal.slots`), gate 2 (`40`/`41`) opens once a familiar is
+   * alive (`health.familiarEnergy`), reachable by buying `39` in this same
+   * shop. Both are real, reachable state this port already tracks — this
+   * array just doesn't consult it yet, a scoped follow-on rather than an
+   * open question. 18 would also exceed this grid's 17-slot capacity (the
+   * original's own `0x25c` scroll path, not ported here). So only the 14
+   * ids that pass regardless of gate state are shown: this port's own 12
+   * plus `37`/`39`. Worlds 3 and 4 share an identical raw list, so they
+   * share this same 14-id set. */
   const SHOP_ROSTER_WORLD_3_4 = [
     0, 35, 36, 37, 38, 39, 42, 44, 51, 52, 53, 70, 71, 72,
   ];

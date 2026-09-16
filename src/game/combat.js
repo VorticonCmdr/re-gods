@@ -125,8 +125,12 @@ export class Health {
    *
    * @returns {{taken:boolean, banked:number}} `banked` is the DS:0x168 credit.
    */
-  /* DS:0x168, the familiar's energy. -1 at both full restarts (CS:0xC470),
-   * and nothing in shipped data can raise it — see the banking note below. */
+  /* DS:0x168, the familiar's energy. -1 at both full restarts (CS:0xC470);
+   * raised to 1000 by summoning one — reachable in shipped play by buying
+   * type 39 in the world 3/4 shop, not just an unreachable map pickup — see
+   * the banking note below and Gods/docs/shop.md's UNKNOWN_shop_eligibility_
+   * gates (CLOSED). This port doesn't wire the summon effect yet, so this
+   * field never actually leaves -1 today. */
   familiarEnergy = -1;
 
   potion(n) {
@@ -141,8 +145,11 @@ export class Health {
      * FAMILIAR'S ENERGY (see consumables.js, which closes UNKNOWN_DS_0168).
      * CS:0xC470 sets it to -1 and is called from both full restarts, and the
      * only thing that lifts it is a "familiar" potion — type 39, placed ZERO
-     * times in all eight shipped maps. So the banking is real code and
-     * UNREACHABLE IN SHIPPED PLAY: over-healing is simply discarded. */
+     * times as a map pickup but purchasable in world 3/4's own shop
+     * (Gods/docs/shop.md's UNKNOWN_shop_eligibility_gates, CLOSED). So the
+     * banking IS reachable in shipped play via that purchase; in THIS port
+     * specifically it's still effectively discarded today only because the
+     * familiar-summon effect isn't wired to set `familiarEnergy` yet. */
     const banked = this.familiarEnergy >= 0 ? excess * POTION_OVERFLOW_SCALE : 0;
     return { taken: true, banked, discarded: banked ? 0 : excess };
   }
