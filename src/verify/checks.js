@@ -78,7 +78,7 @@ import { parseLineBarrierRecords, LineBarriers, TABLE_OFF as BARRIER_TABLE_OFF,
          RECORD_COUNT as BARRIER_RECORD_COUNT, RECORD_STRIDE as BARRIER_RECORD_STRIDE,
          SELECTOR_TO_SLOT as BARRIER_SELECTOR_TO_SLOT } from '../game/line-barriers.js';
 import { GROUP_SLOTS as PAT_GROUP_SLOTS, SUBRECORDS_PER_GROUP, ABSOLUTE_TAG,
-         HOLD_BOX, reloadTicks, decodeDelta, parsePatDirectory,
+         HOLD_BOX, reloadTicks, decodeDelta, parsePatDirectory, animSprite, stepAnimPhase,
          parsePatSpawnDescriptor, CLASS_TABLE_A, PatGroups,
          DEATH_SPRITE_BASE as PAT_DEATH_SPRITE_BASE, DEATH_RETIRE_AT,
          scoreForKey } from '../game/pat-objects.js';
@@ -12080,9 +12080,70 @@ export async function checkPatObjects(fetchRaw) {
      * every overlapping field) before trusting the copy. */
     check('World 2/3 are now transcribed (4 and 3 classes respectively), matching entity-a.js\'s own row counts',
       CLASS_TABLE_A[2]?.length === 4 && CLASS_TABLE_A[3]?.length === 3);
-    check('every World 2/3 class resolves to the generic walk-cycle/bc4b pair (11-of-14 census, no specials there)',
-      [...CLASS_TABLE_A[2], ...CLASS_TABLE_A[3]].every(
-        (c) => c.handlerA === 'generic' && c.handlerB === 'bc4b'));
+    /* handlerA was a single 'generic' label until the walk cycle was decoded
+     * (CS:0xBE3D / CS:0xBE78 are two DIFFERENT bodies, and three of these
+     * four classes reach the first one through their own base-passing stub).
+     * The shoot half is still uniformly bc4b; the animation half is not. */
+    check('every World 2/3 class still pairs with the bc4b shoot handler (the 11-of-14 census)',
+      [...CLASS_TABLE_A[2], ...CLASS_TABLE_A[3]].every((c) => c.handlerB === 'bc4b'));
+    check('World 2 is all walk4 (CS:0xBE60/0xBE66 pass a base to CS:0xBE3D); World 3 is walk4 only '
+      + 'for class 1 (CS:0xBE5A `mov cx,0x20b` = 523), the other two staying static on an unread handler',
+      CLASS_TABLE_A[2].every((c) => c.handlerA === 'walk4')
+      && CLASS_TABLE_A[3].map((c) => c.handlerA).join(',') === 'static,walk4,static');
+    check('the walk4 bases the stubs carry as immediates are exactly the class table\'s own: '
+      + '0x1f8=504, 0x200=512, 0x20b=523',
+      CLASS_TABLE_A[2][0].spriteBase === 0x1f8 && CLASS_TABLE_A[2][1].spriteBase === 0x200
+      && CLASS_TABLE_A[3][1].spriteBase === 0x20b);
+
+    /* ── THE WALK CYCLE, `UNKNOWN_pat_animation_frame` — CLOSED ───────────
+     * The reported creature is world 1 class 2, spriteBase 456, and the
+     * report named its frames as PLEVEL1A.DAT #6..#11. Global descriptor
+     * 450 is that atlas's frame 0, so #6..#11 are sprites 456..461 — and
+     * the decoded formula must produce exactly those six and nothing else.
+     * That is the check: not "it animates", but "it animates over exactly
+     * the frames the report names". */
+    {
+      const base = CLASS_TABLE_A[1][2].spriteBase;
+      check('world 1 class 2 is the ping3 family at spriteBase 456 (CS:0xBE71, table DS:0xdf70)',
+        base === 456 && CLASS_TABLE_A[1][2].handlerA === 'ping3');
+      const seen = new Set();
+      for (let phase = 0; phase < 16; phase++) seen.add(animSprite('ping3', base, phase));
+      const sorted = [...seen].sort((a, b) => a - b);
+      check('...and over every phase/facing combination it yields EXACTLY sprites 456-461 — the six '
+        + 'PLEVEL1A.DAT frames #6-#11 the report names, no more and no fewer',
+        sorted.join(',') === '456,457,458,459,460,461', sorted.join(','));
+      check('CS:0xBE78 — the table is a PING-PONG (base+[0,1,2,1]), so phase 1 and phase 3 are the '
+        + 'same frame; the cycle is 3 distinct frames per facing, not 4',
+        animSprite('ping3', base, 1) === animSprite('ping3', base, 3)
+        && animSprite('ping3', base, 0) === 456 && animSprite('ping3', base, 2) === 458);
+      check('CS:0xBE8F — the facing bit (bit 3) shifts the whole cycle by +3, which is what makes '
+        + '459-461 the mirrored half',
+        animSprite('ping3', base, 8) === 459 && animSprite('ping3', base, 8 | 2) === 461);
+      check('CS:0xBE49/0xBE51 — walk4 is a different shape: base + (phase & 7), facing +4',
+        animSprite('walk4', 504, 0) === 504 && animSprite('walk4', 504, 2) === 506
+        && animSprite('walk4', 504, 8 | 2) === 510);
+
+      /* The advance, CS:0xBE99. */
+      check('CS:0xBE9E — a tock-ZERO tick advances nothing: no phase step, no facing re-evaluation',
+        stepAnimPhase(0, 0, 100, 0) === 0 && stepAnimPhase(5, 0, 100, 0) === 5);
+      check('CS:0xBEA8-0xBEA9 — the phase advances (phase+1) & 3, wrapping 3 -> 0 without touching '
+        + 'the facing bit or the world-4 attack bit',
+        stepAnimPhase(0, 1, 5, 5) === 1 && stepAnimPhase(3, 1, 5, 5) === 0
+        && stepAnimPhase(8 | 3, 1, 5, 5) === (8 | 0)
+        && stepAnimPhase(4 | 1, 1, 5, 5) === (4 | 2));
+      /* The asymmetry, reproduced rather than tidied: CS:0xBEC8's `dec cx /
+       * cmp / jle` gives the RIGHT branch a 1px deadband, and the LEFT
+       * branch's `inc cx / cmp / jg` can never be taken, so it has none. */
+      check('CS:0xBEC8 — moving RIGHT by only 1px does NOT set the facing bit (the deadband)',
+        (stepAnimPhase(0, 1, 101, 100) & 8) === 0);
+      check('...but moving right by 2px does',
+        (stepAnimPhase(0, 1, 102, 100) & 8) === 8);
+      check('CS:0xBEC2 — moving LEFT clears the facing bit at ANY distance, including 1px: the '
+        + 'left branch has no deadband, and this asymmetry is in the bytes, not a port simplification',
+        (stepAnimPhase(8, 1, 99, 100) & 8) === 0 && (stepAnimPhase(8, 1, 90, 100) & 8) === 0);
+      check('CS:0xBEB7 — standing still leaves the facing bit exactly as it was',
+        (stepAnimPhase(8, 1, 100, 100) & 8) === 8 && (stepAnimPhase(0, 1, 100, 100) & 8) === 0);
+    }
     check('World 2/3 spriteBases match entity-a.js\'s own CLASS_TABLES_A exactly',
       CLASS_TABLE_A[2].map((c) => c.spriteBase).join(',') === '504,512,504,504'
       && CLASS_TABLE_A[3].map((c) => c.spriteBase).join(',') === '486,523,486');
@@ -12426,8 +12487,15 @@ export async function checkPatObjects(fetchRaw) {
                             health, null, null, { score });
       check('a hero touch (attackHero) alone kills a PAT object — no DS:0x34/reportGate bracket, '
         + 'unlike ce64.js\'s own creature', sub.key < 0, `key=${sub.key}`);
-      check('the kill still draws the ORDINARY sprite on the SAME tick (CS:0xBB43\'s own `jmp bb49`)',
-        drawn.length === 1 && drawn[0].sprite === 450 /* world1 class0 spriteBase */, JSON.stringify(drawn));
+      /* World 1 class 0 is 'ping3' (CS:0xBE6B, table DS:0xdf68 = base +
+       * [0,1,2,1]), so the ordinary sprite is now an ANIMATED frame, not the
+       * bare base. What this check is really about is that the kill tick
+       * still draws the LIVING sprite rather than a death-burst frame, so it
+       * asserts membership of the class's own six-frame set. */
+      check('the kill still draws the ORDINARY (living) sprite on the SAME tick, not a death frame '
+        + '(CS:0xBB43\'s own `jmp bb49`)',
+        drawn.length === 1 && drawn[0].sprite >= 450 && drawn[0].sprite <= 455,
+        JSON.stringify(drawn));
       check(`score is awarded exactly once, scoreForKey(200)=${scoreForKey(200)}`,
         score.calls.length === 1 && score.calls[0] === scoreForKey(200), JSON.stringify(score.calls));
       check('attackState (the shared +0xe field) is forced to -1 on death',

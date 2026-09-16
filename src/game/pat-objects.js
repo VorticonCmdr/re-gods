@@ -350,6 +350,70 @@ export const reloadTicks = (loNibble) => (0x10 - loNibble) * 2;
 /** A path header word is a SIGNED 16-bit camera-relative offset — see #seed. */
 const s16 = (v) => (v & 0x8000 ? v - 0x10000 : v);
 
+/* ── handlerA: THE WALK-CYCLE ANIMATION, `UNKNOWN_pat_animation_frame` ──────
+ * Closed this pass by reading CS:0xBE3D/0xBE78 and their shared phase
+ * advance CS:0xBE99, plus a live `read_memory` of both frame tables.
+ *
+ * The phase lives in the sub-record's OWN +0xe word — the same field the
+ * death counter (CS:0xBBD9) and the world-4 attack machine (CS:0xBD71) use,
+ * which is why the original masks it rather than reading it whole:
+ *     bits 0-1   animation phase, advanced `(phase+1) & 3` (CS:0xBEA8-BEA9)
+ *     bit 2      the attack-armed flag (world 4 only)
+ *     bit 3      FACING
+ *
+ * THE ADVANCE IS GATED, CS:0xBE99 `cmp byte [0x36c],0 / jz` — the same
+ * global animation tick this port already threads through as `tock`. On a
+ * tock-zero tick the phase does not move and the facing is not re-evaluated.
+ *
+ * FACING, CS:0xBEB1-0xBECE, and it is ASYMMETRIC — reproduced, not tidied:
+ * the new X is compared against the pre-tick X (DS:0x200, written at
+ * CS:0xBAC4 before the move). Moving LEFT clears the bit for any distance;
+ * moving RIGHT sets it only for a step of 2px or more (CS:0xBEC8's own
+ * `dec cx / cmp / jle` deadband has no mirror on the left branch, where
+ * `inc cx / cmp / jg` can never be taken).
+ *
+ * TWO FAMILIES, each a 2-instruction stub jumping to a shared body:
+ *   'ping3'  CS:0xBE6B (table DS:0xdf68) and CS:0xBE71 (table DS:0xdf70)
+ *            -> sprite = table[phase & 3] + (facing ? 3 : 0)
+ *            Both shipped tables read back as base + [0,1,2,1]
+ *            (df68 = 450,451,452,451; df70 = 456,457,458,457), so they are
+ *            re-expressed here against the class's own spriteBase — checked
+ *            equal for both, not assumed for a table this pass cannot see.
+ *            World 1 class 2 (base 456) therefore cycles 456,457,458 and
+ *            459,460,461 — exactly the six PLEVEL1A.DAT frames #6-#11.
+ *   'walk4'  CS:0xBE5A/0xBE60/0xBE66, which pass a BASE in CX to CS:0xBE3D
+ *            -> sprite = base + (phase & 7) + (facing ? 4 : 0)
+ *            The immediates match the class table exactly: 0x1f8=504
+ *            (world 2 class 0), 0x200=512 (world 2 class 1), 0x20b=523
+ *            (world 3 class 1).
+ *
+ * NOT READ THIS PASS, so those classes stay on a static sprite and say so:
+ * CS:0xBED3 (world 1 class 1), CS:0xBEF4 (world 3 classes 0/2), CS:0xBF15 /
+ * CS:0xBF36 (world 4 classes 0/1). `UNKNOWN_pat_animA_bed3_bef4_bf15_bf36`.
+ */
+const PING3 = Object.freeze([0, 1, 2, 1]);      // DS:0xdf68 / DS:0xdf70, base-relative
+
+/** CS:0xBE99 — advance phase and facing in the shared +0xe field. */
+export function stepAnimPhase(phase, tock, newX, preTickX) {
+  if (!tock) return phase;                                  // CS:0xBE9E `jz`
+  let p = (((phase + 1) & 3) | (phase & 8)) | (phase & 4);   // CS:0xBEA8-BEAE
+  if (newX === preTickX) return p;                           // CS:0xBEB7 `jz`
+  if (newX > preTickX) {                                     // CS:0xBEB9 `jg`
+    if (newX - 1 > preTickX) p |= 8;                         // CS:0xBEC8 `jle` deadband
+  } else {
+    p &= ~8;                                                 // CS:0xBEC2 `and ...,0xf7`
+  }
+  return p;
+}
+
+/** CS:0xBE78 ('ping3') / CS:0xBE3D ('walk4') — the sprite for a phase. */
+export function animSprite(family, spriteBase, phase) {
+  const facing = (phase & 8) !== 0;
+  if (family === 'ping3') return spriteBase + PING3[phase & 3] + (facing ? 3 : 0);
+  if (family === 'walk4') return spriteBase + (phase & 7) + (facing ? 4 : 0);
+  return spriteBase;                                         // unread handler — static
+}
+
 export function decodeDelta(byte) {
   const signExtendNibble = (n) => (n << 4 << 24) >> 28; // shl4 then sar4, on a 32-bit host
   return { dy: signExtendNibble(byte & 0xf), dx: signExtendNibble((byte >> 4) & 0xf) };
@@ -436,9 +500,9 @@ export function parsePatSpawnDescriptor(buf, index) {
  */
 export const CLASS_TABLE_A = {
   1: [
-    { spriteBase: 450, w: 32, h: 32, handlerA: 'generic', handlerB: 'bc4b' },
-    { spriteBase: 516, w: 32, h: 32, handlerA: 'generic', handlerB: 'unknown' },
-    { spriteBase: 456, w: 32, h: 32, handlerA: 'generic', handlerB: 'bc4b' },
+    { spriteBase: 450, w: 32, h: 32, handlerA: 'ping3',  handlerB: 'bc4b' },    // CS:0xBE6B, table df68
+    { spriteBase: 516, w: 32, h: 32, handlerA: 'static', handlerB: 'unknown' },  // CS:0xBED3 — unread
+    { spriteBase: 456, w: 32, h: 32, handlerA: 'ping3',  handlerB: 'bc4b' },    // CS:0xBE71, table df70
   ],
   /* Worlds 2/3, transcribed from entity-a.js's own CLASS_TABLES_A (the SAME
    * DS:0x1fe pointer, cross-checked byte-for-byte against this table's own
@@ -449,19 +513,19 @@ export const CLASS_TABLE_A = {
    * world4 idx2 'attack-state', world4 idx3 'cut-hazard') — so every class
    * not already special IS the generic walk-cycle/bc4b pair, not a guess. */
   2: [
-    { spriteBase: 504, w: 32, h: 32, handlerA: 'generic', handlerB: 'bc4b' },
-    { spriteBase: 512, w: 32, h: 32, handlerA: 'generic', handlerB: 'bc4b' },
-    { spriteBase: 504, w: 32, h: 32, handlerA: 'generic', handlerB: 'bc4b' },
-    { spriteBase: 504, w: 32, h: 32, handlerA: 'generic', handlerB: 'bc4b' },
+    { spriteBase: 504, w: 32, h: 32, handlerA: 'walk4',  handlerB: 'bc4b' },    // CS:0xBE60 `mov cx,0x1f8`
+    { spriteBase: 512, w: 32, h: 32, handlerA: 'walk4',  handlerB: 'bc4b' },    // CS:0xBE66 `mov cx,0x200`
+    { spriteBase: 504, w: 32, h: 32, handlerA: 'walk4',  handlerB: 'bc4b' },
+    { spriteBase: 504, w: 32, h: 32, handlerA: 'walk4',  handlerB: 'bc4b' },
   ],
   3: [
-    { spriteBase: 486, w: 32, h: 32, handlerA: 'generic', handlerB: 'bc4b' },
-    { spriteBase: 523, w: 32, h: 32, handlerA: 'generic', handlerB: 'bc4b' },
-    { spriteBase: 486, w: 32, h: 32, handlerA: 'generic', handlerB: 'bc4b' },
+    { spriteBase: 486, w: 32, h: 32, handlerA: 'static', handlerB: 'bc4b' },    // CS:0xBEF4 — unread
+    { spriteBase: 523, w: 32, h: 32, handlerA: 'walk4',  handlerB: 'bc4b' },    // CS:0xBE5A `mov cx,0x20b`
+    { spriteBase: 486, w: 32, h: 32, handlerA: 'static', handlerB: 'bc4b' },    // CS:0xBEF4 — unread
   ],
   4: [
-    { spriteBase: 496, w: 32, h: 32, handlerA: 'generic', handlerB: 'bc4b' },
-    { spriteBase: 524, w: 32, h: 32, handlerA: 'generic', handlerB: 'bc4b' },
+    { spriteBase: 496, w: 32, h: 32, handlerA: 'static', handlerB: 'bc4b' },    // CS:0xBF15 — unread
+    { spriteBase: 524, w: 32, h: 32, handlerA: 'static', handlerB: 'bc4b' },    // CS:0xBF36 — unread
     { spriteBase: 504, w: 32, h: 48, handlerA: 'attack-state', handlerB: 'attack-fire' },
     { spriteBase: 531, w: 32, h: 32, handlerA: 'cut-hazard', handlerB: 'cut-hazard' }, // CS:0xbd38/0xbd0b, never placed — see CLAUDE.md
   ],
@@ -739,7 +803,24 @@ export class PatGroups {
          * `s.key < 0` branch at the top of this loop. */
         if (health) this.#contactAndDamage(slot, s, cam, hero, health, grid, decodeTag, opts);
 
-        drawn.push({ x: screenX, y: screenY, sprite: slot.cls.spriteBase }); // UNKNOWN_pat_animation_frame — see header
+        /* handlerA, CS:0xBB2B — advance the walk cycle and pick the frame.
+         * `s.attackState` IS the original's +0xe field (see stepAnimPhase);
+         * `this.lastPretickX` is DS:0x200, written by #move for THIS
+         * sub-record a few lines above, which is what makes the facing test
+         * read its own pre-tick X rather than a neighbour's. */
+        /* ⚠️ ONLY for the two decoded walk-cycle families. `attackState` is
+         * the shared +0xe field, and world 4 class 2's handlerA is the
+         * CS:0xBDDB ATTACK STATE MACHINE, not an animation driver — that
+         * class's handlerA owns the field and advancing a walk phase under
+         * it would drive its 3->4->5->6->7 sequence from the wrong place.
+         * A class whose handlerA this pass did not read keeps its static
+         * sprite and its untouched field. */
+        const fam = slot.cls.handlerA;
+        if (fam === 'ping3' || fam === 'walk4') {
+          s.attackState = stepAnimPhase(s.attackState, tock, s.x, this.lastPretickX);
+        }
+        drawn.push({ x: screenX, y: screenY,
+                     sprite: animSprite(fam, slot.cls.spriteBase, s.attackState) });
       }
 
       /* CS:0xBB75-0xBBAD — THE GROUP DROP. This is where level 1A's flying
