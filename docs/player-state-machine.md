@@ -216,7 +216,9 @@ The rest of state 13's input dispatch decodes just as cleanly:
 
 Note the dismount needs `inc byte [0x353] / cmp byte [0x353],2 / jng` — a **two-tick hold** before it fires, so a tap of RIGHT+DOWN does not throw the hero off a ladder.
 
-**The animation ping-pongs 0↔3** (`0x565C inc cl / cmp cl,3 / jg`, `0x5688 dec cl / jz`) with the climb-step sound `0x5931` fired **only at the two turn-arounds**, not per tick. Leaving the ladder at the bottom exits to state 26 with `xor cl,cl` and `and word [0x17c],0xfff0` — a Y snap to the tile row, which *is* what `0x5679` does.
+**The animation ping-pongs 0↔3** (`0x565C inc cl / cmp cl,3 / jg`, `0x5688 dec cl / jz`) with a climb-step sound fired **only at the two turn-arounds**, not per tick, from the call site at `0x5931`. Leaving the ladder at the bottom exits to state 26 with `xor cl,cl` and `and word [0x17c],0xfff0` — a Y snap to the tile row, which *is* what `0x5679` does.
+
+⚠️ **CORRECTED, a later session (surfaced while wiring `gods-web`'s footstep/climb audio).** This line used to read "the climb-step sound `0x5931`" — but `0x5931` is not a sound id, it is the CS: address of `FUN_1000_5931`, a 9-byte thunk (`push ax / mov ax,0x240 / call 0x22ca / pop ax / ret`). `get_function_xrefs` on that address finds exactly four callers: `CS:0x5681`/`0x5690` (state 13, descend) and `CS:0x58cd`/`0x58dc` (state 14, ascend) — the same four turn-around sites this section already names. The real sound id — the word actually passed to the sound-effect export at `0x22ca` — is **`0x240`**. `[STATIC]`: read as a `MOV` immediate in the disassembly, not cross-checked against a second binary the way the spike-crop closure was.
 
 `UNKNOWN_ladder_up_branch` — the plain climb-UP branch was not isolated to a single site; the `sub word [0x17c],4` sites at `55F6`/`561C` sit inside the *fire* paths and are gated on `test cl,0x1` (even phases only).
 
