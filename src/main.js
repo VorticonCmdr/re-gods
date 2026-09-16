@@ -1191,6 +1191,18 @@ async function main() {
     KeyA: 'left', KeyD: 'right', KeyW: 'up', KeyS: 'down', Space: 'fire',
   };
   addEventListener('keydown', (e) => {
+    if (uiState === 'shop') {
+      /* The shop (game/shop.js) reads this SAME `{left,right,up,down,fire}`
+       * object every tick via the Clock's own `shopScreen.step(input)` call
+       * above — it needs no dedicated key handler, just a way into `input`.
+       * Routing it through `handleTitleKey` instead (as every other non-
+       * 'game' state does) silently dropped every shop keypress: that
+       * function has branches for 'menu'/'password' only, so a shop cursor
+       * move or FIRE press reached neither `input` nor any shop-aware code —
+       * a real, pre-existing bug found while wiring #11's audio SFX. */
+      const k = KEYMAP[e.code]; if (k) { input[k] = true; e.preventDefault(); }
+      return;
+    }
     if (uiState !== 'game') {
       if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space', 'Enter', 'Escape', 'Backspace']
         .includes(e.code)) e.preventDefault();
