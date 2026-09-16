@@ -23,7 +23,12 @@ opens exactly once per game, via password entry only" claim looks unfamiliar.
 > now established** — see `UNKNOWN_shop_roster_source`, closed the same session
 > after finding that the previous "reads as zero" result was a segment error
 > (`SS:0x51aa`, not `DS:0x51aa` — `[BP+disp]` addressing defaults to `SS` in
-> real mode), not evidence the table needed something more exotic.
+> real mode), not evidence the table needed something more exotic. **The two
+> eligibility gates' bit-level meaning is also now established** — see
+> `UNKNOWN_shop_eligibility_gates`, closed by cross-referencing three
+> already-`[PROVEN]` findings elsewhere in this project (the hero's weapon
+> slots, the "hero starts unarmed" restart clear, and the familiar-energy
+> word `DS:0x168`) plus one fresh live read this session.
 
 ## Forcing shop entry live, without a real password
 
@@ -164,19 +169,19 @@ copy:
 2. Skips the id if `DS:0x319[category]` is already set (bought this category
    already, this shop visit — `0x319` is a 23-byte scratch cleared to zero at
    shop entry, `CS:0x6c5d`-`0x6c67`).
-3. Skips it if either of two gates fails — their **control flow** is now
-   fully disassembled (a later session), though the bit-level *meaning* of
-   the state they read is still open (`UNKNOWN_shop_eligibility_gates`):
+3. Skips it if either of two gates fails — both fully disassembled AND
+   bit-level-decoded, `UNKNOWN_shop_eligibility_gates` CLOSED (see below):
    `FUN_1000_731b` returns "skip" **only when** `DS:0xdd10 & DS:0xdda2 &
    DS:0xde34 == -1` **and** the raw id is `2` or `3` — any other id passes
    regardless, and if that AND is anything other than `-1` (all-ones), ids
-   `2`/`3` pass too. Which state (`-1` or not) is typical at a given shop
-   entry is not established — see `UNKNOWN_shop_eligibility_gates`; world
-   2's own two live captures disagreed on id `2`'s visibility, so it is
-   demonstrably not fixed. `FUN_1000_7336` is the identical shape
-   one level down: skip **only when** `DS:0x168 == -1` **and** the id is
-   `0x28`(40) or `0x29`(41). Both special-cased pairs are otherwise ordinary
-   entries in the raw source list (below) — they are not always available.
+   `2`/`3` pass too. That AND is `-1` exactly when the hero holds **no
+   weapon at all** in any of his three weapon slots (see below) — world 2's
+   own two live captures disagreeing on id `2`'s visibility reflects a hero
+   who was unarmed in one run and armed in the other, not random state.
+   `FUN_1000_7336` is the identical shape one level down: skip **only when**
+   `DS:0x168 == -1` (no familiar alive) **and** the id is `0x28`(40) or
+   `0x29`(41). Both special-cased pairs are otherwise ordinary entries in
+   the raw source list (below) — they are not always available.
 4. Calls `FUN_1000_7392(id)` (the price/value accessor — see below) and skips
    the id if its cost exceeds current money (`DS:0x194:0x196`).
 5. Otherwise keeps it in a 30-slot scratch (`SS:0x4050`), then copies that
@@ -459,57 +464,116 @@ rank 2 weaponPower, `37`→rank 5 noop34c, `39`→rank 7 familiar, `40`→rank 8
 familiarWings, `41`→rank 9 familiarClaws) — six items, six exact matches,
 zero misses, the same signal that validated the original 12.
 
-**Of those six, four are conditionally gated and two are not** — see the
-refined `FUN_1000_731b`/`FUN_1000_7336` characterization above. Ids `2` and
-`3` are skipped when `DS:0xdd10 & DS:0xdda2 & DS:0xde34 == -1`, and pass
-when that AND differs from `-1`; ids `40` and `41` follow the identical
-shape gated on `DS:0x168`. This project has never read any of these four
-words, in world 2 or anywhere else — there is no live evidence for what
-value they typically hold, and the one relevant observation this project
-does have argues against assuming a fixed default: world 2's own two live
-captures disagreed on id `2` (absent in one, present in the other), meaning
-at least one of those two real shop entries had the AND `!= -1`. So the
-runtime state is demonstrably not constant even for the SAME world across
-boots, let alone predictable for worlds 3/4, which were never live-checked
-for this at all. Ids `37` and `39` are not named by either gate and pass
-unconditionally regardless — that part IS unconditional, disassembly-proven
-fact, not an inference about typical runtime state.
+**Of those six, four are conditionally gated and two are not** — see
+`UNKNOWN_shop_eligibility_gates` below, CLOSED. Ids `2` and `3` are skipped
+when `DS:0xdd10 & DS:0xdda2 & DS:0xde34 == -1` (the hero is fully unarmed)
+and pass once he holds any weapon; ids `40` and `41` follow the identical
+shape gated on `DS:0x168` (no familiar alive). Both gates are reachable in
+ordinary shipped play — gate 1 opens on the hero's first weapon pickup
+(nearly certain by world 3), and gate 2 opens if the player buys id `39`
+(the familiar, `30000`) in this same world 3/4 shop, since `39` is itself
+one of the 18 raw ids and is not gated by either check. Ids `37` and `39`
+are not named by either gate and pass unconditionally regardless.
 
 **Consequently, this port's world 3/4 roster ships only the six-plus-12 =
 14 unconditionally-eligible ids** — `{0,35,36,37,38,39,42,44,51,52,53,70,
-71,72}` — deliberately excluding `2,3,40,41` (gated on runtime state this
-project has never read, in either polarity, for worlds 3/4) and every
-sell-marker id (sell is not ported at all, `UNKNOWN_shop_tradein_value`).
-This is not merely a size-limit workaround: 14 fits the 17-slot grid without
-needing the `0x25c` scroll path (see above) at all, and it extends the same
-"don't show what isn't reliably there" discipline world 2's own 12-id roster
-already used for id `2`, rather than introducing a new, weaker standard for
-worlds 3/4. Note this doesn't make the scroll path any less real for worlds
-3/4: if the gate state at a typical world-3/4 shop entry admits `2`/`3`/
-`40`/`41` the way world 2's own run 2 admitted id `2`, the true survivor
-count is closer to the full 18 buy ids (plus sell markers), comfortably
-past 17. A future session that resolves `UNKNOWN_shop_eligibility_gates`'
-bit-level meaning could add `2`/`3`/`40`/`41` back in (with real prices
-already on record, see below) and would need to implement scrolling to show
-them reliably.
+71,72}` — deliberately excluding `2,3,40,41` and every sell-marker id (sell
+is not ported at all, `UNKNOWN_shop_tradein_value`). This was a reasonable
+call when the gates' meaning was unresolved, but is now understood to be a
+real port-fidelity gap rather than just a size-limit workaround: a player
+who buys the familiar (`39`) in this port's own shop gets no visible payoff
+for it, since `40`/`41` never appear regardless, and a player who has
+picked up any weapon (the common case) never sees `2`/`3` either. 14 does
+still fit the 17-slot grid without the `0x25c` scroll path (see above); the
+full 18-id roster, which is real and reachable, would need that scroll path
+implemented to show reliably. Whether to close this gap — wiring
+`ShopScreen`'s eligibility check to the port's own already-tracked
+`arsenal.slots`/`health.familiarEnergy` state, which mirror these same four
+words directly (see `game/weapons.js`, `game/combat.js`) — is a port-scope
+decision, not an RE question; this file records the mechanism, not the
+port's disposition of it.
 
-## `UNKNOWN_shop_eligibility_gates` — control flow now proven, bit-level meaning still open
+## `UNKNOWN_shop_eligibility_gates` — CLOSED
 
-`FUN_1000_731b` and `FUN_1000_7336` were re-disassembled to their exact
-branch structure this session (see the numbered filter-steps list above for
-the precise polarity: each gate skips its own two special ids specifically
-when its flag word — the `AND` of three words for `731b`, `DS:0x168` alone
-for `7336` — equals `-1`, and passes every id, including its own two
-special ones, once that flag differs from `-1`). What is now fully
-understood: the *shape* of both gates and which two ids each one names.
-What is still open: what `DS:0xdd10`/`0xdda2`/`0xde34` and `DS:0x168`
-actually represent in terms of game state, what shipped gameplay event
-clears the relevant bit(s), and — not yet checked at all — what value they
-actually hold on a typical shop entry (world 2's own two live captures
-disagreed on the resulting id-2 visibility, so "typical" may not even be a
-single answer). `UNKNOWN_shop_roster_source` above worked around this
-rather than resolving it, by only porting the two new ids (`37`,`39`) that
-pass regardless of this unresolved state.
+Both gates' bit-level meaning is established this session by cross-
+referencing three findings this project had already made and `[PROVEN]`
+elsewhere — the shop's own gate code was never the only place these four
+words are read — plus one live read this session confirming the identity
+directly.
+
+**Gate 1 (`FUN_1000_731b`, ids 2/3) reads the hero's own weapon inventory.**
+`docs/entity-systems-spawning.md`'s `UNKNOWN_projectile_record` closure
+already documents `DS:0xdd10`/`0xdda2`/`0xde34` as **the hero's three weapon
+slots** — each holds a weapon index, or `0xFFFF` when empty — and states
+outright: "those are exactly the three words trigger predicates COND3/COND4
+test … independent confirmation that they are the weapon inventory." The
+shop's gate reads the identical three addresses the same way (AND all
+three, compare to `-1`) — a second independent confirmation of the same
+fact. `docs/consumables-and-treasure.md`'s "The hero starts UNARMED"
+section pins the write side: `CS:0x914c` clears all three to `0xFFFF`,
+called only from the two full-game-restart sites (`CS:0x473`/`CS:0x8dd9`);
+the only way a slot is ever set again is the arm routine `CS:0x90f9`, fired
+by picking up one of the 55 shipped weapon pickups (object type `>=0xC0`).
+So: **ids 2 and 3 (both "power potion" — increases weapon power) are hidden
+exactly while the hero holds no weapon at all, and become purchasable the
+moment any of the three slots holds one** — upgrading a weapon he doesn't
+have would be meaningless, so this is a deliberate, sensible design choice,
+not an arbitrary restriction. `docs/triggers-and-difficulty.md`'s ACT10
+(`3e3f`, 7 shipped records) is the one shipped gameplay event that can
+re-close this gate mid-level: it clears whichever of the three slots holds
+a given weapon id, so a level script can take a weapon back and the shop's
+own power-potion listing follows automatically on the next visit.
+
+**Gate 2 (`FUN_1000_7336`, ids 40/41) reads the familiar's energy.**
+`docs/combat-and-projectiles.md` already closes `UNKNOWN_DS_0168`: `DS:0x168`
+is **the familiar's energy** — `-1` from every full restart (`CS:0xC440`
+dismiss, called only by the two restart sites), set to `1000` on summon
+(type-39 consumable, `CS:0xC2F6`/`CS:0xC347`), drained by damage
+(`CS:0xAB4D`), and driven back to `-1` on death/dismissal. So: **ids 40 and
+41 ("magic wings"/"power claws", both explicitly *effects familiar* in
+their own `POBJECTS` text) are hidden exactly while no familiar is alive.**
+
+⚠️ **Correction to this file's own earlier framing in this same session.**
+An earlier pass here claimed gate 2 "never opens in shipped play" because
+type 39 (the familiar-summon consumable) is placed in **zero** map
+locations across all eight shipped maps. That census only covers *map
+placement* — it misses the shop as a second, separate acquisition channel,
+the exact blind spot `UNKNOWN_chest_key_surplus` already caught this
+project making once before ("the prior pass only checked static object
+placement; it never checked trigger actions that spawn objects"). **Id 39
+is itself a purchasable item in worlds 3 and 4's own shop roster**
+(`SS:0x51aa`'s raw list, `UNKNOWN_shop_roster_source` above; priced
+`30000`, the single most expensive of the 14 ids this port already ships).
+`FUN_1000_6e62`'s buy dispatch runs the identical category-0 consumable
+handler a map pickup would (`safeApplyConsumable`'s `gods-web` equivalent
+already mirrors this — see below), so buying id 39 in world 3 or 4's shop
+sets `DS:0x168` to `1000` exactly as a (never-shipped) map pickup would have.
+**Gate 2 is reachable in shipped play — a two-stage unlock (buy the
+familiar, then its boosts become purchasable), not dead content.** Worlds
+1/2 never carry `39`/`40`/`41` in their raw roster at all, so the gate is
+moot there; it matters only for worlds 3/4.
+
+**Tags, precisely.** The *identity* of all four words is `[PROVEN]` — a
+fresh live read this session (`GAME.EXE` boot, world 1, mid-quest) found
+slot A (`DS:0xdd10`) `= 0` (armed with the knife, weapon index 0), slots B/C
+(`DS:0xdda2`/`0xde34`) `= 0xFFFF` (empty, confirming the empty-sentinel
+convention live), and `DS:0x168 = 0xFFFF` (no familiar) — consistent with,
+and now a live cross-check of, the three prior `[PROVEN]` docs cited above.
+**The specific claim that the shop's own rendered roster visibly changes
+when these words change is `[STATIC]`, not `[PROVEN]`** — this session read
+the four words directly and separately re-confirmed the shop's own
+disassembled AND/compare logic, but never round-tripped through an actual
+shop screen with a controlled before/after (read the four words at a shop
+entry with id 2 absent, force a weapon pickup, re-enter, confirm id 2 now
+present and the words changed accordingly). That specific check was not run
+this session; doing so would close the last gap to a fully end-to-end
+`[PROVEN]` result.
+
+This also retroactively explains this file's own earlier puzzle: world 2's
+two live captures disagreeing on id `2`'s visibility (run 1 absent, run 2
+present) is exactly what a hero who happened to be unarmed in run 1 and
+armed in run 2 produces. Neither run read the actual weapon-slot words at
+the time, but the mechanism now on record predicts precisely that shape.
 
 ## `UNKNOWN_shop_tradein_value`
 
@@ -536,6 +600,10 @@ invented placeholders. Real prices are shown and charged for all 14 ids
 (`game/shop.js`'s `PRICES` table, `UNKNOWN_shop_prices` closed — see above);
 the visible grid also re-prunes itself after every purchase for the category
 lockout and current affordability, a partial port of the original's own
-roster rebuild (the two `UNKNOWN_shop_eligibility_gates` predicates are not
-reproduced — that's exactly why worlds 3/4 stop at 14 ids rather than the
-full 18). Sell is not ported — see `UNKNOWN_shop_tradein_value`.
+roster rebuild (the two `UNKNOWN_shop_eligibility_gates` predicates — now
+CLOSED, see above — are not yet reproduced; that's why worlds 3/4 still
+stop at 14 ids rather than the reachable full 18. The port already tracks
+the exact state each gate needs, `game/weapons.js`'s `arsenal.slots` and
+`game/combat.js`'s `health.familiarEnergy`, so wiring this up is a scoped
+follow-on rather than an open research question). Sell is not ported — see
+`UNKNOWN_shop_tradein_value`.
