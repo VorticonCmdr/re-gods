@@ -13,7 +13,7 @@ import { parseMap, TILE_COUNTS } from './formats/map.js';
 import { parseAtlas, cutAll } from './formats/atlas.js';
 import { Clock, LOGIC_HZ } from './engine/clock.js';
 import { Renderer } from './render/renderer.js';
-import { Player, ST } from './game/player.js';
+import { Player, ST, FOOTSTEP_SFX, CLIMB_STEP_SFX } from './game/player.js';
 import { InventoryPanel, drawInventoryPanel } from './game/inventory-panel.js';
 import { runAllChecks, checkDescriptorAnchors, checkHeroSprites,
          checkSelectorsAndObjects, checkSpawn, checkEntityB, checkEntityA, checkSpawnA,
@@ -1495,6 +1495,14 @@ async function main() {
       }
       lastDebrisFx = fr.debrisFx || [];
       if (fr.emitted) { shotsFired++; audio.play(FIRE_SFX); }   // CS:0x985f/0x9895
+      /* CS:0x5AAD/0x5ABA — already gated to WALK_FOOTSTEP_PHASES by
+       * player.js, so this per-tick check IS the tuned cadence, not a bare
+       * trigger. See audio/audio-bus.js's own header for why the earlier
+       * "needs cadence tuning" caveat here was checked and closed. */
+      if (fr.footstep) audio.play(FOOTSTEP_SFX);
+      /* The FUN_1000_5931 thunk's four callers — the climb ping-pong's two
+       * turn-arounds, already gated behind _climb's own tock===0 return. */
+      if (fr.climbStep) audio.play(CLIMB_STEP_SFX);
       for (const c of fr.consumed) {
         consumed++;
         postPickupMessage(c);

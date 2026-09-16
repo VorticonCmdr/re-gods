@@ -52,7 +52,7 @@ import { parseAllTriggers, isLive, verbOf, TRIG_COUNT } from '../game/trigger.js
 import { parseAtlas, cutAll, atlasStats } from '../formats/atlas.js';
 import { buildDescriptorMap, GROUP_STEMS, PLAYER_ANIM_BASE, HERO_DESCRIPTOR_MAX } from '../formats/descriptors.js';
 import { STATE_INFO, STATE_TABLE, spriteFor, NON_RENDERING_STATES, jumpPhase,
-         LADDER_JUMP_PHASE } from '../game/states.js';
+         LADDER_JUMP_PHASE, WALK_FOOTSTEP_PHASES, LADDER_PHASE_MAX } from '../game/states.js';
 import { emittableStates } from '../game/player.js';
 import { MODE, MODE_TABLE, EntityB, hopDelta, hopCursorNext, EST,
          groundBelow, onScreen, fireB, isDying,
@@ -185,7 +185,8 @@ import { Starburst, BURST_TEMPLATE, PARTICLES_PER_BURST, SLOTS,
 import { JUMP_ARC_END, JUMP_ARC_EXIT, fireGuardBefore,
          fireGuardAfter } from '../game/fire-states.js';
 import { Player, ST, S as PS, JUMP_ARC_EARLY_LAND_CURSOR,
-         WALK_STEP, fallDamageFor, FALL_DAMAGE_THRESHOLD } from '../game/player.js';
+         WALK_STEP, fallDamageFor, FALL_DAMAGE_THRESHOLD,
+         FOOTSTEP_SFX, CLIMB_STEP_SFX } from '../game/player.js';
 import { CELL_SOLID, CELL_CLIMBABLE, MAP_COLS as MC, attrAt } from '../formats/map.js';
 import { parseWeapons, allocateShots, MAX_SUBSLOTS, WEAPON_SLOTS, tagFor,
          WEAPON_COUNT, PINNED_08, PINNED_SPRITE, PINNED_SPRITE2,
@@ -6663,6 +6664,109 @@ export async function checkWeaponsProjectiles(fetchRaw) {
       `empty and only the two full restarts reach it`);
   }
 
+  /* ── footstep/climb-step: the flags ARE the tuned cadence, checked not
+   * assumed. This project's own audio-bus.js used to carry a "needs cadence
+   * tuning against the real footfall interval" caveat for both signals —
+   * these assertions are what closed it: both are gated by the ORIGINAL's
+   * own phase machine (player.js's `_ground`/`_climb`), not by anything
+   * layered on top, so surfacing the flags at the per-tick call site in
+   * main.js needed no new timing logic. ────────────────────────────────── */
+  {
+    const { a, p, m } = armed();
+    p.tick(m, IN({ right: true }), a);           // enter WALK_R
+    let phase = p.phase;                          // the real post-entry phase
+    const seq = [], expected = [];
+    for (let i = 0; i < 16; i++) {                // two full 8-tick cycles
+      p.tick(m, IN({ right: true }), a);
+      phase = (phase + 1) & 7;
+      expected.push(WALK_FOOTSTEP_PHASES.includes(phase) ? 1 : 0);
+      seq.push(p.footstep ? 1 : 0);
+    }
+    check(`footstep fires exactly twice per 8-tick walk cycle — not once, ` +
+          `not every tick`,
+      seq.filter((v) => v).length === 4 && seq.join('') === expected.join(''),
+      `footstep over 16 sustained walking ticks: ${seq.join('')}, expected ` +
+      `${expected.join('')} from WALK_FOOTSTEP_PHASES=` +
+      `[${WALK_FOOTSTEP_PHASES.join(',')}] applied to the real post-entry ` +
+      `phase — the same gate CS:0x5AAD/0x5ABA apply`);
+  }
+  {
+    const n = MC * 64;
+    const planeB = new Uint8Array(n);
+    for (let r = 2; r < 20; r++) planeB[r * MC + 5] = CELL_CLIMBABLE;
+    const tallLadder = { planeA: new Uint8Array(n), planeB,
+                          widthPx: 4096, heightPx: 1024 };
+    const p = new Player(5 * 32, 10 * 16);
+    p.state = ST.CLIMB; p.phase = 0; p.ladderPingPong = false;
+    const openSeq = [];
+    let closedFired = false;
+    for (let i = 0; i < 24; i++) {
+      const open = i % 2 === 0;
+      const yBefore = p.y, phaseBefore = p.phase;
+      p.tick(tallLadder, IN({ up: true }), null, open ? 1 : 0);
+      if (!open) {
+        if (p.climbStep || p.y !== yBefore || p.phase !== phaseBefore) closedFired = true;
+      } else {
+        openSeq.push(p.climbStep ? 1 : 0);
+      }
+    }
+    check(`a CLOSED climb tick (tock===0) is a true no-op: no Y motion, no ` +
+          `phase change, no climb-step`,
+      !closedFired,
+      `CS:0x54b9/0x5707 \`cmp byte [0x36c],0 / jnz\` — the closed tick is a ` +
+      `bare jmp before input is even read; _climb's own tock===0 early ` +
+      `return reproduces that`);
+    /* Derived from LADDER_PHASE_MAX rather than hand-typed, so the check
+     * stays correct if that constant ever changes: a turn-around every
+     * LADDER_PHASE_MAX open ticks. */
+    const expectedOpenSeq = openSeq
+      .map((_, i) => ((i + 1) % LADDER_PHASE_MAX === 0 ? 1 : 0)).join('');
+    check(`climbStep fires exactly at the two ping-pong turn-arounds per ` +
+          `0->${LADDER_PHASE_MAX}->0 cycle — not once, not every step`,
+      openSeq.join('') === expectedOpenSeq,
+      `open-tick climbStep sequence: ${openSeq.join('')}, expected ` +
+      `${expectedOpenSeq} (a turn-around every LADDER_PHASE_MAX=` +
+      `${LADDER_PHASE_MAX} open ticks) — matches FUN_1000_5931's own 4 call ` +
+      `sites (CS:0x5681/0x5690 descend, CS:0x58cd/0x58dc ascend), 2 per cycle`);
+  }
+  {
+    /* player.js:1319's blocked-step early return (added to fix the "still
+     * plays the climbing animation while stuck" report) sits BEFORE the
+     * phase/climbStep block. This is the same bug shape, now checked for
+     * audio: a hero wedged at the top of a ladder must not play a
+     * climb-step on a tick where it didn't actually move. */
+    const n = MC * 64;
+    const planeB = new Uint8Array(n);
+    for (let r = 0; r <= 8; r++) planeB[r * MC + 5] = CELL_CLIMBABLE;
+    const cappedLadder = { planeA: new Uint8Array(n), planeB,
+                            widthPx: 4096, heightPx: 1024 };
+    const p = new Player(5 * 32, 8 * 16);
+    p.state = ST.CLIMB;
+    const trace = [];
+    for (let i = 0; i < 30; i++) {
+      const yBefore = p.y;
+      p.tick(cappedLadder, IN({ up: true }), null, 1);
+      trace.push({ moved: p.y !== yBefore, climbStep: p.climbStep });
+    }
+    const stuck = trace.filter((t) => !t.moved);
+    check(`a hero wedged at the top of a ladder never plays a climb-step`,
+      stuck.length > 0 && stuck.every((t) => !t.climbStep),
+      `${stuck.length}/${trace.length} ticks were blocked (no Y motion) once ` +
+      `the climb ran out of ladder above the hero — a blocked tick is a true ` +
+      `no-op, the same fix already shipped for the animation, now closed for ` +
+      `audio too`);
+  }
+  check(`FOOTSTEP_SFX and CLIMB_STEP_SFX are the FULL word passed to ` +
+        `CS:0x22ca, and both have a synthesized voice`,
+    FOOTSTEP_SFX === 0x020e && CLIMB_STEP_SFX === 0x0240 &&
+      0x020e in SFX_VOICES && 0x0240 in SFX_VOICES,
+    `FOOTSTEP_SFX=0x${FOOTSTEP_SFX.toString(16)} ` +
+    `CLIMB_STEP_SFX=0x${CLIMB_STEP_SFX.toString(16)} — CLIMB_STEP_SFX is a ` +
+    `correction: Gods/docs/player-state-machine.md used to cite "0x5931" as ` +
+    `the id, which is actually the CS: address of the thunk that plays it ` +
+    `(FUN_1000_5931, disassembled fresh: push ax / mov ax,0x240 / ` +
+    `call 0x22ca / pop ax / ret) — the real id is 0x240`);
+
   results.push({
     name: 'sound ids: most now play, a handful are still carried but not exercised',
     note: true, pass: true,
@@ -6685,17 +6789,25 @@ export async function checkWeaponsProjectiles(fetchRaw) {
       'Gods/docs/combat-and-projectiles.md) — so "nothing plays on every ' +
       'hit" is correct porting everywhere gods-web actually decodes a hit, ' +
       'not a residual gap. Every voice is a STYLIZED synthesis, not ' +
-      'a chip-accurate one — see that module\'s own header for why. Still ' +
+      'a chip-accurate one — see that module\'s own header for why. A still ' +
+      'later pass closed the footstep/climb-step gap: 0x20e footstep and ' +
+      '0x240 climb-step (player.js\'s FOOTSTEP_SFX/CLIMB_STEP_SFX) now play ' +
+      'too. The "needs cadence tuning against the real footfall interval" ' +
+      'caveat this note used to carry for footstep was checked, not carried ' +
+      'forward: both flags are already gated to the ORIGINAL\'s own phase ' +
+      'machine (WALK_FOOTSTEP_PHASES, and the climb ping-pong\'s tock===0 ' +
+      'gate) — see this file\'s own footstep/climb-step cadence checks just ' +
+      'above, which also caught (and fixed) that CLIMB_STEP_SFX had been ' +
+      'mis-cited in this project\'s own RE docs as id "0x5931", actually the ' +
+      'CS: address of the thunk that plays 0x240, not the id itself. Still ' +
       'genuinely unwired, disclosed rather than silently dropped: 0x0e49 the ' +
       'Roland-only alternate kill sound (CS:0xABB7/0xABD1, gated on ' +
       'DS:0x35e, audible on only 3 creature classes and only under that one ' +
       'driver), 0x1d projectile-hits-terrain (CS:0xA7F6), 0x09 magic-axe ' +
       'bounce (CS:0xA7AD) — neither of these two is attached to any per-tick ' +
-      'result frame.js surfaces yet — 0x22 bomb detonation (CS:0xA27C), and ' +
-      '0x20e footstep (needs cadence tuning against the real footfall ' +
-      'interval, not a bare per-tick trigger). A green suite does not mean ' +
-      'the STYLE of what main.js NOW plays is right — only that the right ' +
-      'id reaches the right game event.',
+      'result frame.js surfaces yet — and 0x22 bomb detonation (CS:0xA27C). ' +
+      'A green suite does not mean the STYLE of what main.js NOW plays is ' +
+      'right — only that the right id reaches the right game event.',
   });
 
   /* ── CONSUMABLES: the rank, the table width, and a real potion ────────── */

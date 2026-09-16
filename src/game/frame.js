@@ -149,7 +149,15 @@ export function stepHeroFrame({ input, arsenal, grid, player, map, cam,
   return { projectiles, emitted: player.emitted, picked: picked.taken,
            consumed: picked.consumed || [], treasures: picked.treasures || [],
            loot, burstFx, blockFx, debrisFx, keyCollected: player.keyCollected,
-           leverToggled: player.leverToggled };
+           leverToggled: player.leverToggled,
+           /* CS:0x5AB3/0x5AC0 (footstep) and the FUN_1000_5931 thunk's four
+            * callers (climb step) — see player.js's own FOOTSTEP_SFX/
+            * CLIMB_STEP_SFX for the ids. Both flags are already gated to the
+            * real cadence by the phase machine itself (footstep only at
+            * WALK_FOOTSTEP_PHASES, climbStep only at the ping-pong
+            * turn-arounds behind the tock===0 early return) — surfacing them
+            * here is not a "per tick" trigger, it is the tuned one. */
+           footstep: player.footstep, climbStep: player.climbStep };
 }
 
 /**

@@ -163,6 +163,20 @@ export const CLIMB_STEP = 6;
  * dismount and fire-on-ladder included, runs only every OTHER logic tick;
  * the closed tick is a bare `jmp 0x5e9b` before input is even read. */
 export const CLIMB_EVERY_OTHER_TICK = true;
+
+/* FOOTSTEP_SFX — CS:0x5AB3/0x5AC0, both `push ax / mov ax,0x20e / call
+ * 0x22ca / pop ax`, gated on `cl==2`/`cl==6` (WALK_FOOTSTEP_PHASES). The
+ * full word passed to the sound-effect export, matching this port's own
+ * convention (SFX_VOICES is keyed the same way; see projectiles.js's
+ * FIRE_SFX for why the bare low byte is the wrong thing to export). `[STATIC]`. */
+export const FOOTSTEP_SFX = 0x020e;
+/* CLIMB_STEP_SFX — `[STATIC]`, corrected. `Gods/docs/player-state-machine.md`
+ * used to cite this id as "0x5931", which is not a sound id at all — it's the
+ * CS: address of `FUN_1000_5931`, a 9-byte thunk (`push ax / mov ax,0x240 /
+ * call 0x22ca / pop ax / ret`) called from all four climb turn-arounds
+ * (CS:0x5681/0x5690 descend, CS:0x58cd/0x58dc ascend — confirmed by
+ * `get_function_xrefs`). The real word passed to the sound export is 0x240. */
+export const CLIMB_STEP_SFX = 0x0240;
 /* CS:0x551b/0x576d (right) and CS:0x558b/0x57e5 (left) — DOWN + a direction
  * must be held for THREE ticks (`cmp .. ,2 / jle bail` — proceeds only once
  * the counter is > 2) before a sideways dismount is even attempted. */
@@ -442,7 +456,7 @@ export class Player {
     /* Original-machine mirrors, for rendering. */
     this.stateIndex = S.FALL_R;   // DS:0x377
     this.phase = 0;               // DS:0x36b (CL), sign-extended as a byte
-    this.footstep = false;        // set on the ticks the original plays SFX 0x0e
+    this.footstep = false;        // set on the ticks the original plays FOOTSTEP_SFX
     this.keyCollected = null;     // {type, slot} on the tick CS:0x60F0 fires
     this.leverToggled = null;     // the object toggled/armed this tick, CS:0x1045
 
@@ -463,7 +477,7 @@ export class Player {
     this.emitted = null;          // {right} on the tick a shot actually spawns
     this.ladderPingPong = false;  // DS:0x347 — the climb-cycle direction flag
     this.dismountHold = 0;        // DS:0x353 / DS:0x348 — shared, see _climb
-    this.climbStep = false;       // set on the ticks the original plays SFX 0x5931
+    this.climbStep = false;       // set on the ticks the original plays CLIMB_STEP_SFX
     /* What the sprite selector should use. Equal to `phase` everywhere except
      * walk+fire, which renders through the DS:0xd950 recoil table while
      * persisting the raw counter (CS:0x5D6B stores, then CS:0x5D75 remaps). */

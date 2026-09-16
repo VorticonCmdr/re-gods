@@ -69,19 +69,37 @@
  * correct porting everywhere in `gods-web`, even though it is not what the
  * original does for that one creature.
  *
+ * `player.js`'s per-tick `footstep`/`climbStep` flags (`FOOTSTEP_SFX` =
+ * `0x020e`, `CLIMB_STEP_SFX` = `0x0240`) are wired too, as of a later pass.
+ * The "needs cadence tuning against the actual footfall interval" caveat
+ * this comment used to carry here was checked, not assumed, and turned out
+ * to be unnecessary: `footstep` is already gated to exactly
+ * `WALK_FOOTSTEP_PHASES` (2 of every 8 walking ticks — the same gate
+ * CS:0x5AAD/0x5ABA apply) and `climbStep` only fires at the ping-pong
+ * turn-arounds behind `_climb`'s own `tock===0` early return, so
+ * `if (fr.footstep) audio.play(FOOTSTEP_SFX)` at the per-tick call site IS
+ * the tuned version — there is no separate real-time cadence to build.
+ * `CLIMB_STEP_SFX`'s id is also a correction: `Gods/docs/player-state-
+ * machine.md` used to cite it as "the climb-step sound 0x5931", but 0x5931
+ * is the CS: address of the 9-byte thunk that plays it
+ * (`push ax / mov ax,0x240 / call 0x22ca / pop ax / ret`), not the id —
+ * see that doc's own correction and player.js's `CLIMB_STEP_SFX` comment.
+ * Dispatch (the right flag reaches the right id) is Node-verified in
+ * checks.js; like every other gameplay SFX in this file, it has not been
+ * personally heard — see the VERIFICATION LEVEL paragraph above. Footsteps
+ * fire far more often than any one-shot event voice in this game, so its
+ * gain is deliberately kept low to avoid swamping the mix under sustained
+ * walking.
+ *
  * Still deliberately NOT wired (disclosed, not silently dropped):
  * `projectiles.js`'s `TERRAIN_SFX`/`AXE_BOUNCE_SFX` are real exported ids but
  * never attached to any per-tick result `frame.js` surfaces — wiring them
  * needs new signal-carrying, not just reading one, so it is left for a
- * follow-up. `player.js`'s per-tick `footstep`/`climbStep` flags (SFX
- * `0x0e`/`0x5931` per that module's own comments) are real signals but fire
- * every footfall — playing them well needs cadence tuning against the actual
- * footfall interval, not just a bare per-tick trigger, so they are left
- * silent rather than shipped sounding wrong. Also unwired: the Roland-only
- * alternate kill sound `0x0e49` (CS:0xABB7/0xABD1, gated on `DS:0x35e`,
- * audible on only 3 specific creature classes and only under that one
- * driver — see Gods/docs/drivers-and-memory.md's "Sound: a 13-slot
- * interface"), and `0x22` bomb detonation (CS:0xA27C).
+ * follow-up. Also unwired: the Roland-only alternate kill sound `0x0e49`
+ * (CS:0xABB7/0xABD1, gated on `DS:0x35e`, audible on only 3 specific
+ * creature classes and only under that one driver — see
+ * Gods/docs/drivers-and-memory.md's "Sound: a 13-slot interface"), and
+ * `0x22` bomb detonation (CS:0xA27C).
  * See checks.js's own "sound ids" note for the same list kept in sync.
  */
 
@@ -174,6 +192,17 @@ export const SFX_VOICES = {
    * bright so it reads as a "shot", not a hit or a pickup. */
   0x041c: (ctx, dest, t0) =>
     scheduleTone(ctx, dest, t0, { freq: 700, dur: 0.045, type: 'square', gain: 0.12, slideTo: 1200 }),
+  /* player.js's FOOTSTEP_SFX. Plays twice per 8-tick walk cycle — the most
+   * frequent sound in the game by a wide margin — so gain is deliberately
+   * well below every one-shot event voice above; a short filtered thump,
+   * not a tone, so it reads as a footfall rather than a UI blip. */
+  0x020e: (ctx, dest, t0) =>
+    scheduleNoise(ctx, dest, t0, { dur: 0.035, gain: 0.07, filterFreq: 220 }),
+  /* player.js's CLIMB_STEP_SFX, fired at the two ends of the climb ping-pong
+   * (see that constant's own citation for the 0x5931 id correction). A
+   * short, higher click distinguishes it from a footstep by ear. */
+  0x0240: (ctx, dest, t0) =>
+    scheduleNoise(ctx, dest, t0, { dur: 0.03, gain: 0.09, filterFreq: 500 }),
 };
 
 /** Node-testable: records ids instead of making sound. */
