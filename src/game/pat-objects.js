@@ -347,6 +347,9 @@ export const HOLD_BOX = Object.freeze({ xMin: -0x24, xMax: 0x144, yMin: -0x28, y
 export const reloadTicks = (loNibble) => (0x10 - loNibble) * 2;
 
 /** CS:0xBACB-0xBAF0 — decode one packed delta byte into signed {dx, dy}. */
+/** A path header word is a SIGNED 16-bit camera-relative offset — see #seed. */
+const s16 = (v) => (v & 0x8000 ? v - 0x10000 : v);
+
 export function decodeDelta(byte) {
   const signExtendNibble = (n) => (n << 4 << 24) >> 28; // shl4 then sar4, on a 32-bit host
   return { dy: signExtendNibble(byte & 0xf), dx: signExtendNibble((byte >> 4) & 0xf) };
@@ -527,13 +530,70 @@ export class PatGroups {
     for (let i = 0; i < slot.desc.entityCount && i < SUBRECORDS_PER_GROUP; i++) {
       const s = slot.subs[i];
       let x, y, cursor;
-      if (dv && dv.getUint16(dir.blobOffset, false) === ABSOLUTE_TAG) {
-        x = dv.getUint16(dir.blobOffset + 2, false);
-        y = dv.getUint16(dir.blobOffset + 4, false);
+      /* ⚠️ THE TAG IS READ NATIVELY (little-endian), NOT big-endian:
+       *
+       *     b9c8  mov ax,word ptr [bp+0x0]   ; a plain 16-bit load, NO xchg
+       *     b9cb  cmp ax,0x4523
+       *     b9ce  jnz b9ea                   ; -> the relative branch
+       *
+       * Every OTHER word in this format is big-endian and reached through an
+       * `xchg ah,al` (CS:0xB9D6, 0xB9DD, 0xB9EA, 0xB9F5) — but the tag
+       * comparison is not one of them, because it is a magic number matched
+       * against raw bytes rather than a coordinate. Reading it big-endian
+       * yields 0x2345, which matches NOTHING: the port saw zero absolute
+       * paths in any shipped file and silently ran every one of them down
+       * the relative branch, reading the coordinates from the wrong offsets
+       * (+0/+2 instead of +2/+4), starting the delta cursor two bytes early,
+       * and adding a camera origin that should not be added at all.
+       *
+       * Measured with a native read, absolute paths are: PGOD01 3 of 38,
+       * PGOD02 4 of 6, PGOD03 1 of 1, and PGOD04 **22 of 22** — so world 4's
+       * scripted objects were misparsed in their entirety. */
+      if (dv && dv.getUint16(dir.blobOffset, true) === ABSOLUTE_TAG) {
+        /* CS:0xB9D3-0xB9DF — these two ARE byte-swapped, and are stored with
+         * NO camera add, so they are absolute world coordinates.
+         *
+         * Signed, for the same reason the relative branch is: the original
+         * stores a 16-bit word and every later screen difference is a signed
+         * 16-bit compare, so an absolute path may legitimately start ABOVE
+         * the map and fall into view. Shipped examples: world 2 path #2
+         * starts at y = 0xFFD3 (-45) and world 4 path #13 at y = 0xFFD0
+         * (-48). Sign-extension is unambiguous here because the map is only
+         * 4096x1024 — a real coordinate can never reach 0x8000. */
+        x = s16(dv.getUint16(dir.blobOffset + 2, false));
+        y = s16(dv.getUint16(dir.blobOffset + 4, false));
         cursor = dir.blobOffset + 6;
       } else if (dv) {
-        x = dv.getUint16(dir.blobOffset, false) + cam.x;
-        y = dv.getUint16(dir.blobOffset + 2, false) + cam.y;
+        /* CS:0xB9EA-0xB9FB:
+         *     b9ea  xchg ah,al          ; BE -> native
+         *     b9ec  add  ax,[0xa]       ; + camera X
+         *     b9f0  mov  [di],ax
+         *     b9f2..b9fb  the same for Y with [0xc]
+         *
+         * ⚠️ THE HEADER IS SIGNED, and reading it unsigned is why "some of
+         * the flying monsters don't spawn". These are camera-RELATIVE
+         * offsets and a monster that flies in from off-screen starts at a
+         * negative one: 24 of the shipped paths do, 22 of them in world 1
+         * (12 of level 1A's own 16 reachable groups, split 8 behaviour-class
+         * 1 and 4 class 2 — the PLEVEL1A.DAT #6-#11 creature).
+         *
+         * `add ax,[0xa]` is a 16-bit add, so the original computes
+         * (0xFFDB + cam) mod 65536 = cam - 37. Reading 0xFFDB as 65499 and
+         * adding in JS (which never wraps) puts the sub-record ~65536 px
+         * away instead, where it is drawn every tick, forever off-screen,
+         * until its path runs out and it retires unseen.
+         *
+         * Sign-extending reproduces the original exactly rather than
+         * approximately: the two differ only if the sum escapes 0..65535,
+         * and it cannot — the map is 4096x1024 and the offsets are tens of
+         * pixels. The screen difference downstream (`s.x - cam.x`, tested
+         * against the signed HOLD_BOX bounds) is then already the signed
+         * 16-bit value the original's `JL`/`JG` box test compares.
+         *
+         * Only the seed needed this: `decodeDelta` already sign-extends its
+         * own nibbles (CS:0xBBF3-0xBC18), so path motion was never affected. */
+        x = s16(dv.getUint16(dir.blobOffset, false)) + cam.x;
+        y = s16(dv.getUint16(dir.blobOffset + 2, false)) + cam.y;
         cursor = dir.blobOffset + 4;
       } else {
         x = cam.x; y = cam.y; cursor = dir.blobOffset;

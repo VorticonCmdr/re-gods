@@ -11824,6 +11824,78 @@ export function checkRockfall() {
 export async function checkPatObjects(fetchRaw) {
   const { results, check } = makeChecker();
 
+  /* (0) THE PATH-HEADER ENCODING, checked against the four SHIPPED .PAT
+   * files rather than a fixture — the two bugs here were both invisible to
+   * synthetic blobs, because the fixtures encoded the same wrong assumption
+   * the parser did. */
+  {
+    const files = {};
+    for (const w of [1, 2, 3, 4]) {
+      const blob = dclDecompress(await fetchRaw(`game/PGOD0${w}.PAT`)).data;
+      files[w] = { blob, dir: parsePatDirectory(blob),
+                   dv: new DataView(blob.buffer, blob.byteOffset, blob.byteLength) };
+    }
+    const live = (w) => files[w].dir.filter((d) => d && d.blobLength);
+    const tagCount = (w, littleEndian) => live(w)
+      .filter((d) => files[w].dv.getUint16(d.blobOffset, littleEndian) === ABSOLUTE_TAG).length;
+
+    /* CS:0xB9C8 `mov ax,word ptr [bp+0x0]` / 0xB9CB `cmp ax,0x4523` — a
+     * plain 16-bit load, with none of the `xchg ah,al` every coordinate word
+     * in this format goes through. Reading the tag big-endian yields 0x2345
+     * and matches nothing at all, which is exactly what the port used to do:
+     * it saw zero absolute paths anywhere and ran every one down the
+     * relative branch, from the wrong offsets and with a camera origin added
+     * that must not be. */
+    const beTotal = [1, 2, 3, 4].reduce((n, w) => n + tagCount(w, false), 0);
+    const leTotal = [1, 2, 3, 4].reduce((n, w) => n + tagCount(w, true), 0);
+    check('CS:0xB9C8 — the ABSOLUTE tag is matched on a NATIVE (little-endian) read: big-endian finds '
+      + '0 absolute paths in all four shipped .PAT files, native finds 30',
+      beTotal === 0 && leTotal === 30, `be=${beTotal} le=${leTotal}`);
+    check('every one of world 4\'s scripted paths is absolute-tagged, so a big-endian tag read '
+      + 'misparses PGOD04.PAT in its entirety',
+      tagCount(4, true) === live(4).length && live(4).length === 22,
+      `${tagCount(4, true)}/${live(4).length}`);
+
+    /* Both coordinate branches are SIGNED 16-bit: a relative path may start
+     * off the screen edge and fly in, and an absolute one may start above
+     * the map and fall in. Reading either unsigned puts the sub-record
+     * ~65536px away, where it is stepped and drawn every tick but never
+     * visible — "some of the flying monsters don't spawn". */
+    const negRel = [1, 2, 3, 4].reduce((n, w) => n + live(w)
+      .filter((d) => files[w].dv.getUint16(d.blobOffset, true) !== ABSOLUTE_TAG)
+      .filter((d) => files[w].dv.getUint16(d.blobOffset, false) >= 0x8000
+                  || files[w].dv.getUint16(d.blobOffset + 2, false) >= 0x8000).length, 0);
+    const negAbs = [1, 2, 3, 4].reduce((n, w) => n + live(w)
+      .filter((d) => files[w].dv.getUint16(d.blobOffset, true) === ABSOLUTE_TAG)
+      .filter((d) => files[w].dv.getUint16(d.blobOffset + 2, false) >= 0x8000
+                  || files[w].dv.getUint16(d.blobOffset + 4, false) >= 0x8000).length, 0);
+    check('shipped relative path headers really do carry negative components — 24 of them — so the '
+      + 'sign is load-bearing, not theoretical', negRel === 24, `${negRel}`);
+    /* Three, not five: an earlier draft of this check miscounted by reusing
+     * the list of paths a parked-camera harness could not see, which mixes
+     * "starts off-map" with "starts somewhere else on the map entirely". */
+    check('shipped ABSOLUTE path headers carry negative components too (3 of the 30): an absolute '
+      + 'path can start above the map and fall into view, so that branch needs the sign just as much',
+      negAbs === 3, `${negAbs}`);
+
+    /* No shipped coordinate can be ambiguous between "big unsigned" and
+     * "negative": the map is 128x64 tiles = 4096x1024 px, so a real
+     * coordinate never reaches 0x8000 and sign-extension is exact rather
+     * than a heuristic. */
+    const s16v = (v) => (v & 0x8000 ? v - 0x10000 : v);
+    let inRange = true;
+    for (const w of [1, 2, 3, 4]) {
+      for (const d of live(w)) {
+        const abs = files[w].dv.getUint16(d.blobOffset, true) === ABSOLUTE_TAG;
+        const x = s16v(files[w].dv.getUint16(d.blobOffset + (abs ? 2 : 0), false));
+        const y = s16v(files[w].dv.getUint16(d.blobOffset + (abs ? 4 : 2), false));
+        if (x < -4096 || x > 4096 || y < -1024 || y > 1024) inRange = false;
+      }
+    }
+    check('read signed, every shipped path header lands inside the map\'s own 4096x1024 extent '
+      + '(plus a margin) — which is what makes sign-extension exact rather than a guess', inRange);
+  }
+
   /* (a) decodeDelta — the standard shl4/sar4 signed-nibble extraction,
    * independently re-derived rather than trusted: every nibble 0x0..0x7
    * must read as itself, every nibble 0x8..0xf as itself-minus-16. */
@@ -12071,7 +12143,9 @@ export async function checkPatObjects(fetchRaw) {
     // — movement is not what this block is testing.
     const absBlob = new Uint8Array(0x197);   // one extra byte past blobEnd so the immediate hold-check reads a defined (zero) delta, not undefined
     const av = new DataView(absBlob.buffer);
-    av.setUint16(0x190, ABSOLUTE_TAG, false);
+    av.setUint16(0x190, ABSOLUTE_TAG, true);   // NATIVE byte order — CS:0xB9C8 loads the
+    //   tag with a plain `mov ax,[bp+0]` and compares it raw, unlike every
+    //   coordinate word in this format, which goes through an `xchg ah,al`.
     av.setUint16(0x192, 50, false);   // x
     av.setUint16(0x194, 60, false);   // y
     directory[0] = { blobOffset: 0x190, blobLength: 6 };   // cursor lands exactly on blobEnd -> HOLD immediately
@@ -12130,7 +12204,9 @@ export async function checkPatObjects(fetchRaw) {
     const directory = new Array(PAT_GROUP_SLOTS * 10).fill(null);
     const absBlob = new Uint8Array(0x197);   // one extra byte past blobEnd so the immediate hold-check reads a defined (zero) delta, not undefined
     const av = new DataView(absBlob.buffer);
-    av.setUint16(0x190, ABSOLUTE_TAG, false);
+    av.setUint16(0x190, ABSOLUTE_TAG, true);   // NATIVE byte order — CS:0xB9C8 loads the
+    //   tag with a plain `mov ax,[bp+0]` and compares it raw, unlike every
+    //   coordinate word in this format, which goes through an `xchg ah,al`.
     av.setUint16(0x192, 50, false);
     av.setUint16(0x194, 60, false);
     directory[0] = { blobOffset: 0x190, blobLength: 6 };
@@ -12227,7 +12303,9 @@ export async function checkPatObjects(fetchRaw) {
     const directory = new Array(PAT_GROUP_SLOTS * 10).fill(null);
     const absBlob = new Uint8Array(0x1a0);           // roomy: seed + a handful of movement bytes
     const av = new DataView(absBlob.buffer);
-    av.setUint16(0x190, ABSOLUTE_TAG, false);
+    av.setUint16(0x190, ABSOLUTE_TAG, true);   // NATIVE byte order — CS:0xB9C8 loads the
+    //   tag with a plain `mov ax,[bp+0]` and compares it raw, unlike every
+    //   coordinate word in this format, which goes through an `xchg ah,al`.
     av.setUint16(0x192, 100, false);                  // x
     av.setUint16(0x194, 100, false);                  // y
     absBlob[0x196] = 0x10;                             // one real delta byte: dx=+1,dy=0
@@ -12280,7 +12358,7 @@ export async function checkPatObjects(fetchRaw) {
       const stillDir = new Array(PAT_GROUP_SLOTS * 10).fill(null);
       const stillBlob = new Uint8Array(0x197);
       const sv = new DataView(stillBlob.buffer);
-      sv.setUint16(0x190, ABSOLUTE_TAG, false);
+      sv.setUint16(0x190, ABSOLUTE_TAG, true);   // NATIVE byte order — see above
       /* 96, not 100: this project's own DamageGrid documents `stampIndex`
        * (floors) and `scanIndex` (rounds half-up) agreeing ONLY on exact
        * multiples of 8 — confirmed directly (`stampIndex(100,100)=6422` vs
