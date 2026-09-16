@@ -372,13 +372,17 @@ async function main() {
   const audio = new WebAudioBus();
 
   /* #11 audio backlog item, music half — see audio/music-player.js's own
-   * header. GAME.EXE only ever opens PGODS.MUS (mus-container.js's own
-   * header has the full citation trail for why the other ten shipped .MUS/
-   * .RL files are not fetched at all here); WHICH of its 70 real tracks
-   * plays at which in-game moment is UNKNOWN (no cue-dispatch code path was
-   * found this session) — the same disclosed-affordance spirit as the
-   * weapon picker below: every track is offered on demand, none is claimed
-   * to belong to any level or event. */
+   * header. PGODS.MUS (mus-container.js's own header has the full citation
+   * trail for why the other ten shipped .MUS/.RL files are not fetched at
+   * all here) is played only by the non-Roland sound drivers, which never
+   * pick a specific one of its 70 real tracks — UNKNOWN_pgods_mus_cue_
+   * dispatch is CLOSED, live-confirmed in DOSBox: the real per-level music
+   * is PGODSRL{A-G}.RL, dispatched by world number, but only under Roland
+   * (see Gods/docs/drivers-and-memory.md). This port doesn't parse those
+   * files, so there is no level/event mapping to port for PGODS.MUS itself
+   * — the same disclosed-affordance spirit as the weapon picker below:
+   * every track is offered on demand, none is claimed to belong to any
+   * level or event. */
   const musicPlayer = new MusicPlayer();
   const musicSel = $('musicTrack');
   fetchRaw('game/PGODS.MUS').then((raw) => {

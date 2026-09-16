@@ -53,10 +53,14 @@
         picker is a dev affordance until pickups are wired; idle+fire is object
         pickup in the original, so firing needs a direction held</span>
       <span class="d">the music picker is the SAME kind of dev affordance —
-        GAME.EXE only ever opens PGODS.MUS (73 tracks, 70 real), but which
-        track plays at which moment is unproven (UNKNOWN_pgods_mus_cue_
-        dispatch), so this plays any of the 70 on demand rather than
-        asserting a level/event mapping this session found no evidence for</span>
+        PGODS.MUS (73 tracks, 70 real) is only ever played by the non-Roland
+        drivers, which never pick a specific track from it (a later session
+        live-confirmed the REAL per-level music is a different file,
+        PGODSRL{A-G}.RL, dispatched by world number under Roland only —
+        UNKNOWN_pgods_mus_cue_dispatch is closed, see Gods/docs/drivers-
+        and-memory.md), so this plays any of PGODS.MUS's 70 tracks on
+        demand rather than porting a mapping that belongs to a file this
+        port doesn't parse</span>
     </div>
   </div>
   <aside>
