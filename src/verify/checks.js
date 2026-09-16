@@ -19,7 +19,7 @@ import { scanZones, unpackTeleportDest, resolveExitDestination,
          PASSWORD_SLOTS } from '../game/zones.js';
 import { TitleMenu, PasswordEntry, MENU_OPTIONS } from '../game/title-menu.js';
 import { ShopScreen, GRID_COLS, GRID_ROWS, GRID_SLOTS, EXIT_SLOT, DATA_SLOTS,
-  SELL_ID_BASE, PRICES } from '../game/shop.js';
+  WEAPON_ID_BASE, PRICES } from '../game/shop.js';
 import { TallyScreen, timeBonus, healthBonus, moneyBonus, POOL_STEP,
          WAIT_AFTER_SUMMARY_TICKS, WAIT_AFTER_COUNTDOWN_TICKS,
          SFX_EVERY_N_STEPS } from '../game/tally.js';
@@ -184,7 +184,7 @@ import { Player, ST, S as PS, JUMP_ARC_EARLY_LAND_CURSOR,
 import { CELL_SOLID, CELL_CLIMBABLE, MAP_COLS as MC, attrAt } from '../formats/map.js';
 import { parseWeapons, allocateShots, MAX_SUBSLOTS, WEAPON_SLOTS, tagFor,
          WEAPON_COUNT, PINNED_08, PINNED_SPRITE, PINNED_SPRITE2,
-         armWeapon, pickUpAgain, refundFor, reloadWorld,
+         armWeapon, pickUpAgain, refundFor, reloadWorld, WEAPON_NAMES,
          SPRITE_FIELDS_ARE_PINNED } from '../game/weapons.js';
 import { FIRE_STATES as FS, FIRE_STATE_IDS, WALK_FIRE_ANIM, EMIT_WALK,
          EMIT_OTHER, fireAnimOffset, fireTick, persistsRawPhase,
@@ -13968,7 +13968,10 @@ export function checkShop() {
     check('18 cells, 3 rows x 6 columns', GRID_SLOTS === 18 && GRID_ROWS === 3 && GRID_COLS === 6);
     check('slot 17 is EXIT, the last cell', EXIT_SLOT === 17 && GRID_SLOTS - 1 === EXIT_SLOT);
     check('17 addressable data slots before EXIT', DATA_SLOTS === 17);
-    check('the sell-id split is 0xc0, matching the buy/sell dispatch', SELL_ID_BASE === 0xc0);
+    check('the weapon-purchase id split is 0xc0, matching the buy/weapon-swap '
+      + 'dispatch — every raw id at or above this buys and equips that '
+      + 'weapon (UNKNOWN_shop_tradein_value, CLOSED), not a sell threshold',
+      WEAPON_ID_BASE === 0xc0);
   }
 
   /* ── navigation: clamped, not wrapped, CS:0x6cef-0x6d42 ───────────────── */
@@ -14083,13 +14086,15 @@ export function checkShop() {
       + 'applyConsumable exactly as an in-level pickup would', healed === entry.health);
   }
 
-  /* ── the give-to-inventory path, CS:0x6f41-0x6f7a (not exercised by any '
-   * real roster this session captured — synthetic ids only, see shop.js's '
-   * own header) ─────────────────────────────────────────────────────── */
+  /* ── the give-to-inventory path, CS:0x6f41-0x6f7a (not exercised by any
+   * real roster this session captured — synthetic ids only, see shop.js's
+   * own header). Must be BELOW WEAPON_ID_BASE and not a real CONSUMABLES
+   * type, or it would be routed to a different dispatch entirely (a real
+   * weapon-purchase id, or a real consumable's own auto-use handler). ── */
   {
-    const WEAPON_ID = 5000;   // not a real POBJECTS type — a synthetic id for this test only
+    const NON_CONSUMABLE_ID = 100;   // < WEAPON_ID_BASE, not a real POBJECTS/CONSUMABLES type
     const roster = new Array(DATA_SLOTS).fill(null);
-    roster[0] = WEAPON_ID;
+    roster[0] = NON_CONSUMABLE_ID;
     const fire = { up: false, down: false, left: false, right: false, fire: true };
     const release = { up: false, down: false, left: false, right: false, fire: false };
 
@@ -14098,12 +14103,12 @@ export function checkShop() {
     s.step(fire); s.step(release);
     s.step(fire); s.step(release);
     check('an id with no CONSUMABLES rank goes to the give-to-inventory path',
-      s.lastPurchase && s.lastPurchase.id === WEAPON_ID && s.lastPurchase.slot !== undefined);
+      s.lastPurchase && s.lastPurchase.id === NON_CONSUMABLE_ID && s.lastPurchase.slot !== undefined);
     check('the SELECTED slot (index 0 here) is skipped even though it was '
       + 'empty — DS:0x366\'s own exclusion', s.lastPurchase.slot !== 0 && inv[0] === INVENTORY_EMPTY);
-    check('the item actually landed in some OTHER empty slot', inv.includes(WEAPON_ID));
+    check('the item actually landed in some OTHER empty slot', inv.includes(NON_CONSUMABLE_ID));
 
-    const fullInv = [WEAPON_ID, WEAPON_ID, WEAPON_ID, WEAPON_ID];
+    const fullInv = [NON_CONSUMABLE_ID, NON_CONSUMABLE_ID, NON_CONSUMABLE_ID, NON_CONSUMABLE_ID];
     let refused = null;
     const s2 = new ShopScreen({
       roster, inventory: fullInv, selectedSlot: -1,
@@ -14113,7 +14118,7 @@ export function checkShop() {
     s2.step(fire); s2.step(release);
     check('a full inventory refuses the purchase rather than silently '
       + 'dropping it — no slot mutated', s2.lastPurchase.refused === true
-      && fullInv.every((v) => v === WEAPON_ID));
+      && fullInv.every((v) => v === NON_CONSUMABLE_ID));
     check('the refusal fires at message priority 0x19 (25), matching '
       + 'message-line.md\'s own "object messages, shop refusals" row',
       refused === 0x19);
@@ -14309,6 +14314,195 @@ export function checkShop() {
     check('buying "power claws" (41) with a familiar already alive adds '
       + 'its own +2 PLUS the shared branch\'s +1 — three total, not one',
       h3.familiarPower === 4 + 3);
+  }
+
+  /* ── UNKNOWN_shop_tradein_value — CLOSED, now WIRED. FUN_1000_6e62's
+   * weapon-purchase branch: buy and equip weapon `id - WEAPON_ID_BASE`,
+   * crediting a refund for whatever DIFFERENT weapon it displaces from the
+   * same physical slot (`chooseSlot`, mirroring FUN_1000_953e) and charging
+   * the new weapon's own price. Gods/docs/shop.md. Weapon index 2 is
+   * skipped throughout — it is FIREBALL, hard-wired to slot C regardless of
+   * slotAClass, a different mechanism already covered by pickup.js's own
+   * tests. ─────────────────────────────────────────────────────────── */
+  {
+    const fire = { up: false, down: false, left: false, right: false, fire: true };
+    const release = { up: false, down: false, left: false, right: false, fire: false };
+    const makePurse = (total) => ({ total, add(v) { this.total += v; } });
+    const inv = () => [INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY];
+
+    /* A small synthetic 5-slot weapon table (real PWEAPONS have 11; only
+     * shape matters here) — index 0 forced to slot A, the rest compete for
+     * B/C. Index 2 deliberately left unused (FIREBALL's hard-wire). */
+    const testWeapons = () => ([
+      { index: 0, slotAClass: 0, power: 1, value: 1000, name: 'blade' },
+      { index: 1, slotAClass: 1, power: 2, value: 2000, name: 'bow' },
+      { index: 2, slotAClass: 1, power: 9, value: 9000, name: 'unused-fireball-slot' },
+      { index: 3, slotAClass: 1, power: 5, value: 3000, name: 'staff' },
+      { index: 4, slotAClass: 1, power: 1, value: 4000, name: 'wand' },
+    ]);
+    const idFor = (weaponIndex) => WEAPON_ID_BASE + weaponIndex;
+
+    check('WEAPON_ID_BASE ids never collide with the static consumable '
+      + 'PRICES table', PRICES[idFor(0)] === undefined && PRICES[idFor(4)] === undefined);
+
+    const arsenal = new Arsenal(testWeapons());
+    const purse = makePurse(100000);
+    const roster = [idFor(0), idFor(1), idFor(3), idFor(4)];
+    const state = { arsenal };
+    const s = new ShopScreen({ roster, inventory: inv(), purse, state });
+
+    check('a weapon\'s price comes from the CURRENT arsenal\'s own weapon '
+      + 'record, not a static table (prices are per-world in the original)',
+      s.roster.includes(idFor(0)) && s.roster.includes(idFor(1)));
+
+    /* Buy weapon 0 -> forced to slot A, empty -> plain two-press, no warning. */
+    s.cursor = s.roster.indexOf(idFor(0));
+    s.step(fire); s.step(release);
+    s.step(fire); s.step(release);
+    check('buying weapon 0 (slotAClass 0) arms slot A with no warning and '
+      + 'no refund (the slot was empty)',
+      arsenal.slots[0].weapon === 0 && s.pendingWarning === null
+      && s.lastPurchase.refund === 0 && purse.total === 100000 - 1000);
+
+    /* Buy weapon 1 -> B/C both empty -> takes B (chooseSlot's own order). */
+    s.cursor = s.roster.indexOf(idFor(1));
+    s.step(fire); s.step(release);
+    s.step(fire); s.step(release);
+    check('buying weapon 1 into an empty slot B needs no warning either',
+      arsenal.slots[1].weapon === 1 && s.pendingWarning === null
+      && purse.total === 100000 - 1000 - 2000);
+
+    /* Re-buy weapon 1 -> SAME weapon already in slot B -> no displacement,
+     * no warning, but pickUpWeapon's own "already held" branch fires
+     * (a genuine extra pickup via purchase, bumping count from 2 to 3). */
+    s.previewId = null;
+    s.cursor = s.roster.indexOf(idFor(1));
+    s.step(fire); s.step(release);
+    s.step(fire); s.step(release);
+    check('re-buying the SAME weapon already equipped is a plain two-press '
+      + 'purchase — no warning, no refund, but a real duplicate pickup',
+      s.pendingWarning === null && s.lastPurchase.refund === 0
+      && s.lastPurchase.result.duplicate === true
+      && arsenal.slots[1].st.count === 3);
+
+    /* Buy weapon 3 -> B full, C empty -> takes C. */
+    s.previewId = null;
+    s.cursor = s.roster.indexOf(idFor(3));
+    s.step(fire); s.step(release);
+    s.step(fire); s.step(release);
+    check('buying weapon 3 with slot B already full but C empty takes C, '
+      + 'no warning', arsenal.slots[2].weapon === 3 && s.pendingWarning === null);
+
+    /* Buy weapon 4 -> B and C both full. B holds weapon 1 (count 3), C
+     * holds weapon 3 (count 5, never bumped) -> chooseSlot's own strict `jl`
+     * picks the LOWER count, B, displacing weapon 1 -> a REAL warning. */
+    const moneyBeforeWarning = purse.total;
+    s.previewId = null;
+    s.cursor = s.roster.indexOf(idFor(4));
+    s.step(fire); s.step(release);          // preview
+    const afterSecondPress = s.step(fire);  // CONFIRM press -> should warn, not buy
+    s.step(release);
+    check('buying weapon 4 displaces weapon 1 out of slot B (lower pickup '
+      + 'count than slot C\'s weapon 3) — this needs a THIRD press',
+      afterSecondPress === null && s.pendingWarning !== null
+      && arsenal.slots[1].weapon === 1 && purse.total === moneyBeforeWarning);
+    check('the warning names the weapon actually being displaced ("bow"), '
+      + 'not the new one', s.pendingWarning.toLowerCase().includes('bow'));
+
+    const thirdPress = s.step(fire);        // same cell, previewId now negative -> EXECUTE
+    s.step(release);
+    /* refund = (count 3 - base 2) * (value 2000 + 1) >> 1 = 1 * 2001 >> 1 = 1000 */
+    check('the third press executes: weapon 1\'s displacement refunds '
+      + 'exactly (extras) * (its own price + 1) / 2, THEN weapon 4\'s own '
+      + 'price is charged, THEN it is armed into slot B',
+      thirdPress.refund === 1000 && thirdPress.cost === 4000
+      && arsenal.slots[1].weapon === 4
+      && purse.total === moneyBeforeWarning + 1000 - 4000);
+    check('the warning is cleared once the purchase actually executes',
+      s.pendingWarning === null);
+
+    /* Weapon purchases are NOT subject to the per-visit category lockout —
+     * every weapon bought above succeeded even though several consumable
+     * ranks would have been locked out after one purchase each. */
+    check('four DIFFERENT weapon ids were all purchasable in the SAME '
+      + 'visit — no category lockout applies to weapon-purchase ids',
+      arsenal.slots.map((sl) => sl.weapon).sort().join() === '0,3,4');
+
+    /* Cross-check against the real, shipped data (not the synthetic
+     * fixture above): world 1's own PWEAPONS.001 names, read this session
+     * by decompressing with blast.py, match WEAPON_NAMES exactly. */
+    check('WEAPON_NAMES is exactly the 11 shipped weapon names, in order '
+      + '(read from PWEAPONS.001 at +0x20 with blast.py)',
+      WEAPON_NAMES.length === 11 && WEAPON_NAMES[0] === 'knife'
+      && WEAPON_NAMES[2] === 'fireball' && WEAPON_NAMES[10] === 'mace');
+  }
+
+  /* ── Advisor-flagged gap: the negative (already-warned) preview is reset
+   * by a FIRE press on a DIFFERENT cell (CS:0x6ea4), not by cursor movement
+   * — LAB_1000_6cef, the cursor-move handler, never touches [0x258] at all
+   * (Gods/docs/shop.md's corrected claim). So warning on a weapon, moving
+   * the cursor away WITHOUT firing, and moving back leaves the negative
+   * preview intact: the very next press is the THIRD press, not a fresh
+   * first press — no second warning. ──────────────────────────────────── */
+  {
+    const fire = { up: false, down: false, left: false, right: false, fire: true };
+    const release = { up: false, down: false, left: false, right: false, fire: false };
+    const right = { up: false, down: false, left: false, right: true, fire: false };
+    const left = { up: false, down: false, left: true, right: false, fire: false };
+    const makePurse = (total) => ({ total, add(v) { this.total += v; } });
+    const inv = () => [INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY];
+    const testWeapons = () => ([
+      { index: 0, slotAClass: 0, power: 1, value: 1000, name: 'blade' },
+      { index: 1, slotAClass: 1, power: 2, value: 2000, name: 'bow' },
+      { index: 2, slotAClass: 1, power: 9, value: 9000, name: 'unused-fireball-slot' },
+      { index: 3, slotAClass: 1, power: 5, value: 3000, name: 'staff' },
+      { index: 4, slotAClass: 1, power: 1, value: 4000, name: 'wand' },
+    ]);
+    const idFor = (weaponIndex) => WEAPON_ID_BASE + weaponIndex;
+
+    const arsenal = new Arsenal(testWeapons());
+    const purse = makePurse(100000);
+    const roster = [idFor(0), idFor(1), idFor(3), idFor(4)];
+    const s = new ShopScreen({ roster, inventory: inv(), purse, state: { arsenal } });
+
+    /* Reproduce the exact same "weapon 4 displaces weapon 1 out of slot B"
+     * setup as the block above (0 -> A, 1 -> B, re-buy 1 so its count (3)
+     * beats slot C's weapon 3 (count 5) in chooseSlot's `jl`), so this test
+     * only has to check the NEW behavior, not re-derive slot selection. */
+    for (const wIdx of [0, 1, 1, 3]) {
+      s.previewId = null;
+      s.cursor = s.roster.indexOf(idFor(wIdx));
+      s.step(fire); s.step(release);
+      s.step(fire); s.step(release);
+    }
+    check('fixture reaches the same pre-displacement state as the block '
+      + 'above', arsenal.slots[0].weapon === 0 && arsenal.slots[1].weapon === 1
+      && arsenal.slots[1].st.count === 3 && arsenal.slots[2].weapon === 3);
+
+    s.previewId = null;
+    const targetCol = s.roster.indexOf(idFor(4));
+    s.cursor = targetCol;
+    s.step(fire); s.step(release);          // 1st press: preview only
+    s.step(fire); s.step(release);          // 2nd press: CONFIRM -> warns, previewId now negative
+    check('reaches the pending-warning state before testing persistence',
+      s.pendingWarning !== null && s.previewId === -idFor(4));
+
+    s.step(right); s.step(release);         // move away — no fire anywhere
+    s.step(left); s.step(release);          // move back to the same cell
+    check('moving the cursor away and back does NOT clear the pending '
+      + 'warning or flip the preview sign back positive — only a fire '
+      + 'press (anywhere) does that, and this press landed nowhere',
+      s.cursor === targetCol && s.previewId === -idFor(4)
+      && s.pendingWarning !== null);
+
+    const result = s.step(fire);            // this IS the third press, not a fresh first press
+    s.step(release);
+    check('so the very next press on that cell executes immediately with '
+      + 'no second warning — the one-press-swap case genuinely does not '
+      + 'exist, but only because it needs a fire press elsewhere to arm '
+      + 'it, not because moving the cursor clears anything',
+      result !== null && result.weaponIndex === 4
+      && arsenal.slots[1].weapon === 4 && s.pendingWarning === null);
   }
 
   /* ── EXIT, CS:0x6e74-0x6e7e ────────────────────────────────────────── */

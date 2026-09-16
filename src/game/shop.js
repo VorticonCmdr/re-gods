@@ -1,5 +1,5 @@
 /* shop.js — the shop screen, `FUN_1000_6c19` (grid loop) / `FUN_1000_6e62`
- * (buy/sell dispatch) / `FUN_1000_7233`+`0x7276` (roster load/filter/sort).
+ * (buy / weapon-swap dispatch) / `FUN_1000_7233`+`0x7276` (roster load/filter/sort).
  * Full disassembly and a live DOSBox confirmation of the grid geometry are in
  * `Gods/docs/shop.md` — read that file's own header before trusting a claim
  * here; this module's own comments cite it rather than repeat it.
@@ -52,9 +52,25 @@
  *     `41`'s own prices were read from the same table but never purchase-
  *     confirmed individually (they were excluded from every live capture
  *     this project made, by the very gates now reproduced above).
- *   - Sell (raw item id `>= SELL_ID_BASE`) is not ported at all —
- *     `UNKNOWN_shop_tradein_value`. `roster` here should only ever contain
- *     ids below `SELL_ID_BASE`; the EXIT slot is the only non-buy cell.
+ *   - The weapon purchase/swap mechanic (raw id `>= WEAPON_ID_BASE`) IS now
+ *     ported — `UNKNOWN_shop_tradein_value` is CLOSED, see shop.md. Buying
+ *     a weapon that would displace a DIFFERENT one already in that physical
+ *     slot (`#wouldDisplace`, mirroring `FUN_1000_953e`'s own slot choice)
+ *     needs a third press and shows a warning (`#warningFor`, mirroring
+ *     `FUN_1000_703a`'s "Warning.. this weapon replaces the X" message);
+ *     buying into an empty slot or re-buying the same weapon is a plain
+ *     two-press buy like a consumable. `#buyWeapon` credits half the
+ *     displaced weapon's own price per extra pickup collected for it
+ *     (`game/weapons.js`'s `refundFor`), charges the new weapon's own price,
+ *     and arms it via `game/pickup.js`'s `pickUpWeapon` — the SAME function
+ *     an in-level pickup uses. Weapon purchases are NOT subject to the
+ *     per-visit category lockout (`DS:0x319`) — the original's own weapon-
+ *     purchase branch never writes it, unlike the consumable buy branch.
+ *     Every boundary check against the raw id goes through `pickup.js`'s
+ *     own `isWeaponPickup`/`weaponIndexOf`, never a bare `id >=
+ *     WEAPON_ID_BASE` — `pickup.js`'s own header explains why a bare
+ *     comparison is unsafe (a dead/unused roster slot's `0xFFFF` sentinel
+ *     also passes it).
  *   - Navigation is EDGE-triggered (one grid step per press). The original's
  *     own held-direction auto-repeat (`DS:0x339`/`0x33a`: an initial move,
  *     then a repeat every tick once a held direction crosses an 8-tick
@@ -72,10 +88,13 @@
  * column or past row 2. `[PROVEN]`, live-confirmed under DOSBox for the
  * 3x6-plus-EXIT shape.
  *
- * BUY is always a TWO-PRESS confirm (`CS:0x6e91`-`0x6ea2`): the first FIRE
- * press on a slot only previews it (caches its id); a second press on the
- * SAME slot executes the purchase. Pressing FIRE on a DIFFERENT slot resets
- * the preview to the new one rather than buying anything.
+ * BUY/SWAP is a TWO-PRESS confirm in the common case (`CS:0x6e91`-`0x6ea2`):
+ * the first FIRE press on a slot only previews it (caches its id); a second
+ * press on the SAME slot executes. Pressing FIRE on a DIFFERENT slot resets
+ * the preview to the new one rather than buying anything. A weapon purchase
+ * that would DISPLACE a different weapon is the one exception — its second
+ * press only shows a warning (`#warningFor`) and needs a third, still on the
+ * same cell, to actually execute; see the weapon-purchase bullet above.
  *
  * ON PURCHASE (`CS:0x6ee0`-`0x6f7a`): a category index locks that category
  * out for the rest of this shop visit (`DS:0x319`) — `game/pickup.js`'s own
@@ -100,6 +119,8 @@
  */
 
 import { CONSUMABLES, applyConsumable } from './consumables.js';
+import { chooseSlot, pickUpWeapon, isWeaponPickup, weaponIndexOf } from './pickup.js';
+import { refundFor } from './weapons.js';
 import { drawText, drawCentered } from './title-menu.js';
 import { INVENTORY_EMPTY } from './treasure.js';
 
@@ -108,7 +129,13 @@ export const GRID_ROWS = 3;
 export const GRID_SLOTS = GRID_COLS * GRID_ROWS;       // 18, CS:0x6cef "mov ax,0x11"
 export const EXIT_SLOT = GRID_SLOTS - 1;               // 17, CS:0x6e74-0x6e7e
 export const DATA_SLOTS = EXIT_SLOT;                   // 17 addressable grid cells
-export const SELL_ID_BASE = 0xc0;                      // CS:0x6ead/0x6ed7 — not ported, see header
+/* Renamed from SELL_ID_BASE — UNKNOWN_shop_tradein_value (CLOSED, Gods/docs/
+ * shop.md) found this is not a sell threshold at all. Every raw id at or
+ * above this is a WEAPON TYPE to buy and equip (id - WEAPON_ID_BASE = the
+ * weapon's own index into game/weapons.js's WEAPON_NAMES/parseWeapons
+ * output); there is no path anywhere that sells for cash without also
+ * arming a new weapon. */
+export const WEAPON_ID_BASE = 0xc0;                    // CS:0x6ead/0x6ed7
 export const BUY_CONFIRM_SFX = 0x333;                  // CS:0x6ee1, CS:0x22ca's own SFX primitive
 export const REFUSAL_MESSAGE_PRIORITY = 0x19;          // matches message-line.md's own table (25)
 
@@ -145,7 +172,10 @@ export class ShopScreen {
    *   `game/pickup.js` already builds for an in-level pickup). Also read
    *   directly by `#isEligible` for the two eligibility gates:
    *   `state.arsenal.slots` (ids `2`/`3`) and `state.health.familiarEnergy`
-   *   (ids `40`/`41`) — `UNKNOWN_shop_eligibility_gates`, CLOSED.
+   *   (ids `40`/`41`) — `UNKNOWN_shop_eligibility_gates`, CLOSED — and by
+   *   every weapon-purchase id (`>= WEAPON_ID_BASE`): `state.arsenal` is
+   *   passed straight to `game/pickup.js`'s `chooseSlot`/`pickUpWeapon`,
+   *   the same `Arsenal` instance the rest of the game already mutates.
    * @param {{total:number, add:(v:number)=>any}} [purse] the game's money —
    *   `game/treasure.js`'s `Purse` already has exactly this shape. Omit it
    *   (as a synthetic test might) to skip pricing entirely: every item is
@@ -167,7 +197,12 @@ export class ShopScreen {
     this.onDone = onDone;
 
     this.cursor = 0;              // DS:0x385
-    this.previewId = null;        // DS:0x258 (magnitude only — sign is the sell toggle, not ported)
+    /* DS:0x258. Positive = an ordinary preview. Negative = a weapon-purchase
+     * preview that has already shown its "replaces the X" warning (#fire's
+     * own NEG, CS:0x6fa0) — its magnitude is still the raw id, so `Math.abs`
+     * is how every comparison against it reads "is this the same cell". */
+    this.previewId = null;
+    this.pendingWarning = null;   // text for the warning above, or null
     this.purchasedCategories = new Set();   // DS:0x319, cleared fresh each shop visit
     this.lastPurchase = null;     // surfaced for draw()/tests, not itself game state
     this.done = false;
@@ -224,17 +259,30 @@ export class ShopScreen {
     }
     const id = this.roster[this.cursor];
     if (id == null) return null;                // CS:0x6e8f-0x6e93, empty slot: no-op
-    if (this.previewId === id) {
+    if (this.previewId != null && Math.abs(this.previewId) === id) {
+      /* CS:0x6f8e-0x6f9b — a weapon id whose preview hasn't been warned yet
+       * (still positive) needs one more look at whether it would displace a
+       * DIFFERENT weapon before buying. An empty target slot or re-buying
+       * the same weapon already there skips straight through, same as any
+       * consumable's plain second press. */
+      if (isWeaponPickup(id) && this.previewId > 0
+          && this.#wouldDisplace(weaponIndexOf(id))) {
+        this.pendingWarning = this.#warningFor(weaponIndexOf(id));
+        this.previewId = -id;                   // CS:0x6fa0 NEG — one more press to execute
+        return null;
+      }
       const purchase = this.#buy(id);
       this.previewId = null;
+      this.pendingWarning = null;
       return purchase;
     }
     this.previewId = id;                        // CS:0x6ea4 — preview only, no purchase yet
+    this.pendingWarning = null;
     return null;
   }
 
   #buy(id) {
-    const cost = PRICES[id] ?? 0;
+    const cost = this.#priceFor(id) ?? 0;
     if (this.purse && this.purse.total < cost) {
       /* CS:0x72c9's own affordability filter would never have left this id
        * selectable in the first place; reachable here only if money changed
@@ -242,6 +290,7 @@ export class ShopScreen {
        * the purse go negative. */
       return this.lastPurchase = { id, cost, refused: true, reason: 'unaffordable' };
     }
+    if (isWeaponPickup(id)) return this.#buyWeapon(id, cost);
     const rank = CONSUMABLES.findIndex((c) => c.type === id);
     if (rank >= 0) {
       this.purchasedCategories.add(rank);
@@ -265,17 +314,80 @@ export class ShopScreen {
     return this.lastPurchase = { id, slot, cost };
   }
 
-  /* Not eligible once its category is locked out for this visit (`DS:0x319`),
-   * its price now exceeds the purse (`FUN_1000_7392` via `CS:0x72c9`), or —
-   * `UNKNOWN_shop_eligibility_gates`, CLOSED (Gods/docs/shop.md) — one of the
-   * two gates the original's own roster rebuild re-applies every time:
-   * `FUN_1000_731b` (ids 2/3, gated on the hero's weapon slots) and
-   * `FUN_1000_7336` (ids 40/41, gated on the familiar's energy). */
+  /* CS:0x6f7c-0x7037 — buy and equip a weapon. If its target slot
+   * (`chooseSlot`, mirroring `FUN_1000_953e`) already holds a DIFFERENT
+   * weapon, that weapon is displaced: credit half its own price per extra
+   * pickup collected for it (`refundFor`, `game/weapons.js`), read BEFORE
+   * arming overwrites the slot's state. Then charge the new weapon's own
+   * price and arm it via `pickUpWeapon` — the SAME function an in-level
+   * pickup uses, so a duplicate purchase (re-buying what's already
+   * equipped) correctly becomes a genuine extra-pickup rather than a
+   * silent no-op. No category lockout: `DS:0x319` is never written on this
+   * branch in the original. */
+  #buyWeapon(id, cost) {
+    const weaponIndex = weaponIndexOf(id);
+    const arsenal = this.state.arsenal;
+    let refund = 0, replaced = null;
+    if (arsenal) {
+      const slot = arsenal.slots[chooseSlot(arsenal, weaponIndex)];
+      if (slot.weapon >= 0 && slot.weapon !== weaponIndex) {
+        const oldWeapon = arsenal.weapons[slot.weapon];
+        refund = refundFor(slot.st, oldWeapon);
+        replaced = oldWeapon.name;
+      }
+    }
+    if (this.purse) { this.purse.add(refund); this.purse.add(-cost); }
+    const result = arsenal ? pickUpWeapon(arsenal, weaponIndex) : null;
+    this.#rebuildVisible();
+    return this.lastPurchase = { id, weaponIndex, cost, refund, replaced, result };
+  }
+
+  /** CS:0x6f8e-0x6f9b, read-only: would buying this weapon displace a
+   *  DIFFERENT one from its target slot? False for an empty slot or the
+   *  same weapon already there — both are a plain two-press buy. */
+  #wouldDisplace(weaponIndex) {
+    const arsenal = this.state.arsenal;
+    if (!arsenal) return false;
+    const slot = arsenal.slots[chooseSlot(arsenal, weaponIndex)];
+    return slot.weapon >= 0 && slot.weapon !== weaponIndex;
+  }
+
+  /** CS:0x703a — "Warning.. this weapon replaces the X", X read from the
+   *  currently-equipped weapon's own embedded name (`game/weapons.js`'s
+   *  `WEAPON_NAMES`, confirmed by decompressing PWEAPONS.001 with blast.py). */
+  #warningFor(weaponIndex) {
+    const arsenal = this.state.arsenal;
+    const slot = arsenal.slots[chooseSlot(arsenal, weaponIndex)];
+    return `Warning.. this weapon replaces the ${arsenal.weapons[slot.weapon].name}`;
+  }
+
+  /** `!isWeaponPickup(id)`: the static consumable table. Otherwise: the
+   *  CURRENT world's own loaded weapon record — unlike consumable prices,
+   *  weapon prices are per-world (`game/weapons.js`'s own `value` field
+   *  varies by `PWEAPONS.00{1-4}`, not a single global table). Goes through
+   *  `pickup.js`'s own sign-aware `isWeaponPickup`, not a bare `>=
+   *  WEAPON_ID_BASE`, since a dead/unused roster slot's `0xFFFF` sentinel
+   *  would otherwise also read as a "weapon" id here. */
+  #priceFor(id) {
+    if (!isWeaponPickup(id)) return PRICES[id];
+    return this.state.arsenal?.weapons?.[weaponIndexOf(id)]?.value;
+  }
+
+  /* Not eligible once its price exceeds the purse (`FUN_1000_7392` via
+   * `CS:0x72c9`), or — `UNKNOWN_shop_eligibility_gates`, CLOSED (Gods/docs/
+   * shop.md) — one of the two gates the original's own roster rebuild
+   * re-applies every time: `FUN_1000_731b` (ids 2/3, gated on the hero's
+   * weapon slots) and `FUN_1000_7336` (ids 40/41, gated on the familiar's
+   * energy). The per-visit category lockout (`DS:0x319`) only applies to
+   * consumable ids — a weapon purchase never writes it in the original, so
+   * it never gates one here either (`UNKNOWN_shop_tradein_value`, CLOSED). */
   #isEligible(id) {
     if (id == null) return false;
-    const rank = CONSUMABLES.findIndex((c) => c.type === id);
-    if (this.purchasedCategories.has(rank >= 0 ? rank : id)) return false;
-    const cost = PRICES[id];
+    if (!isWeaponPickup(id)) {
+      const rank = CONSUMABLES.findIndex((c) => c.type === id);
+      if (this.purchasedCategories.has(rank >= 0 ? rank : id)) return false;
+    }
+    const cost = this.#priceFor(id);
     if (cost != null && this.purse && this.purse.total < cost) return false;
     if ((id === 2 || id === 3) && !this.#hasArmedWeapon()) return false;   // FUN_1000_731b
     if ((id === 40 || id === 41) && !this.#hasFamiliar()) return false;   // FUN_1000_7336
@@ -307,7 +419,7 @@ export class ShopScreen {
    * rebuild) can each change the eligible set. */
   #rebuildVisible() {
     const eligible = this.candidates.filter((id) => this.#isEligible(id));
-    eligible.sort((a, b) => (PRICES[a] ?? 0) - (PRICES[b] ?? 0));
+    eligible.sort((a, b) => (this.#priceFor(a) ?? 0) - (this.#priceFor(b) ?? 0));
     const visible = eligible.length > DATA_SLOTS
       ? eligible.slice(eligible.length - DATA_SLOTS)
       : eligible;
@@ -330,15 +442,31 @@ export class ShopScreen {
         if (slot === EXIT_SLOT) continue;
         const id = this.roster[slot];
         if (id == null) continue;
-        const rank = CONSUMABLES.findIndex((c) => c.type === id);
-        const label = (rank >= 0 ? CONSUMABLES[rank].name : `#${id}`).toUpperCase();
-        const marker = slot === this.cursor ? (this.previewId === id ? '>>' : '>') : '  ';
-        const price = PRICES[id];
+        const label = this.#labelFor(id).toUpperCase();
+        const marker = slot === this.cursor
+          ? (this.previewId != null && Math.abs(this.previewId) === id ? '>>' : '>')
+          : '  ';
+        const price = this.#priceFor(id);
         const priceText = price != null ? ` ${price}` : '';
         drawText(renderer, glyphs, `${marker}${label}${priceText}`, 16, 32 + slot * 12);
       }
     }
+    if (this.pendingWarning) {
+      drawText(renderer, glyphs, this.pendingWarning.toUpperCase(), 16, 176);
+    }
     drawCentered(renderer, glyphs, this.cursor === EXIT_SLOT ? '>EXIT<' : 'EXIT', 188);
+  }
+
+  /** The name shown in the grid: a `CONSUMABLES` entry's own `name` below
+   *  `WEAPON_ID_BASE`, or the current world's own weapon record's `name`
+   *  (`game/weapons.js`'s `WEAPON_NAMES`) above it. */
+  #labelFor(id) {
+    if (!isWeaponPickup(id)) {
+      const rank = CONSUMABLES.findIndex((c) => c.type === id);
+      return rank >= 0 ? CONSUMABLES[rank].name : `#${id}`;
+    }
+    const w = this.state.arsenal?.weapons?.[weaponIndexOf(id)];
+    return w ? w.name : `#${id}`;
   }
 }
 

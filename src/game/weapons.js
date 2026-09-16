@@ -16,6 +16,22 @@ export const WEAPON_STRIDE = 0x50;
 export const WEAPON_COUNT = 11;
 export const WEAPON_TABLE_DS = 0xe2b6;      // the runtime table CS:0x95ca indexes
 
+/** Each 80-byte record embeds its own null-terminated name at `+0x20` —
+ *  confirmed by decompressing all four shipped `PWEAPONS.00{1-4}` with
+ *  `blast.py` and reading the bytes directly (`"knife\0"`, `"time bomb\0"`,
+ *  ...), byte-identical across every world. `CS:0x703A` reads this exact
+ *  field to build the shop's own "Warning.. this weapon replaces the X"
+ *  message (`Gods/docs/shop.md`'s `UNKNOWN_shop_tradein_value`, CLOSED) —
+ *  the same "small record with an embedded name" idiom this project already
+ *  knows from `POBJECTS`. Hardcoded here rather than parsed at runtime,
+ *  matching `consumables.js`'s own `CONSUMABLES` table: the text is fixed
+ *  and world-invariant, so parsing it from the buffer on every load would
+ *  just re-derive a constant. */
+export const WEAPON_NAMES = Object.freeze([
+  'knife', 'time bomb', 'fireball', 'flame', 'lightning bolt',
+  'throwing star', 'spear', 'axe', 'hunter', 'magic axe', 'mace',
+]);
+
 /* ── THREE fields are pinned at the EXE-image value, not read from the file ──
  *
  * The load path is CS:0x35e9 (sublevel 'a' only, `cmp byte [0x43],0 / jnz`),
@@ -108,7 +124,8 @@ export function parseWeapons(buf) {
        * that pass stopped reading FUN_1000_9320 at CS:0x9361. */
       breaksTerrain: buf[o + 0x48] !== 0,
       consumedOnHit: buf[o + 0x49] !== 0,
-      value: be(o + 0x4a),          // the shop's "Value" stat
+      value: be(o + 0x4a),          // the shop's "Value" stat — also its PRICE, see WEAPON_NAMES above
+      name: WEAPON_NAMES[i],
       /* Projectile-behaviour handler indices into DS:0xd88c, one per facing.
        * The emitters read them as BYTES from the post-swap record — `mov
        * cl,[si+0x16]` (right, CS:0x987f) and `mov cl,[si+0x12]` (left,

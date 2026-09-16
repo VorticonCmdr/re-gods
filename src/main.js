@@ -1043,12 +1043,16 @@ async function main() {
    * captures). `ShopScreen#rebuildVisible` does the filtering; this is the
    * full candidate list, not a pre-filtered one. Every id is independently
    * confirmed a real `game/consumables.js` `CONSUMABLES` type — shop.md's
-   * own cross-check. */
-  const SHOP_ROSTER_WORLD_2 = [0, 2, 35, 36, 38, 42, 44, 51, 52, 53, 70, 71, 72];
+   * own cross-check. `194,197,201` are weapon-purchase ids (`WEAPON_ID_BASE
+   * + weaponIndex` — fireball, throwing star, magic axe): `UNKNOWN_shop_
+   * tradein_value`, CLOSED, Gods/docs/shop.md — every raw id `>=0xc0` buys
+   * and equips that weapon, not "sells" anything. */
+  const SHOP_ROSTER_WORLD_2 = [0, 2, 35, 36, 38, 42, 44, 51, 52, 53, 70, 71, 72, 194, 197, 201];
 
-  /* Worlds 3/4's shop roster — `SS:0x51aa`'s own full 18-id raw list for
-   * these worlds (world 2's 13 minus `2` plus `3,37,39,40,41`, all
-   * independently confirmed as real CONSUMABLES types). `2`/`3` (power
+  /* Worlds 3 and 4 share the same 18 consumable ids (world 2's 13 minus `2`
+   * plus `3,37,39,40,41`, all independently confirmed as real CONSUMABLES
+   * types) but DIFFERENT weapon-purchase ids — `SS:0x51aa`'s own raw lists
+   * genuinely diverge there, not a transcription choice. `2`/`3` (power
    * potions) and `40`/`41` (familiar boosts) are gated by the two
    * eligibility checks — `UNKNOWN_shop_eligibility_gates`, CLOSED, Gods/
    * docs/shop.md: gate 1 opens once the hero holds any weapon
@@ -1056,16 +1060,22 @@ async function main() {
    * (`health.familiarEnergy`), reachable by buying `39` (the familiar
    * itself) in this same shop. `ShopScreen#rebuildVisible` applies both
    * gates AND the grid's 17-slot scroll truncation (the original's own
-   * `0x25c` path — 18 candidates, all eligible, is one more than fits, so
-   * the single cheapest survivor silently drops). Worlds 3 and 4 share an
-   * identical raw list. */
-  const SHOP_ROSTER_WORLD_3_4 = [
+   * `0x25c` path — with every gate open and a full purse, world 3/4's own
+   * 21/23-entry raw lists both exceed 17, so the single cheapest survivor
+   * silently drops). */
+  const SHOP_CONSUMABLES_WORLD_3_4 = [
     0, 2, 3, 35, 36, 37, 38, 39, 40, 41, 42, 44, 51, 52, 53, 70, 71, 72,
   ];
+  /* Weapon ids, per world — fireball/throwing star/spear for world 3,
+   * fireball/spear/axe/hunter/mace for world 4 (`Gods/docs/shop.md`'s own
+   * roster-source table, `UNKNOWN_shop_roster_source` CLOSED). */
+  const SHOP_ROSTER_WORLD_3 = [...SHOP_CONSUMABLES_WORLD_3_4, 194, 197, 198];
+  const SHOP_ROSTER_WORLD_4 = [...SHOP_CONSUMABLES_WORLD_3_4, 194, 198, 199, 200, 202];
 
   const shopRosterForWorld = (world) => (
     world === 2 ? SHOP_ROSTER_WORLD_2.slice()
-    : (world === 3 || world === 4) ? SHOP_ROSTER_WORLD_3_4.slice()
+    : world === 3 ? SHOP_ROSTER_WORLD_3.slice()
+    : world === 4 ? SHOP_ROSTER_WORLD_4.slice()
     : []
   );
 
