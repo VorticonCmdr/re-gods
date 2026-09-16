@@ -848,9 +848,10 @@ export class PatGroups {
        * THE ID ENCODING IS NOT A NUMERIC POPUP. `CS:0xC059` splits it as
        *   id >= 0x0B -> ordinary POBJECTS type, id - 0x0B
        *   id <  0x0B -> a WEAPON, object type id + 0xC0 (weapon index = id)
-       * objects.js's own `dropCarriedItem` already implements exactly that
-       * split, so the raw id is handed over untouched. PLEV1A's class-2
-       * flying monster carries id 0 — weapon index 0, "knife" — which is the
+       * The raw id is handed over untouched: CS:0xBBA8 calls CS:0xBF5F, the
+       * shared toss (popup.js), which arcs the item and only then runs
+       * CS:0xC041 to allocate the real object. PLEV1A's class-2 flying
+       * monster carries id 0 — weapon index 0, "knife" — which is the
        * second knife that takes the hero's volley from one to two. */
       if (!slot.dropGiven && (n - slot.killedThisFrame - dying) === finished) {
         slot.dropGiven = true;                            // CS:0xBBAD, slot+0x18

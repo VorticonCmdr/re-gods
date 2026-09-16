@@ -50,68 +50,105 @@
  * and the fall sentinel armed. `UNKNOWN_popup_cull` is therefore CLOSED: the
  * lifetime is the arc, and the arc terminates in an object.
  *
- * ⚠️ WHAT THIS PORT STILL DOES NOT DO. This module renders the arc as a
- * transient icon only; it does not run CS:0xC041 at the end of it, so a
- * System-A/System-B/selector-2/nest group-elimination reward is still a
- * visual that vanishes rather than an item the hero can pick up. The
- * selector-1 PAT group drop DOES land as a real object — see main.js's own
- * `patGroups.drops` drain, which calls objects.js's `dropCarriedItem`
- * directly. Bringing the other three callers onto that same path is a
- * separate, larger change: `UNKNOWN_popup_reward_not_collectable`.
+ * `UNKNOWN_popup_reward_not_collectable` — CLOSED. This module used to
+ * render the arc and then throw the reward away, so every System-A,
+ * System-B, selector-2, nest and statue kill award in the port was a
+ * picture that vanished. It now queues a LANDING (`this.landed`), which
+ * main.js drains into objects.js's `dropCarriedItem` — the same allocator
+ * the selector-1 PAT drop and steal-and-carry already use. Rewards are
+ * items again.
  *
- * THE BUSY-SLOT DIVERT, CS:0xBF6B — CLOSED. A second `spawn()` call while
- * the slot is busy diverts, in the original, straight to `CS:0xC041` — the
- * SAME "drop a real, solid object back into the world" allocator
- * steal-and-carry's own periodic/death-time drops use (`objects.js`'s
- * `dropCarriedItem`). Wired here as an OPTIONAL 4th argument (`objects`):
- * every existing caller that doesn't pass one keeps the old "drop the
- * request" behaviour, since C041 needs the live 200-slot runtime array this
- * module has no reference to on its own.
+ * THE BUSY-SLOT DIVERT, CS:0xBF6B — a second `spawn()` while the single
+ * slot (DS:0x1a0) is busy does not queue and does not lose the item: it
+ * jumps straight to CS:0xC041 and lands immediately, where it was awarded.
+ * That now goes through the same `landed` queue rather than an optional
+ * `objects` argument, so every landing re-ranks the draw order the same way
+ * (the old direct-call path skipped that).
  */
 
-import { dropCarriedItem } from './objects.js';
-
-export const POPUP_VY = -6;                 // CS:0xBF7B, the seeded Y-velocity
+export const POPUP_VY = -6;                 // CS:0xBF75, the seeded Y-velocity
 export const POPUP_SPRITE_BASE = 170;        // the object-sprite formula, `170 + type`
-export const POPUP_OFFSCREEN_CULL = 400;     // a disclosed safety valve, see the header
+export const WEAPON_SPRITE_BASE = 0x12e;     // CS:0xC004 `add cx,0x12e` — 302
+export const WEAPON_ID_MAX = 0xb;            // CS:0xBF96 `cmp cx,0xb / jl`
+/* THE TWO ARC LENGTHS. The ordinary branch runs until the velocity reaches
+ * 5 (CS:0xBFD7 `cmp [0x22a],5 / jl`), the WEAPON branch only until 4
+ * (CS:0xC026 `cmp [0x22a],4 / jge`) — they are separate tails, not one
+ * shared loop, and the constants really do differ. So an ordinary item is
+ * airborne 11 ticks and rises a net 11px; a weapon 10 ticks and 15px. */
+export const LAND_VY_OBJECT = 5;
+export const LAND_VY_WEAPON = 4;
+/* CS:0xBF5F `cmp cx,0x3d / jz bf59` — id 61 (POBJECTS type 50, "spike arc")
+ * skips the toss entirely: `and bx,0xfff0` snaps it to the 16px tile row and
+ * jumps straight to the CS:0xC041 landing. */
+export const SNAP_ID = 0x3d;
 
 export class Popup {
   constructor() {
     this.active = false;
     this.x = 0;
     this.y = 0;
-    this.itemType = null;    // POBJECTS type, or null for the unrendered numeric branch
+    this.id = null;          // the RAW id — the weapon/object split needs it
+    this.vy = 0;             // DS:0x22a
+    this.itemType = null;    // POBJECTS type, or null on the weapon branch
+    /* Landings waiting for the host to turn into real objects. Queued rather
+     * than allocated here so every landing goes through main.js's own
+     * `dropCarriedIntoWorld`, which re-ranks the draw order — the old direct
+     * `dropCarriedItem` call on the busy-divert path did not, so a diverted
+     * item could draw out of order. */
+    this.landed = [];
   }
 
-  /** CS:0xBF5F/0xBF64. `id` is the raw popup id (already checked non-negative
-   *  by the caller). Returns false if the slot was already busy — the
-   *  caller's own reward is simply lost UNLESS `objects` (the 200-slot
-   *  runtime array, objects.js) is supplied, in which case a busy slot
-   *  diverts to `dropCarriedItem` instead (CS:0xBF6B `jmp c041`), matching
-   *  the original exactly rather than losing the item. */
-  spawn(worldX, worldY, id, objects) {
+  /** CS:0xBF5F/0xBF64. `id` is the raw id (the caller has already rejected
+   *  negatives). Returns true if the toss slot was taken, false if the
+   *  request was diverted straight to a landing. */
+  spawn(worldX, worldY, id) {
+    if (id === SNAP_ID) {                                    // CS:0xBF5F `jz bf59`
+      this.landed.push({ id, x: worldX, y: worldY & 0xfff0 });  // CS:0xBF59
+      return false;
+    }
     if (this.active) {
-      if (objects) dropCarriedItem(objects, id, worldX, worldY);   // CS:0xBF6B
-      return false;                                          // CS:0xBF64 `js`
+      /* CS:0xBF6B — a second request while the single slot (DS:0x1a0) is
+       * busy does NOT lose the item and does NOT queue behind the first: it
+       * jumps straight to CS:0xC041 and lands immediately, right where it
+       * was awarded. */
+      this.landed.push({ id, x: worldX, y: worldY });
+      return false;
     }
     this.active = true;
     this.x = worldX;
     this.y = worldY;
-    this.itemType = id >= 0xb ? id - 0xb : null;             // CS:0xBF96/0xBF9B
+    this.id = id;
+    this.vy = POPUP_VY;                                      // CS:0xBF75
+    this.itemType = id >= WEAPON_ID_MAX ? id - WEAPON_ID_MAX : null;
     return true;
   }
 
-  /** CS:0xBF80-0xBF92. */
+  /** CS:0xBF80-0xBFEF (ordinary) / CS:0xC004-0xC03B (weapon).
+   *  Order matters and is the original's: apply the velocity, store, draw,
+   *  THEN increment and test — so the frame that lands is drawn at the
+   *  landing position, and the object is created there too. */
   step() {
     if (!this.active) return;
-    this.y += POPUP_VY;
-    if (this.y < -POPUP_OFFSCREEN_CULL) this.active = false;   // see the header's UNKNOWN_popup_cull note
+    this.y += this.vy;                                       // CS:0xBF8E / 0xC008
+    this.vy += 1;                                            // CS:0xBFD3 / 0xC022
+    const limit = this.id < WEAPON_ID_MAX ? LAND_VY_WEAPON : LAND_VY_OBJECT;
+    if (this.vy >= limit) {
+      /* CS:0xBFE9/0xC03B free the slot, then fall into CS:0xC041 — which is
+       * where the reward stops being a picture and becomes an item. */
+      this.landed.push({ id: this.id, x: this.x, y: this.y });
+      this.active = false;
+      this.id = null;
+      this.itemType = null;
+    }
   }
 
-  /** null while inactive, or while the id fell in the undecoded numeric
-   *  range (see the file header). */
+  /** The sprite drawn DURING the toss. Two branches, and the weapon one was
+   *  the piece this project had recorded as undecodable:
+   *    id >= 0xB : CS:0xBFAB, the POBJECTS descriptor sprite, 170 + type
+   *    id <  0xB : CS:0xC004, `0x12E + id` — the weapon's own icon. */
   get spriteId() {
-    if (!this.active || this.itemType === null) return null;
+    if (!this.active) return null;
+    if (this.itemType === null) return WEAPON_SPRITE_BASE + this.id;
     return POPUP_SPRITE_BASE + this.itemType;                 // CS:0xBFAB
   }
 }

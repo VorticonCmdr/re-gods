@@ -173,7 +173,8 @@ import { Brood, broodFacingOffset, BROOD_SEED_FALL_SUBSTATE, BROOD_BOX,
          DEATH_DRAW_OFFSET } from '../game/nest.js';
 import { Debris, SLOTS as DBG_SLOTS, STRIDE as DBG_STRIDE, LIFETIME_TICKS,
          SPRITE_FIRST, SPRITE_LAST, EXPIRE_AT } from '../game/debris.js';
-import { Popup, POPUP_VY, POPUP_SPRITE_BASE, POPUP_OFFSCREEN_CULL } from '../game/popup.js';
+import { Popup, POPUP_VY, POPUP_SPRITE_BASE,
+         WEAPON_SPRITE_BASE, SNAP_ID } from '../game/popup.js';
 import { Destructibles, DESTRUCTIBLE_TILE, MIN_WORLD, MACE_INDEX, MACE_BONUS,
          QUEUE_SLOTS, RESTORE_SLOTS, BREAK_FRAMES, SPRITE_BASE_DS,
          SPRITE_BASE_VALUE, blockDamage, hitsToBreak,
@@ -12605,44 +12606,82 @@ export function checkPopup() {
       p.x === 100 && p.y === 200);
   }
 
-  /* CS:0xBF6B `jmp 0xc041` — the busy-slot divert, now modelled. */
+  /* CS:0xBF6B `jmp 0xc041` — the busy-slot divert. It does NOT queue and
+   * does NOT lose the item: it lands immediately, where it was awarded. */
   {
     const p = new Popup();
     p.spawn(100, 200, 0x2d);
-    const slots = expandMapObjects([]);   // all 200 dead, ready to reuse
-    const second = p.spawn(500, 600, 0x2c, slots);   // id 0x2c -> type 0x21 (33)
-    check('a second spawn() while busy, WITH `objects`, still returns false',
+    const second = p.spawn(500, 600, 0x2c);
+    check('a second spawn() while busy returns false — the toss slot is not taken',
       second === false);
-    check('...but diverts to dropCarriedItem: a live object materializes at the new position',
-      slots.some((o) => !o.dead && o.x === 500 && o.y === 600 && o.type === 0x2c - 0xb));
+    check('...but the item is NOT lost: CS:0xBF6B lands it immediately, at the position it '
+      + 'was awarded, queued for the host to materialise',
+      p.landed.length === 1 && p.landed[0].id === 0x2c
+      && p.landed[0].x === 500 && p.landed[0].y === 600, JSON.stringify(p.landed));
     check('the busy slot itself is untouched by the divert',
       p.x === 100 && p.y === 200 && p.itemType === 0x2d - 0xb);
   }
 
-  /* CS:0xBF87-92: y += POPUP_VY every tick */
+  /* CS:0xBF59 — id 0x3d skips the toss and snaps to the 16px tile row. */
+  {
+    const p = new Popup();
+    const r = p.spawn(100, 205, SNAP_ID);
+    check('CS:0xBF5F `cmp cx,0x3d` — id 61 never enters the toss at all',
+      r === false && p.active === false);
+    check('...it lands at once with Y snapped down to the tile row (CS:0xBF59 `and bx,0xfff0`)',
+      p.landed.length === 1 && p.landed[0].y === 192 && p.landed[0].x === 100,
+      JSON.stringify(p.landed));
+  }
+
+  /* THE ARC. The velocity is seeded -6 and INCREMENTED every tick
+   * (CS:0xBFD3 / 0xC022) — the old model applied a constant -6 forever. */
   {
     const p = new Popup();
     p.spawn(0, 0, 0x2d);
     p.step();
-    check('step() applies CS:0xBF7B\'s seeded Y-velocity of -6 exactly once',
+    check('step() applies CS:0xBF75\'s seeded Y-velocity of -6 exactly once',
       p.y === POPUP_VY, p.y);
     p.step();
-    check('a second step() accumulates: y == -12', p.y === 2 * POPUP_VY, p.y);
+    check('the second step uses -5, not another -6: the velocity is incremented every tick '
+      + '(CS:0xBFD3), so this is an ARC, not a constant rise',
+      p.y === -11, p.y);
   }
 
-  /* CS:0xBF96: id < 0xB -> the undecoded plain-numeric branch, never rendered */
+  /* THE TWO ARCS END AT DIFFERENT VELOCITIES — separate tails, not one loop. */
+  {
+    const run = (id) => {
+      const p = new Popup();
+      p.spawn(0, 0, id);
+      let ticks = 0;
+      while (p.active && ticks < 50) { p.step(); ticks++; }
+      return { ticks, landing: p.landed[0] };
+    };
+    const obj = run(0x2d), wep = run(0);
+    check('CS:0xBFD7 — an ORDINARY reward is airborne 11 ticks and lands 11px above where it '
+      + 'was awarded (velocity -6..4)', obj.ticks === 11 && obj.landing.y === -11,
+      `${obj.ticks} ticks, y=${obj.landing.y}`);
+    check('CS:0xC026 — a WEAPON uses its own, SHORTER tail (`cmp ...,4 / jge`): 10 ticks and '
+      + '15px, so the two branches genuinely differ rather than sharing one constant',
+      wep.ticks === 10 && wep.landing.y === -15, `${wep.ticks} ticks, y=${wep.landing.y}`);
+    check('every arc ends in a LANDING the host can turn into a real object — which is what '
+      + 'closes UNKNOWN_popup_reward_not_collectable',
+      obj.landing.id === 0x2d && wep.landing.id === 0);
+  }
+
+  /* CS:0xC004: id < 0xB is the WEAPON branch, sprite 0x12E + id — not the
+   * "undecoded plain-numeric" branch this suite used to assert. */
   {
     const p = new Popup();
     p.spawn(0, 0, 0);
-    check('id=0 (< 0xB) yields itemType=null (CS:0xC004, "not chased further")',
+    check('id=0 (< 0xB) has no POBJECTS type — it is a weapon, not an ordinary object',
       p.itemType === null);
-    check('...and therefore spriteId=null — this port does not render the numeric branch',
-      p.spriteId === null);
+    check('...and it DOES render: CS:0xC004 gives sprite 0x12E + id = 302, the knife icon',
+      p.spriteId === WEAPON_SPRITE_BASE, p.spriteId);
 
     const p2 = new Popup();
     p2.spawn(0, 0, 0xa);
-    check('id=0xa (still < 0xB, the boundary) also yields itemType=null',
-      p2.itemType === null && p2.spriteId === null);
+    check('id=0xa (the last weapon id below the 0xB boundary) renders as 0x12E + 10 = 312',
+      p2.itemType === null && p2.spriteId === WEAPON_SPRITE_BASE + 0xa, p2.spriteId);
   }
 
   /* CS:0xBF9B/BFAB: id >= 0xB -> POBJECTS icon, sprite = 170 + (id - 0xB) */

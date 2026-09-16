@@ -1814,7 +1814,7 @@ async function main() {
       lastStatueFx = statueResult.drawn;
       /* CS:0xBF5F — the awakened statue's own kill award, drained into the
        * SAME single-slot popup every other reward source shares. */
-      for (const p of statueResult.popups) popup.spawn(p.x, p.y, p.id, level.drawObjects);
+      for (const p of statueResult.popups) popup.spawn(p.x, p.y, p.id);
 
       /* CS:0x7F0D — the world-3 DS:0xce64 creature and its "spit". Neither
        * module needs injected callbacks (see ce64.js's own header for why it
@@ -1910,16 +1910,16 @@ async function main() {
        * the weapon's `count`, and volleySize() = count - base + 1 takes the
        * hero from one thrown knife to two.
        *
-       * ⚠️ The original does NOT place the object at the kill position
-       * directly: CS:0xBF5F stages a single pending drop that pops upward
-       * (vy = -6) and accelerates down one unit a tick until vy >= 5
-       * (CS:0xBFD3-0xBFDC), and only THEN calls CS:0xC041 at wherever it
-       * landed. This port skips that arc and drops at the kill point,
-       * letting objects.js's own fall physics settle it — a disclosed
-       * cosmetic difference in where the item comes to rest, not in whether
-       * it appears or what it is. `UNKNOWN_pat_drop_pop_arc`. */
+       * `UNKNOWN_pat_drop_pop_arc` — CLOSED. CS:0xBBA8 calls CS:0xBF5F, the
+       * SAME toss the System-A/B/selector-2/nest rewards use, so the drop
+       * goes through popup.spawn() rather than straight into the object
+       * array: it arcs up and lands ~11px higher (15px for a weapon), and
+       * only then becomes an object. Routing it here also means the PAT
+       * drop now shares the single-slot and busy-divert semantics with
+       * every other reward, instead of being the one path that bypassed
+       * them. */
       for (const d of patGroups.drops) {
-        dropCarriedIntoWorld(d.id, d.x + camNow.x + 8, d.y + camNow.y + 8);
+        popup.spawn(d.x + camNow.x + 8, d.y + camNow.y + 8, d.id);
       }
       patGroups.drops.length = 0;
       /* THE HUNT. CS:0xf11f/0xf1e5 run the pathfinder only from the two walk
@@ -1980,7 +1980,7 @@ async function main() {
           if (carriedB) dropCarriedIntoWorld(carriedB.id, carriedB.x, carriedB.y);
         }
         if (e.deathDropId !== null) {
-          popup.spawn(e.deathDropX, e.deathDropY, e.deathDropId, level.drawObjects);
+          popup.spawn(e.deathDropX, e.deathDropY, e.deathDropId);
           e.deathDropId = null;
         }
       }
@@ -2025,7 +2025,7 @@ async function main() {
          * different sites. `level.drawObjects` arms popup's own busy-slot
          * divert to C041, closing that module's previously-disclosed gap. */
         if (e.deathDropId !== null) {
-          popup.spawn(e.deathDropX, e.deathDropY, e.deathDropId, level.drawObjects);
+          popup.spawn(e.deathDropX, e.deathDropY, e.deathDropId);
           e.deathDropId = null;
         }
       }
@@ -2086,7 +2086,7 @@ async function main() {
            * of this loop read the cache directly and dropped every
            * entityCount===1 group's reward at (null, null)). */
           const { x, y } = groupRewardPosition(g.members);
-          popup.spawn(x, y, g.desc.rewardId, level.drawObjects);
+          popup.spawn(x, y, g.desc.rewardId);
         }
       }
       /* CS:0xEDAA-0xEDB1 — RELEASE THE RUNTIME SLOT. Read fresh off the
@@ -2143,7 +2143,7 @@ async function main() {
            * `groupRewardPositionA` applies the identical fallback with
            * System A's own +8-on-both-axes read-site bias. */
           const { x, y } = groupRewardPositionA(g.members);
-          popup.spawn(x, y, g.desc.rewardId, level.drawObjects);
+          popup.spawn(x, y, g.desc.rewardId);
         }
       }
       /* CS:0xDFF1-0xDFF9 — System A's own slot release, structurally
@@ -2168,10 +2168,18 @@ async function main() {
        * correctly but grown forever and never rendered. */
       for (const r of selectorTwo.rewards) {
         const id = r.itemType !== null ? r.itemType + 0xb : r.popupValue;
-        popup.spawn(r.x, r.y, id, level.drawObjects);
+        popup.spawn(r.x, r.y, id);
       }
       selectorTwo.rewards.length = 0;
       popup.step();
+      /* CS:0xC041 — THE LANDING. Every reward that finishes its toss (and
+       * every one diverted by a busy slot, and the CS:0xBF59 snap case)
+       * becomes a real, collectable object here. Before this, System-A,
+       * System-B, selector-2, nest and statue awards were drawn and then
+       * discarded — `UNKNOWN_popup_reward_not_collectable`. Drained after
+       * step() so a landing is created on the same tick the arc ends. */
+      for (const l of popup.landed) dropCarriedIntoWorld(l.id, l.x, l.y);
+      popup.landed.length = 0;
       /* CS:0x02BA — enemy shots move and hit, AFTER every emitter that can
        * fire one this tick (the nest at 0x0282, the entities at 0x0285), so
        * unlike the hero's own shots (which step BEFORE the player emits) an
