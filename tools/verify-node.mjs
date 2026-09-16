@@ -373,6 +373,13 @@ for (const r of checkShop()) {
   console.log(line(r));
 }
 
+console.log('\n  #11 audio, music half — PGODS.MUS\'s container + SMF blobs:');
+const { checkMusic } = await import('../src/verify/checks.js');
+for (const r of await checkMusic(fetchRaw)) {
+  if (!r.pass && !r.note) bad++;
+  console.log(line(r));
+}
+
 console.log(`\n${asserts} assertions + ${notes} notes = ${asserts + notes} rows`);
 console.log(`${bad ? `FAILURES: ${bad}` : 'ALL CHECKS PASS'}`);
 process.exit(bad ? 1 : 0);

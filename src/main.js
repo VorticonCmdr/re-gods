@@ -20,7 +20,7 @@ import { runAllChecks, checkDescriptorAnchors, checkHeroSprites,
          checkWeaponsProjectiles, checkTriggerActions,
          checkZones, checkPopup, checkLevers, checkSpikes,
          checkMessages, checkLineBarriers, checkTitleMenu, checkTally,
-         checkShop } from './verify/checks.js';
+         checkShop, checkMusic } from './verify/checks.js';
 import { EventRunner, parsePalfils, palfilsNameFor } from './game/events.js';
 import { LineBarriers, parseLineBarrierRecords } from './game/line-barriers.js';
 import { makeActionContext, makeGates, DOOR_TILES,
@@ -91,6 +91,8 @@ import { TitleMenu, PasswordEntry, MENU_CLICK_SFX, MENU_CONFIRM_SFX } from './ga
 import { ShopScreen, BUY_CONFIRM_SFX } from './game/shop.js';
 import { TallyScreen, CHA_CHING_SFX } from './game/tally.js';
 import { WebAudioBus } from './audio/audio-bus.js';
+import { parseMusContainer, isSmf } from './audio/mus-container.js';
+import { MusicPlayer } from './audio/music-player.js';
 
 const LEVELS = ['1A','1B','2A','2B','3A','3B','4A','4B'];
 
@@ -369,6 +371,37 @@ async function main() {
    * the first real play() call, not here — see that module for why. */
   const audio = new WebAudioBus();
 
+  /* #11 audio backlog item, music half — see audio/music-player.js's own
+   * header. GAME.EXE only ever opens PGODS.MUS (mus-container.js's own
+   * header has the full citation trail for why the other ten shipped .MUS/
+   * .RL files are not fetched at all here); WHICH of its 70 real tracks
+   * plays at which in-game moment is UNKNOWN (no cue-dispatch code path was
+   * found this session) — the same disclosed-affordance spirit as the
+   * weapon picker below: every track is offered on demand, none is claimed
+   * to belong to any level or event. */
+  const musicPlayer = new MusicPlayer();
+  const musicSel = $('musicTrack');
+  fetchRaw('game/PGODS.MUS').then((raw) => {
+    const blobs = parseMusContainer(dclDecompress(raw).data);
+    musicSel.innerHTML = '<option value="-1">(none)</option>';
+    blobs.forEach((blob, i) => {
+      if (!isSmf(blob)) return;   // the 3 mus_type2 blobs (19/20/40) — undecoded, see smf-parser.js
+      const o = document.createElement('option');
+      o.value = String(i);
+      o.textContent = `track ${i}`;
+      musicSel.appendChild(o);
+    });
+    musicSel.addEventListener('change', () => {
+      const n = +musicSel.value;
+      if (n < 0) { musicPlayer.stop(); return; }
+      musicPlayer.play(blobs[n]);
+    });
+  });
+  $('musicStop').addEventListener('click', () => {
+    musicPlayer.stop();
+    musicSel.value = '-1';
+  });
+
   /* Verification first — if the formats are wrong we want to see it up front. */
   try {
     const { results, sampleMessages } = await runAllChecks(fetchRaw);
@@ -385,6 +418,7 @@ async function main() {
     Promise.resolve(checkSpikes()), checkMessages(fetchRaw),
     checkLineBarriers(fetchRaw), Promise.resolve(checkTitleMenu()),
     Promise.resolve(checkTally()), Promise.resolve(checkShop()),
+    checkMusic(fetchRaw),
     ]) results.push(...await g);
     renderChecks(results);
     const mh = $('messages');

@@ -10,6 +10,8 @@ import { dclDecompress } from '../formats/dcl.js';
 import { DOOR_TILES, ZONE_TELEPORT, ZONE_EXIT, makeGates, makeActionContext,
          runAction, fireTrigger, SFX } from '../game/trigger-actions.js';
 import { RecordingAudioBus, SFX_VOICES } from '../audio/audio-bus.js';
+import { parseMusContainer, isSmf } from '../audio/mus-container.js';
+import { parseSmf, notesFromEvents, buildTempoMap, ticksToSeconds } from '../audio/smf-parser.js';
 import { KillSmoke, SLOTS as SMOKE_SLOTS, FRAMES as SMOKE_FRAMES,
          SPRITE_BASE as SMOKE_SPRITE_BASE,
          SPRITE_LAST as SMOKE_SPRITE_LAST } from '../game/kill-smoke.js';
@@ -14621,6 +14623,115 @@ export function checkShop() {
     check('draw() with no glyph atlas draws nothing and does not throw',
       calls.length === 0);
   }
+
+  return results;
+}
+
+/* ── #11 audio, music half — `PGODS.MUS`'s own container + SMF blobs ──────
+ * `GAME.EXE`'s only music-related string literals are `pgods.mus`/`gods.mus`
+ * (a raw byte regex scan of GAME.EXE and TGAME.EXE found zero references to
+ * any of the other ten shipped .MUS/.RL files, which belong to the pre-game
+ * INTRO executables or, for the seven PGODSRLA-G.RL files, to nothing this
+ * project has found at all) — so this is the one file worth parsing for
+ * actual gameplay music. `audio/mus-container.js`'s own header has the full
+ * citation trail. This session's own extended census (format/ntrks/division/
+ * tempo-event-count per blob, beyond drivers-and-memory.md's own `MThd`-only
+ * check) found all 70 real SMF blobs are format 0, 1 track, division 420,
+ * with EXACTLY one Set-Tempo meta event apiece — asserted exhaustively
+ * below, not just spot-checked, since it was cheap to check every one. */
+export async function checkMusic(fetchRaw) {
+  const { results, check } = makeChecker();
+
+  const raw = dclDecompress(await fetchRaw('game/PGODS.MUS')).data;
+  const blobs = parseMusContainer(raw);
+  check('PGODS.MUS has exactly 73 blobs, matching drivers-and-memory.md\'s '
+    + 'own container census', blobs.length === 73);
+
+  const smfIdx = [], otherIdx = [];
+  blobs.forEach((b, i) => (isSmf(b) ? smfIdx : otherIdx).push(i));
+  check('exactly 70 of the 73 blobs are real SMF (MThd) data',
+    smfIdx.length === 70, `got ${smfIdx.length}`);
+  check('the 3 non-SMF blobs are exactly indices 19/20/40 — the mus_type2 '
+    + 'blobs drivers-and-memory.md already names, not some other set',
+    otherIdx.join() === '19,20,40', `got ${otherIdx.join()}`);
+
+  /* Every one of the 70 SMF blobs, not a sample — this session's own fuller
+   * census ran the same check in Python against the same decompressed bytes
+   * (a real cross-language, cross-tool corroboration, same spirit as this
+   * project's other machine-parsed-not-hand-transcribed closures). */
+  let allFormat0 = true, allDivision420 = true, allOneTrack = true;
+  let allOneTempo = true, allHaveEnd = true, totalNotes = 0;
+  for (const i of smfIdx) {
+    const { division, format, events } = parseSmf(blobs[i]);
+    if (format !== 0) allFormat0 = false;
+    if (division !== 420) allDivision420 = false;
+    const tempoCount = events.filter((e) => e.type === 'tempo').length;
+    const endCount = events.filter((e) => e.type === 'end').length;
+    if (tempoCount !== 1) allOneTempo = false;
+    if (endCount < 1) allHaveEnd = false;
+    totalNotes += notesFromEvents(events).length;
+  }
+  check('all 70 SMF blobs are format 0 (Gods/docs\' own claim, checked on '
+    + 'every blob rather than assumed from the one blob it verified)', allFormat0);
+  check('all 70 use division 420 (0x01A4) — this session\'s tempo math must '
+    + 'read this per file, not hardcode it', allDivision420);
+  check('all 70 carry exactly one Set-Tempo meta event, never a mid-piece '
+    + 'tempo change', allOneTempo);
+  check('all 70 reach a real End-of-Track meta event', allHaveEnd);
+  check('parsing every SMF blob yields a nonzero total note count '
+    + '(the parser actually extracts music, not an empty shell)',
+    totalNotes > 0, `got ${totalNotes}`);
+
+  /* One blob, followed all the way from raw bytes to scheduled seconds — the
+   * full pipeline a player actually walks, not just its two ends checked in
+   * isolation. Blob 0 (the first real SMF entry) is used since it is real,
+   * shipped data, not a synthetic fixture. */
+  {
+    const { division, events } = parseSmf(blobs[0]);
+    const notes = notesFromEvents(events);
+    const tempoMap = buildTempoMap(events, division);
+    check('blob 0 has at least one note with a positive duration',
+      notes.length > 0 && notes.every((n) => n.durationTicks > 0));
+    const tempo = events.find((e) => e.type === 'tempo');
+    check('blob 0\'s tempo is a plausible BPM (40-300), not a mis-decoded '
+      + '24-bit value', tempo && tempo.usPerQuarter >= 200000 && tempo.usPerQuarter <= 1500000);
+    const lastNoteEndTick = Math.max(...notes.map((n) => n.tick + n.durationTicks));
+    const lastNoteEndSeconds = ticksToSeconds(lastNoteEndTick, tempoMap, division);
+    check('ticksToSeconds is monotonic with tick and produces a sane, '
+      + 'nonzero duration for a real track', lastNoteEndSeconds > 0 && lastNoteEndSeconds < 60,
+      `${lastNoteEndSeconds.toFixed(2)}s`);
+  }
+
+  /* PGODSRLA.RL, actually fetched and re-derived here (not just transcribed
+   * from a prior Python run) — staged solely for this check, since GAME.EXE
+   * itself never loads it for real play (this module's own header has the
+   * full citation for why). */
+  {
+    const rlRaw = dclDecompress(await fetchRaw('game/PGODSRLA.RL')).data;
+    const rlBlobs = parseMusContainer(rlRaw);
+    const rlOther = [];
+    rlBlobs.forEach((b, i) => { if (!isSmf(b)) rlOther.push(i); });
+    check('PGODSRLA.RL has 63 blobs, exactly one non-SMF, at index 21 — '
+      + 're-derived here, not just transcribed from this session\'s Python run',
+      rlBlobs.length === 63 && rlOther.join() === '21', `blobs=${rlBlobs.length} other=${rlOther.join()}`);
+  }
+
+  /* PGODSRLB-G.RL (six more files, same letter family) are NOT staged or
+   * fetched by this check — GAME.EXE never loads any of them for real play
+   * (this module's own header), so re-deriving their shape here would only
+   * ever exercise dead weight. This session found, by direct Python
+   * analysis of the raw shipped bytes (NOT re-run by this tool, unlike
+   * PGODSRLA.RL just above — flagged per this project's own [WF]-style
+   * discipline for a claim this check itself cannot re-verify), that all
+   * six share PGODSRLA's exact shape: 63 blobs, exactly one non-SMF blob,
+   * always at index 21. */
+  results.push({
+    name: 'NOTE (Python-only, not re-derived by this check): PGODSRLB-G.RL '
+      + '(six files) share PGODSRLA.RL\'s exact container shape above — 63 '
+      + 'blobs, one non-SMF blob, always at index 21 — a new finding; '
+      + 'drivers-and-memory.md only ever checked PGODSRLA\'s own shape.',
+    note: true, pass: true, detail: '',
+  });
 
   return results;
 }

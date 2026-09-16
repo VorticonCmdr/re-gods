@@ -46,11 +46,17 @@
       <span>event <b id="event">–</b></span>
       <span>weapon <select id="weapon"></select></span>
       <span>shots <b id="shots">0</b></span>
+      <span>music <select id="musicTrack"></select> <button id="musicStop" type="button">stop</button></span>
       <span><label><input type="checkbox" id="showUnk" checked> mark unexplained tiles</label></span>
       <span class="d">← → move · ↑ jump/climb · ↓ climb down · space fire</span>
       <span class="d">the hero really starts unarmed (CS:0x914c) — the weapon
         picker is a dev affordance until pickups are wired; idle+fire is object
         pickup in the original, so firing needs a direction held</span>
+      <span class="d">the music picker is the SAME kind of dev affordance —
+        GAME.EXE only ever opens PGODS.MUS (73 tracks, 70 real), but which
+        track plays at which moment is unproven (UNKNOWN_pgods_mus_cue_
+        dispatch), so this plays any of the 70 on demand rather than
+        asserting a level/event mapping this session found no evidence for</span>
     </div>
   </div>
   <aside>

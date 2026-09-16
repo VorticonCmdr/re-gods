@@ -64,6 +64,18 @@ const WANTED = [
   // DOSBox capture of the real title screen, not merely inferred from its
   // palette — see title-menu.js's own header.
   'PBACKSCR.PI1',
+  // #11 audio, music half. GAME.EXE's own only music-related string literals
+  // are `pgods.mus`/`gods.mus` (Table 2/Table 1) — a raw byte scan of both
+  // GAME.EXE and TGAME.EXE found no reference at all to any of the other
+  // ten shipped .MUS/.RL files, which belong to the pre-game INTRO
+  // executables instead (game/audio's own header has the full citation).
+  'PGODS.MUS',
+  // Not loaded by GAME.EXE (see PGODS.MUS's own comment above) — staged only
+  // so checkMusic() can re-derive its container shape itself instead of
+  // resting on an un-re-run Python census. PGODSRLB-G share the same shape
+  // (checked once this session, not restaged here — see checkMusic()'s own
+  // note for exactly what that claim rests on).
+  'PGODSRLA.RL',
 ];
 
 if (!existsSync(SRC)) {
