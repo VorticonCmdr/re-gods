@@ -215,18 +215,21 @@ export function stepSpikes(objects, clock, hero, health, opts = {}) {
  * Y — and it reproduces the reference screenshot at every phase checked
  * live, not just the one this project first tested.
  *
- * `CS:0x1B9F MOV word SS:[SI+0x2],DX` (DX = pingpong) and `CS:0x1BE4 ADD
- * word SS:[SI+0x4],0x20` (`CS:0x1C0B` undoes it after) write the pingpong
- * and a 16-row (32-byte, 16px-wide) source-pointer advance into the SAME
- * 8-byte per-type record (`SI = 0x1e00 + type*8`, `CS:0x1B7E-0x1B81`) that
- * `CS:0x1C15 MOV byte SS:[SI+0x2],0x10` resets to a fixed 16 before the
- * overlay call — `[STATIC]`, consistent with this geometry (a per-call
- * height override plus a fixed 16-row source skip) but NOT independently
- * confirmed to be the same record export 2 reads its own descriptor from
- * (its `SI` is computed from the SPRITE id, not the object TYPE, and this
- * pass could not establish live whether the two coincide) — the geometry
- * itself is `[PROVEN]` by the screenshot match at multiple pingpong phases,
- * the wiring to this specific code is `[STATIC]`.
+ * `UNKNOWN_spike_base_crop_mechanism` is now CLOSED `[PROVEN]` — this isn't
+ * just a matching empirical model, it's the literal arithmetic `GAME.EXE`
+ * executes. `CS:0x1B9F MOV word SS:[SI+0x2],DX` (DX = pingpong) and
+ * `CS:0x1BE4 ADD word SS:[SI+0x4],0x20` (`CS:0x1C0B` undoes it after) write
+ * the pingpong and a 16-row (32-byte, 16px-wide) source-pointer advance into
+ * a per-sprite descriptor (`SI = 0x1e00 + spriteId*8`, `CS:0x1B7E-0x1B81`) —
+ * confirmed the SAME descriptor `VGA.EXE`'s own export-2 draw independently
+ * re-derives (`VGA.EXE:0x1BDB-0x1BE8`, identical `word[0xe] + spriteId*8`
+ * formula, same `spriteId`), whose fields are `{+2: rows-1, +4: source
+ * offset, +6: source segment}` — `AX = word[SI+2]; INC AX` is exactly this
+ * port's `rows: pingpong + 1`. See `Gods/docs/destructible-and-hazards.md`
+ * for the full trace, including why an earlier pass couldn't close this
+ * (it assumed, instead of reading, what a 13-instruction helper did to a
+ * register) and one small disclosed residual (the original may draw 17
+ * rows, not this port's clean 16, on the frame-0 overlay-reuse tick).
  */
 export const BASE_SRC_ROW_OFFSET = 16;
 
