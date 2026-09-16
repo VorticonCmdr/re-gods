@@ -77,14 +77,17 @@ This joins cleanly to what this document already recorded: `0xAB45 mov bx,[0x1ea
 ```
 9364  ax = [0x198] - [0x1ba] ; jg 0x9399         ; unrelated to this mechanism (an
 9399  ax >>= 3 (sar ×3) ; [0x1ea] += ax ; jmp 936d ; event-gated damage bonus, not traced further here)
-936D  cmp byte [0x34],0 / jz 0x937c              ; sfx gate, unrelated
-9374  ...play sfx 0xf22 (mode-1 death sfx)...
+936D  cmp byte [0x34],0 / jz 0x937c              ; sfx gate — NOT "unrelated", see below
+9374  ...play sfx 0xf22 (id 0x22, the same "kill" sound `docs/drivers-and-memory.md`'s
+      "Sound: a 13-slot interface" section documents at CS:0xABA0/0xABC8)...
 937C  cmp byte ptr [di+0x49],0x0                 ; <-- DI is STILL the weapon record from 0x934B-935C
 9380  jz 0x9387                                  ;     (0xe2b6 + weapon*0x50), untouched since the damage read
 9382  mov word ptr [si+0x2],0x0                  ; <-- DESPAWN, but [si] here is NOT the grid pointer
 9387  sub ax,ax                                  ;     — see the SI derivation below
 9389  pop di / ret
 ```
+
+⚠️ **Corrected, a later session: this is not "unrelated," and — for one specific creature — it is NOT dead in normal play.** `CS:0x936D` is a THIRD emitter of the same `0x0f22` id the death branch (`CS:0xAB98`) and the hero-contact branch (`CS:0xABC0`) already play, gated on `DS:0x34` rather than those two branches' `DS:0x35e`. This block is fall-through: it runs after EVERY successful tag decode (`FUN_1000_9320` is called once per weapon hit, from `CS:0xAB41`, before the caller even checks whether the target survives), regardless of whether that hit kills. `DS:0x34` is 0 in normal play EXCEPT during the world-ending cutscene machine (where the entity-AI/damage-scan that could reach this is itself frozen, so it can't fire there either) and around exactly one other bracket: `CS:0x7FD4`, inside the world-3 `DS:0xce64` creature's own contact call (see `docs/consumables-and-treasure.md`'s `DS:0x34` section). That bracket wraps the SAME `a9e4` call this tag decode is reached from — so for that one creature specifically, `0x22` plays on **every weapon hit that damages it, lethal or not**, not only on a kill. This is a genuine, narrow exception to the "a non-lethal weapon hit is silent" finding elsewhere in this document — scoped to exactly the one creature type `DS:0x34` ever brackets. `gods-web` does not model this: `ce64.js`'s own `decodeTag(tag, 1)` mode flag carries no `DS:0x34` equivalent, so this port's ce64 creature is silent on a non-lethal hit like every other creature, not distinctively noisier. Disclosed, not fixed — reproducing it needs threading a `DS:0x34`-equivalent through the decode call, which nothing in this port does today.
 
 **`[si+0x2]` is the exact projectile record that scored the hit, not a copy and not the grid.** `SI` was set at `0x932A/0x9331/0x933A` to the SLOT BASE (`0xdd10`/`0xdda2`/`0xde34`) and then, at `0x9349 add si,ax` (the one instruction the project's earlier reading of this function stopped short of — it quoted `0x9347 bx=[si]` and `0x934B di=...` as adjacent, skipping the `ADD SI,AX` between them), advanced by `(tag-1)*8` — the same offset `0x933F-0x9345` computes. Since a slot's actual record array starts at `slot_base + 2` (the leading word is the slot's own weapon index, per this document's existing record layout), `SI = slot_base + (tag-1)*8 = record_address − 2`, so `[SI+2]` lands exactly on that record's own `+0` field — its TAG. `MOV word ptr [SI+2], 0` is therefore the identical despawn shape as `CS:0x9d91` (common-mover cull) and `CS:0xA85B` (terrain stop): it zeroes the live projectile's tag, freeing its slot immediately (the allocator's free test reads that same word).
 
