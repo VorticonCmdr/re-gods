@@ -129,9 +129,21 @@ export class Health {
    * raised to 1000 by summoning one — reachable in shipped play by buying
    * type 39 in the world 3/4 shop, not just an unreachable map pickup — see
    * the banking note below and Gods/docs/shop.md's UNKNOWN_shop_eligibility_
-   * gates (CLOSED). This port doesn't wire the summon effect yet, so this
-   * field never actually leaves -1 today. */
+   * gates (CLOSED). Wired via consumables.js's `applyFamiliar` (CS:0xC2F6),
+   * called from the shop's own buy dispatch when the purchased id is 39,
+   * 40, or 41. */
   familiarEnergy = -1;
+  /* DS:0x210, "the familiar's power" (combat-and-projectiles.md's own tag-
+   * decode source `0xFF`). Set to 4 on a fresh summon, +1 on every top-up,
+   * +2 extra from buying "power claws" (type 41) specifically. No damage-
+   * source dispatch in this port reads it yet — there is no familiar entity
+   * to deal that damage — so this is state without a consumer, same
+   * disclosed gap as the summon's own position/sprite/target-list fields. */
+  familiarPower = 0;
+  /* DS:0x304, bumped by "magic wings" (type 40). Same disclosed gap as
+   * familiarPower: tracked because CS:0xC2F6 proves it exists and the shop
+   * purchase can reach it, not because anything in this port consumes it. */
+  familiarWings = 0;
 
   potion(n) {
     if (this.bar < 0) return { taken: false, banked: 0 };   // CS:0x6306 `jns`

@@ -11,25 +11,32 @@
  *     lives at `SS:0x51aa`, not `DS:0x51aa` as first assumed (`[BP+disp]`
  *     addressing defaults to `SS` in real mode — that earlier "reads as
  *     zero" result was a segment error, not evidence of anything runtime-
- *     only). World 2 gets the live-captured 12-id set from the original
- *     session; worlds 3/4 get a 14-id set (the same 12 plus `37`/`39`) —
- *     deliberately NOT the full 18-id raw candidate list `SS:0x51aa`
- *     actually has for those worlds, because 4 of those ids (`2`,`3`,`40`,
- *     `41`) are gated by two eligibility checks — `UNKNOWN_shop_
- *     eligibility_gates` is now CLOSED (see shop.md): gate 1 (ids `2`/`3`,
- *     power potions) reads the hero's own weapon slots (`arsenal.slots`
- *     below — `DS:0xdd10`/`0xdda2`/`0xde34` in the original) and opens once
- *     he holds any weapon; gate 2 (ids `40`/`41`, familiar boosts) reads the
- *     familiar's energy (`health.familiarEnergy` — `DS:0x168`) and opens
- *     once a familiar is alive, reachable in worlds 3/4 by buying id `39`
- *     (the familiar itself) in this same shop. Both gates are genuinely
- *     reachable in ordinary play, not dead state — this port already
- *     tracks the exact fields each one needs, it just doesn't consult them
- *     here yet. The full 18 would also exceed this grid's 17-slot capacity
- *     (the original's own `0x25c` scroll path, not ported here). World 1
- *     also has a real entry in the table but is never wired in — the shop
+ *     only). The constructor's `roster` param is now the FULL raw per-world
+ *     candidate list (13 ids for world 2, 18 for worlds 3/4 — `main.js`'s
+ *     `SHOP_ROSTER_WORLD_2`/`_3_4`), not a pre-filtered fixed-length array:
+ *     `#rebuildVisible` reproduces `FUN_1000_7276`'s own filter/sort/
+ *     truncate pipeline (below) rather than the caller doing it. World 1
+ *     also has a real entry in `SS:0x51aa` but is never wired in — the shop
  *     is provably unreachable for world 1 (no password can target it).
- *   - Prices ARE ported for all 14 ids across worlds 2/3/4 —
+ *   - The two eligibility gates ARE reproduced — `UNKNOWN_shop_
+ *     eligibility_gates` is CLOSED (see shop.md): gate 1 (ids `2`/`3`, power
+ *     potions) reads the hero's own weapon slots (`state.arsenal.slots` —
+ *     `DS:0xdd10`/`0xdda2`/`0xde34` in the original) and opens once he
+ *     holds any weapon; gate 2 (ids `40`/`41`, familiar boosts) reads the
+ *     familiar's energy (`state.health.familiarEnergy` — `DS:0x168`) and
+ *     opens once a familiar is alive, reachable in worlds 3/4 by buying id
+ *     `39` (the familiar itself, `game/consumables.js`'s `applyFamiliar`) in
+ *     this same shop.
+ *   - The `0x25c` SCROLL path IS reproduced — `#rebuildVisible` sorts the
+ *     eligible survivors ascending by price (`FUN_1000_7276`'s own
+ *     selection sort) and, when there are more than `DATA_SLOTS` (17) of
+ *     them, keeps only the LAST 17 — the original's renderer advances its
+ *     base pointer into the sorted list by `count - 17` rather than
+ *     exposing any player-facing scroll control, so overflow silently drops
+ *     the CHEAPEST survivors, not the most recently added ones. This only
+ *     fires for world 3/4 with every gate open and a large purse (13 < 17
+ *     for world 2, so it never fires there).
+ *   - Prices ARE ported for all 18 raw ids across worlds 2/3/4 —
  *     `UNKNOWN_shop_prices` is CLOSED, see shop.md. A machine-parsed (base64
  *     dump, decoded by script — not hand-transcribed) live read of
  *     `DS:0x2a4e` found a clean, unbroken 132-record table (a per-record
@@ -41,7 +48,10 @@
  *     plausible-looking number). The table itself was confirmed GLOBAL
  *     rather than per-world/level-scoped by a direct re-read: the same
  *     2048-byte range read during an ordinary world-1 start and again with
- *     the world-2 shop open came back byte-for-byte identical.
+ *     the world-2 shop open came back byte-for-byte identical. `2`/`3`/`40`/
+ *     `41`'s own prices were read from the same table but never purchase-
+ *     confirmed individually (they were excluded from every live capture
+ *     this project made, by the very gates now reproduced above).
  *   - Sell (raw item id `>= SELL_ID_BASE`) is not ported at all —
  *     `UNKNOWN_shop_tradein_value`. `roster` here should only ever contain
  *     ids below `SELL_ID_BASE`; the EXIT slot is the only non-buy cell.
@@ -105,28 +115,24 @@ export const REFUSAL_MESSAGE_PRIORITY = 0x19;          // matches message-line.m
 /* `FUN_1000_7392`'s table, DS:0x2a4e + id*10, price word at +6/+7 (byte-
  * swapped) — live-read this session (base64 dump, script-decoded). The
  * original 12 (world 2) are purchase-confirmed (`DS:0x194` money delta on a
- * real buy exactly matched the decoded value); `37`/`39` (added for world
- * 3/4) are read from the same table with the same unbroken landmark but not
- * individually purchase-confirmed. Only ids this port's rosters actually
- * show are listed — see shop.md's `UNKNOWN_shop_prices` for the full
- * 132-record table this was drawn from, including the four ids (`2`,`3`,
- * `40`,`41`) this port knows the price of but doesn't show, per
- * `UNKNOWN_shop_roster_source`. */
+ * real buy exactly matched the decoded value); the rest are read from the
+ * same table with the same unbroken landmark but not individually purchase-
+ * confirmed. All 18 raw ids either world's `SS:0x51aa` list can name are
+ * listed — see shop.md's `UNKNOWN_shop_prices` for the full 132-record
+ * table this was drawn from. */
 export const PRICES = {
-  0: 4000, 35: 8000, 36: 10000, 37: 20000, 38: 5000, 39: 30000, 42: 20000,
-  44: 4000, 51: 1000, 52: 1000, 53: 1000, 70: 650, 71: 1300, 72: 1000,
+  0: 4000, 2: 6000, 3: 12000, 35: 8000, 36: 10000, 37: 20000, 38: 5000,
+  39: 30000, 40: 5000, 41: 10000, 42: 20000, 44: 4000, 51: 1000, 52: 1000,
+  53: 1000, 70: 650, 71: 1300, 72: 1000,
 };
 
 export class ShopScreen {
   /**
-   * @param {(number|null)[]} roster up to DATA_SLOTS raw item ids (<SELL_ID_BASE),
-   *   already the caller's own sorted choice — short rosters are padded with
-   *   `null` (empty slots). This class DOES prune by affordability and
-   *   per-visit category lockout (see `#pruneRoster`), but not yet by the
-   *   two eligibility gates — `UNKNOWN_shop_eligibility_gates` is CLOSED
-   *   (Gods/docs/shop.md): they read `state.arsenal.slots` (any weapon
-   *   held) and `state.health.familiarEnergy` (a familiar alive), both
-   *   already passed in here as `state`
+   * @param {number[]} roster the FULL raw per-world candidate list (`SS:
+   *   0x51aa`'s own ids, any order — `#rebuildVisible` filters/sorts/
+   *   truncates it exactly as `FUN_1000_7276` does), not a pre-filtered
+   *   fixed-length array. May be longer than `DATA_SLOTS`; overflow and
+   *   ineligible ids are computed here, not by the caller.
    * @param {number[]} inventory the 4-slot weapon/item array, `INVENTORY_EMPTY`
    *   marks an empty slot (mirrors `DS:0x17e/0x180/0x182/0x184`'s own `-1`
    *   sentinel — this port already represents that as the unsigned
@@ -136,7 +142,10 @@ export class ShopScreen {
    * @param {number} selectedSlot `DS:0x366`, the slot the fill scan skips
    * @param {object} state passed straight through to `applyConsumable` as its
    *   own `state` argument for an auto-use purchase (the same shape
-   *   `game/pickup.js` already builds for an in-level pickup)
+   *   `game/pickup.js` already builds for an in-level pickup). Also read
+   *   directly by `#isEligible` for the two eligibility gates:
+   *   `state.arsenal.slots` (ids `2`/`3`) and `state.health.familiarEnergy`
+   *   (ids `40`/`41`) — `UNKNOWN_shop_eligibility_gates`, CLOSED.
    * @param {{total:number, add:(v:number)=>any}} [purse] the game's money —
    *   `game/treasure.js`'s `Purse` already has exactly this shape. Omit it
    *   (as a synthetic test might) to skip pricing entirely: every item is
@@ -148,7 +157,8 @@ export class ShopScreen {
    * @param {()=>void} [onDone] called once, when the EXIT cell is confirmed
    */
   constructor({ roster, inventory, selectedSlot = -1, state = {}, purse = null, onRefused, onDone }) {
-    this.roster = Array.from({ length: DATA_SLOTS }, (_, i) => roster?.[i] ?? null);
+    this.candidates = roster ? roster.slice() : [];   // the FULL raw list, SS:0x51aa
+    this.roster = new Array(DATA_SLOTS).fill(null);   // the visible grid — #rebuildVisible fills this
     this.inventory = inventory;
     this.selectedSlot = selectedSlot;
     this.state = state;
@@ -164,7 +174,7 @@ export class ShopScreen {
     this.firePrev = false;
     this.dirPrev = { up: false, down: false, left: false, right: false };
 
-    this.#pruneRoster();         // an unaffordable starting item is never shown, CS:0x72c9
+    this.#rebuildVisible();      // an unaffordable/ineligible starting item is never shown, CS:0x72c9
   }
 
   /** The item id under the cursor, or `null` on an empty cell / EXIT. */
@@ -237,7 +247,7 @@ export class ShopScreen {
       this.purchasedCategories.add(rank);
       if (this.purse) this.purse.add(-cost);         // CS:0x6ef7 — deduct on confirm
       const result = safeApplyConsumable(CONSUMABLES[rank], this.state);
-      this.#pruneRoster();
+      this.#rebuildVisible();
       return this.lastPurchase = { id, rank, cost, effect: CONSUMABLES[rank].effect, result };
     }
     /* A weapon-type id (no CONSUMABLES rank) — DS:0x5060[category]==0 in the
@@ -251,33 +261,57 @@ export class ShopScreen {
     }
     if (this.purse) this.purse.add(-cost);
     this.inventory[slot] = id;
-    this.#pruneRoster();
+    this.#rebuildVisible();
     return this.lastPurchase = { id, slot, cost };
   }
 
-  /* Not eligible once its category is locked out for this visit (`DS:0x319`)
-   * or its price now exceeds the purse (`FUN_1000_7392` via `CS:0x72c9`).
-   * The full original rebuild also re-applies two eligibility gates —
-   * `UNKNOWN_shop_eligibility_gates` is CLOSED (Gods/docs/shop.md): weapon-
-   * slot occupancy for ids 2/3, familiar energy for ids 40/41 — not
-   * reproduced here yet (this class's `roster` never contains those four
-   * ids today), disclosed rather than guessed at. */
+  /* Not eligible once its category is locked out for this visit (`DS:0x319`),
+   * its price now exceeds the purse (`FUN_1000_7392` via `CS:0x72c9`), or —
+   * `UNKNOWN_shop_eligibility_gates`, CLOSED (Gods/docs/shop.md) — one of the
+   * two gates the original's own roster rebuild re-applies every time:
+   * `FUN_1000_731b` (ids 2/3, gated on the hero's weapon slots) and
+   * `FUN_1000_7336` (ids 40/41, gated on the familiar's energy). */
   #isEligible(id) {
     if (id == null) return false;
     const rank = CONSUMABLES.findIndex((c) => c.type === id);
     if (this.purchasedCategories.has(rank >= 0 ? rank : id)) return false;
     const cost = PRICES[id];
     if (cost != null && this.purse && this.purse.total < cost) return false;
+    if ((id === 2 || id === 3) && !this.#hasArmedWeapon()) return false;   // FUN_1000_731b
+    if ((id === 40 || id === 41) && !this.#hasFamiliar()) return false;   // FUN_1000_7336
     return true;
   }
 
-  /* CS:0x7233/0x7276 rebuild the visible grid after every purchase — a
-   * bought-out category or a now-unaffordable item drops out rather than
-   * staying selectable. */
-  #pruneRoster() {
-    for (let i = 0; i < DATA_SLOTS; i++) {
-      if (this.roster[i] != null && !this.#isEligible(this.roster[i])) this.roster[i] = null;
-    }
+  /** DS:0xdd10 & 0xdda2 & 0xde34 != -1 — at least one of the hero's three
+   *  weapon slots holds a real weapon index rather than the empty sentinel. */
+  #hasArmedWeapon() {
+    return !!this.state.arsenal?.slots?.some((s) => s.weapon >= 0);
+  }
+
+  /** DS:0x168 != -1 — a familiar is currently alive. */
+  #hasFamiliar() {
+    return (this.state.health?.familiarEnergy ?? -1) >= 0;
+  }
+
+  /* CS:0x7233/0x7276's own full rebuild: filter the FULL raw candidate list
+   * by #isEligible, sort survivors ascending by price (the original's own
+   * selection sort on FUN_1000_7392's value — this port uses a stable JS
+   * sort instead; tie order among same-priced ids was never established as
+   * significant), and if there are more than DATA_SLOTS (17), keep only the
+   * LAST 17 — FUN_1000_707d's own `DS:0x25c = count - 17` scroll, which
+   * advances the render base pointer FORWARD into the ascending list rather
+   * than exposing any player-facing scroll control, so overflow silently
+   * drops the CHEAPEST survivors. Called at construction and after every
+   * purchase, since a bought-out category, a now-unaffordable item, or a
+   * newly-opened gate (buying the familiar reveals 40/41 on the very same
+   * rebuild) can each change the eligible set. */
+  #rebuildVisible() {
+    const eligible = this.candidates.filter((id) => this.#isEligible(id));
+    eligible.sort((a, b) => (PRICES[a] ?? 0) - (PRICES[b] ?? 0));
+    const visible = eligible.length > DATA_SLOTS
+      ? eligible.slice(eligible.length - DATA_SLOTS)
+      : eligible;
+    for (let i = 0; i < DATA_SLOTS; i++) this.roster[i] = visible[i] ?? null;
   }
 
   /** Text-only rendering — no shop-icon sprite sheet was RE'd this session,

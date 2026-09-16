@@ -105,8 +105,9 @@ import { CONSUMABLES, WIRED, WEAPON_ARCS, NOT_WIRED_REASON, applyConsumable,
          INVULN_TICKS_POTION, INVULN_TICKS_SPAWN, INVULN_SPAWN_DEDUCTION,
          FREEZE_TICKS, GIANT_JUMP_TICKS, POWER_POTION_STEPS, MSG_CLEAR_394, MSG_NONE,
          SHIELD_NOOP_DS, SHIELD_NOOP_SITES, UNIMPLEMENTED_TYPE,
-         FAMILIAR_ENERGY_DS, FAMILIAR_CLEAR_SITES,
-         banksOverheal } from '../game/consumables.js';
+         FAMILIAR_ENERGY_DS, FAMILIAR_CLEAR_SITES, FAMILIAR_START_ENERGY,
+         FAMILIAR_TOPUP_ENERGY, FAMILIAR_FRESH_POWER, FAMILIAR_FRESH_WINGS,
+         applyFamiliar, banksOverheal } from '../game/consumables.js';
 
 import { stepHeroFrame, stepCreatureDamage, FRAME_ORDER,
          HUNTER_WEAPON } from '../game/frame.js';
@@ -14065,15 +14066,17 @@ export function checkShop() {
   {
     let healed = 0;
     const entry = CONSUMABLES.find((c) => c.effect === 'health');
-    const roster = new Array(DATA_SLOTS).fill(null);
-    roster[3] = entry.type;
+    /* A single candidate — #rebuildVisible compacts survivors to the front,
+     * so it always lands at roster[0] regardless of its position in the
+     * raw candidate list passed in here. */
+    const roster = [entry.type];
     const s = new ShopScreen({
       roster, inventory: [INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY],
       state: { health: { potion: (n) => { healed = n; return { taken: true }; } } },
     });
     const fire = { up: false, down: false, left: false, right: false, fire: true };
     const release = { up: false, down: false, left: false, right: false, fire: false };
-    s.cursor = 3;
+    s.cursor = 0;
     s.step(fire); s.step(release);
     s.step(fire); s.step(release);
     check('a real CONSUMABLES entry (health) dispatches through '
@@ -14129,18 +14132,17 @@ export function checkShop() {
       + 'live-read from DS:0x2a4e', PRICES[42] === 20000);
     check('id 37 costs exactly 20000 — added for the world 3/4 roster, '
       + 'live-read from the same DS:0x2a4e table', PRICES[37] === 20000);
-    check('id 39 costs exactly 30000 — added for the world 3/4 roster, '
-      + 'the highest of all 14 known prices', PRICES[39] === 30000);
-    check('PRICES has exactly 14 entries — the 12 world-2 ids plus 37/39 '
-      + 'for world 3/4, not the full 18-id raw candidate list',
-      Object.keys(PRICES).length === 14);
-    check('ids 2, 3, 40, 41 are deliberately NOT priced/shown — they are '
-      + 'real raw-list ids gated on the hero\'s weapon slots / familiar '
-      + 'energy (UNKNOWN_shop_eligibility_gates, CLOSED — Gods/docs/shop.md) '
-      + 'that this port tracks (arsenal.slots, health.familiarEnergy) but '
-      + 'does not yet consult here',
-      PRICES[2] === undefined && PRICES[3] === undefined
-      && PRICES[40] === undefined && PRICES[41] === undefined);
+    check('id 39 costs exactly 30000 — the highest of all 18 known prices, '
+      + 'and itself the ONLY shipped path to open gate 2', PRICES[39] === 30000);
+    check('id 2 costs 6000 and id 3 costs 12000 — the gate-1 power potions, '
+      + 'read from the same DS:0x2a4e table but never purchase-confirmed '
+      + 'individually since every live capture excluded them',
+      PRICES[2] === 6000 && PRICES[3] === 12000);
+    check('id 40 costs 5000 and id 41 costs 10000 — the gate-2 familiar '
+      + 'boosts, same caveat as 2/3', PRICES[40] === 5000 && PRICES[41] === 10000);
+    check('PRICES has exactly 18 entries — every raw id either world\'s '
+      + 'SS:0x51aa list can name, gated ones included',
+      Object.keys(PRICES).length === 18);
 
     const makePurse = (total) => ({ total, add(v) { this.total += v; } });
     const fire = { up: false, down: false, left: false, right: false, fire: true };
@@ -14187,6 +14189,126 @@ export function checkShop() {
       + 'as auto-use, not give-to-inventory', s4.lastPurchase.rank !== undefined);
     check('id 37 deducts exactly its own price (20000)',
       w34Purse.total === 80000 - 20000);
+  }
+
+  /* ── UNKNOWN_shop_eligibility_gates — CLOSED, now WIRED into ShopScreen
+   * itself (was previously only described in comments). Gate 1 reads
+   * state.arsenal.slots (FUN_1000_731b, DS:0xdd10/0xdda2/0xde34); gate 2
+   * reads state.health.familiarEnergy (FUN_1000_7336, DS:0x168). Both live
+   * in #isEligible, re-applied by #rebuildVisible on every construction and
+   * purchase — Gods/docs/shop.md. ─────────────────────────────────────── */
+  {
+    const fire = { up: false, down: false, left: false, right: false, fire: true };
+    const release = { up: false, down: false, left: false, right: false, fire: false };
+    const makePurse = () => ({ total: 1_000_000, add(v) { this.total += v; } });
+    const inv = () => [INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY];
+
+    const unarmed = { arsenal: { slots: [{ weapon: -1 }, { weapon: -1 }, { weapon: -1 }] } };
+    const armed = { arsenal: { slots: [{ weapon: -1 }, { weapon: 0 }, { weapon: -1 }] } };
+    const gate1Roster = [2, 3, 0];   // 0 (health) rides along, ungated, as a control
+
+    const sUnarmed = new ShopScreen({ roster: gate1Roster, inventory: inv(), purse: makePurse(), state: unarmed });
+    check('gate 1 (FUN_1000_731b): ids 2/3 are hidden while every one of the '
+      + 'three weapon slots reads the empty sentinel',
+      !sUnarmed.roster.includes(2) && !sUnarmed.roster.includes(3) && sUnarmed.roster.includes(0));
+
+    const sArmed = new ShopScreen({ roster: gate1Roster, inventory: inv(), purse: makePurse(), state: armed });
+    check('gate 1 opens the instant ANY of the three slots holds a real '
+      + 'weapon index (here slot B = 0, the knife) — the DX register the '
+      + 'original computes is an AND across all three, so one occupied '
+      + 'slot is enough', sArmed.roster.includes(2) && sArmed.roster.includes(3));
+
+    const noFamiliar = { health: new Health() };
+    const withFamiliar = { health: Object.assign(new Health(), { familiarEnergy: 1000 }) };
+    const gate2Roster = [40, 41, 0];
+
+    const sNoFam = new ShopScreen({ roster: gate2Roster, inventory: inv(), purse: makePurse(), state: noFamiliar });
+    check('gate 2 (FUN_1000_7336): ids 40/41 are hidden while DS:0x168 '
+      + '(familiarEnergy) is -1, the default this port\'s own Health class '
+      + 'now ships (game/combat.js)',
+      !sNoFam.roster.includes(40) && !sNoFam.roster.includes(41) && sNoFam.roster.includes(0));
+
+    const sFam = new ShopScreen({ roster: gate2Roster, inventory: inv(), purse: makePurse(), state: withFamiliar });
+    check('gate 2 opens once a familiar is alive (familiarEnergy >= 0)',
+      sFam.roster.includes(40) && sFam.roster.includes(41));
+
+    /* The two-stage unlock, end to end, in ONE shop visit: buying id 39
+     * runs applyFamiliar via the ordinary auto-use dispatch, and the SAME
+     * purchase's own #rebuildVisible call reveals 40/41 immediately. */
+    const unlockState = { health: new Health() };
+    const s39 = new ShopScreen({
+      roster: [39, 40, 41], inventory: inv(), purse: makePurse(), state: unlockState,
+    });
+    check('before buying the familiar, ids 40/41 sit in the raw candidate '
+      + 'list but are not yet shown',
+      !s39.roster.includes(40) && !s39.roster.includes(41) && s39.roster.includes(39));
+    s39.cursor = s39.roster.indexOf(39);
+    s39.step(fire); s39.step(release);
+    s39.step(fire); s39.step(release);
+    check('buying id 39 sets familiarEnergy to 1000 via applyFamiliar '
+      + '(CS:0xC308, the fresh-summon branch)',
+      unlockState.health.familiarEnergy === FAMILIAR_START_ENERGY);
+    check('the SAME visit\'s own post-purchase roster rebuild immediately '
+      + 'reveals 40/41 — the two-stage unlock this project\'s own '
+      + 'UNKNOWN_shop_eligibility_gates closure predicted, exercised live',
+      s39.roster.includes(40) && s39.roster.includes(41));
+
+    /* The DS:0x25c scroll — world 3/4's full 18-id raw list, both gates
+     * open, unlimited money: every id is eligible, but the grid holds only
+     * DATA_SLOTS (17). FUN_1000_707d advances its render base pointer
+     * FORWARD into the ascending-by-price sorted list, so the survivor
+     * dropped is the single CHEAPEST one, not the 18th one added. */
+    const allOpen = {
+      arsenal: { slots: [{ weapon: 0 }, { weapon: -1 }, { weapon: -1 }] },
+      health: Object.assign(new Health(), { familiarEnergy: 1000 }),
+    };
+    const w34Full = [0, 2, 3, 35, 36, 37, 38, 39, 40, 41, 42, 44, 51, 52, 53, 70, 71, 72];
+    const sFull = new ShopScreen({ roster: w34Full, inventory: inv(), purse: makePurse(), state: allOpen });
+    const shown = sFull.roster.filter((id) => id != null);
+    check('with both gates open and a full purse, all 18 raw ids are '
+      + 'eligible but only DATA_SLOTS (17) fit the grid',
+      shown.length === DATA_SLOTS);
+    check('the ONE dropped survivor is id 70 — the single cheapest of the '
+      + '18 (650, independently purchase-confirmed above), not merely the '
+      + 'last one added to the raw list, confirming the scroll drops from '
+      + 'the CHEAP end',
+      !shown.includes(70) && w34Full.every((id) => id === 70 || shown.includes(id)));
+
+    /* World 2's raw list (13 ids) never exceeds 17, so the scroll never
+     * fires there even with both gates nominally open. */
+    const w2Full = [0, 2, 35, 36, 38, 42, 44, 51, 52, 53, 70, 71, 72];
+    const sW2Full = new ShopScreen({ roster: w2Full, inventory: inv(), purse: makePurse(), state: allOpen });
+    check('world 2\'s 13-id raw list is well under the 17-slot cap, so the '
+      + 'scroll truncation never fires there',
+      sW2Full.roster.filter((id) => id != null).length === w2Full.length);
+  }
+
+  /* ── applyFamiliar's order-dependent quirk, CS:0xC2F6 vs the type-
+   * specific bump each of 40/41 runs FIRST ──────────────────────────── */
+  {
+    const h1 = new Health();
+    applyFamiliar(40, h1);
+    check('buying "magic wings" (40) with NO familiar alive just summons a '
+      + 'plain one — the fresh-summon branch unconditionally resets '
+      + '[0x304] AFTER type 40\'s own `inc [0x304]` already ran',
+      h1.familiarEnergy === FAMILIAR_START_ENERGY
+      && h1.familiarWings === FAMILIAR_FRESH_WINGS
+      && h1.familiarPower === FAMILIAR_FRESH_POWER);
+
+    const h2 = new Health();
+    h2.familiarEnergy = 500; h2.familiarPower = 4; h2.familiarWings = 0;
+    applyFamiliar(40, h2);
+    check('buying "magic wings" (40) with a familiar ALREADY alive keeps '
+      + 'the wings bump — the already-alive branch never touches [0x304]',
+      h2.familiarWings === 1 && h2.familiarEnergy === 500 + FAMILIAR_TOPUP_ENERGY
+      && h2.familiarPower === 4 + 1);
+
+    const h3 = new Health();
+    h3.familiarEnergy = 500; h3.familiarPower = 4;
+    applyFamiliar(41, h3);
+    check('buying "power claws" (41) with a familiar already alive adds '
+      + 'its own +2 PLUS the shared branch\'s +1 — three total, not one',
+      h3.familiarPower === 4 + 3);
   }
 
   /* ── EXIT, CS:0x6e74-0x6e7e ────────────────────────────────────────── */

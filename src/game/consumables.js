@@ -99,6 +99,7 @@ export const CONSUMABLES = Object.freeze([
 export const WIRED = Object.freeze([
   'health', 'weaponPower', 'invulnerable', 'extraLife', 'freeze', 'giantJump',
   'weaponArc', 'shop', 'noop34c', 'starburst',
+  'familiar', 'familiarWings', 'familiarClaws',
 ]);
 
 /* ── The three "weapon arc" potions, CS:0x95B5 / 0x62A1 / 0x62AB ──────────
@@ -245,18 +246,32 @@ export const UNIMPLEMENTED_TYPE = 43;
  * array at DS:0x8cfa from a template at DS:0xdd00, at (heroX+8, heroY+0x20),
  * gated on DS:0x34d and `[0x1d6] < 0xbe`. A whole particle subsystem; five
  * ship, but wiring it means porting that subsystem.
+ */
+
+/* ── The familiar, CS:0xC2F6 (types 39/40/41) — WIRED (state only) ────────
  *
- * THE FAMILIAR (types 39/40/41, CS:0xC2F6) — NONE OF THE THREE IS EVER
- * PLACED, so this is the iron-chest call with more surface area:
  *     C2F6  cmp word [0x168],0 / jns  ; already have one -> +1000 energy,
  *     C2FD    add word [0x168],0x3e8  ;    and +1 power
  *     C303    inc word [0x210]
  *     C308  else SUMMON: position = hero - 160 in Y, sprite [0x30c] = 0x185,
  *           [0x168] = 1000, [0x210] = 4, [0x304] = 0, [0x343] = 0
- * with `magic wings` doing `inc [0x304]` first and `power claws` `[0x210] +=
- * 2`. CS:0xC440 dismisses it (`[0x168] = -1`, `[0x33d] = 0xff`, sprite -1) and
- * is called from CS:0x047D and CS:0x8DDF — the two FULL RESTARTS — and from
- * CS:0xAB53, right after the familiar takes damage at CS:0xAB4D.
+ * with `magic wings` (type 40) doing `inc [0x304]` FIRST, and `power claws`
+ * (type 41) doing `[0x210] += 2` FIRST, before falling into this same shared
+ * dispatch. CS:0xC440 dismisses it (`[0x168] = -1`, `[0x33d] = 0xff`, sprite
+ * -1) and is called from CS:0x047D and CS:0x8DDF — the two FULL RESTARTS —
+ * and from CS:0xAB53, right after the familiar takes damage at CS:0xAB4D.
+ *
+ * ⚠️ None of the three is ever PLACED on a map (the census below still shows
+ * that), but type 39 is purchasable in world 3/4's own shop
+ * (Gods/docs/shop.md's UNKNOWN_shop_eligibility_gates, CLOSED) — a real,
+ * reachable path, not the iron-chest's kind of dead placement. `applyFamiliar`
+ * below wires the energy/power/wings STATE exactly as the disassembly reads
+ * it (including the surprising order-dependent quirk: buying wings/claws
+ * with no familiar yet just summons a plain one, since the fresh-summon
+ * branch unconditionally overwrites [0x304]/[0x210] right after the type-
+ * specific bump). What's still NOT modeled, because this port has no
+ * familiar ENTITY at all: the summon's own position/sprite, and [0x343]'s
+ * hunter/familiar target-list gate.
  *
  * TELEPORT STONE (type 54, CS:0x6217) is decoded and PROVEN, just not
  * actionable in a port with no level transitions. It sets three variables:
@@ -277,17 +292,13 @@ export const UNIMPLEMENTED_TYPE = 43;
  * hint keys. Nothing new here.
  */
 export const NOT_WIRED_REASON = Object.freeze({
-  /* ⚠️ CORRECTED: these three are placed as MAP pickups zero times, but that
-   * is not the same as unreachable. Type 39 is itself purchasable in the
-   * shop's own world-3/4 roster (Gods/docs/shop.md, UNKNOWN_shop_
-   * eligibility_gates — CLOSED) — buying it is the shipped, designed path
-   * to a live familiar, which in turn is what gate 2 checks to allow
-   * 40/41's own purchase. None of the three has an applyConsumable effect
-   * wired here yet (this port has no familiar entity at all), which is the
-   * real reason they're unimplemented — not that they're unreachable. */
-  familiar:      'no familiar entity in this port; reachable via a world 3/4 shop purchase',
-  familiarWings: 'no familiar entity in this port; reachable via a world 3/4 shop purchase',
-  familiarClaws: 'no familiar entity in this port; reachable via a world 3/4 shop purchase',
+  /* familiar/familiarWings/familiarClaws moved to WIRED — see the familiar
+   * section above. They're placed as MAP pickups zero times, but type 39 is
+   * purchasable in world 3/4's own shop (Gods/docs/shop.md's UNKNOWN_shop_
+   * eligibility_gates, CLOSED), a real reachable path. The energy/power/
+   * wings state is wired exactly as CS:0xC2F6 reads it; only the summon's
+   * position/sprite and the target-list gate remain unmodeled, since this
+   * port has no familiar entity to draw or target with. */
   teleport:      'decoded and proven; needs level transitions the port lacks',
   /* ⚠️ THIS ENTRY USED TO READ "already ported as the PALFILS hint system",
    * and that was FALSE — the hint TABLE had been decoded (docs/asset-formats
@@ -322,14 +333,48 @@ export const NOT_WIRED_REASON = Object.freeze({
  * of this note said "which no map places" and stopped there, missing that
  * `39` is itself purchasable in world 3/4's own shop (Gods/docs/shop.md's
  * UNKNOWN_shop_eligibility_gates, CLOSED). So the banking is real code that
- * a player who buys the familiar there CAN reach — it just needs the
- * familiar-summon effect to actually be wired (see NOT_WIRED_REASON above)
- * before this port's own over-heal path can exercise it.
+ * a player who buys the familiar there CAN reach — `applyFamiliar` below
+ * now wires that purchase, so this port's own over-heal path can exercise
+ * it too.
  */
 export const FAMILIAR_ENERGY_DS = 0x168;
 export const FAMILIAR_START_ENERGY = 0x3e8;       // CS:0xC347
+export const FAMILIAR_FRESH_POWER = 4;            // CS:0xC308 `[0x210] = 4`
+export const FAMILIAR_FRESH_WINGS = 0;            // CS:0xC308 `[0x304] = 0`
+export const FAMILIAR_TOPUP_ENERGY = 0x3e8;       // CS:0xC2FD `add [0x168],0x3e8`
 export const FAMILIAR_DEAD = -1;                  // CS:0xC470
 export const FAMILIAR_CLEAR_SITES = Object.freeze([0x047d, 0x8ddf]);
+
+/**
+ * CS:0xC2F6 — buying (or, in principle, picking up) type 39/40/41. Mutates
+ * `health` (a `combat.js` `Health` instance, or anything shaped like one) in
+ * place and returns a snapshot for the caller.
+ *
+ * ⚠️ ORDER MATTERS. Types 40/41 bump their own field FIRST, then the shared
+ * C2F6 dispatch runs — and the FRESH-SUMMON branch unconditionally resets
+ * both fields regardless of what the type-specific bump just did. So buying
+ * "magic wings" or "power claws" with NO familiar alive yet just summons a
+ * plain one (the bump is overwritten); buying either while a familiar is
+ * ALREADY alive keeps the bump, since that branch never touches [0x304] and
+ * only adds +1 (not the type-specific amount) to [0x210].
+ */
+export function applyFamiliar(type, health) {
+  if (type === 40) health.familiarWings += 1;                // CS:0x61D6 `inc [0x304]`
+  if (type === 41) health.familiarPower += 2;                 // CS:0x61DF `[0x210] += 2`
+  if (health.familiarEnergy >= 0) {                           // CS:0xC2F6 `jns` — already alive
+    health.familiarEnergy += FAMILIAR_TOPUP_ENERGY;           // CS:0xC2FD
+    health.familiarPower += 1;                                 // CS:0xC303 `inc [0x210]`
+  } else {                                                     // CS:0xC308 — fresh summon
+    health.familiarEnergy = FAMILIAR_START_ENERGY;
+    health.familiarPower = FAMILIAR_FRESH_POWER;
+    health.familiarWings = FAMILIAR_FRESH_WINGS;
+    /* NOT modeled: summon position/sprite ([0x30c]=0x185, y = heroY-160) and
+     * [0x343]:=0 (the hunter/familiar target-list gate) — this port has no
+     * familiar entity to place, draw, or build a target list for. */
+  }
+  return { energy: health.familiarEnergy, power: health.familiarPower,
+           wings: health.familiarWings };
+}
 
 /** True when over-healing is banked rather than discarded — CS:0x6384 `jns`.
  *  False in this port today because summoning a familiar (buying type 39 in
@@ -379,6 +424,10 @@ export function applyConsumable(entry, state) {
     case 'noop34c':                                  // CS:0x62BF — writes only
       state.shieldFlagWritten = true;
       return { noop: true };
+    case 'familiar':                                 // CS:0xC2F6, types 39/40/41
+    case 'familiarWings':
+    case 'familiarClaws':
+      return state.health ? applyFamiliar(entry.type, state.health) : null;
     default:
       return null;                                   // decoded, not wired
   }

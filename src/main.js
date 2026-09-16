@@ -932,13 +932,36 @@ async function main() {
       patGroups = new PatGroups(level.patDirectory || []);
       patGroups.blobBytes = level.patBlobBytes || null;
       debris = new Debris();
+      /* ⚠️ FIXED — same bug as arsenal below, same root cause. A level
+       * change resets health/bar to full (CS:0x084B/0x0851 — correct, an
+       * ordinary level load DOES restore health), but the familiar's own
+       * state (DS:0x168/0x210/0x304) is cleared only by CS:0x047D/0x8DDF
+       * (full restarts) and CS:0xAB53 (the familiar's own death) — never by
+       * an ordinary level load. `new Health()` below wiped it every time
+       * regardless, which would silently re-close the shop's gate 2 the
+       * moment the player left and re-entered any shop, even without the
+       * familiar ever dying. Carried across explicitly instead. */
+      const carriedFamiliar = { energy: health.familiarEnergy,
+        power: health.familiarPower, wings: health.familiarWings };
       health = new Health();
-      /* A real level change is not a game restart, so CS:0x914c does NOT run
-       * and the weapon slots survive — only their counts are re-pinned
-       * (CS:0x35e9). The dev selector re-arms below, so equipping is
-       * re-applied rather than carried; `reloadWorld` is what keeps the
-       * per-world Power swap honest. */
-      arsenal = new Arsenal(level.weapons);
+      health.familiarEnergy = carriedFamiliar.energy;
+      health.familiarPower = carriedFamiliar.power;
+      health.familiarWings = carriedFamiliar.wings;
+      /* ⚠️ FIXED — this comment used to describe intent the code below it
+       * didn't implement. A real level change is not a game restart, so
+       * CS:0x914c does NOT run and the weapon slots should survive — but
+       * this line unconditionally built a brand-new (unarmed) Arsenal on
+       * EVERY level transition, silently disarming the hero every time,
+       * which is what made the shop's own gate 1 (UNKNOWN_shop_eligibility_
+       * gates, CLOSED — Gods/docs/shop.md) unreachable through its one real
+       * entry path: entering a world 3/4 shop via password always calls
+       * this function first. `reloadWorld` is the call that actually keeps
+       * armed slots armed while re-pinning their counts under the new
+       * world's PWEAPONS records (CS:0x35e9) and swapping in the per-world
+       * Power table; `fullRestart()` is the one place arsenal is actually
+       * rebuilt from scratch, mirroring CS:0x914c's own two callers being
+       * full restarts, never a level transition. */
+      arsenal.reloadWorld(level.weapons);
       events.actionCtx = buildActionCtx(level, inventory, arsenal);
       equipFromUI();
       grid.clear();
@@ -991,6 +1014,18 @@ async function main() {
     fx.lives = 2;                       // CS:0x8DD9's own starting value
     purse = new Purse(); score = new Score();          // CS:0x0487/0x8D91
     inventory = [INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY]; // CS:0x0498/0x8D80
+    /* CS:0x914c — clears all three weapon slots (the hero starts UNARMED,
+     * Gods/docs/consumables-and-treasure.md). This is now the ONLY place
+     * arsenal is rebuilt from scratch — switchLevel's own reloadWorld call
+     * preserves it across an ordinary level change, matching CS:0x914c's
+     * own two callers both being full restarts, never a level transition. */
+    arsenal = new Arsenal(level.weapons);
+    /* CS:0xC470 (dismiss the familiar) — called from these exact same two
+     * full restarts (CS:0x047D/0x8DDF). switchLevel's own health reset
+     * below now CARRIES the familiar's state forward across an ordinary
+     * level change (see its own comment), so a full restart has to clear
+     * it explicitly here instead, the same asymmetry as arsenal above. */
+    health.familiarEnergy = -1; health.familiarPower = 0; health.familiarWings = 0;
     deathSeq = null; gameOverState = null; lastDeathBurstFx = [];
     await switchLevel(key);             // CS:0x914c's own two callers both fall into world 1
   }
@@ -1000,30 +1035,32 @@ async function main() {
    * correct — see Gods/docs/shop.md) is 0x1_3880 = 80000. */
   const SHOP_STARTING_MONEY = 80000;
 
-  /* World 2's shop roster — the live-captured sample from the original
-   * session, confirmed exactly reproduced by `SS:0x51aa`'s own raw list for
-   * this world once that table was later read directly (Gods/docs/shop.md's
-   * `UNKNOWN_shop_roster_source`, CLOSED). Every one of these 12 ids is
-   * independently confirmed to be a real `game/consumables.js` `CONSUMABLES`
-   * type — see shop.md's own cross-check. */
-  const SHOP_ROSTER_WORLD_2 = [0, 35, 36, 38, 42, 44, 51, 52, 53, 70, 71, 72];
+  /* World 2's shop roster — `SS:0x51aa`'s own full raw list for this world
+   * (Gods/docs/shop.md's `UNKNOWN_shop_roster_source`, CLOSED): the 12-id
+   * "stable core" this project's own live captures agreed on, plus `2`
+   * (gated on the hero's weapon slots, `UNKNOWN_shop_eligibility_gates`,
+   * CLOSED — this is exactly the id that disagreed between the two live
+   * captures). `ShopScreen#rebuildVisible` does the filtering; this is the
+   * full candidate list, not a pre-filtered one. Every id is independently
+   * confirmed a real `game/consumables.js` `CONSUMABLES` type — shop.md's
+   * own cross-check. */
+  const SHOP_ROSTER_WORLD_2 = [0, 2, 35, 36, 38, 42, 44, 51, 52, 53, 70, 71, 72];
 
-  /* Worlds 3/4's shop roster — `SS:0x51aa`'s own raw list for these worlds
-   * has 18 buy ids (this 12 plus `2,3,37,39,40,41`, all six independently
-   * confirmed as real CONSUMABLES types too). `2`/`3`/`40`/`41` are gated by
-   * two eligibility checks, `UNKNOWN_shop_eligibility_gates` — now CLOSED,
-   * see Gods/docs/shop.md: gate 1 (`2`/`3`) opens once the hero holds any
-   * weapon (`arsenal.slots`), gate 2 (`40`/`41`) opens once a familiar is
-   * alive (`health.familiarEnergy`), reachable by buying `39` in this same
-   * shop. Both are real, reachable state this port already tracks — this
-   * array just doesn't consult it yet, a scoped follow-on rather than an
-   * open question. 18 would also exceed this grid's 17-slot capacity (the
-   * original's own `0x25c` scroll path, not ported here). So only the 14
-   * ids that pass regardless of gate state are shown: this port's own 12
-   * plus `37`/`39`. Worlds 3 and 4 share an identical raw list, so they
-   * share this same 14-id set. */
+  /* Worlds 3/4's shop roster — `SS:0x51aa`'s own full 18-id raw list for
+   * these worlds (world 2's 13 minus `2` plus `3,37,39,40,41`, all
+   * independently confirmed as real CONSUMABLES types). `2`/`3` (power
+   * potions) and `40`/`41` (familiar boosts) are gated by the two
+   * eligibility checks — `UNKNOWN_shop_eligibility_gates`, CLOSED, Gods/
+   * docs/shop.md: gate 1 opens once the hero holds any weapon
+   * (`arsenal.slots`), gate 2 opens once a familiar is alive
+   * (`health.familiarEnergy`), reachable by buying `39` (the familiar
+   * itself) in this same shop. `ShopScreen#rebuildVisible` applies both
+   * gates AND the grid's 17-slot scroll truncation (the original's own
+   * `0x25c` path — 18 candidates, all eligible, is one more than fits, so
+   * the single cheapest survivor silently drops). Worlds 3 and 4 share an
+   * identical raw list. */
   const SHOP_ROSTER_WORLD_3_4 = [
-    0, 35, 36, 37, 38, 39, 42, 44, 51, 52, 53, 70, 71, 72,
+    0, 2, 3, 35, 36, 37, 38, 39, 40, 41, 42, 44, 51, 52, 53, 70, 71, 72,
   ];
 
   const shopRosterForWorld = (world) => (
