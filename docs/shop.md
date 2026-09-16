@@ -198,10 +198,28 @@ longer than one screenful. **Now confirmed shipped-data-reachable**: world 3's
 and world 4's raw candidate lists (below) are 21 and 23 entries respectively —
 well past 17 even before the two eligibility gates run — so a real player
 opening either shop with most/all gates open would see this scroll path fire.
-Neither live capture in this file exercises it (both were world 2, 15/16
-survivors), and this port does not implement scrolling — see the final
-roster tables below for how that's sidestepped rather than silently
-truncated.
+
+⚠️ **`[STATIC]` — this is a misnomer: it is a fixed truncation, not a
+scroll, and it drops the CHEAP end, not the recently-added end.** Reading
+the actual bytes (`0x7091`-`0x70a7`, quoted in full above the numbered
+filter-steps list) shows `BP` — the render loop's own cursor into the
+already-ascending-by-price-sorted survivor list `0x408c` builds — starts at
+`0x408c` and, only when `count > 17`, advances FORWARD by `scroll*2` bytes
+before the render loop ever runs. There is no per-tick input anywhere that
+moves this offset once computed, and no code that ever decrements it — it is
+set once, at roster-rebuild time, from the count alone. So a shop with 18
+eligible survivors doesn't let the player scroll to see the 18th; it
+permanently shows only the 17 MOST EXPENSIVE ones and drops the single
+CHEAPEST survivor outright, silently, every time the roster is rebuilt.
+`gods-web`'s `ShopScreen#rebuildVisible` reproduces this exactly (sort
+ascending by price, then keep only the last `DATA_SLOTS`) and a synthetic
+test confirms it: feeding worlds 3/4's full 18-id list with both gates open
+and unlimited money drops exactly id `70` — the single cheapest of the 18
+— never any other id, matching this reading precisely. This was never
+observed live against the ORIGINAL binary with more than 17 survivors
+(both live captures in this file were world 2, capped at 15/16) — the
+disassembly and the port's own reproduction agree, but the original itself
+was never watched actually truncating a real overflowing roster.
 
 ### Two independent live captures of world 2, and why they disagree
 
@@ -409,21 +427,20 @@ capture — **an exact match, all 2048 bytes**. The price table is populated
 once with the same fixed content regardless of which world's level loaded
 it, not a level-scoped economy that varies per world.
 
-**The 14 prices this port's world 2/3/4 rosters need** (12 live-purchase-
-confirmed as above, plus `37`/`39` added when worlds 3/4 were wired in — see
-`UNKNOWN_shop_roster_source` below; not purchase-confirmed individually, but
-read from the same 132-record table with the same unbroken landmark):
+**All 18 raw ids either world's roster can name** (12 live-purchase-confirmed
+originally, `37`/`39` added when worlds 3/4 were first wired in, and `2`/`3`/
+`40`/`41` added once `UNKNOWN_shop_eligibility_gates` closed and the port
+started actually gating rather than omitting them — see `UNKNOWN_shop_
+roster_source` and `UNKNOWN_shop_eligibility_gates` below; only the original
+12 are purchase-confirmed individually, the rest read from the same
+132-record table with the same unbroken landmark):
 
-| id | 0 | 35 | 36 | 37 | 38 | 39 | 42 | 44 | 51 | 52 | 53 | 70 | 71 | 72 |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| price | 4000 | 8000 | 10000 | 20000 | 5000 | 30000 | 20000 | 4000 | 1000 | 1000 | 1000 | 650 | 1300 | 1000 |
+| id | 0 | 2 | 3 | 35 | 36 | 37 | 38 | 39 | 40 | 41 | 42 | 44 | 51 | 52 | 53 | 70 | 71 | 72 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| price | 4000 | 6000 | 12000 | 8000 | 10000 | 20000 | 5000 | 30000 | 5000 | 10000 | 20000 | 4000 | 1000 | 1000 | 1000 | 650 | 1300 | 1000 |
 
-The broader table (ids `0`-`131`, all landmark-verified) also has entries for
-the four ids this port deliberately does not show (`2`, `3`, `40`, `41` —
-`6000`, `12000`, `5000`, `10000` respectively) — not ported because their own
-eligibility is conditional, not because their price is unknown. Sell-side
-values (`DS:0xe2b6`, id `>=0xc0`) remain entirely unresolved — a different
-item, `UNKNOWN_shop_tradein_value`.
+Sell-side values (`DS:0xe2b6`, id `>=0xc0`) remain entirely unresolved — a
+different item, `UNKNOWN_shop_tradein_value`.
 
 ## `UNKNOWN_shop_roster_source` — CLOSED
 
@@ -475,23 +492,21 @@ ordinary shipped play — gate 1 opens on the hero's first weapon pickup
 one of the 18 raw ids and is not gated by either check. Ids `37` and `39`
 are not named by either gate and pass unconditionally regardless.
 
-**Consequently, this port's world 3/4 roster ships only the six-plus-12 =
-14 unconditionally-eligible ids** — `{0,35,36,37,38,39,42,44,51,52,53,70,
-71,72}` — deliberately excluding `2,3,40,41` and every sell-marker id (sell
-is not ported at all, `UNKNOWN_shop_tradein_value`). This was a reasonable
-call when the gates' meaning was unresolved, but is now understood to be a
-real port-fidelity gap rather than just a size-limit workaround: a player
-who buys the familiar (`39`) in this port's own shop gets no visible payoff
-for it, since `40`/`41` never appear regardless, and a player who has
-picked up any weapon (the common case) never sees `2`/`3` either. 14 does
-still fit the 17-slot grid without the `0x25c` scroll path (see above); the
-full 18-id roster, which is real and reachable, would need that scroll path
-implemented to show reliably. Whether to close this gap — wiring
-`ShopScreen`'s eligibility check to the port's own already-tracked
-`arsenal.slots`/`health.familiarEnergy` state, which mirror these same four
-words directly (see `game/weapons.js`, `game/combat.js`) — is a port-scope
-decision, not an RE question; this file records the mechanism, not the
-port's disposition of it.
+**Consequently, this port now ships the FULL 18-id raw candidate list for
+worlds 3/4** (`{0,2,3,35,36,37,38,39,40,41,42,44,51,52,53,70,71,72}`) and the
+full 13-id list for world 2 (`{0,2,35,36,38,42,44,51,52,53,70,71,72}`), not a
+pre-filtered subset — `ShopScreen#rebuildVisible` (`game/shop.js`) applies
+both eligibility gates and the `0x25c` scroll truncation itself (see the next
+section), reading `state.arsenal.slots` and `state.health.familiarEnergy`
+directly, exactly as `FUN_1000_731b`/`FUN_1000_7336` do. An earlier revision
+of this port shipped only the 14 ids passing regardless of gate state,
+deliberately excluding `2,3,40,41` — a reasonable call while the gates'
+meaning was unresolved, but a real port-fidelity gap once it wasn't (a player
+who bought the familiar got no visible payoff, since `40`/`41` never
+appeared regardless). Closed the same session `UNKNOWN_shop_eligibility_
+gates` was: `npm run verify` exercises both gates directly (an unarmed vs.
+armed hero, no familiar vs. one bought mid-visit) and the 18-vs-17 scroll
+truncation, and a live browser check reproduced the same results.
 
 ## `UNKNOWN_shop_eligibility_gates` — CLOSED
 
@@ -543,7 +558,7 @@ project making once before ("the prior pass only checked static object
 placement; it never checked trigger actions that spawn objects"). **Id 39
 is itself a purchasable item in worlds 3 and 4's own shop roster**
 (`SS:0x51aa`'s raw list, `UNKNOWN_shop_roster_source` above; priced
-`30000`, the single most expensive of the 14 ids this port already ships).
+`30000`, the single most expensive of all 18 raw ids this port now ships).
 `FUN_1000_6e62`'s buy dispatch runs the identical category-0 consumable
 handler a map pickup would (`safeApplyConsumable`'s `gods-web` equivalent
 already mirrors this — see below), so buying id 39 in world 3 or 4's shop
@@ -588,22 +603,25 @@ condition returns" statement. Do not guess a refund formula from this.
 See the port's own `game/shop.js` header for the current state — built and
 tested as a state machine (grid navigation, the two-press buy confirm, the
 `0x319` category lockout, the `0x5060` auto-use-vs-inventory branch, the
-selected-slot skip, the priority-`0x19` refusal message), fed roster data
-through an explicit constructor parameter rather than a hardcoded per-world
-table. World 2 uses the live-captured 12-id buy set from the original session
-(`{0,35,36,38,42,44,51,52,53,70,71,72}`, cross-checked above); worlds 3 and 4
-share a 14-id set (the same 12 plus `37`,`39` — see `UNKNOWN_shop_roster_source`,
-CLOSED, above, for why the other six raw-list ids `2,3,40,41` and every
-sell-marker id are deliberately excluded rather than truncated). All real,
-byte-grounded content from the actual `SS:0x51aa` per-world source lists, not
-invented placeholders. Real prices are shown and charged for all 14 ids
-(`game/shop.js`'s `PRICES` table, `UNKNOWN_shop_prices` closed — see above);
-the visible grid also re-prunes itself after every purchase for the category
-lockout and current affordability, a partial port of the original's own
-roster rebuild (the two `UNKNOWN_shop_eligibility_gates` predicates — now
-CLOSED, see above — are not yet reproduced; that's why worlds 3/4 still
-stop at 14 ids rather than the reachable full 18. The port already tracks
-the exact state each gate needs, `game/weapons.js`'s `arsenal.slots` and
-`game/combat.js`'s `health.familiarEnergy`, so wiring this up is a scoped
-follow-on rather than an open research question). Sell is not ported — see
-`UNKNOWN_shop_tradein_value`.
+selected-slot skip, the priority-`0x19` refusal message), fed the FULL raw
+per-world candidate list (not a pre-filtered array) through an explicit
+constructor parameter: world 2 gets `SS:0x51aa`'s own 13-id list, worlds 3/4
+the full 18-id list, both cross-checked above. `ShopScreen#rebuildVisible`
+reproduces `FUN_1000_7276`/`FUN_1000_707d`'s own full pipeline — eligibility
+gates, per-visit category lockout, affordability, ascending-by-price sort,
+and the 17-slot scroll truncation — so both eligibility gates
+(`UNKNOWN_shop_eligibility_gates`, CLOSED) are genuinely wired: `game/
+weapons.js`'s `arsenal.slots` (gate 1) and `game/combat.js`'s
+`health.familiarEnergy` (gate 2, raised by a new `applyFamiliar` handler for
+the previously-unwired type-39/40/41 consumables, `game/consumables.js`).
+All real, byte-grounded content from the actual `SS:0x51aa` per-world source
+lists, not invented placeholders. Real prices are shown and charged for all
+18 raw ids (`game/shop.js`'s `PRICES` table, `UNKNOWN_shop_prices` closed —
+see above). Along the way, two pre-existing bugs in `main.js`'s own
+`switchLevel`/`fullRestart` were found and fixed: `switchLevel` was
+rebuilding `arsenal` (and silently dropping the familiar's own state) from
+scratch on EVERY level transition, not just a full restart, which would
+have made gate 1 unreachable through the shop's one real entry path
+(password entry always calls `switchLevel` immediately before opening the
+shop) regardless of how correctly the gate itself was wired. Sell is not
+ported — see `UNKNOWN_shop_tradein_value`.
