@@ -758,7 +758,16 @@ async function main() {
    * runtime-slot cap to recycle", which was simply false: GroupSlots has
    * ten (spawn.js RUNTIME_SLOTS), activate() refuses when they are all
    * busy, and nothing ever freed one — so the pool filled and later
-   * activations were consumed-and-lost. That was the bug. */
+   * activations were consumed-and-lost. That was the bug.
+   *
+   * ⚠️ `groupsA`/`groupsB` are APPEND-ONLY for the life of a level: a group
+   * that has paid its reward and released its slot keeps its record here
+   * with `released: true`, because the latch is what stops a stale record
+   * zeroing a slot a NEWER activation has since taken. So these arrays are
+   * a log of every group ever activated, NOT a list of live ones — a
+   * divergence from the original, where the ten fixed slot records are
+   * reused wholesale and a released slot is indistinguishable from a fresh
+   * one. Anything iterating them for "current enemies" must filter. */
   let groupsA = [];
   /* Stage 6 (CS:0xe659) is ported and now wired end to end for BOTH entity
    * systems: the reload timer, facing test and muzzle computation feed the
