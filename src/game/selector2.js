@@ -802,12 +802,13 @@ export class SelectorTwoSpawns {
      * ONE-TOUCH KILL for the entity, exactly like every other creature in
      * this project's default (non-ce64) contact path. */
     const r = attackHero({ x: e.x, y: e.y, w: slot.w, h: slot.h, strength: e.state },
-                          hero, health, { invuln: opts.invuln });
+                          hero, health, { invuln: opts.invuln, sfx: opts.sfx });
     e.state = r.strengthOut;
     let killed = e.state < 0;
     if (!killed && decodeTag) {
       const proxy = { x: e.x, y: e.y, state: e.state };
-      creatureScansGrid(proxy, grid, cam, decodeTag, 0, { w: slot.w, h: slot.h });
+      creatureScansGrid(proxy, grid, cam, decodeTag, 0, { w: slot.w, h: slot.h },
+                         null, { sfx: opts.sfx });
       e.state = proxy.state;
       killed = e.state < 0;
     }

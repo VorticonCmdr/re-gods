@@ -364,7 +364,7 @@ export class Ce64Creatures {
   #contactAndDraw(s, cam, hero, health, grid, decodeTag, drawn, opts) {
     const box = BOX_CREATURE;
     const r = attackHero({ x: s.x, y: s.y, w: box.w, h: box.h, strength: s.hp },
-                          hero, health, { reportGate: 1, invuln: opts.invuln });
+                          hero, health, { reportGate: 1, invuln: opts.invuln, sfx: opts.sfx });
     s.hp = r.strengthOut;
     /* ⚠️ STRUCTURALLY DEAD VIA THIS CALL ALONE, and deliberately kept anyway.
      * With reportGate:1, attackHero's strengthOut === the strength it was
@@ -384,7 +384,7 @@ export class Ce64Creatures {
       const proxy = { x: s.x, y: s.y, state: s.hp };
       creatureScansGrid(proxy, grid, cam, (tag) => decodeTag(tag, 1),
                          opts.difficulty || 0, box, opts.targets || null,
-                         { rng: () => this.rng.next(), debris: opts.debris });
+                         { rng: () => this.rng.next(), debris: opts.debris, sfx: opts.sfx });
       s.hp = proxy.state;
       if (s.hp < 0) {
         if (opts.score) opts.score.add(SCORE_CREATURE_KILL);
@@ -557,13 +557,13 @@ export class Ce64Spits {
      * frame.js's stepCreatureDamage uses for every other entity). */
     const box = SPIT_BOX;
     const r = attackHero({ x: p.x, y: p.y, w: box.w, h: box.h, strength: p.state },
-                          hero, health, { invuln: opts.invuln });
+                          hero, health, { invuln: opts.invuln, sfx: opts.sfx });
     p.state = r.strengthOut;
     if (p.state >= 0 && decodeTag) {
       const proxy = { x: p.x, y: p.y, state: p.state };
       creatureScansGrid(proxy, grid, cam, (tag) => decodeTag(tag, 0),
                          opts.difficulty || 0, box, opts.targets || null,
-                         { rng: () => this.rng.next(), debris: opts.debris });
+                         { rng: () => this.rng.next(), debris: opts.debris, sfx: opts.sfx });
       p.state = proxy.state;
     }
 

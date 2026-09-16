@@ -163,12 +163,14 @@ export function stepHeroFrame({ input, arsenal, grid, player, map, cam,
  * @param {?Function} rng     CS:0x3836 (GodsRandom#next) — only consumed when
  *   a hit lands and the target SURVIVES it, for the hit-spark jitter.
  * @param {?object} debris    the DS:0x8b4c owner — CS:0xAC4C's spark.
+ * @param {?Function} sfx     played with `KILL_SFX` on either death branch —
+ *   see combat.js's `attackHero`/`creatureScansGrid` for which reaches it.
  * @returns {{touched:number, killed:number}}
  */
 export function stepCreatureDamage(enemies, { grid, cam, hero, health,
                                               decodeTag, difficulty = 0,
                                               arsenal = null, rng = null,
-                                              debris = null }) {
+                                              debris = null, sfx = null }) {
   /* CS:0x9124-0x9146 — the hunter target list is built only while the hero
    * carries the hunter (weapon 8). CS:0x021E resets its count to 0xFF every
    * frame, so it is rebuilt from scratch each tick by the scan below. */
@@ -178,10 +180,10 @@ export function stepCreatureDamage(enemies, { grid, cam, hero, health,
   let touched = 0, killed = 0;
   for (const e of enemies) {
     if (!e.alive) continue;
-    const c = creatureTouchesHero(e, hero, health);
+    const c = creatureTouchesHero(e, hero, health, { sfx });
     if (c.strengthOut < 0) { touched++; continue; }     // CS:0xa9ec — contact won
     const s = creatureScansGrid(e, grid, cam, decodeTag, difficulty,
-                                undefined, targets, { rng, debris });
+                                undefined, targets, { rng, debris, sfx });
     if (s.killed) { killed++; e.frame = -1; e.delay = 0; }
   }
   if (arsenal) arsenal.targets = targets || [];

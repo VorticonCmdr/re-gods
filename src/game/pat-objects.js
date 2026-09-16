@@ -698,14 +698,14 @@ export class PatGroups {
   #contactAndDamage(slot, s, cam, hero, health, grid, decodeTag, opts) {
     const box = { w: slot.cls.w, h: slot.cls.h };
     const c = attackHero({ x: s.x, y: s.y, w: box.w, h: box.h, strength: s.key },
-                          hero, health, { invuln: opts.invuln });
+                          hero, health, { invuln: opts.invuln, sfx: opts.sfx });
     s.key = c.strengthOut;
     if (s.key < 0) { this.#onKilled(slot, s, opts); return; }    // CS:0xBCEF/BCF1 — hero touch killed it
 
     if (grid && decodeTag) {
       const proxy = { x: s.x, y: s.y, state: s.key };
       const r = creatureScansGrid(proxy, grid, cam, decodeTag, opts.difficulty || 0,
-                                   box, null, { rng: opts.rng, debris: opts.debris });
+                                   box, null, { rng: opts.rng, debris: opts.debris, sfx: opts.sfx });
       s.key = proxy.state;
       if (r.killed) this.#onKilled(slot, s, opts);
     }

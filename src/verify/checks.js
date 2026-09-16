@@ -95,7 +95,8 @@ import { MarkerList, stepMarkers, DISTRACT_TYPE } from '../game/markers.js';
 import { Health, HEALTH_MAX, damageFor, attackHero, creatureTouchesHero,
          difficultyScale, DIFFICULTY_MULTIPLIERS, difficultyForgiven,
          DIFFICULTY_PROGRESSION, creatureScansGrid, hitSparkAxis,
-         CREATURE_CONTACT_BOX, db4eHit, DB4E_CROUCH_TOP_RAISE } from '../game/combat.js';
+         CREATURE_CONTACT_BOX, db4eHit, DB4E_CROUCH_TOP_RAISE,
+         KILL_SFX, HURT_SFX } from '../game/combat.js';
 import { DeathBurst, DEATH_BURST_TEMPLATE, DEATH_BURST_TICKS,
          DEATH_BURST_SPRITE_BASE, ARRIVAL_ZONE_TABLE, findRespawnPosition,
          loseLife, gameOverPlaceholder, DEATH_SFX } from '../game/death.js';
@@ -217,7 +218,7 @@ import { SLOT_STRIDE, PROJECTILE_SIZE, GROUP_STRIDE, GROUP_ENTRIES,
          BOMB_BOUNCE, BOMB_GRAVITY_CAP, stepTimeBomb,
          PROJECTILE_VELOCITY, setWeaponArc, resetWeaponArc,
          MOVER_WALK, CULL, stepProjectiles,
-         DECODED_MOVERS, stepMoverFrame, projectileSprite } from '../game/projectiles.js';
+         DECODED_MOVERS, stepMoverFrame, projectileSprite, FIRE_SFX } from '../game/projectiles.js';
 /* A separate import, appended rather than folded into any block above, so
  * this pass's addition stays strictly additive: ce64.js — the world-3-only
  * creature (object type 96) and its "spit" sub-projectile. Names that would
@@ -6161,6 +6162,80 @@ export async function checkWeaponsProjectiles(fetchRaw) {
       'the death branch (CS:0xAB88 `js`/`jz`) forces bp negative and returns ' +
       'without ever falling into the CS:0xABDA/0xAC4C tail — a live count ' +
       'that stayed at 1 across this second, lethal hit proves it');
+
+    /* "I don't hear a sound when hitting an enemy" — CS:0xAB98 plays
+     * KILL_SFX on the death branch only; a non-lethal hit is genuinely
+     * silent in the original (only the spark above) for every creature
+     * except the world-3 DS:0xce64 type (CS:0x936D, gated on DS:0x34 —
+     * see Gods/docs/combat-and-projectiles.md's "Weapon +0x49" correction),
+     * which this port does not model — so a bare per-hit sound here would
+     * have been WRONG for ordinary creatures, not merely missing. */
+    const bus1 = new RecordingAudioBus();
+    const survivor2 = { x: 200, y: 200, state: 50 };
+    grid2.stamp2x2(survivor2.x, survivor2.y, 1);
+    creatureScansGrid(survivor2, grid2, cam2, () => ({ damage: 5, weapon: 0 }),
+      0, undefined, null, { rng: () => 1, debris: debris2, sfx: (id) => bus1.play(id) });
+    check('creatureScansGrid: a non-lethal hit plays NO sound (the reported bug\'s real answer, for every creature this port models a decode() mode for)',
+      bus1.played.length === 0, `played [${bus1.played}]`);
+
+    const bus2 = new RecordingAudioBus();
+    const killer2 = { x: 200, y: 200, state: 3 };
+    grid2.stamp2x2(killer2.x, killer2.y, 1);
+    creatureScansGrid(killer2, grid2, cam2, () => ({ damage: 5, weapon: 0 }),
+      0, undefined, null, { rng: () => 1, debris: debris2, sfx: (id) => bus2.play(id) });
+    check('creatureScansGrid: a KILL plays KILL_SFX exactly once (CS:0xAB98 -> 0xABA0)',
+      bus2.played.length === 1 && bus2.played[0] === KILL_SFX, `played [${bus2.played}]`);
+  }
+
+  /* ── attackHero/creatureTouchesHero: the OTHER death branch, CS:0xA9EC ──
+   * plays the SAME KILL_SFX, gated on the hit being REPORTED — never on a
+   * miss, and never when reportGate suppresses the report (ce64.js's own
+   * creature bracket), matching CS:0xACDB/0xACE2 exactly. */
+  {
+    const hero0 = { x: 100, y: 100, state: 0 };
+    const atkBox = { x: 100, y: 100, w: 0x20, h: 0x20, strength: 40 };
+
+    const busMiss = new RecordingAudioBus();
+    attackHero({ ...atkBox, x: 9999 }, hero0, new Health(),
+      { sfx: (id) => busMiss.play(id) });
+    check('attackHero: a MISS plays no sound', busMiss.played.length === 0,
+      `played [${busMiss.played}]`);
+
+    const busHit = new RecordingAudioBus();
+    const rHit2 = attackHero(atkBox, hero0, new Health(),
+      { sfx: (id) => busHit.play(id) });
+    check('attackHero: a reported HIT plays KILL_SFX exactly once (CS:0xA9EC -> 0xABC0)',
+      rHit2.strengthOut < 0 && busHit.played.length === 1 && busHit.played[0] === KILL_SFX,
+      `strengthOut=${rHit2.strengthOut} played [${busHit.played}]`);
+
+    /* ce64.js's own reportGate:1 bracket — a hit lands and still damages the
+     * hero, but the death path is never reached from here (see combat.js's
+     * own comment on this call shape), so no sound plays either. */
+    const busGated = new RecordingAudioBus();
+    attackHero(atkBox, hero0, new Health(),
+      { reportGate: 1, sfx: (id) => busGated.play(id) });
+    check('attackHero: a reportGate-suppressed hit plays no sound',
+      busGated.played.length === 0, `played [${busGated.played}]`);
+  }
+
+  /* ── HURT_SFX and FIRE_SFX: consume-and-reset / dispatch shape ─────────── */
+  {
+    /* Health#hurtSounds counts pending plays; main.js consumes and resets
+     * it once per tick, the same shape as tally.js's own sfxPending. A
+     * multi-frame descent from ONE hit must play the sound exactly once. */
+    const h = new Health(24, 24);
+    h.damage(10);          // target := 14, bar still 24 — a multi-frame descent starts
+    let plays = 0;
+    for (let i = 0; i < 10; i++) {
+      h.chase();
+      if (h.hurtSounds > 0) { plays++; h.hurtSounds = 0; }
+    }
+    check('Health#hurtSounds: a single hit produces exactly one consumed play across its whole multi-frame bar descent',
+      plays === 1 && h.bar === 14, `plays=${plays} bar=${h.bar}`);
+
+    check('FIRE_SFX and KILL_SFX are the FULL word passed to CS:0x22ca, not a bare low byte (the reported bug: the old 0x1c value matched no SFX_VOICES key and silently played nothing)',
+      FIRE_SFX === 0x041c && KILL_SFX === 0x0f22 && HURT_SFX === 0x0e42,
+      `FIRE_SFX=0x${FIRE_SFX.toString(16)} KILL_SFX=0x${KILL_SFX.toString(16)} HURT_SFX=0x${HURT_SFX.toString(16)}`);
   }
 
   /* ── end to end: press -> ... -> a creature loses HP ──────────────────── */
@@ -6589,25 +6664,38 @@ export async function checkWeaponsProjectiles(fetchRaw) {
   }
 
   results.push({
-    name: 'sound ids: some now play, most are still carried but not exercised',
+    name: 'sound ids: most now play, a handful are still carried but not exercised',
     note: true, pass: true,
     detail: '#11 audio backlog item — audio/audio-bus.js now exists, and ' +
       'main.js plays 0x0638 pickup (CS:0x1939, shared by weapon and treasure ' +
       'pickups) through it, along with buy/lever/starburst/tally/menu/death ' +
       'ids and all seven ctx.sfx trigger-action ids (see checkTriggerActions\' ' +
-      'own "#11 audio" block for that dispatch, verified end to end). Every ' +
-      'voice is a STYLIZED synthesis, not a chip-accurate one — see that ' +
-      'module\'s own header for why. Still genuinely unwired, disclosed rather ' +
-      'than silently dropped: 0x0f22/0x0e49 creature death via the GENERAL ' +
-      'combat/entity kill path (CS:0xABA0/0xABB7 — distinct from ACT6\'s own ' +
-      'trigger-fired kill, which reuses 0x0f22 and IS wired), 0x1c fire, ' +
-      '0x1d projectile-hits-terrain (CS:0xA7F6), 0x09 magic-axe bounce ' +
-      '(CS:0xA7AD) — none of these three are attached to any per-tick result ' +
-      'frame.js surfaces yet — 0x22 bomb detonation (CS:0xA27C), 0x20e ' +
-      'footstep and 0x0e42 the hurt sound (footstep needs cadence tuning ' +
-      'against the real footfall interval, not a bare per-tick trigger). A ' +
-      'green suite does not mean the STYLE of what main.js NOW plays is right ' +
-      '— only that the right id reaches the right game event.',
+      'own "#11 audio" block for that dispatch, verified end to end). A later ' +
+      'pass closed the reported "no sound when hitting an enemy" gap: ' +
+      '0x0f22 the GENERAL combat/entity kill sound (CS:0xABA0/0xABC8, both ' +
+      'attackHero\'s reported-hit branch and creatureScansGrid\'s death ' +
+      'branch — see this file\'s own "attackHero/creatureTouchesHero" and ' +
+      '"creatureScansGrid" #11 blocks), 0x0e42 the hero\'s own hurt sound ' +
+      '(Health#hurtSounds, consumed once per bar-descent), and 0x041c ' +
+      'weapon-fire (corrected from a bare, non-matching low byte 0x1c — see ' +
+      'projectiles.js\'s own citation). The live disassembly also showed a ' +
+      'non-lethal weapon hit is SILENT in the original (only the CS:0xAC4C ' +
+      'debris spark plays) for every creature except the world-3 DS:0xce64 ' +
+      'type (CS:0x936D, gated on DS:0x34, not modelled by this port — see ' +
+      'Gods/docs/combat-and-projectiles.md) — so "nothing plays on every ' +
+      'hit" is correct porting everywhere gods-web actually decodes a hit, ' +
+      'not a residual gap. Every voice is a STYLIZED synthesis, not ' +
+      'a chip-accurate one — see that module\'s own header for why. Still ' +
+      'genuinely unwired, disclosed rather than silently dropped: 0x0e49 the ' +
+      'Roland-only alternate kill sound (CS:0xABB7/0xABD1, gated on ' +
+      'DS:0x35e, audible on only 3 creature classes and only under that one ' +
+      'driver), 0x1d projectile-hits-terrain (CS:0xA7F6), 0x09 magic-axe ' +
+      'bounce (CS:0xA7AD) — neither of these two is attached to any per-tick ' +
+      'result frame.js surfaces yet — 0x22 bomb detonation (CS:0xA27C), and ' +
+      '0x20e footstep (needs cadence tuning against the real footfall ' +
+      'interval, not a bare per-tick trigger). A green suite does not mean ' +
+      'the STYLE of what main.js NOW plays is right — only that the right ' +
+      'id reaches the right game event.',
   });
 
   /* ── CONSUMABLES: the rank, the table width, and a real potion ────────── */
@@ -9239,6 +9327,7 @@ export async function checkTriggerActions(fetchRaw) {
       CHEST_SFX, SFX_LEVER_TOGGLE, SPAWN_SFX, DEATH_SFX, CHA_CHING_SFX,
       SFX.ACT0_SPAWN, SFX.ACT2_DOOR_OPEN, SFX.ACT3_TELEPORT, SFX.ACT6_KILL,
       SFX.ACT7_GATE_OPEN, SFX.ACT8_GATE_SHUT, SFX.ACT9_DOOR_SHUT,
+      KILL_SFX, HURT_SFX, FIRE_SFX,
     ];
     const missingVoice = wiredIds.filter((id) => typeof SFX_VOICES[id] !== 'function');
     check('every SFX id main.js actually plays has a SFX_VOICES entry',
@@ -9247,11 +9336,14 @@ export async function checkTriggerActions(fetchRaw) {
      * share one voice (weapon pickup and treasure pickup both cite
      * CS:0x1892/CS:0x0638, and ACT2's door-open shares ACT3's teleport id) —
      * confirm those two specific collisions are the ONLY ones, not a wider
-     * accidental id clash this table's own keys would otherwise mask. */
+     * accidental id clash this table's own keys would otherwise mask. KILL_SFX
+     * and SFX.ACT6_KILL are a THIRD, already-known reuse (both cite the same
+     * generic "kill" id, CS:0xABA0/0x9320's own ACT6 call) — folded into the
+     * expected count here rather than treated as a surprise. */
     const uniqueIds = new Set(wiredIds);
     const dupPairs = wiredIds.length - uniqueIds.size;
-    check('exactly the two known id reuses account for every duplicate in the wired-id list (weapon/treasure pickup share 0x0638; ACT2/ACT3 share 0x0537)',
-      dupPairs === 2, `${wiredIds.length} entries, ${uniqueIds.size} unique ids`);
+    check('exactly the three known id reuses account for every duplicate in the wired-id list (weapon/treasure pickup share 0x0638; ACT2/ACT3 share 0x0537; ACT6_KILL/KILL_SFX share 0x0f22)',
+      dupPairs === 3, `${wiredIds.length} entries, ${uniqueIds.size} unique ids`);
   }
 
   results.push({

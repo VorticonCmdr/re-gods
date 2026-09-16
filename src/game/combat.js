@@ -12,6 +12,10 @@
 
 export const HEALTH_MAX = 0x18;          // 24 — CS:0x0e30 `cmp ax,0x18`
 
+/** CS:0x0e1d `mov ax,0xe42 / call 0x22ca` — the hero's own hurt sound, one
+ *  per health-bar descent (see `Health#hurtSounds` below). */
+export const HURT_SFX = 0x0e42;
+
 /* CS:0x084B / 0x0851 — level start fills the bar VISIBLY: target full, bar 1,
  * so it animates up over 23 frames rather than appearing full. */
 export const START_TARGET = 0x18;
@@ -47,7 +51,8 @@ export class Health {
     this.target = target;                  // DS:0x192
     this.bar = bar;                        // DS:0x19a
     this.latch = 0;                        // DS:0x3ad — the hurt-sound one-shot
-    this.hurtSounds = 0;                   // how many times the sound would fire
+    this.hurtSounds = 0;                   // pending HURT_SFX plays; main.js
+                                            // consumes and resets this after chase()
   }
 
   /** CS:0x0dff. Call once per logic tick. */
@@ -265,18 +270,53 @@ export function db4eHit(hotX, hotY, hero, health, opts = {}) {
 export const damageFor = (strength) => (((strength + 1) >> 5) + 5);
 
 /**
+ * CS:0xABA0/0xABAF and CS:0xABC8 — the ordinary "something just died"
+ * sound, reached from BOTH death mechanisms `FUN_1000_a9e4` exposes: a
+ * reported hero-contact hit (CS:0xA9EC `jmp 0xabc0`, ported as `attackHero`
+ * below) and the weapon-vs-creature grid scan's own death branch (CS:0xAB98,
+ * ported as `creatureScansGrid`). Numerically the same id
+ * `trigger-actions.js`'s `SFX.ACT6_KILL` already plays — the original reuses
+ * one generic "kill" sound for both mechanisms, not a coincidence.
+ *
+ * ⚠️ Not modelled here: when `DS:0x35e` is nonzero (a bracket around exactly
+ * three call sites — System A's own pipeline, the world-1 statue hazard, and
+ * the `PGOD0x.PAT` driver — see Gods/docs/drivers-and-memory.md's "Sound: a
+ * 13-slot interface"), the DEATH branch (`CS:0xAB98`) plays THIS id *and
+ * then* the Roland-only alternate `0x0e49`, while the CONTACT branch
+ * (`CS:0xABC0`) plays `0x0e49` *instead of* this id — two different
+ * combine-vs-replace shapes, not the same "instead" both were once
+ * mis-documented as. Reproducing that needs tracking `DS:0x35e`'s three
+ * gated call sites, which this port does not do; every kill here plays this
+ * one id.
+ */
+export const KILL_SFX = 0x0f22;
+
+/**
  * CS:0xac59 — does this attacker overlap the hero, and if so, hurt him.
  *
  * @param {{x:number,y:number,w:number,h:number,strength:number}} atk
  *   x/y are WORLD coordinates; w/h are DS:0x1e2 / DS:0x1e4.
  * @param {{x:number,y:number,state:number}} hero
  * @param {Health} health
- * @param {{invuln?:number, reportGate?:number}} opts
+ * @param {{invuln?:number, reportGate?:number, sfx?:Function}} opts
  *   invuln     DS:0x172 — non-zero suppresses the damage but not the hit.
  *   reportGate DS:0x34  — the hit is reported back to the caller ONLY when
  *              this is zero. UNKNOWN_DS_0034: it is written 0/1/2 from eight
  *              sites and initialised to 0 at CS:0x009e; what it means is not
  *              established, so it is an input here rather than a constant.
+ *   sfx        CS:0xA9EC's own `jmp 0xabc0` — called with `KILL_SFX` exactly
+ *              when a hit is REPORTED (never on a miss, and never when
+ *              reportGate suppresses the report). ⚠️ Only pass this when the
+ *              CALLER's own `ac59` call is genuinely reached through
+ *              `a9e4` in the original, the way `creatureTouchesHero`
+ *              (`CS:0xff93`), the `nestContact`/statue/PAT/selector-2
+ *              wrappers (`CS:0x8997`/`0x7c7c`/`0xbccf`/`0xb8de`), and
+ *              ce64.js all are. `rockfall.js`'s `RockBurstPool` calls
+ *              `ac59` DIRECTLY at `CS:0xB49F`, bypassing `a9e4` and its sfx
+ *              entirely (confirmed live: it tests `bp`'s sign itself and
+ *              branches to its own debris spark, never to `abc0`) — that
+ *              caller must never pass `sfx`, or this port would invent a
+ *              kill sound the original never plays there.
  * @returns {{hit:boolean, damage:number, strengthOut:number}}
  *   `strengthOut` is the original's IN-AND-OUT `bp`. Callers test its SIGN,
  *   not a boolean: CS:0xace2 stores 0xFFFF into it on a reported hit and the
@@ -308,6 +348,7 @@ export function attackHero(atk, hero, health, opts = {}) {
 
   /* The hit is only REPORTED when DS:0x34 is zero (CS:0xacdb / 0xace2). */
   const reported = !opts.reportGate;
+  if (reported && opts.sfx) opts.sfx(KILL_SFX);          // CS:0xA9EC -> 0xABC0
   return { hit: true, damage: dmg, strengthOut: reported ? -1 : atk.strength };
 }
 
@@ -525,10 +566,14 @@ export function hitSparkAxis(center, size, draw) {
  * @param {Function} decode      collision.js damageForTag, pre-bound to the
  *                               slot weapons and their runtime state
  * @param {number} scalar        DS:0x365
- * @param {object} opts          { rng: ()=>number (CS:0x3836), debris }.
+ * @param {object} opts          { rng: ()=>number (CS:0x3836), debris, sfx }.
  *   `rng`/`debris` are only touched on a hit that deals damage and the
  *   target SURVIVES — CS:0xABDA-0xAC4C, the "hit spark" this document's
  *   own debris pass (CS:0xAC4C) left blocked pending this exact model.
+ *   `sfx`, if given, is called with `KILL_SFX` on the death branch
+ *   (CS:0xAB98) — a hit that deals damage and does NOT survive. A hit that
+ *   deals damage and survives plays no sound at all in the original: only
+ *   the hit-spark above.
  * @returns {{hit:boolean, tag:number, damage:number, killed:boolean}}
  */
 export function creatureScansGrid(entity, grid, cam, decode, scalar = 0,
@@ -556,8 +601,10 @@ export function creatureScansGrid(entity, grid, cam, decode, scalar = 0,
   entity.state -= applied;
   /* CS:0xAB88 `js` / `jz` — BOTH reach the death path, so the test is <= 0. */
   const killed = entity.state <= 0;
-  if (killed) entity.state = -1;                        // the caller reads its SIGN
-  else if (opts.rng && opts.debris) {                    // CS:0xABDE `or bx,bx / jz` — bx=applied, skip if 0
+  if (killed) {
+    entity.state = -1;                                  // the caller reads its SIGN
+    if (opts.sfx) opts.sfx(KILL_SFX);                    // CS:0xAB98 -> 0xABA0
+  } else if (opts.rng && opts.debris) {                  // CS:0xABDE `or bx,bx / jz` — bx=applied, skip if 0
     /* CS:0xABE5/0xABE9 read the entity's WORLD x/y straight off the stack
      * (pushed before the screen conversion at CS:0xA9FD), so this works
      * directly in world space — no screen round-trip needed. */

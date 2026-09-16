@@ -58,8 +58,14 @@ export const DIRS = { right: [1, 0, 2], left: [4, 3, 5] };
 
 /* CS:0x985f / 0x9895 both open with `mov ax,0x41c / call 0x22ca`. The low
  * byte is the sfx id, matching the footstep (0x020e -> 14) and hurt (0x0e42
- * -> 66) calls elsewhere in the engine. */
-export const FIRE_SFX = 0x1c;
+ * -> 66) calls elsewhere in the engine.
+ * ⚠️ CORRECTED: this used to export the bare low byte (0x1c), but every
+ * other sfx id in this port (combat.js's `KILL_SFX`/`HURT_SFX`,
+ * trigger-actions.js's `SFX`, shop.js's `BUY_CONFIRM_SFX`, ...) is the FULL
+ * word actually passed to `call 0x22ca`, and `audio/audio-bus.js`'s
+ * `SFX_VOICES` is keyed the same way — so the bare byte silently matched no
+ * voice and played nothing. */
+export const FIRE_SFX = 0x041c;
 
 /* ── The handler table, DS:0xd88c ─────────────────────────────────────────
  *

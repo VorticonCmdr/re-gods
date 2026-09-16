@@ -51,19 +51,37 @@
  * driving real gameplay through this harness unreliable for anything beyond
  * a few ticks.
  *
- * Deliberately NOT wired this pass (disclosed, not silently dropped):
- * `projectiles.js`'s `FIRE_SFX`/`TERRAIN_SFX`/`AXE_BOUNCE_SFX` are real
- * exported ids but never attached to any per-tick result `frame.js` surfaces
- * — wiring them needs new signal-carrying, not just reading one, so it is
- * left for a follow-up. `player.js`'s per-tick `footstep`/`climbStep` flags
- * (SFX `0x0e`/`0x5931` per that module's own comments) are real signals but
- * fire every footfall — playing them well needs cadence tuning against the
- * actual footfall interval, not just a bare per-tick trigger, so they are
- * left silent rather than shipped sounding wrong. Also unwired, and not yet
- * even named as exports anywhere in this port: creature death via the
- * GENERAL combat/entity kill path (`0x0f22`/`0x0e49`, CS:0xABA0/0xABB7 —
- * distinct from ACT6's own trigger-fired kill, which reuses `0x0f22` and IS
- * wired), `0x22` bomb detonation (CS:0xA27C), and `0x0e42` the hurt sound.
+ * ⚠️ A later pass wired the rest of the combat-sound family (reported here
+ * because it was found while chasing "no sound on hitting an enemy" —
+ * `combat.js`'s `KILL_SFX`/`HURT_SFX`, and `projectiles.js`'s `FIRE_SFX`,
+ * whose own exported value was ALSO corrected: it used to be the bare low
+ * byte `0x1c`, which matches no key here and so silently played nothing —
+ * the exact bug reported). Read live off `FUN_1000_a9e4` in Ghidra: a weapon
+ * hit that damages a creature and it SURVIVES is silent in the original —
+ * only the debris hit-spark plays, no sound at all — for every creature
+ * EXCEPT the world-3 `DS:0xce64` type, where a `DS:0x34` bracket
+ * (`CS:0x7FD4`) makes the tag decoder's own third `0x0f22` emitter
+ * (`CS:0x936D`, inside `FUN_1000_9320`) fire on every damaging hit, lethal
+ * or not — see Gods/docs/combat-and-projectiles.md's own correction under
+ * "Weapon +0x49". This port does not model `DS:0x34`, so its ce64 creature
+ * is silent on a non-lethal hit like every other creature — a disclosed
+ * simplification, not an oversight — so "nothing plays on every hit" is
+ * correct porting everywhere in `gods-web`, even though it is not what the
+ * original does for that one creature.
+ *
+ * Still deliberately NOT wired (disclosed, not silently dropped):
+ * `projectiles.js`'s `TERRAIN_SFX`/`AXE_BOUNCE_SFX` are real exported ids but
+ * never attached to any per-tick result `frame.js` surfaces — wiring them
+ * needs new signal-carrying, not just reading one, so it is left for a
+ * follow-up. `player.js`'s per-tick `footstep`/`climbStep` flags (SFX
+ * `0x0e`/`0x5931` per that module's own comments) are real signals but fire
+ * every footfall — playing them well needs cadence tuning against the actual
+ * footfall interval, not just a bare per-tick trigger, so they are left
+ * silent rather than shipped sounding wrong. Also unwired: the Roland-only
+ * alternate kill sound `0x0e49` (CS:0xABB7/0xABD1, gated on `DS:0x35e`,
+ * audible on only 3 specific creature classes and only under that one
+ * driver — see Gods/docs/drivers-and-memory.md's "Sound: a 13-slot
+ * interface"), and `0x22` bomb detonation (CS:0xA27C).
  * See checks.js's own "sound ids" note for the same list kept in sync.
  */
 
@@ -147,6 +165,15 @@ export const SFX_VOICES = {
     scheduleTone(ctx, dest, t0, { freq: 1046, dur: 0.06, type: 'sine', gain: 0.15 });
     scheduleTone(ctx, dest, t0, { freq: 1568, dur: 0.10, type: 'sine', gain: 0.15, delay: 0.04 });
   },
+  /* combat.js's HURT_SFX — the hero's own hurt sound. Distinct from the kill
+   * noise above (0x0f22): a short descending tone, not filtered noise, so a
+   * player can tell "I got hit" from "something died" by ear alone. */
+  0x0e42: (ctx, dest, t0) =>
+    scheduleTone(ctx, dest, t0, { freq: 300, dur: 0.09, type: 'sawtooth', gain: 0.18, slideTo: 120 }),
+  /* projectiles.js's FIRE_SFX — a weapon leaving the hero's hand. Short and
+   * bright so it reads as a "shot", not a hit or a pickup. */
+  0x041c: (ctx, dest, t0) =>
+    scheduleTone(ctx, dest, t0, { freq: 700, dur: 0.045, type: 'square', gain: 0.12, slideTo: 1200 }),
 };
 
 /** Node-testable: records ids instead of making sound. */

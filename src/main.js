@@ -39,7 +39,7 @@ import { parseObjectRecords, Score, Purse, TreasureBurst,
 import { CONSUMABLES, WEAPON_ARCS, INVULN_TICKS_SPAWN } from './game/consumables.js';
 import { Starburst, SPRITE_BASE as SB_SPRITE, SPAWN_SFX } from './game/starburst.js';
 import { Destructibles } from './game/destructible.js';
-import { resetWeaponArc, setWeaponArc, projectileSprite } from './game/projectiles.js';
+import { resetWeaponArc, setWeaponArc, projectileSprite, FIRE_SFX } from './game/projectiles.js';
 import { parseGroupsB, parseGroupsA, GroupSlots, spriteForEntity, MAX_ENTITIES,
          CREATURE_DESCRIPTOR_BASE } from './game/spawn.js';
 import { EntityB, MODE, MODE_TABLE, groundBelow, isDying, EST,
@@ -60,7 +60,7 @@ import { SpikeClock, stepSpikes, spikeSprites, spike130Sprite,
          SPIKE_TYPE, SPIKE117_TYPE, SPIKE130_TYPE } from './game/spikes.js';
 /* Contact and the grid scan are reached through game/frame.js, which owns the
  * order they must run in — see the note there. */
-import { Health, HEALTH_MAX, attackHero } from './game/combat.js';
+import { Health, HEALTH_MAX, attackHero, HURT_SFX } from './game/combat.js';
 import { Nests, Brood } from './game/nest.js';
 import { Statues } from './game/statue.js';
 import { Ce64Creatures, Ce64Spits, OBJECT_TYPE as CE64_OBJECT_TYPE } from './game/ce64.js';
@@ -1490,7 +1490,7 @@ async function main() {
         }
       }
       lastDebrisFx = fr.debrisFx || [];
-      if (fr.emitted) shotsFired++;
+      if (fr.emitted) { shotsFired++; audio.play(FIRE_SFX); }   // CS:0x985f/0x9895
       for (const c of fr.consumed) {
         consumed++;
         postPickupMessage(c);
@@ -1706,7 +1706,7 @@ async function main() {
       const nestContact = (box) => attackHero(
         { x: box.x, y: box.y, w: box.w, h: box.h, strength: box.hp },
         { x: player.x, y: player.y, state: player.stateIndex }, health,
-        { invuln: fx.invuln > 0 }).strengthOut;
+        { invuln: fx.invuln > 0, sfx: (id) => audio.play(id) }).strengthOut;
       const nestResult = nests.step(
         camNow, { x: player.x }, fx.freeze,
         nestContact, brood, tock);
@@ -1729,11 +1729,25 @@ async function main() {
       const statueScanGrid = (entity) => {
         const r = creatureScansGrid(entity, grid, camNow, decodeTag,
                                      difficulty, undefined, null,
-                                     { rng: () => rng.next(), debris });
+                                     { rng: () => rng.next(), debris,
+                                       sfx: (id) => audio.play(id) });
         return { killed: r.killed };
       };
+      /* ⚠️ NOT `nestContact`. `checkTrigger`'s own "defer if the hero is
+       * standing on the dormant statue" probe (`CS:0x7D6E call 0x1000:ac59`,
+       * DIRECTLY — confirmed live in Ghidra, unlike statue.js's own live-
+       * creature touch test at `CS:0x7C90 call 0x1000:a9e4`) never reaches
+       * `a9e4`'s `abc0`, so it never plays a sound in the original — it
+       * even snapshots/restores `health.target` around the call BECAUSE
+       * it's a pure geometry probe, not a real hit. Reusing `nestContact`
+       * here would have played `KILL_SFX` every tick the hero merely stands
+       * near a dormant world-1-sublevel-B statue. */
+      const statueTriggerProbe = (box) => attackHero(
+        { x: box.x, y: box.y, w: box.w, h: box.h, strength: box.hp },
+        { x: player.x, y: player.y, state: player.stateIndex }, health,
+        { invuln: fx.invuln > 0 }).strengthOut;
       statues.checkTrigger(camNow, level.map.planeA, levelInfo.world, health,
-                            nestContact, rng);
+                            statueTriggerProbe, rng);
       const statueResult = statues.step(
         camNow, { x: player.x, y: player.y }, fx.freeze,
         nestContact, statueScanGrid, tock);
@@ -1747,7 +1761,8 @@ async function main() {
        * module needs injected callbacks (see ce64.js's own header for why it
        * calls combat.js directly, unlike nest.js/statue.js), so this just
        * hands them the real objects. */
-      const ce64Opts = { invuln: fx.invuln > 0, difficulty, debris, score };
+      const ce64Opts = { invuln: fx.invuln > 0, difficulty, debris, score,
+                          sfx: (id) => audio.play(id) };
       lastCe64Fx = ce64Creatures.step(
         camNow, { x: player.x, y: player.y, state: player.stateIndex }, fx.freeze,
         health, grid, decodeTag, ce64Spits, ce64Opts).drawn;
@@ -1788,7 +1803,8 @@ async function main() {
         health, grid, decodeTag, tock,
         (wx, wy, vx, cam) => shots.fire(wx, wy, vx, cam),
         (wx, wy, n, cam) => lineHazards.spawn(wx, wy, player.x + 8, player.y + 6, n),
-        { invuln: fx.invuln > 0, score, debris, planeB: level.map.planeB }).drawn;
+        { invuln: fx.invuln > 0, score, debris, planeB: level.map.planeB,
+          sfx: (id) => audio.play(id) }).drawn;
 
       /* CS:0xB987 — the PGOD0x.PAT scripted objects (game/pat-objects.js).
        * Reuses the SAME `shots`/`lineHazards` pools every other emitter in
@@ -1802,7 +1818,8 @@ async function main() {
         camNow, fx.freeze, shots, lineHazards,
         { x: player.x, y: player.y, state: player.stateIndex }, () => rng.next(), tock, null,
         health, grid, decodeTag,
-        { invuln: fx.invuln > 0, difficulty, rng: () => rng.next(), debris, score });
+        { invuln: fx.invuln > 0, difficulty, rng: () => rng.next(), debris, score,
+          sfx: (id) => audio.play(id) });
 
       runSpawns();
       /* CS:0xC041, via objects.js's dropCarriedItem — steal-and-carry's own
@@ -1946,6 +1963,7 @@ async function main() {
          * while this is set the hero takes no damage AND STILL KILLS what he
          * touches. Both the shield potion and spawn protection feed it. */
         invuln: fx.invuln > 0 ? 1 : 0,
+        sfx: (id) => audio.play(id),
       }).killed;
       /* `UNKNOWN_f030_item_drop` — System-B's own per-GROUP elimination
        * reward. CS:0xED78-ED80 sums `[0x3c3]` (state===0, dead) + `[0x1f4]`
@@ -2062,6 +2080,10 @@ async function main() {
       if (fx.invuln > 0) fx.invuln--;
       if (fx.giantJump > 0) fx.giantJump--;
       health.chase();
+      /* CS:0x0e15-0x0e24 — one HURT_SFX per bar-descent-start, latched so a
+       * multi-frame descent from one hit plays it once, matching tally.js's
+       * own `sfxPending` consume-and-reset pattern. */
+      if (health.hurtSounds > 0) { audio.play(HURT_SFX); health.hurtSounds = 0; }
       /* CS:0x01BD-0x01C9 (`bar <= 0`, combat.js's `health.dead`) — detected
        * here, one step later than the original's own per-frame ordering
        * (which tests the bar BEFORE that frame's player-state-machine call
