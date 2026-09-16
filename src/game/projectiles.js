@@ -410,7 +410,7 @@ export const DRAW_STYLES = [
  *   A7BD  jmp 0xa860              ; flag CLEAR -> just stamp, keep flying
  *   A7C0  ... bp = plane-B cell for (x + cam + 8) rounded to the tile
  *   A7EF  cmp byte [ds:bp+0],1 / jnz 0xa860    ; not solid -> stamp, keep flying
- *   A7F6  play sfx 0x1d
+ *   A7F6  push ax / mov ax,0x21d / call 0x22ca / pop ax   ; play sfx 0x21d
  *   A816  append a debris record to the 20-slot array at DS:0x8b4c
  *   A85B  mov word [di],0         ; DESPAWN THE PROJECTILE
  *
@@ -425,7 +425,14 @@ export const DRAW_STYLES = [
  * which appends the cell to a 40-entry queue at DS:0xd0c6.
  * UNKNOWN_destructible_tile — what that queue then does is not decoded.
  */
-export const TERRAIN_SFX = 0x1d;
+/* ⚠️ CORRECTED — this used to be the bare low byte 0x1d, which never
+ * matched any SFX_VOICES key and would have silently played nothing the
+ * moment it was wired. `CS:0xA7F7 mov ax,0x21d` is the FULL word actually
+ * passed to `call 0x22ca`, matching this port's own convention (every
+ * other exported id here is the full word — see FIRE_SFX's own citation
+ * for the identical bug, caught first). Fixed in Gods/docs/combat-and-
+ * projectiles.md's own citation too. */
+export const TERRAIN_SFX = 0x021d;
 /* Moved to game/destructible.js, which now owns the whole mechanism; re-
  * exported here so the old import path keeps working and there is exactly ONE
  * definition rather than two that can drift apart. */
@@ -846,7 +853,12 @@ export const AXE_GRAVITY = 2;             // CS:0xa703
 export const AXE_VY_CAP = 8;              // CS:0xa706
 export const AXE_SPRITE_BASE = 0x1aa;     // 426
 export const AXE_SPRITE_PHASES = 6;       // CS:0xa750/0xa758, and the weapon frame mod 6
-export const AXE_BOUNCE_SFX = 0x09;
+/* ⚠️ CORRECTED — same bug class as TERRAIN_SFX above (and FIRE_SFX before
+ * both): this used to be the bare low byte 0x09. `CS:0xa7ae mov ax,0x209`
+ * is the full word `call 0x22ca` actually receives (`CS:0xa7ad` itself is
+ * only the `push ax` guarding the call, not the id). Fixed in Gods/docs/
+ * combat-and-projectiles.md's own citation too. */
+export const AXE_BOUNCE_SFX = 0x0209;
 
 /** Nine `{vx, vy, life}` records, the companion array to a slot's projectiles. */
 export const newAxeState = () =>

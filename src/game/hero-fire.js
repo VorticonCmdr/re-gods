@@ -278,6 +278,7 @@ export class Arsenal {
    */
   step(cam, grid, planeB, world, planeA = null, blocks = null, debris = null) {
     let moved = 0, culled = 0;
+    let axeBounced = 0;                           // this tick's bounce count
     const hits = [];                              // this tick's terrain-stops
     for (const s of this.slots) {
       if (s.weapon < 0) continue;                // CS:0x9477 `cmp [di],0 / jns`
@@ -299,6 +300,7 @@ export class Arsenal {
         moved += r.moved; culled += r.culled;
         this.stamped += r.stamped;
         this.axeBounced = (this.axeBounced || 0) + r.bounced;
+        axeBounced += r.bounced;
         this.axeExpired = (this.axeExpired || 0) + r.expired;
         continue;
       }
@@ -312,7 +314,13 @@ export class Arsenal {
       this.brokeBlocks = (this.brokeBlocks || 0) + r.brokeBlocks;
       hits.push(...r.hits);
     }
-    return { moved, culled, hits };
+    /* `hits` (CS:0xA7F6, TERRAIN_SFX) and `axeBounced` (CS:0xa7ad,
+     * AXE_BOUNCE_SFX) are this TICK's counts, not the lifetime totals —
+     * `this.hitTerrain`/`this.axeBounced` above keep accumulating for the
+     * HUD, but a per-tick audio hook needs to know what happened just now,
+     * which is exactly what frame.js's `projectiles` return value never
+     * carried until this pass. */
+    return { moved, culled, hits, axeBounced };
   }
 
   /** Every live projectile, for the renderer. */

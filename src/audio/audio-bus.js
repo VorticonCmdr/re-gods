@@ -91,11 +91,19 @@
  * gain is deliberately kept low to avoid swamping the mix under sustained
  * walking.
  *
- * Still deliberately NOT wired (disclosed, not silently dropped):
- * `projectiles.js`'s `TERRAIN_SFX`/`AXE_BOUNCE_SFX` are real exported ids but
- * never attached to any per-tick result `frame.js` surfaces — wiring them
- * needs new signal-carrying, not just reading one, so it is left for a
- * follow-up. Also unwired: the Roland-only alternate kill sound `0x0e49`
+ * `projectiles.js`'s `TERRAIN_SFX`/`AXE_BOUNCE_SFX` are wired too, as of a
+ * still later pass. Both needed real signal-carrying, not just a read:
+ * `Arsenal.step()` (`game/hero-fire.js`) already collected `hits` (one
+ * entry per projectile the terrain stopped this tick, CS:0xA7F6) into its
+ * returned `projectiles` object for the debris puff frame.js drops at each
+ * one — `main.js` now also plays `TERRAIN_SFX` once per entry, same array.
+ * `axeBounced` (CS:0xa7ad) needed a genuinely new field: `Arsenal.step()`
+ * already kept a LIFETIME total (`this.axeBounced`, for the HUD) but never
+ * returned the per-tick delta, so there was nothing for a hook to read —
+ * `step()` now also returns that tick's own count.
+ *
+ * Still deliberately NOT wired (disclosed, not silently dropped): the
+ * Roland-only alternate kill sound `0x0e49`
  * (CS:0xABB7/0xABD1, gated on `DS:0x35e`, audible on only 3 specific
  * creature classes and only under that one driver — see
  * Gods/docs/drivers-and-memory.md's "Sound: a 13-slot interface"), and
@@ -203,6 +211,16 @@ export const SFX_VOICES = {
    * short, higher click distinguishes it from a footstep by ear. */
   0x0240: (ctx, dest, t0) =>
     scheduleNoise(ctx, dest, t0, { dur: 0.03, gain: 0.09, filterFreq: 500 }),
+  /* projectiles.js's TERRAIN_SFX — a shot stopped by a wall. A dull, low
+   * thud, distinct from the fire/kill voices above, so a wall stop reads
+   * as "blocked" rather than "hit something". */
+  0x021d: (ctx, dest, t0) =>
+    scheduleNoise(ctx, dest, t0, { dur: 0.06, gain: 0.18, filterFreq: 300 }),
+  /* projectiles.js's AXE_BOUNCE_SFX — the magic axe ricocheting off a wall.
+   * A short bright ping, distinct from the dull terrain-stop thump above:
+   * the axe keeps flying, it hasn't stopped. */
+  0x0209: (ctx, dest, t0) =>
+    scheduleTone(ctx, dest, t0, { freq: 1200, dur: 0.04, type: 'triangle', gain: 0.14, slideTo: 700 }),
 };
 
 /** Node-testable: records ids instead of making sound. */

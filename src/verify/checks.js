@@ -101,7 +101,7 @@ import { DeathBurst, DEATH_BURST_TEMPLATE, DEATH_BURST_TICKS,
          DEATH_BURST_SPRITE_BASE, ARRIVAL_ZONE_TABLE, findRespawnPosition,
          loseLife, gameOverPlaceholder, DEATH_SFX } from '../game/death.js';
 import { Arsenal, spawnableWeapons, FIRE_CAPABLE_STATES, LEVER_STATES,
-         INVENTORY_STATES } from '../game/hero-fire.js';
+         INVENTORY_STATES, MAGIC_AXE_WEAPON } from '../game/hero-fire.js';
 import { pickUpWeapon, chooseSlot, heroTouches, stepPickups, PICKUP_BOX,
          isWeaponPickup, weaponIndexOf, FIREBALL,
          consumableRank, keyHotPoint, objectNearHotPoint, scanForKey,
@@ -219,7 +219,8 @@ import { SLOT_STRIDE, PROJECTILE_SIZE, GROUP_STRIDE, GROUP_ENTRIES,
          BOMB_BOUNCE, BOMB_GRAVITY_CAP, stepTimeBomb,
          PROJECTILE_VELOCITY, setWeaponArc, resetWeaponArc,
          MOVER_WALK, CULL, stepProjectiles,
-         DECODED_MOVERS, stepMoverFrame, projectileSprite, FIRE_SFX } from '../game/projectiles.js';
+         DECODED_MOVERS, stepMoverFrame, projectileSprite, FIRE_SFX,
+         TERRAIN_SFX, AXE_BOUNCE_SFX } from '../game/projectiles.js';
 /* A separate import, appended rather than folded into any block above, so
  * this pass's addition stays strictly additive: ce64.js — the world-3-only
  * creature (object type 96) and its "spit" sub-projectile. Names that would
@@ -6786,6 +6787,78 @@ export async function checkWeaponsProjectiles(fetchRaw) {
     `(FUN_1000_5931, disassembled fresh: push ax / mov ax,0x240 / ` +
     `call 0x22ca / pop ax / ret) — the real id is 0x240`);
 
+  /* ── TERRAIN_SFX/AXE_BOUNCE_SFX: the missing per-tick signal, and both
+   * ids were wrong ─────────────────────────────────────────────────────
+   * Both were exported as bare low bytes (0x1d/0x09) — the same bug class
+   * FIRE_SFX was already corrected for. Arsenal.step()'s own `hits` array
+   * already existed (frame.js drains it for the debris puff); `axeBounced`
+   * did not — `this.axeBounced` was a lifetime HUD total with no per-tick
+   * delta anywhere a hook could read. Driven end to end through a real
+   * Arsenal, not the lower-level stepProjectiles/stepMagicAxe calls the
+   * checks above this one already cover. */
+  {
+    const arsenal = new Arsenal([]);
+    arsenal.weapons[0] = { breaksTerrain: true, drawStyle: 0 };
+    arsenal.slots[0].weapon = 0;
+    /* The exact fixture the terrain-collision check above this one already
+     * proved hits a wall: x=100,y=100,dir=1 against a solid cell at the
+     * +8-rounded (row 6, col 3). */
+    arsenal.slots[0].area[0] = { tag: 1, x: 100, y: 100, dir: 1 };
+    const wall = new Uint8Array(128 * 64);
+    wall[6 * 128 + 3] = 1;
+    /* A SECOND record hitting the SAME wall on the SAME tick — this is what
+     * discriminates "one hits entry per event" from a regression to a bare
+     * `if (hits.length) play()` in main.js, which would look identical to
+     * the single-event fixture below it. */
+    arsenal.slots[0].area[1] = { tag: 2, x: 100, y: 100, dir: 1 };
+    const r = arsenal.step({ x: 0, y: 0 }, new DamageGrid(), wall, 1);
+    check(`Arsenal.step() surfaces THIS TICK's terrain hits, ONE ENTRY PER ` +
+          `HIT — not just the lifetime total, and not collapsed to a flag`,
+      r.hits.length === 2 && arsenal.slots[0].area[0].tag === 0 &&
+        arsenal.slots[0].area[1].tag === 0 && arsenal.hitTerrain === 2,
+      `r.hits (per-tick, what a TERRAIN_SFX hook needs) vs arsenal.hitTerrain ` +
+      `(the pre-existing lifetime HUD counter) — both should agree on a ` +
+      `two-hit tick, but only r.hits was ever returned from step(), and the ` +
+      `original plays the sfx once per record (CS:0xA7F6), not once per tick`);
+  }
+  {
+    const arsenal = new Arsenal([]);
+    arsenal.weapons[MAGIC_AXE_WEAPON] = {};
+    arsenal.slots[0].weapon = MAGIC_AXE_WEAPON;
+    /* sub-tile 0x10=16 > 12 -> inside the "moving right" bounce window (the
+     * same window the low-level stepMagicAxe checks above already proved);
+     * a wall at the diagonal look-ahead cell (row 4, col 4) the real
+     * axeWallAt probe reaches from here with a nonzero Y sub-tile. */
+    arsenal.slots[0].area[0] = { tag: 1, x: 100 + 0x10, y: 60, dir: 0 };
+    arsenal.slots[0].axeState[0] = { vx: 4, vy: 0, life: 99 };
+    /* A SECOND record bouncing off the SAME wall on the SAME tick — same
+     * reason as the terrain fixture above: proves the count, not just the
+     * presence, of this tick's bounces. */
+    arsenal.slots[0].area[1] = { tag: 2, x: 100 + 0x10, y: 60, dir: 0 };
+    arsenal.slots[0].axeState[1] = { vx: 4, vy: 0, life: 99 };
+    const wall = new Uint8Array(128 * 64);
+    wall[4 * 128 + 4] = 1;
+    const r = arsenal.step({ x: 0, y: 0 }, new DamageGrid(), wall, 1);
+    check(`Arsenal.step() surfaces THIS TICK's axe bounces, ONE COUNT PER ` +
+          `BOUNCE — not just the lifetime total, and not collapsed to a flag`,
+      r.axeBounced === 2 && arsenal.slots[0].axeState[0].vx === -AXE_BOUNCE_VX
+        && arsenal.slots[0].axeState[1].vx === -AXE_BOUNCE_VX
+        && arsenal.axeBounced === 2,
+      `r.axeBounced is new — arsenal.axeBounced already accumulated a ` +
+      `lifetime total (for the HUD), but step() never returned the per-tick ` +
+      `delta an AXE_BOUNCE_SFX hook needs, and the original plays the sfx ` +
+      `once per bounce (CS:0xa7ad), not once per tick`);
+  }
+  check(`TERRAIN_SFX and AXE_BOUNCE_SFX are the FULL word passed to ` +
+        `CS:0x22ca, and both have a synthesized voice`,
+    TERRAIN_SFX === 0x021d && AXE_BOUNCE_SFX === 0x0209 &&
+      0x021d in SFX_VOICES && 0x0209 in SFX_VOICES,
+    `TERRAIN_SFX=0x${TERRAIN_SFX.toString(16)} ` +
+    `AXE_BOUNCE_SFX=0x${AXE_BOUNCE_SFX.toString(16)} — both used to be the ` +
+    `bare low byte (0x1d/0x09), matching no SFX_VOICES key; ` +
+    `CS:0xA7F7 mov ax,0x21d and CS:0xa7ae mov ax,0x209 are the real full ` +
+    `words, corrected in Gods/docs/combat-and-projectiles.md too`);
+
   results.push({
     name: 'sound ids: most now play, a handful are still carried but not exercised',
     note: true, pass: true,
@@ -6818,15 +6891,24 @@ export async function checkWeaponsProjectiles(fetchRaw) {
       'gate) — see this file\'s own footstep/climb-step cadence checks just ' +
       'above, which also caught (and fixed) that CLIMB_STEP_SFX had been ' +
       'mis-cited in this project\'s own RE docs as id "0x5931", actually the ' +
-      'CS: address of the thunk that plays 0x240, not the id itself. Still ' +
-      'genuinely unwired, disclosed rather than silently dropped: 0x0e49 the ' +
-      'Roland-only alternate kill sound (CS:0xABB7/0xABD1, gated on ' +
-      'DS:0x35e, audible on only 3 creature classes and only under that one ' +
-      'driver), 0x1d projectile-hits-terrain (CS:0xA7F6), 0x09 magic-axe ' +
-      'bounce (CS:0xA7AD) — neither of these two is attached to any per-tick ' +
-      'result frame.js surfaces yet — and 0x22 bomb detonation (CS:0xA27C). ' +
-      'A green suite does not mean the STYLE of what main.js NOW plays is ' +
-      'right — only that the right id reaches the right game event.',
+      'CS: address of the thunk that plays 0x240, not the id itself. A ' +
+      'still later pass closed projectiles.js\'s own gap too: 0x21d ' +
+      'projectile-hits-terrain and 0x209 magic-axe-bounce ' +
+      '(TERRAIN_SFX/AXE_BOUNCE_SFX) now play, via a genuinely new field — ' +
+      'Arsenal.step() (game/hero-fire.js) already collected `hits` per tick ' +
+      '(for the debris puff) but only ever accumulated axe bounces into a ' +
+      'LIFETIME total for the HUD, never returning the per-tick delta an ' +
+      'audio hook needs, so `step()` now also returns `axeBounced`. Both ' +
+      'ids were ALSO wrong: exported as their bare low bytes (0x1d/0x09), ' +
+      'the exact same bug class as the FIRE_SFX correction above — neither ' +
+      'would have matched an SFX_VOICES key. Corrected in ' +
+      'Gods/docs/combat-and-projectiles.md too. Still genuinely unwired, ' +
+      'disclosed rather than silently dropped: 0x0e49 the Roland-only ' +
+      'alternate kill sound (CS:0xABB7/0xABD1, gated on DS:0x35e, audible ' +
+      'on only 3 creature classes and only under that one driver), and ' +
+      '0x22 bomb detonation (CS:0xA27C). A green suite does not mean the ' +
+      'STYLE of what main.js NOW plays is right — only that the right id ' +
+      'reaches the right game event.',
   });
 
   /* ── CONSUMABLES: the rank, the table width, and a real potion ────────── */

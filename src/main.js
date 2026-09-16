@@ -39,7 +39,8 @@ import { parseObjectRecords, Score, Purse, TreasureBurst,
 import { CONSUMABLES, WEAPON_ARCS, INVULN_TICKS_SPAWN } from './game/consumables.js';
 import { Starburst, SPRITE_BASE as SB_SPRITE, SPAWN_SFX } from './game/starburst.js';
 import { Destructibles } from './game/destructible.js';
-import { resetWeaponArc, setWeaponArc, projectileSprite, FIRE_SFX } from './game/projectiles.js';
+import { resetWeaponArc, setWeaponArc, projectileSprite, FIRE_SFX,
+         TERRAIN_SFX, AXE_BOUNCE_SFX } from './game/projectiles.js';
 import { parseGroupsB, parseGroupsA, GroupSlots, spriteForEntity, MAX_ENTITIES,
          CREATURE_DESCRIPTOR_BASE } from './game/spawn.js';
 import { EntityB, MODE, MODE_TABLE, groundBelow, isDying, EST,
@@ -1503,6 +1504,16 @@ async function main() {
       /* The FUN_1000_5931 thunk's four callers — the climb ping-pong's two
        * turn-arounds, already gated behind _climb's own tock===0 return. */
       if (fr.climbStep) audio.play(CLIMB_STEP_SFX);
+      /* CS:0xA7F6 — one play per projectile the terrain stops this tick,
+       * not one per tick: `fr.projectiles.hits` already carries one entry
+       * per stop (Arsenal.step collects it from every slot's own
+       * stepProjectiles call), the same array frame.js already drains for
+       * the debris puff at each hit. */
+      for (let i = 0; i < fr.projectiles.hits.length; i++) audio.play(TERRAIN_SFX);
+      /* CS:0xa7ad — likewise one play per bounce this TICK. Arsenal.step's
+       * own `this.axeBounced` is a lifetime total (for the HUD); the
+       * returned `axeBounced` is the per-tick delta this hook needs. */
+      for (let i = 0; i < fr.projectiles.axeBounced; i++) audio.play(AXE_BOUNCE_SFX);
       for (const c of fr.consumed) {
         consumed++;
         postPickupMessage(c);
