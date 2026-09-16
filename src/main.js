@@ -37,7 +37,7 @@ import { spriteForType, parseObjectCategories, sortForDraw, isDeadType,
 import { parseObjectRecords, Score, Purse, TreasureBurst,
          INVENTORY_EMPTY } from './game/treasure.js';
 import { CONSUMABLES, WEAPON_ARCS, INVULN_TICKS_SPAWN } from './game/consumables.js';
-import { Starburst, SPRITE_BASE as SB_SPRITE } from './game/starburst.js';
+import { Starburst, SPRITE_BASE as SB_SPRITE, SPAWN_SFX } from './game/starburst.js';
 import { Destructibles } from './game/destructible.js';
 import { resetWeaponArc, setWeaponArc, projectileSprite } from './game/projectiles.js';
 import { parseGroupsB, parseGroupsA, GroupSlots, spriteForEntity, MAX_ENTITIES,
@@ -54,7 +54,7 @@ import { GodsRandom } from './game/random.js';
 import { decodeStatusPanel, PANEL_Y0 as STATUS_PANEL_Y0 } from './game/status-panel.js';
 import { stepHealthBarShimmer, drawHealthBar } from './game/health-bar.js';
 import { sliceDigitFrames, clampMoneyForDisplay, drawScore, drawMoney, drawLives } from './game/hud-digits.js';
-import { LeverToggle } from './game/levers.js';
+import { LeverToggle, SFX_LEVER_TOGGLE } from './game/levers.js';
 import { KillSmoke } from './game/kill-smoke.js';
 import { SpikeClock, stepSpikes, spikeSprites, spike130Sprite,
          SPIKE_TYPE, SPIKE117_TYPE, SPIKE130_TYPE } from './game/spikes.js';
@@ -86,10 +86,11 @@ import { scanZones, unpackTeleportDest, resolveExitDestination,
          clearNonPotionInventory, generatePassword, passwordSlotForWorld,
          passwordWorldForSlot, passwordToString, PASSWORD_SLOTS } from './game/zones.js';
 import { DeathBurst, findRespawnPosition, loseLife,
-         gameOverPlaceholder } from './game/death.js';
-import { TitleMenu, PasswordEntry } from './game/title-menu.js';
-import { ShopScreen } from './game/shop.js';
-import { TallyScreen } from './game/tally.js';
+         gameOverPlaceholder, DEATH_SFX } from './game/death.js';
+import { TitleMenu, PasswordEntry, MENU_CLICK_SFX, MENU_CONFIRM_SFX } from './game/title-menu.js';
+import { ShopScreen, BUY_CONFIRM_SFX } from './game/shop.js';
+import { TallyScreen, CHA_CHING_SFX } from './game/tally.js';
+import { WebAudioBus } from './audio/audio-bus.js';
 
 const LEVELS = ['1A','1B','2A','2B','3A','3B','4A','4B'];
 
@@ -361,6 +362,12 @@ async function main() {
   $('hz').textContent = LOGIC_HZ.toFixed(3);
 
   const renderer = new Renderer($('screen'));
+  /* #11 audio backlog item — see audio/audio-bus.js's own header for what
+   * this is and, explicitly, what it is not (not chip-accurate; a stylized
+   * reproduction of already-cited SFX ids this port had nowhere to send
+   * before now). `AudioContext` is created lazily inside the bus itself on
+   * the first real play() call, not here — see that module for why. */
+  const audio = new WebAudioBus();
 
   /* Verification first — if the formats are wrong we want to see it up front. */
   try {
@@ -465,6 +472,12 @@ async function main() {
      * through the hook below, not by writing into this array. */
     weaponSlots: ars.slots.map((sl) => sl.weapon),
     clearWeaponSlot: (i) => { ars.slots[i].weapon = INVENTORY_EMPTY; },
+    /* Without this, `makeActionContext`'s own default `sfx: () => {}` (a
+     * deliberately silent no-op for tests) is what every ACT0/2/3/6/7/8/9
+     * handler's `ctx.sfx(SFX.XXX)` call would reach here too — the exact
+     * "recorded as already ported, actually never wired" trap this project's
+     * own memory already flags for the message-line subsystem. */
+    sfx: (id) => audio.play(id),
     /* Same allocator the treasure burst uses — CS:0x38D7 first-fit, with the
      * 200-slot ceiling measured against what is actually live. */
     alloc: () => {
@@ -556,6 +569,13 @@ async function main() {
    * damage source (tag 0xFC), so it lives beside the projectiles rather than
    * with the cosmetics. */
   let starburst = new Starburst(new GodsRandom(2));
+  /* `starburst.bursts` only counts real spawner runs (starburst.js: "how
+   * many times the spawner actually ran"), incremented once per call
+   * regardless of how many of the 8 particles it seeds — edge-detecting it
+   * here is how a NEW chain reaction is told apart from the per-tick
+   * `burstFx` snapshot frame.js already returns for every tick a burst is
+   * still animating, without needing a dedicated signal from starburst.js. */
+  let lastStarburstBursts = 0;
   /* CS:0x73EC — breakable masonry. Only worlds 3-4 place solid 0x6d cells,
    * and only the six terrain-stopping weapons can reach it. */
   let blocks = new Destructibles(1);
@@ -973,6 +993,7 @@ async function main() {
        * slots). */
       burst = new TreasureBurst(new GodsRandom(1)); opened = 0; lootLanded = 0;
       starburst = new Starburst(new GodsRandom(2));
+      lastStarburstBursts = 0;  // a fresh instance restarts its own bursts count at 0 too
       /* CS:0x69B1/0x8E40 restore every broken block, then clear the queue. */
       if (blocks) blocks.restoreAll(level.map.planeA, level.map.planeB);
       blocks = new Destructibles(level.world);
@@ -1121,7 +1142,23 @@ async function main() {
   let passwordEntry = null;
   let shopScreen = null;
 
+  /* Gods/docs/dynamic-trace-and-runtime-data.md: UP/DOWN plays click sfx
+   * 0x119, FIRE plays confirm sfx 0x233 — see title-menu.js's own citation
+   * for the LEFT/RIGHT generalisation. Both `TitleMenu` and `PasswordEntry`
+   * are keydown-driven through this one function, so it is the one place
+   * that plays for either widget. */
+  const MENU_MOVE_KEYS = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'KeyW', 'KeyA', 'KeyS', 'KeyD'];
+  const MENU_CONFIRM_KEYS = ['Space', 'Enter'];
   function handleTitleKey(code) {
+    /* Only `TitleMenu`/`PasswordEntry` own this sound — `handleTitleKey` is
+     * also called (and does nothing) for 'shop'/'exit', both `!== 'game'`
+     * too. Playing unconditionally would layer a spurious menu click under
+     * every shop cursor move and a confirm blip under every buy press,
+     * doubled up with `BUY_CONFIRM_SFX` from the shop's own tick loop. */
+    if (uiState === 'menu' || uiState === 'password') {
+      if (MENU_MOVE_KEYS.includes(code)) audio.play(MENU_CLICK_SFX);
+      else if (MENU_CONFIRM_KEYS.includes(code)) audio.play(MENU_CONFIRM_SFX);
+    }
     if (uiState === 'menu') {
       const action = titleMenu.onKeyDown(code);
       if (action === 'begin') { uiState = 'game'; fullRestart('1A'); }
@@ -1212,6 +1249,10 @@ async function main() {
       if (tallyScreen) {
         const award = tallyScreen.step(input.fire);
         if (award) purse.add(award);
+        /* `sfxPending` is reset to false at the TOP of every step() call
+         * (tally.js), so this reads as a fresh, single-tick latch — safe to
+         * play once here without a separate "already played" guard. */
+        if (tallyScreen.sfxPending) audio.play(CHA_CHING_SFX);
         if (tallyScreen.done) tallyScreen.onDone();
         return;
       }
@@ -1220,7 +1261,16 @@ async function main() {
        * (enterViaPassword) already handed off into 'game', so nothing here
        * needs to watch for a state change the way the tally screen's
        * onDone dispatch does. */
-      if (shopScreen) { shopScreen.step(input); return; }
+      if (shopScreen) {
+        /* Read the RETURN value, not `lastPurchase` — `lastPurchase`
+         * persists across ticks, so gating on it would replay the sound
+         * every tick after a purchase instead of once, on the tick it
+         * actually completed. Refusals have no cited sfx id (shop.md only
+         * documents a message priority for them), so they stay silent. */
+        const purchase = shopScreen.step(input);
+        if (purchase && !purchase.refused) audio.play(BUY_CONFIRM_SFX);
+        return;
+      }
       /* The title menu / password screen freeze the whole simulation, same
        * as the original's own menu loop never runs FUN_1000_4993 (the
        * per-frame player update) while it has control — see the 'uiState'
@@ -1343,7 +1393,12 @@ async function main() {
        * same as the draw call itself. */
       inventoryPanel.step(player.state === ST.CROUCH);
       if (fr) {
+      if (starburst.bursts !== lastStarburstBursts) {
+        audio.play(SPAWN_SFX);
+        lastStarburstBursts = starburst.bursts;
+      }
       for (const t of fr.treasures) {
+        if (t.sfx) audio.play(t.sfx);
         /* CS:0x18A4 (ordinary treasure, CX = type) and CS:0x18EF (a chest just
          * unlocked, CX = type|1 — the OPEN sprite's own type, which is why the
          * message reads "treasure chest / open" rather than "/ iron"). */
@@ -1366,6 +1421,7 @@ async function main() {
       }
       /* IDLE + FIRE, CS:0x1045 -> game/levers.js's `LeverToggle`. */
       if (fr.leverToggled) {
+        audio.play(SFX_LEVER_TOGGLE);
         const on = leverToggle.animating() || (fr.leverToggled.type & 1);
         $('event').textContent =
           `lever/switch type ${fr.leverToggled.type} ${on ? 'ON' : 'OFF'}` +
@@ -1426,6 +1482,7 @@ async function main() {
       }
       for (const p of fr.picked) {
         picked++;
+        if (p.sfx) audio.play(p.sfx);
         $('event').textContent = `picked up ${WEAPON_NAMES[p.weapon]}` +
           (p.duplicate ? ` (again — count ${p.count})` : ` into slot ${'ABC'[p.slot]}`);
       }
@@ -1967,6 +2024,7 @@ async function main() {
        * full CS:0x09BB/0x0930/0x0845 chain this block ports. */
       if (!deathSeq && !gameOverState && health.dead) {
         deathSeq = new DeathBurst(player.x - cam.snapX, player.y - cam.snapY);
+        audio.play(DEATH_SFX);   // once, right as the burst begins — this gate only ever fires once per death
         /* `fr` (stepHeroFrame's own per-tick return) is gated off for the
          * whole burst below, so lastDebrisFx/lastBurstFx/lastBlockFx would
          * otherwise keep redrawing whatever they held on the tick death was

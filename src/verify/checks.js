@@ -8,7 +8,8 @@
 
 import { dclDecompress } from '../formats/dcl.js';
 import { DOOR_TILES, ZONE_TELEPORT, ZONE_EXIT, makeGates, makeActionContext,
-         runAction, fireTrigger } from '../game/trigger-actions.js';
+         runAction, fireTrigger, SFX } from '../game/trigger-actions.js';
+import { RecordingAudioBus, SFX_VOICES } from '../audio/audio-bus.js';
 import { KillSmoke, SLOTS as SMOKE_SLOTS, FRAMES as SMOKE_FRAMES,
          SPRITE_BASE as SMOKE_SPRITE_BASE,
          SPRITE_LAST as SMOKE_SPRITE_LAST } from '../game/kill-smoke.js';
@@ -17,17 +18,18 @@ import { scanZones, unpackTeleportDest, resolveExitDestination,
          clearNonPotionInventory, generatePassword, passwordSlotForWorld,
          passwordWorldForSlot, passwordToString, PASSWORD_LENGTH,
          PASSWORD_SLOTS } from '../game/zones.js';
-import { TitleMenu, PasswordEntry, MENU_OPTIONS } from '../game/title-menu.js';
+import { TitleMenu, PasswordEntry, MENU_OPTIONS,
+         MENU_CLICK_SFX, MENU_CONFIRM_SFX } from '../game/title-menu.js';
 import { ShopScreen, GRID_COLS, GRID_ROWS, GRID_SLOTS, EXIT_SLOT, DATA_SLOTS,
-  WEAPON_ID_BASE, PRICES } from '../game/shop.js';
+  WEAPON_ID_BASE, PRICES, BUY_CONFIRM_SFX } from '../game/shop.js';
 import { TallyScreen, timeBonus, healthBonus, moneyBonus, POOL_STEP,
          WAIT_AFTER_SUMMARY_TICKS, WAIT_AFTER_COUNTDOWN_TICKS,
-         SFX_EVERY_N_STEPS } from '../game/tally.js';
+         SFX_EVERY_N_STEPS, CHA_CHING_SFX } from '../game/tally.js';
 import { consumesKey } from '../game/trigger.js';
 import { PI1_SIZE, decodePI1, TILE_COUNT } from '../formats/pi1.js';
 import { decodeStatusPanel, PANEL_W, PANEL_H, PANEL_Y0 } from '../game/status-panel.js';
 import { LeverToggle, heroNearLever, SPECIAL_LEVER_SPRITES,
-         SPECIAL_LEVER_ANIM } from '../game/levers.js';
+         SPECIAL_LEVER_ANIM, SFX_LEVER_TOGGLE } from '../game/levers.js';
 import { SpikeClock, spikePingpong, heroInSpikeBox, heroInSpike130Box,
          stepSpikes, spikeSprites, spike130Sprite, SPIKE_OVERLAY,
          SPIKE117_OVERLAY, SPIKE130_ANIM, SPIKE_TYPE, SPIKE117_TYPE,
@@ -94,13 +96,13 @@ import { Health, HEALTH_MAX, damageFor, attackHero, creatureTouchesHero,
          CREATURE_CONTACT_BOX, db4eHit, DB4E_CROUCH_TOP_RAISE } from '../game/combat.js';
 import { DeathBurst, DEATH_BURST_TEMPLATE, DEATH_BURST_TICKS,
          DEATH_BURST_SPRITE_BASE, ARRIVAL_ZONE_TABLE, findRespawnPosition,
-         loseLife, gameOverPlaceholder } from '../game/death.js';
+         loseLife, gameOverPlaceholder, DEATH_SFX } from '../game/death.js';
 import { Arsenal, spawnableWeapons, FIRE_CAPABLE_STATES, LEVER_STATES,
          INVENTORY_STATES } from '../game/hero-fire.js';
 import { pickUpWeapon, chooseSlot, heroTouches, stepPickups, PICKUP_BOX,
          isWeaponPickup, weaponIndexOf, FIREBALL,
          consumableRank, keyHotPoint, objectNearHotPoint, scanForKey,
-         collectKey } from '../game/pickup.js';
+         collectKey, PICKUP_SFX } from '../game/pickup.js';
 import { CONSUMABLES, WIRED, WEAPON_ARCS, NOT_WIRED_REASON, applyConsumable,
          INVULN_TICKS_POTION, INVULN_TICKS_SPAWN, INVULN_SPAWN_DEDUCTION,
          FREEZE_TICKS, GIANT_JUMP_TICKS, POWER_POTION_STEPS, MSG_CLEAR_394, MSG_NONE,
@@ -176,7 +178,7 @@ import { Destructibles, DESTRUCTIBLE_TILE, MIN_WORLD, MACE_INDEX, MACE_BONUS,
 import { Starburst, BURST_TEMPLATE, PARTICLES_PER_BURST, SLOTS,
          CULL as SB_CULL, GRAVITY_PERIOD, AGE_MAX, AGE_STEP, CHAIN_WINDOW,
          TAG as SB_TAG, chainThreshold, modeDamage,
-         SPAWNER_CALLERS } from '../game/starburst.js';
+         SPAWNER_CALLERS, SPAWN_SFX } from '../game/starburst.js';
 import { JUMP_ARC_END, JUMP_ARC_EXIT, fireGuardBefore,
          fireGuardAfter } from '../game/fire-states.js';
 import { Player, ST, S as PS, JUMP_ARC_EARLY_LAND_CURSOR,
@@ -6585,14 +6587,25 @@ export async function checkWeaponsProjectiles(fetchRaw) {
   }
 
   results.push({
-    name: 'sound ids are carried but NOT exercised', note: true, pass: true,
-    detail: 'The port has no audio, so every sfx id it records is unverified ' +
-      'by this suite and asserting one against itself would be a tautology the ' +
-      'linter rejects. Stating the gap instead: 0x0638 pickup (CS:0x1939), ' +
-      '0x0f22 and 0x0e49 creature death (CS:0xABA0 / 0xABB7), 0x1c fire, ' +
+    name: 'sound ids: some now play, most are still carried but not exercised',
+    note: true, pass: true,
+    detail: '#11 audio backlog item — audio/audio-bus.js now exists, and ' +
+      'main.js plays 0x0638 pickup (CS:0x1939, shared by weapon and treasure ' +
+      'pickups) through it, along with buy/lever/starburst/tally/menu/death ' +
+      'ids and all seven ctx.sfx trigger-action ids (see checkTriggerActions\' ' +
+      'own "#11 audio" block for that dispatch, verified end to end). Every ' +
+      'voice is a STYLIZED synthesis, not a chip-accurate one — see that ' +
+      'module\'s own header for why. Still genuinely unwired, disclosed rather ' +
+      'than silently dropped: 0x0f22/0x0e49 creature death via the GENERAL ' +
+      'combat/entity kill path (CS:0xABA0/0xABB7 — distinct from ACT6\'s own ' +
+      'trigger-fired kill, which reuses 0x0f22 and IS wired), 0x1c fire, ' +
       '0x1d projectile-hits-terrain (CS:0xA7F6), 0x09 magic-axe bounce ' +
-      '(CS:0xA7AD), 0x22 bomb detonation (CS:0xA27C), 0x20e footstep and ' +
-      '0x0e42 the hurt sound. A green suite does not mean these are right.',
+      '(CS:0xA7AD) — none of these three are attached to any per-tick result ' +
+      'frame.js surfaces yet — 0x22 bomb detonation (CS:0xA27C), 0x20e ' +
+      'footstep and 0x0e42 the hurt sound (footstep needs cadence tuning ' +
+      'against the real footfall interval, not a bare per-tick trigger). A ' +
+      'green suite does not mean the STYLE of what main.js NOW plays is right ' +
+      '— only that the right id reaches the right game event.',
   });
 
   /* ── CONSUMABLES: the rank, the table width, and a real potion ────────── */
@@ -9160,6 +9173,83 @@ export async function checkTriggerActions(fetchRaw) {
       puffs[0].x === 443 - 8 && puffs[0].y === 960 &&
       puffs[1].x === 462 - 8 && puffs[1].y === 960,
       puffs.map((p) => `#${p.sprite}@(${p.x},${p.y})`).join(' ') || 'no puff');
+  }
+
+  /* ── #11 audio: the ctx.sfx callback slot, verified end to end ──────────
+   * `makeActionContext`'s own default `sfx: () => {}` exists so tests don't
+   * need a real audio backend — but main.js's own `buildActionCtx` MUST
+   * override it (audio/audio-bus.js's `WebAudioBus`), or every one of these
+   * seven ids is swallowed silently, exactly the `NOT_WIRED_REASON.hint`
+   * shape this project's own memory already flags. This can't be asserted
+   * against main.js directly (it's the browser bootstrap, not Node-
+   * importable), so what IS asserted here is the mechanism main.js relies
+   * on: overriding `sfx` in `makeActionContext({...})` really does reach
+   * each verb handler, with the RIGHT id, not just some id. */
+  {
+    check('makeActionContext()\'s default sfx is a safe no-op — verbs never crash under the tests above, which never override it',
+      (() => { try { makeActionContext().sfx(0x1234); return true; } catch { return false; } })());
+
+    const fires = (label, verb, setup, expected) => {
+      const bus = new RecordingAudioBus();
+      const ctx = makeActionContext({ ...setup, sfx: (id) => bus.play(id) });
+      runAction(verb, ctx);
+      check(label, bus.played.length === 1 && bus.played[0] === expected,
+        `played [${bus.played}], expected [${expected}]`);
+    };
+    fires('ACT0 (spawn, non-category-4) fires SFX.ACT0_SPAWN through an overridden ctx.sfx',
+      T({ x: 10, y: 10, action: 0, actionArg: 1 }),
+      { objects: [{ x: 0, y: 0, type: 0, dead: true, flag6: 0 }], categoryOf: () => 0 },
+      SFX.ACT0_SPAWN);
+    fires('ACT2 (door open) fires SFX.ACT2_DOOR_OPEN',
+      T({ x: 0x140, y: 0x100, action: 2 }), { tiles: DOOR_TILES[0] }, SFX.ACT2_DOOR_OPEN);
+    fires('ACT9 (door shut) fires SFX.ACT9_DOOR_SHUT — a DIFFERENT id from ACT2, not the same "door" sound reused',
+      T({ x: 0x140, y: 0x100, action: 9 }), { tiles: DOOR_TILES[0] }, SFX.ACT9_DOOR_SHUT);
+    fires('ACT3 (teleport zone) fires SFX.ACT3_TELEPORT',
+      T({ x: 0x200, y: 0x100, action: 3, actionArg: 7 }), {}, SFX.ACT3_TELEPORT);
+    fires('ACT6 (kill category-4 object) fires SFX.ACT6_KILL',
+      T({ x: 100, y: 100, action: 6 }),
+      { objects: [{ x: 100, y: 100, type: 5, dead: false, flag6: 1 }], categoryOf: () => 4 },
+      SFX.ACT6_KILL);
+    {
+      const noGate = () => makeActionContext({ gates: makeGates(new Uint8Array(8760)) });
+      const g7 = noGate(); g7.gates[0].x = 0x400; g7.gates[0].y = 0x200;
+      const bus7 = new RecordingAudioBus(); g7.sfx = (id) => bus7.play(id);
+      runAction(T({ x: 0x400, y: 0x200, action: 7 }), g7);
+      check('ACT7 (gate open, real hit) fires SFX.ACT7_GATE_OPEN',
+        bus7.played.length === 1 && bus7.played[0] === SFX.ACT7_GATE_OPEN, `played [${bus7.played}]`);
+
+      /* Trap 1 (this file's own header): ACT8's miss guard is dead, so it
+       * fires SFX.ACT8_GATE_SHUT even on a MISS — a genuinely different
+       * property from ACT7 above, not a copy-paste of the same test. */
+      const g8 = noGate(); g8.gates.forEach((g) => { g.x = 0xfffe; g.y = 0xfffe; });
+      const bus8 = new RecordingAudioBus(); g8.sfx = (id) => bus8.play(id);
+      runAction(T({ x: 0x400, y: 0x200, action: 8 }), g8);
+      check('ACT8 (gate shut) fires SFX.ACT8_GATE_SHUT even on a MISS (trap 1: the guard is dead)',
+        bus8.played.length === 1 && bus8.played[0] === SFX.ACT8_GATE_SHUT, `played [${bus8.played}]`);
+    }
+
+    /* Completeness: every id this project's audio wiring (main.js) actually
+     * plays has a synthesized voice — a typo'd id here would silently do
+     * nothing in the browser, the "double-fire and no-op-default" class
+     * advisor flagged, applied to the voice table instead of the dispatch. */
+    const wiredIds = [
+      MENU_CLICK_SFX, MENU_CONFIRM_SFX, BUY_CONFIRM_SFX, PICKUP_SFX, TREASURE_SFX,
+      CHEST_SFX, SFX_LEVER_TOGGLE, SPAWN_SFX, DEATH_SFX, CHA_CHING_SFX,
+      SFX.ACT0_SPAWN, SFX.ACT2_DOOR_OPEN, SFX.ACT3_TELEPORT, SFX.ACT6_KILL,
+      SFX.ACT7_GATE_OPEN, SFX.ACT8_GATE_SHUT, SFX.ACT9_DOOR_SHUT,
+    ];
+    const missingVoice = wiredIds.filter((id) => typeof SFX_VOICES[id] !== 'function');
+    check('every SFX id main.js actually plays has a SFX_VOICES entry',
+      missingVoice.length === 0, `missing voices for: ${missingVoice}`);
+    /* And the reverse isn't silently true either: two real ids intentionally
+     * share one voice (weapon pickup and treasure pickup both cite
+     * CS:0x1892/CS:0x0638, and ACT2's door-open shares ACT3's teleport id) —
+     * confirm those two specific collisions are the ONLY ones, not a wider
+     * accidental id clash this table's own keys would otherwise mask. */
+    const uniqueIds = new Set(wiredIds);
+    const dupPairs = wiredIds.length - uniqueIds.size;
+    check('exactly the two known id reuses account for every duplicate in the wired-id list (weapon/treasure pickup share 0x0638; ACT2/ACT3 share 0x0537)',
+      dupPairs === 2, `${wiredIds.length} entries, ${uniqueIds.size} unique ids`);
   }
 
   results.push({

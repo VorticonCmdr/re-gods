@@ -54,7 +54,7 @@ export const DEATH_BURST_TEMPLATE = Object.freeze([
 export const DEATH_BURST_Y_BIAS = 8;          // CS:0x0A55
 export const DEATH_BURST_SPRITE_BASE = 0x5b;  // CS:0x0A89 `mov bp,0x5b`
 export const DEATH_BURST_TICKS = 0x12;        // 18 — CS:0x0A28 `cmp [0x24c],0x12`
-export const DEATH_SFX = 0x7f3c;              // CS:0x0A34 — not played, no audio engine yet
+export const DEATH_SFX = 0x7f3c;              // CS:0x0A34 — played via audio/audio-bus.js, once, when main.js starts the burst
 
 /**
  * The 5-particle death burst. CS:0xA73-0xA86 never re-subtracts the camera

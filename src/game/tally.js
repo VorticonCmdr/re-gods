@@ -83,10 +83,10 @@
  * password-gen) hands off into the password reveal, if any. The `0x52f`
  * "cha-ching" sfx (`FUN_1000_22ca`, the same generic sound-export call
  * `zones.js` already cites for the teleport chime) fires once after the
- * static bonus summary and once every 3rd countdown step — this port has no
- * audio playback anywhere (see e.g. `zones.js`'s own unplayed teleport sfx
- * citation), so `sfxPending` is exposed for a future audio layer to hook
- * rather than played here.
+ * static bonus summary and once every 3rd countdown step. `sfxPending` is
+ * exposed rather than played here so this module stays audio-free and
+ * testable under plain Node; main.js reads it right after each `step()`
+ * call and plays `CHA_CHING_SFX` through `audio/audio-bus.js`.
  */
 
 import { drawCentered } from './title-menu.js';
@@ -99,6 +99,12 @@ export const POOL_STEP = 90;                  // CS:0x66fd-0x6798, see header
 export const WAIT_AFTER_SUMMARY_TICKS = 30;   // FUN_1000_64d7(30)
 export const WAIT_AFTER_COUNTDOWN_TICKS = 50; // FUN_1000_64d7(50)
 export const SFX_EVERY_N_STEPS = 3;
+/* The "cha-ching" itself — see the header's own citation
+ * (`FUN_1000_22ca(0x52f)`, the same generic sound-export call `zones.js`
+ * cites for the teleport chime's own CALL MECHANISM, not the same id). Named
+ * here, alongside `sfxPending`, now that audio/audio-bus.js exists for
+ * main.js to play it through. */
+export const CHA_CHING_SFX = 0x52f;
 
 export const POOL_DIGITS = 6;
 export const POOL_X0 = 172, POOL_Y = 136, POOL_DIGIT_STEP = 16;   // CS:0x67da, live-confirmed layout

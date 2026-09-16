@@ -75,6 +75,19 @@ import { PASSWORD_LENGTH } from './zones.js';
 export const ADVANCE = 0x0a;    // 10 — the same per-glyph step message.js uses
 export const DIAMOND = '\x11';  // CS:0x4443's own separator glyph, reused as a cursor
 
+/* Gods/docs/dynamic-trace-and-runtime-data.md's own title-screen trace:
+ * "UP -> cursor -1, clamp at 0, click sfx 0x119, redraw" / "FIRE -> confirm
+ * sfx 0x233 (same sound the grid-entry widget uses to confirm)" — one
+ * confirm id serves BOTH `TitleMenu` and `PasswordEntry`, not two. The
+ * click fires on any cursor move in the citation (UP/DOWN); this port
+ * generalises it to LEFT/RIGHT too for the password grid's own 2-D
+ * navigation, a disclosed generalisation rather than a byte-cited claim for
+ * that axis specifically. main.js's `handleTitleKey` is the one place both
+ * widgets' key handling passes through, so it is also the one place these
+ * are played, rather than threading an audio dependency into either class. */
+export const MENU_CLICK_SFX = 0x119;
+export const MENU_CONFIRM_SFX = 0x233;
+
 /* CONFIRMED against a live DOSBox capture of the real title screen: the
  * menu's own option 1 reads "ENTER PASSWORD" (no "A") — a DIFFERENT string
  * from the password-entry SCREEN's own title, "ENTER A PASSWORD"
