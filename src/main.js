@@ -1897,6 +1897,31 @@ async function main() {
             level.drawObjects.filter((o) => o !== dropped), level.cats, dropped);
         }
       };
+      /* CS:0xBB87-0xBBA8 — drain the selector-1 GROUP drops queued by
+       * pat-objects.js when a whole scripted group has been killed. The
+       * queued position is SCREEN-relative (the original caches it that way
+       * at CS:0xBBC1 and adds the camera back at CS:0xBB8E), plus the +8 on
+       * BOTH axes that CS:0xBB96/0xBB99 apply.
+       *
+       * This is what makes level 1A's class-2 flying monster hand over its
+       * knife: its descriptor byte +7 is 0, and `dropCarriedItem`'s own
+       * CS:0xC059 split turns an id below 0x0B into weapon type id + 0xC0 —
+       * object type 192, weapon index 0, "knife". Picking it up increments
+       * the weapon's `count`, and volleySize() = count - base + 1 takes the
+       * hero from one thrown knife to two.
+       *
+       * ⚠️ The original does NOT place the object at the kill position
+       * directly: CS:0xBF5F stages a single pending drop that pops upward
+       * (vy = -6) and accelerates down one unit a tick until vy >= 5
+       * (CS:0xBFD3-0xBFDC), and only THEN calls CS:0xC041 at wherever it
+       * landed. This port skips that arc and drops at the kill point,
+       * letting objects.js's own fall physics settle it — a disclosed
+       * cosmetic difference in where the item comes to rest, not in whether
+       * it appears or what it is. `UNKNOWN_pat_drop_pop_arc`. */
+      for (const d of patGroups.drops) {
+        dropCarriedIntoWorld(d.id, d.x + camNow.x + 8, d.y + camNow.y + 8);
+      }
+      patGroups.drops.length = 0;
       /* THE HUNT. CS:0xf11f/0xf1e5 run the pathfinder only from the two walk
        * modes, only on a tile crossing, and only when standing on ground —
        * so the verdict is sticky for a whole tile and an airborne or falling

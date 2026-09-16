@@ -13,13 +13,22 @@
  * THE ID ENCODING, CS:0xBF5F/0xBF96 — verbatim from CLAUDE.md's own decode:
  *   negative        -> (handled by the CALLER: "no reward", never reaches
  *                        this module at all)
- *   0 .. 0xA        -> a PLAIN NUMERIC popup (CS:0xC004). CLAUDE.md's own
- *                       words: "not chased further" — this is a genuine
- *                       UNKNOWN, not merely unported, so this module does
- *                       NOT render this branch rather than guess a sprite
- *                       for it. `spawn()` still occupies the single slot
- *                       (matching the original's own slot-occupancy rule),
- *                       it simply never yields a `spriteId`.
+ *   0 .. 0xA        -> ⚠️ NOT a "plain numeric popup". That reading — which
+ *                       this header, spawn.js and CLAUDE.md all carried, and
+ *                       which called the branch "a genuine UNKNOWN" — is
+ *                       WRONG, and it is why the port dropped no weapons.
+ *                       CS:0xC004 is `ADD CX,0x12E`: the id IS a WEAPON
+ *                       INDEX and the popup sprite is `0x12E + id`. The
+ *                       confirmation is that CS:0x1DC6, the weapon-object
+ *                       DRAW path, computes the identical sprite the long
+ *                       way round — `SUB CX,0xC0 / ADD CX,0x12E` — so both
+ *                       sites agree that weapon index i draws as 0x12E + i.
+ *                       And CS:0xC075, where the arc finally lands, creates
+ *                       the real object as `type = id + 0xC0`: object type
+ *                       192 for id 0, which POBJECTS/PWEAPONS both name
+ *                       "knife". PLEV1A's class-2 flying monster carries
+ *                       id 0 — the second knife that takes the hero's
+ *                       volley from one to two.
  *   0xB and above   -> a POBJECTS icon, `sprite = 170 + (id - 0xB)`
  *                       (CS:0xBF9B/0xBFAB, this project's own already-
  *                       established `170 + type` object-sprite formula).
@@ -31,11 +40,24 @@
  *                       (`UNKNOWN_bf5f_special_sprite_callers` — CLOSED
  *                       negative, exhaustive).
  *
- * MOTION, CS:0xBF6E/0xBF87-92: `y += -6` every tick, uncapped in the bytes
- * this project has read. No cull or lifetime is established from the binary
- * — `UNKNOWN_popup_cull` — so this port's own off-screen-height cull below
- * is a disclosed SAFETY VALVE against an eternal floating icon, not a
- * decoded mechanism; flagged rather than presented as proven.
+ * MOTION — ⚠️ ALSO CORRECTED, and the correction changes what this effect
+ * IS. The velocity at DS:0x22a is seeded to -6 (CS:0xBF75) but then
+ * INCREMENTED once per tick (CS:0xBFD3 `INC word [0x22a]`), so the item
+ * arcs: up, over, down. It is not an icon floating away forever. When the
+ * velocity reaches +5 (CS:0xBFD7 `CMP [0x22a],5 / JL`), the slot is freed
+ * (`[0x1a0] := 0xFFFF`) and CS:0xC041 runs at the landing point, allocating
+ * a REAL, COLLECTABLE OBJECT — a dead-slot reuse via CS:0x38D7, `flag6 := 1`
+ * and the fall sentinel armed. `UNKNOWN_popup_cull` is therefore CLOSED: the
+ * lifetime is the arc, and the arc terminates in an object.
+ *
+ * ⚠️ WHAT THIS PORT STILL DOES NOT DO. This module renders the arc as a
+ * transient icon only; it does not run CS:0xC041 at the end of it, so a
+ * System-A/System-B/selector-2/nest group-elimination reward is still a
+ * visual that vanishes rather than an item the hero can pick up. The
+ * selector-1 PAT group drop DOES land as a real object — see main.js's own
+ * `patGroups.drops` drain, which calls objects.js's `dropCarriedItem`
+ * directly. Bringing the other three callers onto that same path is a
+ * separate, larger change: `UNKNOWN_popup_reward_not_collectable`.
  *
  * THE BUSY-SLOT DIVERT, CS:0xBF6B — CLOSED. A second `spawn()` call while
  * the slot is busy diverts, in the original, straight to `CS:0xC041` — the

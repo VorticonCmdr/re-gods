@@ -152,10 +152,14 @@ export function parseGroupsB(buf) {
       budget:     b[0x0d],
       /* CS:0xED94's own `MOV CX,word[SI+0x10] / XCHG CH,CL` (BE -> native) —
        * the GROUP-ELIMINATION reward id, `UNKNOWN_f030_item_drop`. Negative
-       * = no reward; `< 0xB` a plain numeric popup (CS:0xC004, not decoded
-       * to sprite level by this project — see popup.js's own header for
-       * what this port does and does not render); `>= 0xB` a POBJECTS type,
-       * `id - 0xB`. Fires once the WHOLE group is dead-or-dying, at
+       * = no reward; `>= 0xB` a POBJECTS type, `id - 0xB`; `< 0xB` a
+       * ⚠️ WEAPON, object type `id + 0xC0` (CS:0xC075) drawn during its own
+       * toss arc as sprite `0x12E + id` (CS:0xC004). This comment used to
+       * call the low branch "a plain numeric popup ... not decoded to sprite
+       * level"; that was wrong, and it is why no enemy in this port ever
+       * yielded a weapon. See popup.js's corrected header for the full
+       * decode and for what is still not collectable. Fires once the WHOLE
+       * group is dead-or-dying, at
        * whichever entity died last — see main.js's own group tracking. */
       rewardId: signWord((b[0x10] << 8) | b[0x11]),
       tileX:   b[0x12],

@@ -11896,6 +11896,96 @@ export async function checkPatObjects(fetchRaw) {
       + '(plus a margin) — which is what makes sign-extension exact rather than a guess', inRange);
   }
 
+  /* (0b) THE GROUP DROP, CS:0xBB75-0xBBAD -> CS:0xBF5F -> CS:0xC041.
+   * Reported as "in Level 1 one of the flying monsters drops a knife extra
+   * (two knives)". It does, and the port dropped nothing at all. */
+  {
+    const pf = dclDecompress(await fetchRaw('game/PALFILS.0A1')).data;
+    const blob = dclDecompress(await fetchRaw('game/PGOD01.PAT')).data;
+    const dir = parsePatDirectory(blob);
+    const weapons = parseWeapons(dclDecompress(await fetchRaw('game/PWEAPONS.001')).data);
+
+    /* THE DECODE, and the correction that made this work. CS:0xC059 splits
+     * the drop id the OPPOSITE way round from what this project documented:
+     * ids below 0x0B are WEAPONS (type = id + 0xC0), not "plain numeric
+     * popups". objects.js's dropCarriedItem already had it right; popup.js,
+     * spawn.js and CLAUDE.md all had it wrong, which is why no enemy in this
+     * port ever yielded a weapon. */
+    const mk = () => Array.from({ length: 200 }, () => ({ type: 0xFFFF, x: 0, y: 0, flag6: 0 }));
+    check('CS:0xC075 — a drop id below 0x0B is a WEAPON, object type id + 0xC0, NOT a numeric popup',
+      dropCarriedItem(mk(), 0, 10, 20).type === 0xC0
+      && dropCarriedItem(mk(), 5, 10, 20).type === 0xC5);
+    check('CS:0xC05E — a drop id of 0x0B or more is an ordinary POBJECTS type, id - 0x0B',
+      dropCarriedItem(mk(), 0x0B, 10, 20).type === 0
+      && dropCarriedItem(mk(), 45, 10, 20).type === 34);
+    check('weapon index 0 really is the knife, so drop id 0 is the reported "knife extra"',
+      weapons[0].name === 'knife' && 0xC0 + 0 === 192);
+
+    /* EXACTLY ONE group in PLEV1A carries it — "ONE of them", as reported.
+     * Derived from the shipped descriptors, not asserted from the report. */
+    const patIds = [];
+    {
+      const map = parseMap(dclDecompress(await fetchRaw('game/PLEV1A.MAP')).data);
+      const pal = parsePalfils(pf);
+      const seen = new Set();
+      for (let i = 0; i < map.planeB.length; i++) {
+        const v = map.planeB[i];
+        if (v < 3 || seen.has(v - 3)) continue;
+        seen.add(v - 3);
+        const ev = pal.events[v - 3];
+        if (!ev || ev.selector !== 1) continue;
+        const d = parsePatSpawnDescriptor(pf, ev.param);
+        patIds.push({ cls: d.behaviorClassIndex, id: d.extra });
+      }
+    }
+    const knives = patIds.filter((p) => p.id < 0x0B);
+    check('PLEV1A: exactly ONE reachable selector-1 group drops a weapon, and it is a class-2 '
+      + '(the flying monster, spriteBase 456 = PLEVEL1A.DAT #6) carrying drop id 0 = the knife',
+      knives.length === 1 && knives[0].cls === 2 && knives[0].id === 0,
+      JSON.stringify(knives));
+
+    /* END TO END on the real descriptor: activate it, kill its sub-record
+     * through the ordinary contact path, and check a knife comes out. */
+    const d0 = parsePatSpawnDescriptor(pf, 0);
+    const pg = new PatGroups(dir);
+    pg.blobBytes = blob;
+    pg.activate(d0, 1);
+    const cam = { x: 300, y: 600 };
+    const hero = { x: -9999, y: -9999, state: 0 };
+    const hp = { bar: 24, damage() {} };
+    const sh = new EnemyShots(), lh = new LineHazards();
+    pg.step(cam, 0, sh, lh, hero, () => 0, 0, null, hp, null, null, {});   // seed
+    const sub = pg.slots[0].subs[0];
+    for (let t = 1; t < 80 && !pg.drops.length; t++) {
+      hero.x = sub.x - 8; hero.y = sub.y - 8;             // stand on it: contact kills
+      pg.step(cam, 0, sh, lh, hero, () => 0, t, null, hp, null, null, {});
+    }
+    check('END TO END — killing PLEV1A\'s knife-carrying flying monster queues its group drop '
+      + '(CS:0xBB7D fires once nothing in the group is alive, latched by slot+0x18)',
+      pg.drops.length === 1 && pg.drops[0].id === 0, JSON.stringify(pg.drops));
+    if (pg.drops.length) {
+      const obj = dropCarriedItem(mk(), pg.drops[0].id, 100, 100);
+      check('...and that drop becomes a REAL, collectable weapon object — type 192, flag6 = 1 '
+        + '(activated) — rather than a popup icon that vanishes',
+        obj.type === 192 && obj.flag6 === 1 && weapons[obj.type - 0xC0].name === 'knife');
+    }
+
+    /* The escape suppressor: a group that flies off screen drops nothing,
+     * because CS:0xBABB poisons slot+0x16 to 0xFFFF and CS:0xBBA2 tests the
+     * low byte against 0xFF. */
+    const pg2 = new PatGroups(dir);
+    pg2.blobBytes = blob;
+    pg2.activate(d0, 1);
+    const far = { x: -9999, y: -9999, state: 0 };
+    for (let t = 0; t < 400 && pg2.slots[0].active; t++) {
+      pg2.step(cam, 0, sh, lh, far, () => 0, t, null, hp, null, null, {});
+    }
+    check('CS:0xBABB — a group that ESCAPES off-screen instead of being killed drops nothing: '
+      + 'the retire poisons its drop id to 0xFFFF and the 0xFF low byte fails CS:0xBBA2',
+      pg2.drops.length === 0 && (pg2.slots[0].dropId & 0xff) === 0xff,
+      `drops=${pg2.drops.length} id=${pg2.slots[0].dropId}`);
+  }
+
   /* (a) decodeDelta — the standard shl4/sar4 signed-nibble extraction,
    * independently re-derived rather than trusted: every nibble 0x0..0x7
    * must read as itself, every nibble 0x8..0xf as itself-minus-16. */

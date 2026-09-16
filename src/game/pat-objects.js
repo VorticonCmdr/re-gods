@@ -491,9 +491,14 @@ export class PatGroups {
       subs: Array.from({ length: SUBRECORDS_PER_GROUP }, freeSub),
     }));
     this.lostActivations = 0;
+    /* CS:0xBF5F's staged group drops, drained by the host into the live
+     * object array (objects.js `dropCarriedItem` + `insertSpawned`). Queued
+     * rather than spawned here so this module stays free of the object-array
+     * coupling, matching selector2.js's own `rewards` convention. */
+    this.drops = [];
   }
 
-  clear() { for (const s of this.slots) { s.active = false; s.materialised = false; } return this; }
+  clear() { for (const s of this.slots) { s.active = false; s.materialised = false; } this.drops.length = 0; return this; }
 
   get live() { return this.slots.reduce((n, s) => n + (s.active ? 1 : 0), 0); }
 
@@ -514,6 +519,15 @@ export class PatGroups {
     free.materialised = false;
     free.desc = desc;
     free.cls = cls;
+    /* CS:0xB975 `movsb` copies descriptor byte +7 into slot+0x16 — the group
+     * DROP ID (see the drop gate in step()). The allocator copies it
+     * unconditionally; CS:0xBABB poisons it to 0xFFFF later if the group
+     * escapes off-screen instead of being killed. */
+    free.dropId = desc.extra;                 // slot+0x16
+    free.dropGiven = false;                   // slot+0x18, the one-shot latch
+    free.killedThisFrame = 0;                 // slot+0x1a
+    free.deathCacheX = null;                  // DS:0x202, screen-relative
+    free.deathCacheY = null;                  // DS:0x204
     return true;
   }
 
@@ -670,6 +684,13 @@ export class PatGroups {
        * would leak forever, which is the very bug this block removes. */
       const n = Math.min(slot.desc.entityCount, SUBRECORDS_PER_GROUP);
       let finished = 0;
+      /* CS:0xBA45/0xBA49 — both group tallies are zeroed at the head of every
+       * run pass, exactly like CX. They are per-FRAME counts, not running
+       * totals: +0x1a (`killedThisFrame`) is bumped by the kill path at
+       * CS:0xBBC8, +0x1b (`dying`) by the death-animation branch at
+       * CS:0xBBD6. */
+      slot.killedThisFrame = 0;                            // slot+0x1a
+      let dying = 0;                                        // slot+0x1b
       for (let i = 0; i < n; i++) {
         const s = slot.subs[i];
         /* CS:0xBA5B `CMP word ptr [DI+0xc],0` / `JNZ ba64` / `JMP bbbe` —
@@ -683,6 +704,7 @@ export class PatGroups {
         if (s.key === 0) { finished++; continue; }       // CS:0xBA5B/BA61 -> BBBE
 
         if (s.key < 0) {                                  // CS:0xBA64 `JNS ba69` fallthrough -> JMP bbd6
+          dying += 1;                                      // CS:0xBBD6 `inc byte [si+0x1b]`
           const d = this.#deathDraw(slot, s, cam);
           if (d) drawn.push(d);
           continue;                                       // no stagger/movement/dispatch/contact while dying
@@ -718,6 +740,45 @@ export class PatGroups {
         if (health) this.#contactAndDamage(slot, s, cam, hero, health, grid, decodeTag, opts);
 
         drawn.push({ x: screenX, y: screenY, sprite: slot.cls.spriteBase }); // UNKNOWN_pat_animation_frame — see header
+      }
+
+      /* CS:0xBB75-0xBBAD — THE GROUP DROP. This is where level 1A's flying
+       * monster gives up its knife.
+       *
+       *     bb75  mov dx,[si]            ; entityCount
+       *     bb77  sub dl,[si+0x1a]       ; minus killed-this-frame
+       *     bb7a  sub dl,[si+0x1b]       ; minus still-dying
+       *     bb7d  cmp dl,cl              ; vs the retired tally (CX)
+       *     bb7f  jnz bbb2               ; -> straight to the slot release
+       *     bb81  cmp word [si+0x18],0 / jnz bbb2     ; one-shot latch
+       *     bb87  ax=[0x202] bx=[0x204]  ; the last kill's SCREEN position
+       *     bb8e  add ax,[0xa] / add bx,[0xc]         ; -> world
+       *     bb96  add ax,8 / add bx,8
+       *     bb9d  mov cl,[si+0x16] / cmp cl,0xff / jz ; 0xFF -> no drop
+       *     bba8  call 0xbf5f            ; stage the drop
+       *     bbad  mov word [si+0x18],1   ; latch it
+       *
+       * Since entityCount = retired + dying + killedThisFrame + stillAlive,
+       * `entityCount - killed - dying === retired` is exactly "nothing is
+       * alive any more". A group that flies off the screen instead of being
+       * killed drops nothing, because CS:0xBABB poisons slot+0x16 to 0xFFFF
+       * on an off-screen retire and the 0xFF low byte fails this test.
+       *
+       * THE ID ENCODING IS NOT A NUMERIC POPUP. `CS:0xC059` splits it as
+       *   id >= 0x0B -> ordinary POBJECTS type, id - 0x0B
+       *   id <  0x0B -> a WEAPON, object type id + 0xC0 (weapon index = id)
+       * objects.js's own `dropCarriedItem` already implements exactly that
+       * split, so the raw id is handed over untouched. PLEV1A's class-2
+       * flying monster carries id 0 — weapon index 0, "knife" — which is the
+       * second knife that takes the hero's volley from one to two. */
+      if (!slot.dropGiven && (n - slot.killedThisFrame - dying) === finished) {
+        slot.dropGiven = true;                            // CS:0xBBAD, slot+0x18
+        if ((slot.dropId & 0xff) !== 0xff                 // CS:0xBBA2
+            && slot.deathCacheX !== null) {
+          this.drops.push({ id: slot.dropId,              // CS:0xBB9D
+                            x: slot.deathCacheX,          // screen-relative,
+                            y: slot.deathCacheY });       //   see #onKilled
+        }
       }
 
       /* CS:0xBBB2-0xBBB6 — RELEASE THE GROUP SLOT.
@@ -762,7 +823,11 @@ export class PatGroups {
       const inBox = sx > HOLD_BOX.xMin && sx < HOLD_BOX.xMax
                  && sy > HOLD_BOX.yMin && sy < HOLD_BOX.yMax;
       if (inBox) { cursor -= 1; }                        // CS:0xBAB2 — back off, re-apply last delta
-      else { s.key = 0; return; }                         // CS:0xBAB6 — retire
+      else {
+        s.key = 0;                                        // CS:0xBAB6 — retire
+        slot.dropId = 0xFFFF;                             // CS:0xBABB — a group that
+        return;                                           //   ESCAPES drops nothing
+      }
     }
 
     /* AX (the pre-movement X) is cached to DS:0x200 BEFORE the delta is
@@ -809,24 +874,32 @@ export class PatGroups {
     const c = attackHero({ x: s.x, y: s.y, w: box.w, h: box.h, strength: s.key },
                           hero, health, { invuln: opts.invuln, sfx: opts.sfx });
     s.key = c.strengthOut;
-    if (s.key < 0) { this.#onKilled(slot, s, opts); return; }    // CS:0xBCEF/BCF1 — hero touch killed it
+    if (s.key < 0) { this.#onKilled(slot, s, opts, s.x - cam.x, s.y - cam.y); return; }  // CS:0xBCEF/BCF1
 
     if (grid && decodeTag) {
       const proxy = { x: s.x, y: s.y, state: s.key };
       const r = creatureScansGrid(proxy, grid, cam, decodeTag, opts.difficulty || 0,
                                    box, null, { rng: opts.rng, debris: opts.debris, sfx: opts.sfx });
       s.key = proxy.state;
-      if (r.killed) this.#onKilled(slot, s, opts);
+      if (r.killed) this.#onKilled(slot, s, opts, s.x - cam.x, s.y - cam.y);
     }
   }
 
   /** CS:0xBCFA-0xBD09 (the shared-field kill marker + frozen death-delta
    *  capture) and CS:0xBBC1-0xBBD3 (the score award). */
-  #onKilled(slot, s, opts) {
+  #onKilled(slot, s, opts, screenX, screenY) {
     s.attackState = -1;                                      // CS:0xBCFA — shared with the death-frame counter
     const b = this.blobBytes;
     s.deathDelta = (b && s.cursor > 0) ? b[s.cursor - 1] : 0; // CS:0xBCFF-BD02 — the last byte #move consumed
     if (opts.score) opts.score.add(scoreForKey(slot.desc.key)); // CS:0xBBCC-BBD2
+    /* CS:0xBBC1-0xBBC8 — the kill path caches this sub-record's SCREEN
+     * position into the shared scratch pair DS:0x202/0x204 and bumps the
+     * "died this frame" tally at slot+0x1a. The group drop below reads the
+     * cache back and adds the camera to it (CS:0xBB8E), which is what pins
+     * these as screen-relative rather than world coordinates. */
+    slot.deathCacheX = screenX;                              // DS:0x202
+    slot.deathCacheY = screenY;                              // DS:0x204
+    slot.killedThisFrame += 1;                               // slot+0x1a
   }
 
   #dispatch(slot, s, cam, hero, shots, lineHazards, rngNext, tock) {
