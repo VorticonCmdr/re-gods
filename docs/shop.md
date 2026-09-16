@@ -15,11 +15,15 @@ opens exactly once per game, via password entry only" claim looks unfamiliar.
 > grid and slot-17-is-EXIT were additionally **live-confirmed under DOSBox**: forced
 > into the world-2 shop via the isolated-write technique (below), screenshotted, and
 > the on-screen icon layout matches the disassembled cursor math exactly. Item
-> **prices are now established** for the 12 ids this port's own world-2 roster
-> uses — see `UNKNOWN_shop_prices`, closed in a later session via a machine-parsed
+> **prices are now established** for the ids this port's world 2/3/4 rosters
+> use — see `UNKNOWN_shop_prices`, closed in a later session via a machine-parsed
 > live memory dump (not a hand transcription) plus independent live purchase
 > confirmation. The fuller table (ids 0-131) is read and landmark-verified but not
-> purchase-confirmed past those 12.
+> purchase-confirmed past the original 12. **The per-world roster source is also
+> now established** — see `UNKNOWN_shop_roster_source`, closed the same session
+> after finding that the previous "reads as zero" result was a segment error
+> (`SS:0x51aa`, not `DS:0x51aa` — `[BP+disp]` addressing defaults to `SS` in
+> real mode), not evidence the table needed something more exotic.
 
 ## Forcing shop entry live, without a real password
 
@@ -101,11 +105,33 @@ populated), 3 icons plus a gap in the third row, and `EXIT` in the last cell.
 
 ⚠️ **Correction for anyone reading this project's own session notes before this
 file existed**: an earlier working note (this port's own backlog memory, not
-CLAUDE.md) called `DS:0x408c` "the per-world roster table." That is wrong in a
+CLAUDE.md) called `0x408c` "the per-world roster table." That is wrong in a
 way that matters. `0x408c` is a 30-word (`0x1e`) **scratch buffer that gets
 overwritten every time the shop (re)builds its visible grid** — it is the
 *output* of a filter-and-sort pass, not the source data. The actual per-world
-source is `DS:0x51aa`.
+source is `0x51aa`.
+
+⚠️ **Second correction, a later session: every address in this pipeline
+section that this file previously cited as `DS:` is actually `SS:`** —
+`0x51aa`, `0x408c`, and `0x4050` (the roster-load/filter scratch trio) all
+live in the stack segment, not the main data segment. This was missed
+originally because `[BP+disp]` addressing **defaults to `SS`, not `DS`, in
+real mode** — the disassembly text (`MOV SI, word ptr [BP+0]`, `MOV BP,
+0x408c` ... `MOV CX, word ptr [BP+0]`) never shows an explicit segment,
+so the earlier pass assumed the project's usual `DS:` default rather than
+applying the base-register rule. Two independent proofs: (1) live —
+breakpointing the exact instruction and single-stepping it shows `SI` load
+a real pointer value while `DS:0x51aa` itself reads all zero and `SS:0x51aa`
+reads the same value `SI` just got; (2) static — Ghidra's own disassembly of
+the surrounding `FUN_1000_7276` renders several of these same accesses with
+an **explicit** `SS:` prefix in the text itself (`LODSW SS:SI`, `MOV word ptr
+SS:[SI],BX`, `STOSW ES:DI` with `ES` freshly loaded from `SS`), which is only
+printed when a real `0x36` override byte is present in the machine code —
+not a inferred default. `DS:0x2a4e` (the price table, `[DI+disp]` addressing,
+which DOES default to `DS`) and `DS:0x318`/`0x319`/`0x25c`/`0xef78` (plain
+direct-displacement or explicitly `DS:`-overridden `[BP+disp]` addressing in
+the very same disassembly) are unaffected by this correction — re-checked
+against Ghidra's own text this session, still `DS`.
 
 ```
 7233  cmp byte[0x38c],0
@@ -121,10 +147,10 @@ reached only after a successful password) never touches `0x38c`, and `0x38c` is
 only ever cleared by BEGIN QUEST or the attract-mode demo cycler — so at the one
 call site that shipped code can actually reach, `0x38c` is provably still `1`.
 **The `0x5078` sublevel-indexed branch is dead for the shop feature specifically**
-— every real invocation uses `DS:0x51aa`, a plain 4-entry (`world 1..4`) pointer
-table to a `-1`-terminated list of raw item ids. `[PROVEN]` by disassembly;
-`UNKNOWN_shop_roster_source` below is about not having *read* those 4 lists,
-not about how they're selected.
+— every real invocation uses `SS:0x51aa` (see the segment correction above), a
+plain 4-entry (`world 1..4`) pointer table to a `0xFFFF`-terminated list of raw
+item ids. `[PROVEN]` by disassembly and now also live (below) —
+`UNKNOWN_shop_roster_source` is CLOSED, see below.
 
 `FUN_1000_7276` (`0x7276`-`0x7391`, with a same-function continuation Ghidra
 splits off as `FUN_1000_73d3` — it is reached only by a plain `JMP`, not a
@@ -138,15 +164,22 @@ copy:
 2. Skips the id if `DS:0x319[category]` is already set (bought this category
    already, this shop visit — `0x319` is a 23-byte scratch cleared to zero at
    shop entry, `CS:0x6c5d`-`0x6c67`).
-3. Skips it if either of two unexplained eligibility gates fails —
-   `FUN_1000_731b` (`AND`s three words at `DS:0xdd10`/`0xdda2`/`0xde34`, then
-   additionally special-cases raw ids `2` and `3`) or `FUN_1000_7336`
-   (checks `DS:0x168 == -1`, then special-cases ids `0x28`/`0x29`). Both were
-   disassembled but their *bit-level meaning* was not chased further — see
-   `UNKNOWN_shop_eligibility_gates`.
+3. Skips it if either of two gates fails — their **control flow** is now
+   fully disassembled (a later session), though the bit-level *meaning* of
+   the state they read is still open (`UNKNOWN_shop_eligibility_gates`):
+   `FUN_1000_731b` returns "skip" **only when** `DS:0xdd10 & DS:0xdda2 &
+   DS:0xde34 == -1` **and** the raw id is `2` or `3` — any other id passes
+   regardless, and if that AND is anything other than `-1` (all-ones), ids
+   `2`/`3` pass too. Which state (`-1` or not) is typical at a given shop
+   entry is not established — see `UNKNOWN_shop_eligibility_gates`; world
+   2's own two live captures disagreed on id `2`'s visibility, so it is
+   demonstrably not fixed. `FUN_1000_7336` is the identical shape
+   one level down: skip **only when** `DS:0x168 == -1` **and** the id is
+   `0x28`(40) or `0x29`(41). Both special-cased pairs are otherwise ordinary
+   entries in the raw source list (below) — they are not always available.
 4. Calls `FUN_1000_7392(id)` (the price/value accessor — see below) and skips
    the id if its cost exceeds current money (`DS:0x194:0x196`).
-5. Otherwise keeps it in a 30-slot scratch (`DS:0x4050`), then copies that
+5. Otherwise keeps it in a 30-slot scratch (`SS:0x4050`), then copies that
    scratch back into `0x408c`, **selection-sorts it ascending by
    `FUN_1000_7392`'s own value**, and counts the survivors into `DS:0x318`.
 6. If zero survivors, forces the cursor straight to the EXIT cell
@@ -156,9 +189,14 @@ copy:
 `FUN_1000_707d` (the per-tick grid *renderer*, not the builder) additionally
 computes a scroll offset `DS:0x25c = count - 17` whenever the survivor count
 exceeds 17 (the number of non-EXIT cells) — i.e. the roster can in principle be
-longer than one screenful. **Not exercised by either live capture below** (15
-and 16 survivors respectively, both `< 17`) — `UNKNOWN_shop_roster_source`
-covers whether any shipped world roster is ever long enough to trigger it.
+longer than one screenful. **Now confirmed shipped-data-reachable**: world 3's
+and world 4's raw candidate lists (below) are 21 and 23 entries respectively —
+well past 17 even before the two eligibility gates run — so a real player
+opening either shop with most/all gates open would see this scroll path fire.
+Neither live capture in this file exercises it (both were world 2, 15/16
+survivors), and this port does not implement scrolling — see the final
+roster tables below for how that's sidestepped rather than silently
+truncated.
 
 ### Two independent live captures of world 2, and why they disagree
 
@@ -181,7 +219,10 @@ own special case for id `2` gates it on a runtime word triple this session
 never decoded, so the SAME world's shop can legitimately show a different item
 count from one boot to the next. **Do not treat either list as "the" world-2
 roster** — both are one filtered sample of it, taken at different eligibility
-states. The raw source (`DS:0x51aa`'s own 4 pointers) was never read.
+states. The raw source (`SS:0x51aa`'s own 4 pointers) was read in a later
+session — see `UNKNOWN_shop_roster_source` below — and its own 16-entry list
+for world 1/2 is exactly the union of these two filtered samples, confirming
+both captures and the source read agree.
 
 ### The 12 buy ids are exactly 12 `gods-web` `CONSUMABLES` types — independent cross-check
 
@@ -363,38 +404,112 @@ capture — **an exact match, all 2048 bytes**. The price table is populated
 once with the same fixed content regardless of which world's level loaded
 it, not a level-scoped economy that varies per world.
 
-**The 12 prices this port's world-2 roster needs**, all live-read and the
-first live-purchase-confirmed as above (see `gods-web`'s `game/shop.js`
-`PRICES`):
+**The 14 prices this port's world 2/3/4 rosters need** (12 live-purchase-
+confirmed as above, plus `37`/`39` added when worlds 3/4 were wired in — see
+`UNKNOWN_shop_roster_source` below; not purchase-confirmed individually, but
+read from the same 132-record table with the same unbroken landmark):
 
-| id | 0 | 35 | 36 | 38 | 42 | 44 | 51 | 52 | 53 | 70 | 71 | 72 |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| price | 4000 | 8000 | 10000 | 5000 | 20000 | 4000 | 1000 | 1000 | 1000 | 650 | 1300 | 1000 |
+| id | 0 | 35 | 36 | 37 | 38 | 39 | 42 | 44 | 51 | 52 | 53 | 70 | 71 | 72 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| price | 4000 | 8000 | 10000 | 20000 | 5000 | 30000 | 20000 | 4000 | 1000 | 1000 | 1000 | 650 | 1300 | 1000 |
 
-The broader table (ids `0`-`131`, all landmark-verified but only these 12
-purchase-confirmed) is not ported anywhere — no world 3/4 roster exists yet
-to need it (`UNKNOWN_shop_roster_source` is still open) — but is available
-for a future session that reads `DS:0x51aa`'s real per-world lists. Sell-side
+The broader table (ids `0`-`131`, all landmark-verified) also has entries for
+the four ids this port deliberately does not show (`2`, `3`, `40`, `41` —
+`6000`, `12000`, `5000`, `10000` respectively) — not ported because their own
+eligibility is conditional, not because their price is unknown. Sell-side
 values (`DS:0xe2b6`, id `>=0xc0`) remain entirely unresolved — a different
 item, `UNKNOWN_shop_tradein_value`.
 
-## `UNKNOWN_shop_roster_source`
+## `UNKNOWN_shop_roster_source` — CLOSED
 
-`DS:0x51aa`'s own 4 pointers (one per world) were never dereferenced this
-session — every roster observation came from `0x408c`, the *filtered output*,
-not the source list. Reading the 4 raw lists would settle both "what's the
-full candidate set per world" and "is the `0x25c` scroll path ever shipped-data
-reachable" in one pass, without needing a live DOSBox session at all (the
-table is static, never written — confirmed via a program-wide write-search
-this session).
+Closed in a later session, once the segment error above (`SS:0x51aa`, not
+`DS:0x51aa`) was found — a straight `DS:0x51aa` read had genuinely returned
+all zero every time it was tried, including right after `GAME.EXE` starts,
+at the title menu, and inside an open shop, which is what led the earlier
+session to conclude (wrongly) that the table needed a live DOSBox read for
+some *other* reason it couldn't pin down. It didn't; it needed the right
+segment. Once corrected, `SS:0x51aa`'s 4 words read live as `20646, 20646,
+20718, 20808` (worlds 1-4) — `SS:0x50a6`, `SS:0x50a6` (world 1 and 2 share a
+list), `SS:0x50ee`, `SS:0x5148`. Each is a flat, `0xFFFF`-terminated list of
+raw item ids (mixing buy ids `<0xc0` and sell-marker ids `>=0xc0` together,
+exactly as `FUN_1000_6e62`'s dispatch already implied) — read live and
+saved verbatim, not hand-transcribed:
 
-## `UNKNOWN_shop_eligibility_gates`
+| World | Raw list (sentinel-terminated) |
+|---|---|
+| 1 / 2 | `0,38,197,2,35,36,42,194,201,44,51,52,53,70,71,72` |
+| 3 | `0,38,197,40,35,41,36,42,194,198,37,39,2,3,44,51,52,53,70,71,72` |
+| 4 | `194,198,199,200,202,0,2,3,35,36,37,38,39,40,41,42,44,51,52,53,70,71,72` |
 
-`FUN_1000_731b` (three words ANDed from `0xdd10`/`0xdda2`/`0xde34`, then a
-special case for raw ids `2`/`3`) and `FUN_1000_7336` (`0x168 == -1`, special
-case for `0x28`/`0x29`) were disassembled but their bit-level meaning was not
-chased. Both directly explain the run-to-run roster variance observed live
-(above) but neither table's actual semantics are established.
+**World 1/2's raw list is an exact, independent reproduction of a fact this
+project had only ever *inferred* before**: the "stable core" `{0,35,36,38,
+42,44,51,52,53,70,71,72}` (12 ids) plus the conditionally-present `2` plus
+sell markers `{194,197,201}` — derived earlier this project from comparing
+two *filtered* live captures — is precisely this raw list's own 16 entries,
+with nothing added or missing. That the unfiltered source and the two
+filtered samples agree exactly, from two unrelated reads months apart, is
+strong independent confirmation the whole pipeline (source table, filter,
+and this project's own reconstruction of it) is understood correctly.
+
+**Worlds 3 and 4 share an identical buy-id candidate set**, `{0,2,3,35,36,
+37,38,39,40,41,42,44,51,52,53,70,71,72}` (18 ids) — world 1/2's 12 plus six
+new ones: `2,3,37,39,40,41`. Cross-checked exactly like the original 12: all
+six are real `gods-web` `CONSUMABLES` types (`2`→rank 1 weaponPower, `3`→
+rank 2 weaponPower, `37`→rank 5 noop34c, `39`→rank 7 familiar, `40`→rank 8
+familiarWings, `41`→rank 9 familiarClaws) — six items, six exact matches,
+zero misses, the same signal that validated the original 12.
+
+**Of those six, four are conditionally gated and two are not** — see the
+refined `FUN_1000_731b`/`FUN_1000_7336` characterization above. Ids `2` and
+`3` are skipped when `DS:0xdd10 & DS:0xdda2 & DS:0xde34 == -1`, and pass
+when that AND differs from `-1`; ids `40` and `41` follow the identical
+shape gated on `DS:0x168`. This project has never read any of these four
+words, in world 2 or anywhere else — there is no live evidence for what
+value they typically hold, and the one relevant observation this project
+does have argues against assuming a fixed default: world 2's own two live
+captures disagreed on id `2` (absent in one, present in the other), meaning
+at least one of those two real shop entries had the AND `!= -1`. So the
+runtime state is demonstrably not constant even for the SAME world across
+boots, let alone predictable for worlds 3/4, which were never live-checked
+for this at all. Ids `37` and `39` are not named by either gate and pass
+unconditionally regardless — that part IS unconditional, disassembly-proven
+fact, not an inference about typical runtime state.
+
+**Consequently, this port's world 3/4 roster ships only the six-plus-12 =
+14 unconditionally-eligible ids** — `{0,35,36,37,38,39,42,44,51,52,53,70,
+71,72}` — deliberately excluding `2,3,40,41` (gated on runtime state this
+project has never read, in either polarity, for worlds 3/4) and every
+sell-marker id (sell is not ported at all, `UNKNOWN_shop_tradein_value`).
+This is not merely a size-limit workaround: 14 fits the 17-slot grid without
+needing the `0x25c` scroll path (see above) at all, and it extends the same
+"don't show what isn't reliably there" discipline world 2's own 12-id roster
+already used for id `2`, rather than introducing a new, weaker standard for
+worlds 3/4. Note this doesn't make the scroll path any less real for worlds
+3/4: if the gate state at a typical world-3/4 shop entry admits `2`/`3`/
+`40`/`41` the way world 2's own run 2 admitted id `2`, the true survivor
+count is closer to the full 18 buy ids (plus sell markers), comfortably
+past 17. A future session that resolves `UNKNOWN_shop_eligibility_gates`'
+bit-level meaning could add `2`/`3`/`40`/`41` back in (with real prices
+already on record, see below) and would need to implement scrolling to show
+them reliably.
+
+## `UNKNOWN_shop_eligibility_gates` — control flow now proven, bit-level meaning still open
+
+`FUN_1000_731b` and `FUN_1000_7336` were re-disassembled to their exact
+branch structure this session (see the numbered filter-steps list above for
+the precise polarity: each gate skips its own two special ids specifically
+when its flag word — the `AND` of three words for `731b`, `DS:0x168` alone
+for `7336` — equals `-1`, and passes every id, including its own two
+special ones, once that flag differs from `-1`). What is now fully
+understood: the *shape* of both gates and which two ids each one names.
+What is still open: what `DS:0xdd10`/`0xdda2`/`0xde34` and `DS:0x168`
+actually represent in terms of game state, what shipped gameplay event
+clears the relevant bit(s), and — not yet checked at all — what value they
+actually hold on a typical shop entry (world 2's own two live captures
+disagreed on the resulting id-2 visibility, so "typical" may not even be a
+single answer). `UNKNOWN_shop_roster_source` above worked around this
+rather than resolving it, by only porting the two new ids (`37`,`39`) that
+pass regardless of this unresolved state.
 
 ## `UNKNOWN_shop_tradein_value`
 
@@ -411,17 +526,16 @@ tested as a state machine (grid navigation, the two-press buy confirm, the
 `0x319` category lockout, the `0x5060` auto-use-vs-inventory branch, the
 selected-slot skip, the priority-`0x19` refusal message), fed roster data
 through an explicit constructor parameter rather than a hardcoded per-world
-table, specifically because `UNKNOWN_shop_roster_source` is still open. For
-world 2, `main.js` wires it with the live-captured 12-id buy set from this
-session (`{0,35,36,38,42,44,51,52,53,70,71,72}`, cross-checked above) dispatched
-straight into the existing `game/consumables.js` `CONSUMABLES`/`applyConsumable`
-machinery by matching `type` — real, byte-grounded content, not invented, but
-explicitly a *sample* filtered under one runtime state, not the definitive
-per-world list (`UNKNOWN_shop_roster_source`, `UNKNOWN_shop_eligibility_gates`).
-Worlds 3/4 get an empty (EXIT-only) roster, disclosed in code, pending the same
-data for those worlds. Real prices ARE now shown and charged for those 12 ids
+table. World 2 uses the live-captured 12-id buy set from the original session
+(`{0,35,36,38,42,44,51,52,53,70,71,72}`, cross-checked above); worlds 3 and 4
+share a 14-id set (the same 12 plus `37`,`39` — see `UNKNOWN_shop_roster_source`,
+CLOSED, above, for why the other six raw-list ids `2,3,40,41` and every
+sell-marker id are deliberately excluded rather than truncated). All real,
+byte-grounded content from the actual `SS:0x51aa` per-world source lists, not
+invented placeholders. Real prices are shown and charged for all 14 ids
 (`game/shop.js`'s `PRICES` table, `UNKNOWN_shop_prices` closed — see above);
 the visible grid also re-prunes itself after every purchase for the category
 lockout and current affordability, a partial port of the original's own
 roster rebuild (the two `UNKNOWN_shop_eligibility_gates` predicates are not
-reproduced). Sell is not ported — see `UNKNOWN_shop_tradein_value`.
+reproduced — that's exactly why worlds 3/4 stop at 14 ids rather than the
+full 18). Sell is not ported — see `UNKNOWN_shop_tradein_value`.
