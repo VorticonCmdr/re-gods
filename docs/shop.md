@@ -1,4 +1,4 @@
-# The shop screen — `FUN_1000_6c19` (loop), `FUN_1000_6e62` (buy/sell dispatch), `FUN_1000_7233`/`0x7276` (roster)
+# The shop screen — `FUN_1000_6c19` (loop), `FUN_1000_6e62` (buy / weapon-swap dispatch), `FUN_1000_7233`/`0x7276` (roster)
 
 Placement (when the shop opens at all, and that it is not a between-level screen)
 is established in `docs/message-line.md`'s own "world gate is not world 1 only"
@@ -268,14 +268,15 @@ plausible by chance. It also explains `DS:0x5060` cheaply: every one of these
 observed case for world 2) — the give-to-inventory branch was not exercised by
 either live capture.
 
-Ids `≥0xc0` (`194`, `197`, `201` here) are **not** extra high-priced buy items —
-`FUN_1000_6e62` (below) routes any id `≥0xc0` to the sell path unconditionally,
-with no buy branch reachable for that range at all. `194-192=2`, `197-192=5`,
-`201-192=9` — these are **sellable-item TYPE ids** (not raw inventory-slot
-indices 0-3; the confirm path's own `FUN_1000_953e(type)` call, not chased
-further this session, is what maps a type to "do you currently hold one, and
-in which of your 4 slots" — seen in the disassembly below but not itself
-disassembled).
+Ids `≥0xc0` (`194`, `197`, `201` here) are **not** extra high-priced consumables
+and this is **not a sell mechanic** — `UNKNOWN_shop_tradein_value` is now
+CLOSED, see below. `FUN_1000_6e62` routes any id `≥0xc0` to a **weapon
+purchase/swap** dispatch unconditionally, with no ordinary buy branch
+reachable for that range at all. `194-192=2`, `197-192=5`, `201-192=9` are
+**weapon TYPE ids** (0-10, the same order `docs/combat-and-projectiles.md`
+already establishes: `knife, time bomb, fireball, flame, lightning bolt,
+throwing star, spear, axe, hunter, magic axe, mace`) — world 1/2's shop
+offers to buy/switch to fireball(2), throwing star(5), and magic axe(9).
 
 ## Buy: two-press confirm, category lockout, refund-and-message on a full inventory
 
@@ -284,7 +285,7 @@ stored positive). Pressing FIRE:
 
 ```
 6e91  cursor slot empty (<0)         -> back to the poll loop, no-op
-6ea2  raw id == abs([0x258])         -> CONFIRM (buy or sell dispatch, below)
+6ea2  raw id == abs([0x258])         -> CONFIRM (buy or weapon-swap dispatch, below)
       else                          -> PREVIEW ONLY: store id in [0x258],
                                         call 0x6e20 (id<0xc0) or 0x6df5 (id>=0xc0)
                                         (draw-only routines; not chased further),
@@ -324,29 +325,105 @@ On confirm, for `id < 0xc0` (`CS:0x6ee0`-`0x6f7a`):
    already documents for the hint tablet (`CS:0x63D5`). Buying a potion/key
    from the shop runs the identical handler an in-level pickup would.
 
-## Sell: id ≥0xc0 always routes here; three-stage confirm
+## Weapon purchase/swap: id ≥0xc0 always routes here — `UNKNOWN_shop_tradein_value` CLOSED
+
+**This is not a "sell your stuff for cash" mechanic — there is no shipped
+path that refunds money without also arming a new weapon.** Every id `≥0xc0`
+names a **weapon type to buy and equip** (`id - 0xc0` = weapon index 0-10);
+the "sell" framing this file used until this session came from mirroring
+`FUN_1000_7392`'s own two-branch shape (id `<0xc0` reads the consumable
+price table, id `≥0xc0` reads a *different* table) without yet knowing what
+that second table actually drove. `gods-web`'s `SELL_ID_BASE`/"sell" naming
+inherited the same misreading and should be renamed if this gets ported.
+
+`FUN_1000_953e(weaponIndex)` (fully disassembled this session — the earlier
+"not chased further" note above is stale) is the SAME slot-selector
+`docs/combat-and-projectiles.md`/`gods-web`'s own `pickup.js` already port
+as `chooseSlot`/`weapons.js`'s `WEAPON_SLOTS` logic: weapon index `2`
+(fireball) is hard-wired to slot C; otherwise a weapon whose own record
+`+0x00` field is `0` goes to slot A; otherwise it competes for slots B/C,
+preferring an empty one or (if both hold a weapon already) whichever holds
+*fewer* extra pickups. It returns the target slot's base address
+(`0xdd10`/`0xdda2`/`0xde34`) in `SI` and the slot number in `BX` — an
+out-parameter pair the decompiler's pseudo-C for this function badly
+mis-rendered (a truncated, wrong-looking `if (BX==2) ...; return;` body);
+**read this one from `disassemble_function`, not `decompile_function`.**
 
 ```
 6ed7  raw id >= 0xc0 on CONFIRM -> 0x6f7c
-6f7c  if [0x258] < 0 (already toggled negative)   -> 0x6fa7  ; EXECUTE
+6f7c  if DS:0x258 (preview) < 0  -> 0x6fa7                     ; already warned -> EXECUTE
       else:
-        FUN_1000_953e(id-0xc0) -> SI               ; does the player hold this type?
-        if not holding it, or holding the exact same type again -> 0x6fa7 ; EXECUTE
-        else: FUN_1000_703a() (preview only) ; NEG [0x258] ; back to poll loop
-6fa7  EXECUTE: FUN_1000_22ca(0x333) (same confirm sfx as buy)
-      FUN_1000_953e(...) again, then a value computed from an 80-byte-stride
-      table at DS:0xe2b6 (keyed partly by the 953e result, partly by the raw
-      inventory-slot arithmetic) is added to money, and a second value from
-      the SAME table (keyed by slot index directly) is subtracted.
+        SI,BX = FUN_1000_953e(id-0xc0)                          ; where would/does this weapon live?
+        if that slot is EMPTY (DS:[SI] < 0), OR already holds
+          this exact weapon (DS:[SI] == id-0xc0)   -> 0x6fa7    ; nothing displaced -> EXECUTE
+        else: FUN_1000_703a()  ; builds "Warning.. this weapon replaces the "
+                                ;   + the CURRENTLY-EQUIPPED weapon's own name
+                                ;   (its record's own +0x20 embedded name string,
+                                ;   confirmed by decompressing PWEAPONS.001 with
+                                ;   blast.py: each 80-byte record carries its own
+                                ;   null-terminated name there, e.g. "knife\0")
+              NEG DS:0x258      ; toggle the preview negative -- needs ONE more press
+              -> back to the poll loop
+6fa7  EXECUTE: FUN_1000_22ca(0x333)  ; same confirm sfx as an ordinary buy
+      SI,BX = FUN_1000_953e(id-0xc0) again
+      if slot NOT empty AND DS:[SI] != id-0xc0:        ; a DIFFERENT weapon IS being displaced
+        oldIdx = DS:[SI]
+        rec = DS:0xe2b6 + oldIdx*0x50                   ; the DISPLACED weapon's own record
+        refund = (rec[+8] - rec[+6]) * (byteswap(rec[+0x4a]) + 1) >> 1
+        money += refund                                  ; a real 32-bit add
+      price = byteswap((DS:0xe2b6 + (id-0xc0)*0x50)[+0x4a])   ; the NEW weapon's own price
+      money -= price                                     ; a real 32-bit subtract
+      FUN_1000_94a7(id-0xc0)                             ; the ARM routine -- already
+                                                          ;   ported in gods-web as
+                                                          ;   pickup.js's real pickup path
+      FUN_1000_7233()                                    ; rebuild the roster
 ```
 
-The **trade-in value arithmetic itself was not resolved** this session — see
-`UNKNOWN_shop_tradein_value`. What *is* proven: sell is reachable, always
-gated on the same raw-id-≥-0xc0 rule the buy path also enforces, uses the same
-confirm sound effect, and needs its own multi-step confirm distinct from buy's
-plain two-press (a third press only actually executes once `[0x258]` has been
-toggled negative by a *second* distinct press — a minimum of two presses to
-preview plus one more to execute, three total, vs. buy's two).
+**`rec+0x4a`/`+0x4b` is the weapon's own PRICE, in the same units and scale
+as the consumable table — not a stat.** Read out of all four shipped
+`PWEAPONS.00{1-4}` files (`blast.py`): `knife=2500, time bomb=20000,
+fireball=12500, flame=45 (the cut weapon, a degenerate placeholder value
+consistent with its cut status elsewhere in this project), lightning
+bolt=30000, throwing star=5000, spear=17500 (all four worlds), axe=10000
+(worlds 1/2) or 17500 (worlds 3/4 — the only weapon whose price differs by
+world in the first 9 records), hunter=15000 (all four worlds), magic
+axe=15000 (worlds 1/2), 20000 (world 3), 10000 (world 4), mace=7500 (all
+four worlds)`. This settles the dimensional question the refund
+formula raises: `rec+8` (pickup count) minus `rec+6` (Power, the immutable
+base — `UNKNOWN_weapon_08`, already closed) is the number of *extra*
+duplicate pickups collected for that weapon, so **the refund is exactly
+half the displaced weapon's own price, per extra copy collected** — a
+proportional trade-in credit for however invested the player was in the
+weapon being given up, not an arbitrary formula. `rec+0x20` (confirmed by
+reading the decompressed bytes directly) is a null-terminated embedded name
+string inside each weapon's own 80-byte record, the exact same "small
+record with embedded name text" idiom this project already knows from
+`POBJECTS`' 48-byte records.
+
+**The three-press shape, precisely.** Buying a weapon for an EMPTY slot, or
+re-buying the exact same weapon already equipped there, is a plain
+two-press confirm exactly like a consumable (no displacement, no warning).
+Buying a weapon that would displace a genuinely DIFFERENT weapon needs a
+third press: press 1 previews (shows the new weapon's own description,
+`FUN_1000_6df5`/`0x474c`); press 2 hits the CONFIRM branch, finds a real
+mismatch, shows the "this weapon replaces the X" warning and toggles
+`DS:0x258` negative *for this same raw id*; press 3 on the *same* cell
+re-enters CONFIRM, and the negative-preview short-circuit sends it straight
+to EXECUTE. **Verified this does not leak across cells**: moving the cursor
+to a different id resets `DS:0x258` to that new id (positive) at
+`FUN_1000_6e62`'s own mismatch branch, so the warning must be re-triggered
+per weapon — there is no one-press swap hiding behind a stale preview from
+a different cell.
+
+**Tags.** The control-flow and formula are `[STATIC]` — read directly from
+disassembly (`disassemble_function`, not the decompiler, for `953e`) and
+cross-checked against the shipped `PWEAPONS` bytes for the price-scale
+claim; none of it was exercised live under DOSBox this session (no purchase
+of a weapon-type id, nor a displacement, was actually driven through the
+running game). The arm step (`FUN_1000_94a7`) and its own slot-selection
+(`FUN_1000_953e`) were already `[PROVEN]` elsewhere in this project via
+prior live pickup-path work — only the SHOP's own orchestration around them
+(the warning, the refund, the charge) is new this session.
 
 ## `FUN_1000_7392` — the price/value accessor (formula proven, table contents not)
 
@@ -374,10 +451,12 @@ against `80000` every decoded price for the 12 relevant ids is affordable;
 second, that `FUN_1000_7276`'s ascending sort of survivors by
 `FUN_1000_7392`'s value should make a live capture's buy-only subsequence
 monotonic, and it wasn't — also wrong, since `FUN_1000_7392` reads a
-*different* table for `id >= 0xc0` (sell-side, `DS:0xe2b6`, never
-calibrated), and both live captures interleave sell ids into the same
-sorted list, so checking monotonicity of only the buy-only subsequence of a
-jointly-sorted list proves nothing. Both objections are retracted. What
+*different* table for `id >= 0xc0` (then called "sell-side," `DS:0xe2b6`,
+uncalibrated at the time — since resolved as weapon-purchase prices, see
+`UNKNOWN_shop_tradein_value` below), and both live captures interleave those
+`≥0xc0` ids into the same sorted list, so checking monotonicity of only the
+buy-only subsequence of a jointly-sorted list proves nothing. Both
+objections are retracted. What
 actually remained wrong with that pass was narrower and real: the
 transcription was independently known to be short by one element (729 of
 730), and, being a single hand-copy nobody had re-read, no number from it
@@ -439,8 +518,10 @@ roster_source` and `UNKNOWN_shop_eligibility_gates` below; only the original
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | price | 4000 | 6000 | 12000 | 8000 | 10000 | 20000 | 5000 | 30000 | 5000 | 10000 | 20000 | 4000 | 1000 | 1000 | 1000 | 650 | 1300 | 1000 |
 
-Sell-side values (`DS:0xe2b6`, id `>=0xc0`) remain entirely unresolved — a
-different item, `UNKNOWN_shop_tradein_value`.
+Weapon-purchase prices (`DS:0xe2b6+0x4a`, id `>=0xc0`) are now resolved too
+— see `UNKNOWN_shop_tradein_value`, CLOSED below, for the full 11-weapon
+table (read from the shipped `PWEAPONS` files, not purchase-confirmed
+individually the way the 12 original consumable prices were).
 
 ## `UNKNOWN_shop_roster_source` — CLOSED
 
@@ -590,13 +671,19 @@ present) is exactly what a hero who happened to be unarmed in run 1 and
 armed in run 2 produces. Neither run read the actual weapon-slot words at
 the time, but the mechanism now on record predicts precisely that shape.
 
-## `UNKNOWN_shop_tradein_value`
+## `UNKNOWN_shop_tradein_value` — CLOSED
 
-The `DS:0xe2b6` (stride `0x50`=80) sell-value computation
-(`(rec[+8]-rec[+6]) * (byteswap(rec[+0x4a])+1) >> 1`, added to money, followed
-by a *second*, differently-indexed subtraction from the same table) was
-disassembled but not resolved to a clean "this is what selling item X for Y
-condition returns" statement. Do not guess a refund formula from this.
+Renamed from what this project's own earlier framing got wrong: there is no
+"sell for cash" action anywhere in the shop. Every id `≥0xc0` is a **weapon
+purchase** (buy weapon `id-0xc0` and equip it), and the "trade-in value" is
+the partial refund credited for whichever *different* weapon that purchase
+displaces from the same physical slot — see the "Weapon purchase/swap"
+section above for the full mechanism, the resolved formula (`(extra pickups)
+× (displaced weapon's own price + 1) ÷ 2`), the confirmed price table (read
+from the shipped `PWEAPONS` files), and the three-press confirm shape
+including the "Warning.. this weapon replaces the X" message. `[STATIC]` —
+disassembly- and shipped-bytes-confirmed, not yet exercised live under
+DOSBox.
 
 ## What `gods-web` ports and what it discloses as not ported
 
@@ -623,5 +710,11 @@ rebuilding `arsenal` (and silently dropping the familiar's own state) from
 scratch on EVERY level transition, not just a full restart, which would
 have made gate 1 unreachable through the shop's one real entry path
 (password entry always calls `switchLevel` immediately before opening the
-shop) regardless of how correctly the gate itself was wired. Sell is not
-ported — see `UNKNOWN_shop_tradein_value`.
+shop) regardless of how correctly the gate itself was wired. The weapon
+purchase/swap mechanic (`UNKNOWN_shop_tradein_value`, CLOSED above) is not
+ported at all yet — no raw id `≥0xc0` appears in any world's roster in this
+port today, `PRICES` has no weapon entries, and `ShopScreen` has no
+three-press/warning-message interaction shape. `pickUpWeapon` (`game/
+pickup.js`) and the slot selector it uses already implement the ARM half of
+this mechanic for in-level pickups; the shop's own refund-and-charge
+orchestration around that existing code is the only genuinely new surface.
