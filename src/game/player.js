@@ -168,7 +168,10 @@ export const CLIMB_EVERY_OTHER_TICK = true;
  * 0x22ca / pop ax`, gated on `cl==2`/`cl==6` (WALK_FOOTSTEP_PHASES). The
  * full word passed to the sound-effect export, matching this port's own
  * convention (SFX_VOICES is keyed the same way; see projectiles.js's
- * FIRE_SFX for why the bare low byte is the wrong thing to export). `[STATIC]`. */
+ * FIRE_SFX for why the bare low byte is the wrong thing to export).
+ * `[PROVEN]`-adjacent: read fresh this session AND already carried as the
+ * same word by `docs/player-state-machine.md:81` from an earlier pass —
+ * two independent reads agreeing, unlike CLIMB_STEP_SFX below. */
 export const FOOTSTEP_SFX = 0x020e;
 /* CLIMB_STEP_SFX — `[STATIC]`, corrected. `Gods/docs/player-state-machine.md`
  * used to cite this id as "0x5931", which is not a sound id at all — it's the

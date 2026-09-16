@@ -6689,6 +6689,19 @@ export async function checkWeaponsProjectiles(fetchRaw) {
       `${expected.join('')} from WALK_FOOTSTEP_PHASES=` +
       `[${WALK_FOOTSTEP_PHASES.join(',')}] applied to the real post-entry ` +
       `phase — the same gate CS:0x5AAD/0x5ABA apply`);
+    /* ⚠️ The check above recomputes `expected` from the SAME
+     * WALK_FOOTSTEP_PHASES array and `(phase+1)&7` recurrence `_ground`
+     * itself uses, so it moves in lockstep with that array — it would not
+     * catch WALK_FOOTSTEP_PHASES being edited to, say, `[2]` or `[1,5]`.
+     * This one is independent of the array literal: "two steps per cycle
+     * at OPPOSITE phases" implies every footstep is exactly half an
+     * 8-tick cycle (4 ticks) from the last, whatever the two phases are. */
+    const at = seq.map((v, i) => (v ? i : -1)).filter((i) => i >= 0);
+    const gaps = at.slice(1).map((v, i) => v - at[i]);
+    check(`consecutive footsteps are exactly 4 walking ticks apart`,
+      at.length >= 2 && gaps.every((g) => g === 4),
+      `footstep tick indices: ${at.join(',')}, gaps: ${gaps.join(',')} — ` +
+      `independent of which two phases WALK_FOOTSTEP_PHASES actually names`);
   }
   {
     const n = MC * 64;
@@ -6734,13 +6747,19 @@ export async function checkWeaponsProjectiles(fetchRaw) {
      * plays the climbing animation while stuck" report) sits BEFORE the
      * phase/climbStep block. This is the same bug shape, now checked for
      * audio: a hero wedged at the top of a ladder must not play a
-     * climb-step on a tick where it didn't actually move. */
+     * climb-step on a tick where it didn't actually move.
+     * ⚠️ The band sits mid-map (rows 20-30 of a 64-row plane, hero starting
+     * well below the cap at row 28) with genuine non-climbable terrain
+     * (the Uint8Array's own zero-fill) both above and below it, so the
+     * eventual block comes from real geometry, not from climbableHere's
+     * two-row lookahead running off the edge of the array into
+     * `undefined` reads. */
     const n = MC * 64;
     const planeB = new Uint8Array(n);
-    for (let r = 0; r <= 8; r++) planeB[r * MC + 5] = CELL_CLIMBABLE;
+    for (let r = 20; r <= 30; r++) planeB[r * MC + 5] = CELL_CLIMBABLE;
     const cappedLadder = { planeA: new Uint8Array(n), planeB,
                             widthPx: 4096, heightPx: 1024 };
-    const p = new Player(5 * 32, 8 * 16);
+    const p = new Player(5 * 32, 28 * 16);
     p.state = ST.CLIMB;
     const trace = [];
     for (let i = 0; i < 30; i++) {
