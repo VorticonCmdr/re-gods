@@ -2666,7 +2666,23 @@ async function main() {
         ` · chests ${opened} · keys [${inventory.map((v) => v === INVENTORY_EMPTY ? '-' : v).join(',')}]` +
         (lootLanded ? ` · ${lootLanded} loot landed` : '') +
         (burst.stranded ? ` · ${burst.stranded} loot STRANDED (object table full)` : '') +
-        (slots.lostActivations ? ` · ${slots.lostActivations} activations lost (all slots busy)` : '');
+        /* ALL FOUR allocator pools, not just System B's. Every one of them
+         * consumes its event record before searching for a slot, so a
+         * refusal is a permanently missing enemy — and for years only one
+         * of the four counters had any read site at all, which is precisely
+         * why the pools that never released a slot went unnoticed. Naming
+         * the pool matters too: the fix for each is a different file. */
+        (() => {
+          const lost = [
+            ['SysB', slots.lostActivations],
+            ['SysA', slotsA.lostActivations],
+            ['PAT', patGroups.lostActivations],
+            ['turret', selectorTwo.refused],
+          ].filter(([, n]) => n);
+          return lost.length
+            ? ` · activations lost: ${lost.map(([k, n]) => `${k} ${n}`).join(', ')} (pool full)`
+            : '';
+        })();
       /* Every counter the fire chain can raise, surfaced rather than swallowed:
        * an undecoded or NULL spawn handler, an out-of-range projectile `dir`,
        * and how many stamps actually reached the grid. A shot that fires but
