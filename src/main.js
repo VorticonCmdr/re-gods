@@ -1857,10 +1857,22 @@ async function main() {
        * scripted groups finish on the same frame the first takes the slot
        * and the second diverts. pat-objects.js queues drops in slot-walk
        * order and the drain below replays that order, so both halves of
-       * that behaviour survive the port. */
-      popup.step();
-      for (const l of popup.landed) dropCarriedIntoWorld(l.id, l.x, l.y);
-      popup.landed.length = 0;
+       * that behaviour survive the port.
+       *
+       * ── WHERE A REWARD BECOMES AN OBJECT ─────────────────────────────
+       *
+       * INLINE, at the award site — never deferred. `dropCarriedIntoWorld`
+       * is handed to every popup.step/popup.spawn below because CS:0xC041
+       * is reached by FALLING INTO it from three places that are all in the
+       * middle of a frame: the arc's terminator (CS:0xBFE9/0xC03B), the
+       * busy-slot divert (CS:0xBF6B) and the id-0x3D snap (CS:0xBF59). An
+       * object created there exists for the REST of the frame, so later
+       * channels — and entity.js's own steal probe, which is handed
+       * `level.drawObjects` at CS:0xEE61 — can see it on the same tick.
+       * An earlier revision queued these landings and drained them at the
+       * bottom of the tick; that made a selector-2 divert invisible to the
+       * System-B steal probe, which is a divergence, not a simplification. */
+      popup.step(dropCarriedIntoWorld);
 
       statues.checkTrigger(camNow, level.map.planeA, levelInfo.world, health,
                             statueTriggerProbe, rng);
@@ -1929,7 +1941,7 @@ async function main() {
        * and PAT had already taken the slot. */
       for (const r of selectorTwo.rewards) {
         const id = r.itemType !== null ? r.itemType + 0xb : r.popupValue;
-        popup.spawn(r.x, r.y, id);
+        popup.spawn(r.x, r.y, id, dropCarriedIntoWorld);
       }
       selectorTwo.rewards.length = 0;
 
@@ -2007,7 +2019,7 @@ async function main() {
           if (carriedB) dropCarriedIntoWorld(carriedB.id, carriedB.x, carriedB.y);
         }
         if (e.deathDropId !== null) {
-          popup.spawn(e.deathDropX, e.deathDropY, e.deathDropId);
+          popup.spawn(e.deathDropX, e.deathDropY, e.deathDropId, dropCarriedIntoWorld);
           e.deathDropId = null;
         }
       }
@@ -2052,7 +2064,7 @@ async function main() {
          * different sites. `level.drawObjects` arms popup's own busy-slot
          * divert to C041, closing that module's previously-disclosed gap. */
         if (e.deathDropId !== null) {
-          popup.spawn(e.deathDropX, e.deathDropY, e.deathDropId);
+          popup.spawn(e.deathDropX, e.deathDropY, e.deathDropId, dropCarriedIntoWorld);
           e.deathDropId = null;
         }
       }
@@ -2113,7 +2125,7 @@ async function main() {
            * of this loop read the cache directly and dropped every
            * entityCount===1 group's reward at (null, null)). */
           const { x, y } = groupRewardPosition(g.members);
-          popup.spawn(x, y, g.desc.rewardId);
+          popup.spawn(x, y, g.desc.rewardId, dropCarriedIntoWorld);
         }
       }
       /* CS:0xEDAA-0xEDB1 — RELEASE THE RUNTIME SLOT. Read fresh off the
@@ -2170,7 +2182,7 @@ async function main() {
            * `groupRewardPositionA` applies the identical fallback with
            * System A's own +8-on-both-axes read-site bias. */
           const { x, y } = groupRewardPositionA(g.members);
-          popup.spawn(x, y, g.desc.rewardId);
+          popup.spawn(x, y, g.desc.rewardId, dropCarriedIntoWorld);
         }
       }
       /* CS:0xDFF1-0xDFF9 — System A's own slot release, structurally
@@ -2217,25 +2229,22 @@ async function main() {
        * PAT LOSES the slot to both; it does not win it. See the priority
        * table at the popup tick above. */
       for (const d of patGroups.drops) {
-        popup.spawn(d.x + camNow.x + 8, d.y + camNow.y + 8, d.id);
+        popup.spawn(d.x + camNow.x + 8, d.y + camNow.y + 8, d.id, dropCarriedIntoWorld);
       }
       patGroups.drops.length = 0;
 
       /* CS:0x029A / CS:0x7CA2 — the awakened statue's own kill award. LAST
        * of the six channels, so it is the one most likely to find the slot
        * busy and land in place. */
-      for (const p of statueResult.popups) popup.spawn(p.x, p.y, p.id);
+      for (const p of statueResult.popups) popup.spawn(p.x, p.y, p.id, dropCarriedIntoWorld);
 
-      /* CS:0xC041 — THE LANDING, second pass. The pass above the statue
-       * block handled arcs that ENDED this frame (CS:0xBFE9/0xC03B); this
-       * one handles the busy-slot DIVERTS the six channels just queued,
-       * which CS:0xBF6B lands within the same frame rather than deferring.
-       * Both passes are needed: one drain alone would hold one of the two
-       * cases over to the next tick. Before any of this, System-A,
+      /* No landing drain here, deliberately: CS:0xC041 already ran INLINE
+       * for every award above, which is what the original does. See the
+       * popup tick's own header. `popup.landed` stays empty in this build —
+       * it is the queue the invariant suite drives the class through when
+       * no landing callback is supplied. Before any of this, System-A,
        * System-B, selector-2, nest and statue awards were drawn and then
        * discarded — `UNKNOWN_popup_reward_not_collectable`. */
-      for (const l of popup.landed) dropCarriedIntoWorld(l.id, l.x, l.y);
-      popup.landed.length = 0;
       /* CS:0x02BA — enemy shots move and hit, AFTER every emitter that can
        * fire one this tick (the nest at 0x0282, the entities at 0x0285), so
        * unlike the hero's own shots (which step BEFORE the player emits) an

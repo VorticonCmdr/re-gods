@@ -397,20 +397,34 @@ for (const r of await checkMusic(fetchRaw)) {
  * hole the only way available from outside: by reading main.js's own source
  * and asserting the six channels still appear in the binary's order.
  *
- * ⚠️ What this does NOT assert: the sub-order of each system's per-ENTITY
- * drop against its per-GROUP reward. System B's group reward lives in
- * FUN_1000_f030, reached from the shared FUN_1000_ff20 rather than from
- * ed15 directly, so "all of B before all of A" was not established — the
- * anchors below deliberately use each system's entity pass only. */
+ * ⚠️ ONE KNOWN, DELIBERATE DIVERGENCE, not asserted here. Chasing the xrefs
+ * DOES establish "all of System B before all of System A": B's group reward
+ * (CS:0xF068) is in FUN_1000_f030, reached from FUN_1000_ff20 at CS:0xED6A,
+ * which is inside ed38 — System B's own walker under 0x0285. But this port
+ * runs ONE shared contact/damage pass over both entity arrays (main.js's
+ * stepCreatureDamage) where the original runs each system's inside its own
+ * walker, and both group-reward loops have to sit after it. So the port's
+ * order is B-entity, A-entity, damage, B-group, A-group. The group
+ * DETECTION is unaffected — a groupsB check reads only groupsB members, and
+ * B's own damage lands before it either way — so the sole observable
+ * difference is which of {B-group, A-entity} wins the popup slot on a frame
+ * where both award. Moving the group loops ahead of the shared damage pass
+ * would trade that for a one-frame lag in group elimination, which is
+ * worse. The anchors below therefore use each system's ENTITY pass only. */
 {
   const mainSrc = readFileSync(join(here, '..', 'src', 'main.js'), 'utf8');
+  /* Blank out comment-only lines, preserving every offset (and every
+   * newline — `.` does not match one), so both the ordering anchors and the
+   * call census below read CODE and never main.js's own prose about it. A
+   * comment naming `popup.spawn(` must not be able to fail this check. */
+  const code = mainSrc.replace(/^[ \t]*(\/\/|\/?\*).*$/gm, (m) => ' '.repeat(m.length));
   const at = (needle) => {
-    const i = mainSrc.indexOf(needle);
+    const i = code.indexOf(needle);
     if (i < 0) throw new Error(`verify-node: popup-order anchor missing from main.js: ${needle}`);
     return i;
   };
   const chain = [
-    ['tick       CS:0x0209', at('popup.step();')],
+    ['tick       CS:0x0209', at('popup.step(dropCarriedIntoWorld);')],
     ['selector-2 CS:0x0223', at('for (const r of selectorTwo.rewards) {')],
     ['System B   CS:0x0285', at('stealAttemptB(')],
     ['System A   CS:0x028b', at('const carried = stepCarriedItem(e, e.desc')],
@@ -427,25 +441,41 @@ for (const r of await checkMusic(fetchRaw)) {
   }];
 
   /* The tick frees the slot when an arc ends (CS:0xBFE9/0xC03B). Running it
-   * after ANY award means that award never sees the slot it should have. */
-  const spawnSites = [...mainSrc.matchAll(/popup\.spawn\(/g)].map((m) => m.index);
+   * after ANY award means that award never sees the slot it should have.
+   *
+   * Matched against `code`, not the raw source — see the blanking above. */
+  const spawnSites = [...code.matchAll(/popup\.spawn\(/g)].map((m) => m.index);
   popupOrder.push({
     pass: spawnSites.length > 0 && spawnSites.every((i) => i > chain[0][1]),
     name: 'the popup tick precedes every popup.spawn in the tick',
     detail: `${spawnSites.length} spawn sites, earliest at ${Math.min(...spawnSites)}, tick at ${chain[0][1]}`,
   });
 
-  /* Two landing drains, not one: the first turns arcs that ENDED into
-   * objects, the second turns this frame's busy-slot DIVERTS into objects
-   * within the same frame, which is what CS:0xBF6B does. One drain alone
-   * would hold one of the two cases over to the next tick. */
-  const drains = [...mainSrc.matchAll(/for \(const l of popup\.landed\)/g)].map((m) => m.index);
+  /* CS:0xC041 runs INLINE, by fall-through, from the arc terminator
+   * (CS:0xBFE9/0xC03B), the busy-slot divert (CS:0xBF6B) and the 0x3D snap
+   * (CS:0xBF59) alike — so a landed reward is a real object for the rest of
+   * the frame and later channels can see it. Every call site must therefore
+   * hand popup.js the landing callback; deferring to a drain at the bottom
+   * of the tick hides a divert from anything that runs in between. */
+  const calls = [...code.matchAll(/popup\.(spawn|step)\([^;]*/g)].map((m) => m[0]);
+  const unwired = calls.filter((c) => !c.includes('dropCarriedIntoWorld'));
   popupOrder.push({
-    pass: drains.length === 2 && drains[0] > chain[0][1]
-          && drains[0] < chain[1][1] && drains[1] > chain[5][1],
-    name: 'a landing drain sits after the tick AND after the last channel',
-    detail: `${drains.length} drain(s) at ${drains.join(', ')}`,
+    pass: calls.length === 8 && unwired.length === 0
+          && !/for \(const l of popup\.landed\)/.test(code),
+    name: 'every popup call lands CS:0xC041 inline, with no deferred drain',
+    detail: unwired.length
+      ? `${unwired.length} call(s) without a landing callback`
+      : `${calls.length} call sites wired, 0 drains`,
   });
+
+  /* Reordering the frame loop MOVES statements past hundreds of lines, and
+   * a move that lands a reference outside its binding's block compiles
+   * cleanly and throws only when the tick runs — which neither the bundler
+   * nor this suite nor a hidden (rAF-throttled) browser tab ever does. So
+   * prove the bindings the reordering actually carried. */
+  const { checkScope } = await import('./scope-check.mjs');
+  popupOrder.push(...await checkScope(join(here, '..', 'src', 'main.js'),
+    ['statueResult', 'camNow', 'dropCarriedIntoWorld', 'patGroups', 'selectorTwo']));
 
   console.log('\n  the single popup slot — who wins it, and when it lands '
     + '(FUN_1000_006f call order):');

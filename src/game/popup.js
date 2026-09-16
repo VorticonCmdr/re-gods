@@ -98,12 +98,26 @@ export class Popup {
     this.landed = [];
   }
 
+  /** A LANDING, CS:0xC041. `land` is how the host turns a reward into a real
+   *  object. Pass it and the landing happens INLINE, which is what the
+   *  original does at every one of these sites: CS:0xBF6B and CS:0xBF59 both
+   *  jump straight into CS:0xC041, and the arc's own terminator falls into it
+   *  — so the object exists for the REST of the frame and anything that runs
+   *  later (a steal probe, another channel's collision) can see it. Omit it
+   *  and the landing is queued on `landed` instead, which is the shape the
+   *  invariant suite drives this class in. Deferring in the real game would
+   *  be a divergence, not a simplification. */
+  #settle(land, id, x, y) {
+    if (land) land(id, x, y);
+    else this.landed.push({ id, x, y });
+  }
+
   /** CS:0xBF5F/0xBF64. `id` is the raw id (the caller has already rejected
    *  negatives). Returns true if the toss slot was taken, false if the
    *  request was diverted straight to a landing. */
-  spawn(worldX, worldY, id) {
+  spawn(worldX, worldY, id, land) {
     if (id === SNAP_ID) {                                    // CS:0xBF5F `jz bf59`
-      this.landed.push({ id, x: worldX, y: worldY & 0xfff0 });  // CS:0xBF59
+      this.#settle(land, id, worldX, worldY & 0xfff0);       // CS:0xBF59
       return false;
     }
     if (this.active) {
@@ -111,7 +125,7 @@ export class Popup {
        * busy does NOT lose the item and does NOT queue behind the first: it
        * jumps straight to CS:0xC041 and lands immediately, right where it
        * was awarded. */
-      this.landed.push({ id, x: worldX, y: worldY });
+      this.#settle(land, id, worldX, worldY);
       return false;
     }
     this.active = true;
@@ -127,7 +141,7 @@ export class Popup {
    *  Order matters and is the original's: apply the velocity, store, draw,
    *  THEN increment and test — so the frame that lands is drawn at the
    *  landing position, and the object is created there too. */
-  step() {
+  step(land) {
     if (!this.active) return;
     this.y += this.vy;                                       // CS:0xBF8E / 0xC008
     this.vy += 1;                                            // CS:0xBFD3 / 0xC022
@@ -135,7 +149,7 @@ export class Popup {
     if (this.vy >= limit) {
       /* CS:0xBFE9/0xC03B free the slot, then fall into CS:0xC041 — which is
        * where the reward stops being a picture and becomes an item. */
-      this.landed.push({ id: this.id, x: this.x, y: this.y });
+      this.#settle(land, this.id, this.x, this.y);
       this.active = false;
       this.id = null;
       this.itemType = null;
