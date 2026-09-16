@@ -419,7 +419,7 @@ A5D2  cmp byte [si+0x1],1           ; y remainder == 0 -> same row, col+1
 | time bomb | `v++` | 4 |
 | **magic axe** | **`v += 2`** | **8** |
 
-Lifetime is `A737 dec word [si+0x4] / js` — **decrement then test the sign**, so a life of 2 survives two ticks and dies on the third. Sprite is `0x1aa + ((weaponFrame + phase) mod 6) + 1`, and **`0x1aa` = 426 = `PINNED_SPRITE[9]`**, the magic axe's own pinned descriptor — an independent check on that table from a routine that never reads it. Bounces play sfx `0x09` (`CS:0xa7ad`).
+Lifetime is `A737 dec word [si+0x4] / js` — **decrement then test the sign**, so a life of 2 survives two ticks and dies on the third. Sprite is `0x1aa + ((weaponFrame + phase) mod 6) + 1`, and **`0x1aa` = 426 = `PINNED_SPRITE[9]`**, the magic axe's own pinned descriptor — an independent check on that table from a routine that never reads it. Bounces play sfx `0x209` — `CS:0xa7ad` is the `push ax` guarding the call; the id itself is the full word at `CS:0xa7ae mov ax,0x209`, not the bare low byte `0x09` this line used to gloss it as (⚠️ corrected, a later session, the same bug class as `TERRAIN_SFX` above and `FIRE_SFX` before it — see that paragraph's own citation). `[STATIC]`.
 
 **On expiry, `CS:0xA7A1 call 0xa633` drops a debris spark** carrying the state record's OWN current `{vx, vy}` (`cx=[si]`, `dx=[si+2]`) — a MOVING spark, not the stationary puffs the terrain-stop and enemy-shot-hits-hero paths drop, and notably **after** that same tick's own gravity clamp has already run (the instruction order is position-update → gravity → cull → lifetime-test), so the spark's `vy` is the post-gravity value. This closes one of the five `CS:0xA633` callers catalogued under *`DS:0x8b4c` — debris* above.
 
@@ -464,10 +464,12 @@ A7C0  cx = x + [0xa] + 8 ; and 0xffe0   ; ⚠️ +8 on BOTH axes before the mask
       dx = y + [0xc] + 8 ; and 0xfff0
       bp = 0x5004 + (cx>>5) + (dx<<3)
 A7EF  cmp byte [ds:bp+0],1 / jnz 0xa860 ; not solid -> stamp, keep flying
-A7F6  play sfx 0x1d
+A7F6  push ax / mov ax,0x21d / call 0x22ca / pop ax   ; play sfx 0x21d
 A816  append a debris record to the 20-slot array at DS:0x8b4c
 A85B  mov word [di],0                   ; DESPAWN THE PROJECTILE
 ```
+
+⚠️ **CORRECTED, a later session (surfaced while wiring `gods-web`'s TERRAIN_SFX).** This section used to gloss the sound as "sfx 0x1d" — the low byte only. Fresh disassembly at `CS:0xA7F7` reads `mov ax,0x21d`: the FULL word passed to `call 0x22ca` is **`0x21d`**, the same id-numbering convention this document already uses everywhere else (e.g. the hero's own hurt/footstep ids). `gods-web`'s `TERRAIN_SFX` had been exported as the bare low byte `0x1d` since this port's SFX ids were first added — never matching any `SFX_VOICES` key, so it would have played nothing the moment it was wired, the exact same bug class `projectiles.js`'s `FIRE_SFX` was already corrected for (bare `0x1c` → full word `0x041c`). `[STATIC]`: a `MOV` immediate read fresh this session, not cross-checked live.
 
 **There is no write to plane A or plane B anywhere on that path.** The projectile is consumed by the wall; the wall is untouched. So the flag means the shot *collides with* terrain, and a weapon with `+0x48 == 0` flies **straight through walls**. Shipped: knife, time bomb, fireball, flame, throwing star and mace collide; **lightning bolt, spear, axe, hunter and magic axe pass through**.
 
