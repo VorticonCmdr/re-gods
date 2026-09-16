@@ -29,25 +29,41 @@
  *     masonry-textured block was observed at exactly that position, every
  *     frame, starting before the player could send any input.
  *
- * WHAT THIS PORT DOES **NOT** REPRODUCE, AND WHY:
- *   - Motion from source toward target. Both live-tested records this
- *     session are zero-displacement (`source === target`); of the 83
- *     distinct events this system dispatches across the 8 shipped levels,
- *     roughly half have `source != target` and this port's own live trace
- *     never reached one. Whether the per-tick resume (`FUN_1000_7845` -> the
- *     shared walker `CS:0x7A0B`) keeps advancing those, or whether they too
- *     settle at the target and hold, was not established. Modelling every
- *     record as "settle at target, hold" is the SAFE reading — it is
- *     exactly what was observed for both tested records, and a wrong
- *     "it drifts forever" guess risks a wall silently sliding through the
- *     level in a port nobody asked it to. `UNKNOWN_189c_motion`, tracked
- *     here rather than guessed at.
+ * WHAT THIS PORT DOES **NOT** REPRODUCE, AND WHY (UPDATED — both
+ * `UNKNOWN_189c_motion` and `UNKNOWN_189c_type_dispatch` are now CLOSED, see
+ * the doc section):
+ *   - Motion from source toward target IS type-dependent in the original,
+ *     not uniform. The obstacle "type" byte (this record's own
+ *     `+0x16..+0x19`, one per selector) resolves through `2f3d:35ec`'s
+ *     11-entry table into one of three behaviours: types 2-5/7-10 (148 of
+ *     183 shipped dispatches) pick ONE target point (with a fixed fallback
+ *     search among the record's 4 points, skipping any with x==0) and
+ *     SETTLE there forever — this port's "settle at target, hold" model is
+ *     now proven correct for these, not just a safe guess. Types 0/1/6
+ *     (7 of 183 dispatches, all type 0 in shipped data) instead CYCLE: on
+ *     reaching one target point they immediately re-seed toward the next
+ *     point in a fixed forward/backward order (wrapping through however
+ *     many of the record's 4 points are non-degenerate), forever — a true
+ *     patrol, never settling. Cross-checked against all 8 shipped levels'
+ *     plane-B/ACT5 dispatch tables: **5 of the 7 shipped cyclers are
+ *     genuinely reachable** — real 2-point ping-pong barriers, two each in
+ *     PLEV2A/PLEV2B and one in PLEV1B (see the doc for exact cells) —
+ *     while the other 2 (an elaborate 4-point patrol, one each in
+ *     PLEV4A/PLEV4B) are placed in the static table but never wired to any
+ *     reachable plane-B cell or `ACT5` arg in either file, so they are dead
+ *     content, same shape as this project's other "authored but
+ *     unreachable" findings. **This port still does not implement cycling
+ *     — the 5 reachable ping-pong barriers in worlds 1B/2A/2B are a real,
+ *     disclosed gap**, not merely an unverified-guess gap anymore: wiring
+ *     it is new feature work (same shape as the `PGODSRLA-F.RL` Roland
+ *     music gap), not a bug fix, so it's left for a deliberate decision
+ *     rather than built here.
  *   - The exact sprite `FUN_1000_7779` draws. It goes through graphics
  *     export 1 (the same masked blit `selector2.js`'s turrets use),
- *     selected by the record's own `+0x16..+0x19` "obstacle type" byte — an
- *     11+-entry jump table (`2f3d:35ec`) never disassembled
- *     (`UNKNOWN_189c_type_dispatch`, open in the docs). Guessing a specific
- *     atlas descriptor index with no evidentiary basis would risk looking
+ *     selected by the record's own `+0x16..+0x19` "obstacle type" byte —
+ *     now fully decoded (see doc), but a specific atlas descriptor index
+ *     for what it actually draws was never established. Guessing one with
+ *     no evidentiary basis would risk looking
  *     WORSE than the gap it replaces, so this port instead borrows the
  *     level's OWN adjacent solid platform tile — the tile immediately
  *     touching the barrier's footprint whose plane B was ALREADY 1 before
