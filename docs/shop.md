@@ -409,11 +409,16 @@ third press: press 1 previews (shows the new weapon's own description,
 mismatch, shows the "this weapon replaces the X" warning and toggles
 `DS:0x258` negative *for this same raw id*; press 3 on the *same* cell
 re-enters CONFIRM, and the negative-preview short-circuit sends it straight
-to EXECUTE. **Verified this does not leak across cells**: moving the cursor
-to a different id resets `DS:0x258` to that new id (positive) at
-`FUN_1000_6e62`'s own mismatch branch, so the warning must be re-triggered
-per weapon — there is no one-press swap hiding behind a stale preview from
-a different cell.
+to EXECUTE. **The reset is on a FIRE press, not cursor movement**:
+`LAB_1000_6cef` (the cursor-move handler) never touches `[0x258]` at all —
+only a fire press on a *different* cell resets it, at `6ea4`, to that new
+id (positive). This has a real, slightly surprising consequence: warn on
+weapon A (press 1, press 2 -> negative preview, third press pending), then
+move the cursor away *without firing* and back to A — the preview is still
+`-A`, unchanged, so the very next press on A is the THIRD press and executes
+immediately with no second warning. The one-press-swap case genuinely
+doesn't exist, but only because it requires a fire press elsewhere to arm
+it, not because moving the cursor clears anything.
 
 **Tags.** The control-flow and formula are `[STATIC]` — read directly from
 disassembly (`disassemble_function`, not the decompiler, for `953e`) and
@@ -710,11 +715,38 @@ rebuilding `arsenal` (and silently dropping the familiar's own state) from
 scratch on EVERY level transition, not just a full restart, which would
 have made gate 1 unreachable through the shop's one real entry path
 (password entry always calls `switchLevel` immediately before opening the
-shop) regardless of how correctly the gate itself was wired. The weapon
-purchase/swap mechanic (`UNKNOWN_shop_tradein_value`, CLOSED above) is not
-ported at all yet — no raw id `≥0xc0` appears in any world's roster in this
-port today, `PRICES` has no weapon entries, and `ShopScreen` has no
-three-press/warning-message interaction shape. `pickUpWeapon` (`game/
-pickup.js`) and the slot selector it uses already implement the ARM half of
-this mechanic for in-level pickups; the shop's own refund-and-charge
-orchestration around that existing code is the only genuinely new surface.
+shop) regardless of how correctly the gate itself was wired. `ShopScreen`
+holding `arsenal` by reference (not a copy) is load-bearing for the weapon
+purchase mechanic below too, not only gate 1.
+
+The weapon purchase/swap mechanic (`UNKNOWN_shop_tradein_value`, CLOSED
+above) is now ported: world 2's roster gained its 3 weapon ids, and worlds
+3/4 (which diverge in which weapons they sell, unlike their shared
+consumable set) each got their own weapon-id tail instead of reusing one
+roster constant. `game/weapons.js`'s `parseWeapons` now carries each
+weapon's own embedded name (`WEAPON_NAMES`, read from `rec+0x20` and
+cross-checked against `PWEAPONS.001`'s decompressed bytes) alongside its
+pre-existing `value`/`refundFor`, and `ShopScreen` gained the three-press
+warning/execute flow (`#buyWeapon`/`#wouldDisplace`/`#warningFor`) plus
+per-world live pricing (`#priceFor` — weapon prices, unlike consumable
+prices, come from the CURRENTLY LOADED world's own `PWEAPONS` file, not one
+static table). `pickUpWeapon` (`game/pickup.js`) and the slot selector it
+uses were reused as-is for the ARM half, exactly as this doc predicted; the
+refund-then-charge orchestration in `#buyWeapon` and the warning/preview
+state machine in `#fire` were the only genuinely new surface. Every
+boundary check against the raw id (`#fire`, `#buy`, `#priceFor`,
+`#isEligible`, `#labelFor`) goes through `pickup.js`'s own `isWeaponPickup`/
+`weaponIndexOf` rather than a bare `id >= WEAPON_ID_BASE` comparison —
+`pickup.js`'s own header warns a dead/unused slot's `0xFFFF` sentinel also
+passes a bare `>= 0xc0` test, which is exactly how this port acquired 535
+phantom pickups the first time; `WEAPON_ID_BASE` stays exported only for
+constructing ids (docs, tests, `main.js`'s rosters), never for a boundary
+comparison. Verified three ways: a synthetic Node suite in
+`src/verify/checks.js` (sequential purchases, displacement, refund math,
+the warning text and its clearing, the no-category-lockout behavior, and
+the fire-press-not-cursor-move preview-persistence case above), a live
+Chrome session against the real decompressed `PWEAPONS.001` (world 2's
+three real weapon purchases — fireball/throwing star/magic axe at their
+real 12500/5000/15000 prices — landing in the correct slots with no
+spurious warning), and `npm run verify` (1834 assertions, all passing)
+plus a clean `vite build`.
