@@ -1000,18 +1000,35 @@ async function main() {
    * correct — see Gods/docs/shop.md) is 0x1_3880 = 80000. */
   const SHOP_STARTING_MONEY = 80000;
 
-  /* The one live-captured sample this session got for world 2's shop
-   * roster — real item ids read from a live DOSBox session, NOT the
-   * per-world source table (`DS:0x51aa`, never read — Gods/docs/shop.md's
-   * own `UNKNOWN_shop_roster_source`), and not necessarily reproducible
-   * (two live captures of the same world disagreed on one id, gated by
-   * runtime state this session didn't decode — `UNKNOWN_shop_eligibility_
-   * gates`). Every one of these 12 ids is independently confirmed to be a
-   * real `game/consumables.js` `CONSUMABLES` type — see shop.md's own
-   * cross-check. Worlds 3/4 get an empty (EXIT-only) roster, disclosed
-   * here rather than invented, pending the same data for those worlds. */
+  /* World 2's shop roster — the live-captured sample from the original
+   * session, confirmed exactly reproduced by `SS:0x51aa`'s own raw list for
+   * this world once that table was later read directly (Gods/docs/shop.md's
+   * `UNKNOWN_shop_roster_source`, CLOSED). Every one of these 12 ids is
+   * independently confirmed to be a real `game/consumables.js` `CONSUMABLES`
+   * type — see shop.md's own cross-check. */
   const SHOP_ROSTER_WORLD_2 = [0, 35, 36, 38, 42, 44, 51, 52, 53, 70, 71, 72];
-  const shopRosterForWorld = (world) => (world === 2 ? SHOP_ROSTER_WORLD_2.slice() : []);
+
+  /* Worlds 3/4's shop roster — `SS:0x51aa`'s own raw list for these worlds
+   * has 18 buy ids (this 12 plus `2,3,37,39,40,41`, all six independently
+   * confirmed as real CONSUMABLES types too), but `2`/`3`/`40`/`41` are
+   * gated by two still-unresolved eligibility checks (`UNKNOWN_shop_
+   * eligibility_gates`) on runtime state this project has never read —
+   * world 2's own two live captures disagreed on id `2`'s visibility, so no
+   * fixed default can be assumed — and 18 would exceed this grid's 17-slot
+   * capacity anyway (the original's own `0x25c` scroll path, not ported
+   * here — see shop.md). So only the 14 ids that pass regardless of those
+   * gates' runtime state are shown: this port's own 12 plus `37`/`39`.
+   * Worlds 3 and 4 share an identical raw list, so they share this same
+   * 14-id set. */
+  const SHOP_ROSTER_WORLD_3_4 = [
+    0, 35, 36, 37, 38, 39, 42, 44, 51, 52, 53, 70, 71, 72,
+  ];
+
+  const shopRosterForWorld = (world) => (
+    world === 2 ? SHOP_ROSTER_WORLD_2.slice()
+    : (world === 3 || world === 4) ? SHOP_ROSTER_WORLD_3_4.slice()
+    : []
+  );
 
   /**
    * A correct password takes the player straight into that world's shop,

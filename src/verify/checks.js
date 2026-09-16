@@ -14114,6 +14114,18 @@ export function checkShop() {
     check('id 0 costs exactly 4000 — live purchase-confirmed', PRICES[0] === 4000);
     check('id 42 costs exactly 20000 — the highest of the 12 known prices, '
       + 'live-read from DS:0x2a4e', PRICES[42] === 20000);
+    check('id 37 costs exactly 20000 — added for the world 3/4 roster, '
+      + 'live-read from the same DS:0x2a4e table', PRICES[37] === 20000);
+    check('id 39 costs exactly 30000 — added for the world 3/4 roster, '
+      + 'the highest of all 14 known prices', PRICES[39] === 30000);
+    check('PRICES has exactly 14 entries — the 12 world-2 ids plus 37/39 '
+      + 'for world 3/4, not the full 18-id raw candidate list',
+      Object.keys(PRICES).length === 14);
+    check('ids 2, 3, 40, 41 are deliberately NOT priced/shown — they are '
+      + 'real raw-list ids (UNKNOWN_shop_roster_source) gated on runtime '
+      + 'state this project has not read',
+      PRICES[2] === undefined && PRICES[3] === undefined
+      && PRICES[40] === undefined && PRICES[41] === undefined);
 
     const makePurse = (total) => ({ total, add(v) { this.total += v; } });
     const fire = { up: false, down: false, left: false, right: false, fire: true };
@@ -14145,6 +14157,21 @@ export function checkShop() {
     const s3 = new ShopScreen({ roster: freeRoster, inventory: [INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY], state: {} });
     check('omitting purse skips pricing entirely — every item stays '
       + 'eligible, the pre-pricing behavior', s3.roster[0] === 42);
+
+    /* Ids 37/39 (world 3/4's own additions) must actually be real
+     * CONSUMABLES types, not a typo — the same cross-check shop.md
+     * documents for all 14 ids, exercised here as live dispatch rather
+     * than just asserted in prose. */
+    const w34Roster = new Array(DATA_SLOTS).fill(null);
+    w34Roster[0] = 37;
+    const w34Purse = makePurse(80000);
+    const s4 = new ShopScreen({ roster: w34Roster, inventory: [INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY], purse: w34Purse, state: {} });
+    s4.step(fire); s4.step(release);
+    s4.step(fire); s4.step(release);
+    check('id 37 (world 3/4) has a real CONSUMABLES rank and dispatches '
+      + 'as auto-use, not give-to-inventory', s4.lastPurchase.rank !== undefined);
+    check('id 37 deducts exactly its own price (20000)',
+      w34Purse.total === 80000 - 20000);
   }
 
   /* ── EXIT, CS:0x6e74-0x6e7e ────────────────────────────────────────── */

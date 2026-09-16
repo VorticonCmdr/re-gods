@@ -6,28 +6,36 @@
  *
  * SCOPE, disclosed rather than silently simplified:
  *   - Roster CONTENT is an explicit constructor parameter, not a hardcoded
- *     per-world table. The real source (`DS:0x51aa`, one static list per
- *     world) was never read this session — `UNKNOWN_shop_roster_source` in
- *     shop.md. `main.js` feeds this class the one live-captured sample this
- *     session got for world 2 (a real, byte-observed set of item ids), not
- *     an invented list, and an empty (EXIT-only) roster for worlds 3/4.
- *   - Prices ARE now ported for the 12 ids this session has a roster for —
+ *     per-world table, but the real source IS now read — `UNKNOWN_shop_
+ *     roster_source` is CLOSED, see shop.md. The per-world pointer table
+ *     lives at `SS:0x51aa`, not `DS:0x51aa` as first assumed (`[BP+disp]`
+ *     addressing defaults to `SS` in real mode — that earlier "reads as
+ *     zero" result was a segment error, not evidence of anything runtime-
+ *     only). World 2 gets the live-captured 12-id set from the original
+ *     session; worlds 3/4 get a 14-id set (the same 12 plus `37`/`39`) —
+ *     deliberately NOT the full 18-id raw candidate list `SS:0x51aa`
+ *     actually has for those worlds, because 4 of those ids (`2`,`3`,`40`,
+ *     `41`) are gated by two still-unresolved eligibility checks
+ *     (`UNKNOWN_shop_eligibility_gates`) on runtime state this project has
+ *     never read — world 2's own two live captures disagreed on id `2`'s
+ *     visibility, so no fixed default can be assumed either way — and the
+ *     full 18 would also exceed this grid's 17-slot capacity (the
+ *     original's own `0x25c` scroll path, not ported here). World 1 also
+ *     has a real entry in the table but is never wired in — the shop is
+ *     provably unreachable for world 1 (no password can target it).
+ *   - Prices ARE ported for all 14 ids across worlds 2/3/4 —
  *     `UNKNOWN_shop_prices` is CLOSED, see shop.md. A machine-parsed (base64
  *     dump, decoded by script — not hand-transcribed) live read of
  *     `DS:0x2a4e` found a clean, unbroken 132-record table (a per-record
  *     tag byte increments by exactly 1 every record, wrapping at 0xff, with
- *     zero deviation), and the 12 prices below were independently
- *     corroborated by live purchases: the actual `DS:0x194` money deduction
- *     matched the decoded price exactly for every id bought (650 for id 70
- *     is a unique match against every other decoded price in the table, not
- *     just a plausible-looking number), and the table itself was confirmed
- *     GLOBAL rather than per-world/level-scoped by a direct re-read: the
- *     same 2048-byte range read during an ordinary world-1 start and again
- *     with the world-2 shop open came back byte-for-byte identical. Ids
- *     outside `PRICES` (any world 3/4 roster would need) remain unpriced —
- *     the live table's own ids 0-131 were all read and landmark-verified,
- *     but only these 12 were purchase-confirmed, and no world 3/4 roster
- *     exists in this port yet to need them.
+ *     zero deviation), and the original 12 were independently corroborated
+ *     by live purchases: the actual `DS:0x194` money deduction matched the
+ *     decoded price exactly for every id bought (650 for id 70 is a unique
+ *     match against every other decoded price in the table, not just a
+ *     plausible-looking number). The table itself was confirmed GLOBAL
+ *     rather than per-world/level-scoped by a direct re-read: the same
+ *     2048-byte range read during an ordinary world-1 start and again with
+ *     the world-2 shop open came back byte-for-byte identical.
  *   - Sell (raw item id `>= SELL_ID_BASE`) is not ported at all —
  *     `UNKNOWN_shop_tradein_value`. `roster` here should only ever contain
  *     ids below `SELL_ID_BASE`; the EXIT slot is the only non-buy cell.
@@ -89,15 +97,18 @@ export const BUY_CONFIRM_SFX = 0x333;                  // CS:0x6ee1, CS:0x22ca's
 export const REFUSAL_MESSAGE_PRIORITY = 0x19;          // matches message-line.md's own table (25)
 
 /* `FUN_1000_7392`'s table, DS:0x2a4e + id*10, price word at +6/+7 (byte-
- * swapped) — live-read this session (base64 dump, script-decoded) and
- * purchase-confirmed for every id below (`DS:0x194` money delta on a real
- * buy exactly matched the decoded value). Only the 12 ids this port's own
- * world-2 roster (`main.js`'s `SHOP_ROSTER_WORLD_2`) actually shows are
- * listed — see shop.md's `UNKNOWN_shop_prices` for the full 132-record
- * table this was drawn from. */
+ * swapped) — live-read this session (base64 dump, script-decoded). The
+ * original 12 (world 2) are purchase-confirmed (`DS:0x194` money delta on a
+ * real buy exactly matched the decoded value); `37`/`39` (added for world
+ * 3/4) are read from the same table with the same unbroken landmark but not
+ * individually purchase-confirmed. Only ids this port's rosters actually
+ * show are listed — see shop.md's `UNKNOWN_shop_prices` for the full
+ * 132-record table this was drawn from, including the four ids (`2`,`3`,
+ * `40`,`41`) this port knows the price of but doesn't show, per
+ * `UNKNOWN_shop_roster_source`. */
 export const PRICES = {
-  0: 4000, 35: 8000, 36: 10000, 38: 5000, 42: 20000, 44: 4000,
-  51: 1000, 52: 1000, 53: 1000, 70: 650, 71: 1300, 72: 1000,
+  0: 4000, 35: 8000, 36: 10000, 37: 20000, 38: 5000, 39: 30000, 42: 20000,
+  44: 4000, 51: 1000, 52: 1000, 53: 1000, 70: 650, 71: 1300, 72: 1000,
 };
 
 export class ShopScreen {
