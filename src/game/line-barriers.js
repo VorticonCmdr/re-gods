@@ -29,22 +29,36 @@
  *     masonry-textured block was observed at exactly that position, every
  *     frame, starting before the player could send any input.
  *
- * WHAT THIS PORT DOES **NOT** REPRODUCE, AND WHY (UPDATED — both
- * `UNKNOWN_189c_motion` and `UNKNOWN_189c_type_dispatch` are now CLOSED, see
- * the doc section):
+ * THE MOTION MODEL — UPDATED THIS SESSION, cycling is now implemented (both
+ * `UNKNOWN_189c_motion` and `UNKNOWN_189c_type_dispatch` were already CLOSED
+ * in the doc; this just finishes wiring what that closure described):
  *   - Motion from source toward target IS type-dependent in the original,
  *     not uniform. The obstacle "type" byte (this record's own
  *     `+0x16..+0x19`, one per selector) resolves through `2f3d:35ec`'s
  *     11-entry table into one of three behaviours: types 2-5/7-10 (148 of
  *     183 shipped dispatches) pick ONE target point (with a fixed fallback
  *     search among the record's 4 points, skipping any with x==0) and
- *     SETTLE there forever — this port's "settle at target, hold" model is
- *     now proven correct for these, not just a safe guess. Types 0/1/6
+ *     SETTLE there forever — this port's pre-existing "settle at target,
+ *     hold" model (proven correct live for these) is unchanged. Types 0/1/6
  *     (7 of 183 dispatches, all type 0 in shipped data) instead CYCLE: on
  *     reaching one target point they immediately re-seed toward the next
  *     point in a fixed forward/backward order (wrapping through however
  *     many of the record's 4 points are non-degenerate), forever — a true
- *     patrol, never settling. Cross-checked against all 8 shipped levels'
+ *     patrol, never settling. **Now implemented** (`#armCycle`/`tick`):
+ *     the record travels the real Bresenham line from its own source point,
+ *     at `stepSeed+1` pixels/tick (`CS:0x765A`'s `n`, parsed but unused
+ *     until now), snapping exactly onto each target on arrival (matching
+ *     `FUN_1000_7845`'s own literal-coordinate snap, which overrides any
+ *     Bresenham rounding drift) before re-seeding toward the next point.
+ *     The next point is chosen by bumping the 1-based point index +1
+ *     (forward, type 0) or -1 (backward, types 1/6), wrapping 1..4, then
+ *     searching in that same direction past any point whose `x==0` —
+ *     `findValidPoint` below, matching `FUN_1000_78E9`/`0x790E`'s own
+ *     `SS:0x35EE`/`0x35F8`-indexed cascade (the exact cascade table
+ *     contents were not disassembled; the OBSERVABLE behaviour — "ping-pong
+ *     between only the non-degenerate points, never detour through (0,0)"
+ *     — is what's modelled, cross-checked against all 5 real shipped
+ *     cyclers below). Cross-checked against all 8 shipped levels'
  *     plane-B/ACT5 dispatch tables: **5 of the 7 shipped cyclers are
  *     genuinely reachable** — real 2-point ping-pong barriers, two each in
  *     PLEV2A/PLEV2B and one in PLEV1B (see the doc for exact cells) —
@@ -52,12 +66,16 @@
  *     PLEV4A/PLEV4B) are placed in the static table but never wired to any
  *     reachable plane-B cell or `ACT5` arg in either file, so they are dead
  *     content, same shape as this project's other "authored but
- *     unreachable" findings. **This port still does not implement cycling
- *     — the 5 reachable ping-pong barriers in worlds 1B/2A/2B are a real,
- *     disclosed gap**, not merely an unverified-guess gap anymore: wiring
- *     it is new feature work (same shape as the `PGODSRLA-F.RL` Roland
- *     music gap), not a bug fix, so it's left for a deliberate decision
- *     rather than built here.
+ *     unreachable" findings; this port's cycling code path handles them
+ *     correctly too (nothing here is 2-point-specific) but they cannot be
+ *     reached by any shipped trigger.
+ *     ⚠️ STILL NOT REPRODUCED, disclosed: the exact `DI+5`/1-based-index
+ *     starting value on a FRESH arm (never-before-cycled slot) is inferred
+ *     from `FUN_1000_78E9`/`0x790E`'s own bump-and-wrap arithmetic applied
+ *     to a zeroed runtime slot (`0 -> 1` forward, `0 -> 4` backward), not
+ *     read live — this determines only WHICH of the two ping-pong endpoints
+ *     a barrier starts by walking toward, not the ping-pong itself, and
+ *     matches the only shipped shape (2 populated points) either way.
  *   - The exact sprite `FUN_1000_7779` draws. It goes through graphics
  *     export 1 (the same masked blit `selector2.js`'s turrets use),
  *     selected by the record's own `+0x16..+0x19` "obstacle type" byte —
@@ -69,10 +87,60 @@
  *     touching the barrier's footprint whose plane B was ALREADY 1 before
  *     this system's own stamp — so the fill is always the correct texture
  *     FAMILY for that level, even where it doesn't reproduce GAME.EXE's own
- *     exact tile choice. See `#resolveTile`.
+ *     exact tile choice. See `#resolveTile`. For a CYCLING barrier this is
+ *     now re-resolved every tick against its current footprint, so it keeps
+ *     borrowing whatever it is currently passing, rather than staying
+ *     pinned to whatever bordered its starting cell.
  */
 
 import { MAP_COLS, MAP_ROWS } from '../formats/map.js';
+import { newLine, stepLine } from './line-hazard.js';
+
+/**
+ * Obstacle-"type" byte -> behaviour, `2f3d:35ec`'s 11-entry table
+ * (`docs/triggers-and-difficulty.md`'s "The full +0x16..+0x19 type enum").
+ * Only `kind`/`direction` matter here — the settle ring's own preferred-
+ * point-per-type mapping is `arm()`'s pre-existing, live-proven
+ * `targets[selector-7]` shape and is intentionally untouched.
+ * The catch-all `'disabled'` default below is a defensive fallback, not
+ * something read live — checks.js's own census of every (record, selector)
+ * pair an event actually DISPATCHES (not every raw byte in the 800-slot
+ * table, most of which is never read) across all 8 shipped PALFILS files
+ * confirms the only values that ever occur are `-1, 0, 2, 3, 4, 5` — the
+ * default never actually fires on shipped data.
+ */
+function classifyType(typeVal) {
+  if (typeVal === 0) return { kind: 'cycle', direction: 1 };
+  if (typeVal === 1 || typeVal === 6) return { kind: 'cycle', direction: -1 };
+  if (typeVal >= 2 && typeVal <= 10) return { kind: 'settle' };
+  return { kind: 'disabled' };   // 0xFF (-1), and anything else out of range
+}
+
+/** `FUN_1000_78E9`/`FUN_1000_790E`'s own `DI+5` bump: +1 or -1, wrapping the
+ *  1-based point index into 1..4. Called with `0` for a fresh arm (a never-
+ *  before-cycled runtime slot reads 0), matching both functions' own
+ *  `bVar1 = DI+5 +/- 1` arithmetic starting from that zeroed value. */
+function bump1Based(idx1, direction) {
+  let n = idx1 + direction;
+  if (n > 4) n = 1;
+  if (n < 1) n = 4;
+  return n;
+}
+
+/** The validating cascade `FUN_1000_78E9`/`0x790E` share with the settle
+ *  rings (types 2-5/7-10): starting at `start1Based`, walk in `direction`
+ *  order, skipping any point whose `x === 0`, and return the first valid
+ *  one as a 0-based `targets` index. Returns -1 only if all 4 points are
+ *  degenerate, which `arm()`'s own liveness gate (mirroring `CS:0x761B`)
+ *  already rules out before this is ever called. */
+function findValidPoint(targets, start1Based, direction) {
+  let idx1 = start1Based;
+  for (let i = 0; i < 4; i++) {
+    if (targets[idx1 - 1].x !== 0) return idx1 - 1;
+    idx1 = bump1Based(idx1, direction);
+  }
+  return -1;
+}
 
 export const TABLE_OFF = 0x189c;        // -> DS:0xa8a4
 export const RECORD_COUNT = 25;
@@ -99,7 +167,7 @@ export function parseLineBarrierRecords(buf) {
       index: i,
       srcX: dv.getUint16(o, false),
       srcY: dv.getUint16(o + 2, false),
-      stepSeed: dv.getUint8(o + 5),          // n = stepSeed + 1, CS:0x765A -- unused, see UNKNOWN_189c_motion
+      stepSeed: dv.getUint8(o + 5),          // n = stepSeed + 1, CS:0x765A -- cycling speed, px/tick
       targets, types,
       width: (wh & 7) + 1,                   // cells -- record's own +0x1a low 3 bits
       skipSolid: (wh & 0x80) !== 0,          // +0x1a bit 7
@@ -142,22 +210,99 @@ export class LineBarriers {
     if (!rec) return;
     const slotIdx = SELECTOR_TO_SLOT[selector];
     if (slotIdx === undefined) return;
-    const pt = rec.targets[slotIdx];
     /* CS:0x761B/0x7627 -- liveness is "any of the 4 target points has a
      * nonzero X", tested across all four, not just this selector's own --
      * an all-zero record is inert padding (this project's own census found
      * several, e.g. PLEV1A's own records 4-8). */
     if (!rec.targets.some((t) => t.x !== 0)) return;
 
-    const state = {
-      x: pt.x, y: pt.y,
-      width: rec.width, rows: rec.rows, skipSolid: rec.skipSolid,
-      tileId: null,
-    };
+    /* CS:0x7669 -- dispatch through this SELECTOR's own type byte
+     * (table25[+0x16+slotIdx]). CS:0x78DC (type 0xFF, "disabled") consumes
+     * the event but never actually creates a runtime slot -- FUN_1000_78DC
+     * decrements the active-obstacle counter the arm dispatcher had just
+     * incremented, undoing the arm outright. */
+    const behavior = classifyType(rec.types[slotIdx]);
+    if (behavior.kind === 'disabled') return;
+
+    const state = behavior.kind === 'cycle'
+      ? this.#armCycle(rec, behavior.direction)
+      : this.#armSettle(rec, rec.targets[slotIdx]);
+
+    state.width = rec.width; state.rows = rec.rows; state.skipSolid = rec.skipSolid;
     state.tileId = this.#resolveTile(state);
     if (state.tileId === null) this.unresolvedTile++;
     this.slots[recordIndex] = state;
-    this.#stamp(state);
+    this.#restamp(state);
+  }
+
+  /** The pre-existing settle model -- snap straight to the selector's own
+   *  target point and hold there forever. Unchanged (still the live-proven
+   *  `targets[selector-7]` shape, not the type ring's own preferred-point
+   *  mapping -- see the file header). */
+  #armSettle(rec, pt) {
+    return { cycling: false, x: pt.x, y: pt.y };
+  }
+
+  /** `FUN_1000_78E9`/`0x790E`, the type-0/1/6 arm path: pick the first
+   *  non-degenerate point in `direction` order starting from a fresh (zeroed)
+   *  1-based point index, and start walking the real Bresenham line toward
+   *  it from the record's own source point -- see the file header for the
+   *  `bump1Based(0, direction)` reasoning. */
+  #armCycle(rec, direction) {
+    const start1 = bump1Based(0, direction);
+    const pointIdx = findValidPoint(rec.targets, start1, direction);
+    const target = rec.targets[pointIdx];
+    const state = {
+      cycling: true, direction, pointIdx, rec,
+      x: rec.srcX, y: rec.srcY,
+      speed: rec.stepSeed + 1,
+    };
+    this.#seedLeg(state, target);
+    return state;
+  }
+
+  /** Start (or restart, on arrival) one Bresenham leg from the barrier's
+   *  CURRENT position toward `target` -- `CALL 0x7A2A`. */
+  #seedLeg(state, target) {
+    state.line = newLine(state.x, state.y, target.x, target.y);
+    state.majorRemaining = state.line.xMajor ? state.line.dx : state.line.dy;
+  }
+
+  /**
+   * `CS:0x767B-0x76FF`, the per-frame rescan loop (`FUN_1000_7845` per slot)
+   * -- advance every cycling barrier one tick. Settle barriers never move
+   * once armed and are untouched here, matching the original: `DI+4>1`
+   * (settle/disabled) returns immediately at `FUN_1000_7845`'s own top.
+   *
+   * Placement in `main.js`'s per-tick order is NOT traced to an exact
+   * `CS:` call site relative to the other systems -- the doc only pins this
+   * system's OWN internal structure and the self-modifying `nop`/`ret` gate
+   * shape (shared with `CS:0xAD88`, selector2.js's turret driver), not where
+   * in the frame that gate itself sits. Called once per tick, grouped with
+   * the other "per-tick pool advance" systems (`lineHazards.step`), which is
+   * a reasonable but disclosed placement choice, not a proven one.
+   */
+  tick() {
+    for (const state of this.slots) {
+      if (!state || !state.cycling) continue;
+      const steps = Math.min(state.speed, state.majorRemaining);
+      stepLine(state.line, steps);
+      state.majorRemaining -= steps;
+      if (state.majorRemaining <= 0) {
+        /* `FUN_1000_7845`'s own literal-coordinate snap -- overrides any
+         * Bresenham rounding drift, so the barrier is always EXACTLY on a
+         * target point at the moment it arrives, never one pixel off. */
+        const arrived = state.rec.targets[state.pointIdx];
+        state.x = arrived.x; state.y = arrived.y;
+        const next1 = bump1Based(state.pointIdx + 1, state.direction);
+        state.pointIdx = findValidPoint(state.rec.targets, next1, state.direction);
+        this.#seedLeg(state, state.rec.targets[state.pointIdx]);
+      } else {
+        state.x = state.line.x; state.y = state.line.y;
+      }
+      state.tileId = this.#resolveTile(state);
+      this.#restamp(state);
+    }
   }
 
   /** See the file header -- borrow whichever pre-existing, already-solid
@@ -187,20 +332,45 @@ export class LineBarriers {
     return null;
   }
 
-  /** `FUN_1000_77d6` — stamp `width x rows` plane-B cells solid, anchored at
-   *  the barrier's own `(x, y)`, unless the record's own skip bit is set. */
-  #stamp(state) {
-    if (state.skipSolid) return;
+  /** `width x rows` map cells anchored at the barrier's current `(x, y)`. */
+  #footprintCells(state) {
     const col0 = state.x >> 5, row0 = state.y >> 4;
+    const cells = [];
     for (let r = 0; r < state.rows; r++) {
       for (let c = 0; c < state.width; c++) {
         const col = col0 + c, row = row0 + r;
         if (col < 0 || col >= MAP_COLS || row < 0 || row >= MAP_ROWS) continue;
-        const cell = row * MAP_COLS + col;
-        this.map.planeB[cell] = 1;
-        this.stampedCells.add(cell);
+        cells.push(row * MAP_COLS + col);
       }
     }
+    return cells;
+  }
+
+  /** `FUN_1000_77d6` — stamp `width x rows` plane-B cells solid, anchored at
+   *  the barrier's own current `(x, y)`, unless the record's own skip bit is
+   *  set. For a settle barrier this runs once, at arm time, and the
+   *  footprint never changes again. For a CYCLING barrier `tick()` calls
+   *  this every frame, so any cell the footprint just vacated is released
+   *  first (back to 0, unless some OTHER live slot's own footprint still
+   *  covers it — checked so two barriers can never un-solid each other's
+   *  shared ground) before the new footprint is stamped. */
+  #restamp(state) {
+    const next = state.skipSolid ? [] : this.#footprintCells(state);
+    const nextSet = new Set(next);
+    const prev = state.footprint;
+    if (prev) {
+      for (const cell of prev) {
+        if (nextSet.has(cell)) continue;
+        this.stampedCells.delete(cell);
+        const stillHeld = this.slots.some((s) => s && s !== state && s.footprint && s.footprint.has(cell));
+        if (!stillHeld) this.map.planeB[cell] = 0;
+      }
+    }
+    for (const cell of next) {
+      this.map.planeB[cell] = 1;
+      this.stampedCells.add(cell);
+    }
+    state.footprint = nextSet;
   }
 
   /** Undo every stamp this system made and free every slot — level
@@ -219,7 +389,7 @@ export class LineBarriers {
 
   /** `FUN_1000_7779` — every armed barrier's own footprint, in map cells.
    *  World/screen-independent; the caller applies the camera. Clipped to the
-   *  128x64 map exactly like `#stamp`'s own solid-fill — a handful of
+   *  128x64 map exactly like `#restamp`'s own solid-fill — a handful of
    *  shipped `rows`/`width` values on levels 4A/4B run one cell past the
    *  map's own last row (the world is exactly 1024px tall; a footprint
    *  anchored at row 63 with rows >= 2 reaches row 64, which does not

@@ -13836,7 +13836,10 @@ export async function checkLineBarriers(fetchRaw) {
     dv.setUint16(o + 0x0a, 101, false); dv.setUint16(o + 0x0c, 201, false);  // target 1 (sel 8)
     dv.setUint16(o + 0x0e, 102, false); dv.setUint16(o + 0x10, 202, false);  // target 2 (sel 9)
     dv.setUint16(o + 0x12, 103, false); dv.setUint16(o + 0x14, 203, false);  // target 3 (sel 10)
-    buf[o + 0x16] = 0xfe;   // -2, signed
+    buf[o + 0x16] = 0xfe;   // -2, signed (selector 7's own type -- decode-only, never armed below)
+    buf[o + 0x17] = 3;      // selector 8's type -- SETTLE, prefers point 1 (explicit: type 0
+                             // means CYCLE in real data, and this record's arm() check below
+                             // expects the pre-existing settle snap, not a travelling start)
     buf[o + 0x1a] = 0x85;   // width bits = 5 -> width 6, bit7 set -> skipSolid
     buf[o + 0x1b] = 2;      // rows = 3
     const recs = parseLineBarrierRecords(buf);
@@ -13862,6 +13865,202 @@ export async function checkLineBarriers(fetchRaw) {
       lb.live === 1 && lb.slots[3].x === 101 && lb.slots[3].y === 201);
     check('skipSolid true leaves plane B untouched even though the record armed',
       zeroMap.planeB[0] === 0);
+  }
+
+  /* ── census: `classifyType`'s catch-all "anything outside 0..10/-1 is
+   * disabled" default is a defensive fallback, not something read live --
+   * check it against every type byte an event actually DISPATCHES (not
+   * every raw byte in the 25x4 table, most of which is never read at all;
+   * this project's own placement-census-vs-acquisition lesson) across all
+   * 8 shipped PALFILS files. Reproduces the doc's own 183/148/7/28 split
+   * exactly, confirming the catch-all default never actually fires on
+   * shipped data. ──────────────────────────────────────────────────────── */
+  {
+    const keys = ['1A','1B','2A','2B','3A','3B','4A','4B'];
+    let total = 0, settle = 0, cycle0 = 0, cycle1or6 = 0, disabled = 0, outOfRange = 0;
+    for (const k of keys) {
+      const pfBuf = dclDecompress(await fetchRaw(`game/${palfilsNameFor(k)}`)).data;
+      const palfils = parsePalfils(pfBuf);
+      const records = parseLineBarrierRecords(pfBuf);
+      for (const ev of palfils.events) {
+        if (ev.selector < 7 || ev.selector > 10) continue;
+        const rec = records[ev.param];
+        if (!rec) continue;
+        const t = rec.types[ev.selector - 7];
+        total++;
+        if (t === -1) disabled++;
+        else if (t === 0) cycle0++;
+        else if (t === 1 || t === 6) cycle1or6++;
+        else if (t >= 2 && t <= 10) settle++;
+        else outOfRange++;
+      }
+    }
+    check('183 real selector-7..10 dispatches across all 8 shipped files, '
+      + 'matching the doc\'s own count', total === 183, `got ${total}`);
+    check('148 settle / 7 cycle-forward / 0 cycle-backward / 28 disabled -- '
+      + 'the exact split the doc\'s own census found',
+      settle === 148 && cycle0 === 7 && cycle1or6 === 0 && disabled === 28,
+      `settle=${settle} cycle0=${cycle0} cycle1/6=${cycle1or6} disabled=${disabled}`);
+    check('no dispatched type byte ever falls outside 0..10/-1 in shipped '
+      + 'data -- classifyType\'s catch-all "disabled" default for anything '
+      + 'else is a defensive fallback that never actually fires here',
+      outOfRange === 0, `${outOfRange} out-of-range dispatches`);
+  }
+
+  /* ── cycling (types 0/1/6) — synthetic records, independent of any shipped
+   * file. `docs/triggers-and-difficulty.md`'s `UNKNOWN_189c_motion` closure:
+   * type 0 cycles forward, types 1/6 cycle backward, both skipping any
+   * degenerate (x===0) point via the same cascade the settle rings use, at
+   * `stepSeed+1` px/tick, snapping exactly onto each target on arrival. ──── */
+  {
+    const cycMap = { planeA: new Uint8Array(1), planeB: new Uint8Array(1) };
+    /* One record, only points 0 and 2 populated (1 and 3 degenerate) — the
+     * shape every real shipped cycler has (2 of 4 points live), plus it
+     * exercises the skip-cascade both directions land on. */
+    const rec = {
+      srcX: 0, srcY: 0, stepSeed: 15,   // speed = 16 px/tick
+      targets: [{ x: 64, y: 0 }, { x: 0, y: 0 }, { x: 192, y: 0 }, { x: 0, y: 0 }],
+      types: [0, -1, -1, -1],           // selector 7 -> type 0 (cycle forward)
+      width: 1, rows: 1, skipSolid: true,
+    };
+
+    const fwd = new LineBarriers(cycMap, [rec]);
+    fwd.arm(0, 7);
+    check('a cycling arm starts travelling FROM the record\'s own source '
+      + 'point, not snapped onto a target the way settle does',
+      fwd.slots[0].x === 0 && fwd.slots[0].y === 0 && fwd.slots[0].cycling === true);
+    check('the first leg heads toward point 0 (targets[0]) -- a fresh arm '
+      + 'bumps a zeroed 1-based index (0) forward to 1', fwd.slots[0].pointIdx === 0);
+
+    fwd.tick();
+    check('one tick advances exactly stepSeed+1 = 16 px along the major axis',
+      fwd.slots[0].x === 16 && fwd.slots[0].y === 0, `got (${fwd.slots[0].x},${fwd.slots[0].y})`);
+    fwd.tick(); fwd.tick();
+    check('three ticks in, still short of the 64px leg (48 < 64)',
+      fwd.slots[0].x === 48);
+    fwd.tick();
+    check('the 4th tick (4x16=64) arrives EXACTLY on point 0 and re-seeds '
+      + 'toward the next valid point',
+      fwd.slots[0].x === 64 && fwd.slots[0].y === 0);
+    check('point 1 (targets[1]) is degenerate (x=0) -- the cascade skips '
+      + 'it and lands on point 2 (targets[2]) instead, matching every real '
+      + 'shipped 2-of-4-populated cycler', fwd.slots[0].pointIdx === 2);
+
+    for (let i = 0; i < 8; i++) fwd.tick();   // 128px leg, 16px/tick = 8 ticks
+    check('8 more ticks (8x16=128px) crosses from point 0 (64) to point 2 '
+      + '(192) and snaps exactly there',
+      fwd.slots[0].x === 192 && fwd.slots[0].y === 0, `got x=${fwd.slots[0].x}`);
+    check('arriving at point 2 cascades past degenerate point 3 and back to '
+      + 'point 0 -- a real, forever ping-pong between only the 2 live points',
+      fwd.slots[0].pointIdx === 0);
+
+    /* Backward direction (types 1/6): a fresh arm bumps the zeroed index the
+     * OTHER way (0 -> 4), landing on point 3 first if live, else cascading
+     * backward -- here point 3 is degenerate too, so it lands on point 2. */
+    const bwdRec = { ...rec, types: [1, -1, -1, -1] };
+    const bwd = new LineBarriers(cycMap, [bwdRec]);
+    bwd.arm(0, 7);
+    check('a fresh backward-cycling arm (type 1) starts toward point 2, not '
+      + 'point 0 -- the direction genuinely changes which endpoint is first',
+      bwd.slots[0].pointIdx === 2);
+
+    /* Instant (zero-length) leg — src already equals the first target.
+     * `majorRemaining` starts at 0, so arrival + re-seed must happen on the
+     * very first tick, not hang or divide by zero. */
+    const instantRec = { srcX: 64, srcY: 0, stepSeed: 15,
+      targets: [{ x: 64, y: 0 }, { x: 0, y: 0 }, { x: 192, y: 0 }, { x: 0, y: 0 }],
+      types: [0, -1, -1, -1], width: 1, rows: 1, skipSolid: true };
+    const instant = new LineBarriers(cycMap, [instantRec]);
+    instant.arm(0, 7);
+    check('arming exactly ON the first target (zero-length first leg) does '
+      + 'not hang -- the arm itself starts the (degenerate) leg',
+      instant.slots[0].majorRemaining === 0);
+    instant.tick();
+    check('...and the very next tick resolves it: arrives, then re-seeds '
+      + 'toward point 2 immediately, same tick',
+      instant.slots[0].pointIdx === 2 && instant.slots[0].x === 64);
+  }
+
+  /* ── #restamp's diffing path, with skipSolid FALSE (the previous block
+   * uses skipSolid:true throughout, so the actual vacate/claim logic --
+   * the genuinely new, stateful part of this change -- was never exercised
+   * by a synthetic check). A barrier that leaves a permanent trail of solid
+   * cells behind it as it patrols would wreck collision on 1B/2A/2B and
+   * pass every check above. ─────────────────────────────────────────────── */
+  {
+    const n = MAP_COLS * 64;                     // MAP_ROWS
+    const trailMap = { planeA: new Uint8Array(n), planeB: new Uint8Array(n) };
+    const rec = {
+      srcX: 0, srcY: 0, stepSeed: 15,               // speed = 16 px/tick
+      targets: [{ x: 32, y: 0 }, { x: 0, y: 0 }, { x: 96, y: 0 }, { x: 0, y: 0 }],
+      types: [0, -1, -1, -1],                        // selector 7, cycle forward
+      width: 1, rows: 1, skipSolid: false,
+    };
+    const lb = new LineBarriers(trailMap, [rec]);
+    lb.arm(0, 7);
+    check('arm() itself stamps the starting cell (col 0, row 0) solid',
+      trailMap.planeB[0] === 1 && lb.stampedCells.size === 1);
+
+    lb.tick();   // x: 0 -> 16, still col 0 -- no cell boundary crossed
+    check('mid-leg tick that stays in the same map cell does not touch '
+      + 'plane B at all', trailMap.planeB[0] === 1 && lb.stampedCells.size === 1);
+
+    lb.tick();   // x: 16 -> 32 (arrival at point 0), col 0 -> col 1
+    check('crossing a cell boundary vacates the old cell (back to 0) and '
+      + 'claims the new one (set to 1) -- the previous cell is not left '
+      + 'behind as a permanent trail',
+      trailMap.planeB[0] === 0 && trailMap.planeB[1] === 1 && lb.stampedCells.size === 1,
+      `planeB[0]=${trailMap.planeB[0]} planeB[1]=${trailMap.planeB[1]} size=${lb.stampedCells.size}`);
+
+    for (let i = 0; i < 4; i++) lb.tick();   // 32 -> 96 (64px @ 16px/tick), crossing col 2 then col 3
+    check('after crossing two more cell boundaries on the way to point 2, '
+      + 'exactly one cell is stamped (the current one) -- stampedCells '
+      + 'never grows across the whole patrol, only ever tracks the live '
+      + 'footprint', trailMap.planeB[0] === 0 && trailMap.planeB[1] === 0
+        && trailMap.planeB[3] === 1 && lb.stampedCells.size === 1,
+      `planeB=[${trailMap.planeB[0]},${trailMap.planeB[1]},${trailMap.planeB[2]},${trailMap.planeB[3]}] size=${lb.stampedCells.size}`);
+  }
+
+  /* ── cycling against real shipped data — PALFILS.0A2/PLEV2A record 9, one
+   * of the 5 genuinely reachable shipped cyclers (docs/triggers-and-
+   * difficulty.md: "0A2 record 9 patrols between (1056,96) and (832,96)"). */
+  {
+    const mapBuf = dclDecompress(await fetchRaw('game/PLEV2A.MAP')).data;
+    const map = parseMap(mapBuf);
+    const pfBuf = dclDecompress(await fetchRaw(`game/${palfilsNameFor('2A')}`)).data;
+    const palfils = parsePalfils(pfBuf);
+    const records = parseLineBarrierRecords(pfBuf);
+    const rec9 = records[9];
+
+    /* Read event 197's own selector/param directly rather than guessing it
+     * from the record's type bytes -- record 9 has type 0 at TWO slots
+     * ([0,-1,0,0]), so `types.indexOf(0)` would silently pick slot 0
+     * (selector 7) even if the level actually dispatched a different one. */
+    const ev197 = palfils.events[197];
+    check('event 197 dispatches record 9 via selector 7 (this level\'s own '
+      + 'wiring, not an assumption)', ev197.selector === 7 && ev197.param === 9,
+      JSON.stringify(ev197));
+    check('record 9\'s selector-7 type byte is 0 (cycle forward) -- the '
+      + 'doc\'s own cross-check that this is one of the 7 real type-0 '
+      + 'dispatches in shipped data', rec9.types[0] === 0, JSON.stringify(rec9.types));
+
+    const lineBarriers = new LineBarriers(map, records);
+    lineBarriers.arm(ev197.param, ev197.selector);
+    const start = { x: lineBarriers.slots[9].x, y: lineBarriers.slots[9].y };
+    check('a fresh arm starts at the record\'s own source point',
+      start.x === rec9.srcX && start.y === rec9.srcY);
+
+    const seen = new Set([`${start.x},${start.y}`]);
+    let reachedBothEndpoints = false;
+    for (let i = 0; i < 2000 && !reachedBothEndpoints; i++) {
+      lineBarriers.tick();
+      const { x, y } = lineBarriers.slots[9];
+      seen.add(`${x},${y}`);
+      if (seen.has('1056,96') && seen.has('832,96')) reachedBothEndpoints = true;
+    }
+    check('ticking long enough visits BOTH real endpoints the doc names, '
+      + '(1056,96) and (832,96) -- a genuine ping-pong patrol, not a one-way '
+      + 'walk or a stall', reachedBothEndpoints);
   }
 
   /* ── PLEV1A end to end, against the actual shipped file — this is the '

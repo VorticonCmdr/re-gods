@@ -2278,6 +2278,13 @@ async function main() {
         level.map.planeB,
         { invulnerable: fx.invuln > 0, hurt: (n) => health.damage(n) },
         debris, tock);
+      /* CS:0x767B-0x76FF — the line-barrier rescan (game/line-barriers.js's
+       * own `tick()`), advancing every CYCLING selector-7-10 barrier one
+       * Bresenham leg. Grouped here with the other per-tick pool systems;
+       * see that method's own header for why this exact position in the
+       * frame is a disclosed placement choice, not a traced one. Settle
+       * barriers (the vast majority) are untouched by this call. */
+      lineBarriers.tick();
       /* CS:0x02c6 — the bar chases the target one unit per frame, and the
        * death test reads the BAR, so a fatal hit leaves a rescue window. */
       /* CS:0x0186 `dec word [0x2fa]` floored at CS:0x018C, CS:0xA99B

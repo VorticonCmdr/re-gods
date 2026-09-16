@@ -167,8 +167,15 @@ export const isCrouching = (playerState) =>
  * magnitudes, `sx`/`sy` are the per-step signs (+-1), `xMajor` picks which
  * axis increments every step vs. only on error carry, and `err` is the
  * running error term, seeded to `major >> 1` — CS:0xdd02/CS:0xdd41.
+ *
+ * Exported: `game/line-barriers.js`'s selector-7-10 cycling path (`CS:0x7A2A`/
+ * `CS:0x7A0B`) is a SEPARATE copy of this exact same dx/dy/sign/err loop
+ * shape in `GAME.EXE` (four near-identical bodies there too), reusing THIS
+ * module's math rather than duplicating it — see that module's own header
+ * for the one real behavioural difference (this system's seed never checks
+ * distance and rays forever; the barrier system's does, and stops).
  */
-function newLine(x0, y0, x1, y1) {
+export function newLine(x0, y0, x1, y1) {
   const dx = Math.abs(x1 - x0);
   const dy = Math.abs(y1 - y0);
   const sx = x1 >= x0 ? 1 : -1;
@@ -182,7 +189,7 @@ function newLine(x0, y0, x1, y1) {
  * body (CS:0xdd04/CS:0xdd43/CS:0xdd95/CS:0xddd3) — no destination check, by
  * the ray-not-segment finding above. `n <= 0` is a no-op (see the N==0 note).
  */
-function stepLine(line, n) {
+export function stepLine(line, n) {
   for (let i = 0; i < n; i++) {
     if (line.xMajor) {
       line.err -= line.dy;                                    // CS:0xdd04
