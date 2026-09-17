@@ -1,17 +1,20 @@
 {
   "_provenance": [
     "Captured live in DOSBox this session against PJOYG1.DAT (world 1, sublevel B).",
-    "Three disjoint tick ranges, gaps disclosed rather than filled. Segment A",
+    "Two disjoint tick ranges, gaps disclosed rather than filled. Segment A",
     "(ticks 0,1,2,3,4,12,13,14,15,16,17,22,29,30 -- not contiguous, see the",
-    "correction below for why) was rebuilt in a later pass of this same project;",
-    "segment B (ticks 158-404) is the original clean run that watched DS:0x3bd",
-    "clear on its own at cursor 405 -- exactly PJOYG1.DAT decompressed length --",
-    "confirming a complete, correctly-terminated recording, untouched by this",
-    "correction. Every other tick in 0-404 was never captured live -- in",
-    "particular 5-11, 18-21 and 23-28 are NOT filled in: they would land in a",
-    "proven-constant or linearly-bounded stretch and could be derived, but this",
-    "project's own convention is a disjoint range with a gap, not asserted",
-    "values a future diff could mistake for something independently read.",
+    "correction below for why) was rebuilt in an earlier pass of this same",
+    "project. Segment B (ticks 158,166-169,175,179-182,200,211-213,220,225-227,",
+    "240,250-253,260,264-266,280,285-286,300,311-313,315-316,319-324,326-330,",
+    "334-339,350,370,377-379,388-393,395,403 -- 66 samples, likewise not",
+    "contiguous) was REBUILT FROM SCRATCH in a later pass -- see the correction",
+    "below. Every other tick in 0-404 was never captured live -- in particular",
+    "5-11, 18-21, 23-28 (segment A's own gaps) and the large stretch 31-157",
+    "(never captured at all, by either pass) are NOT filled in: several would",
+    "land in a proven-constant or linearly-bounded stretch and could be",
+    "derived, but this project's own convention is a disjoint range with a",
+    "gap, not asserted values a future diff could mistake for something",
+    "independently read.",
     "Each sample is {tick, heroX, heroY, state, camX, camY}.",
     "Tick 0 (heroX=3424, heroY=608, camX=3296, camY=512) is independently",
     "confirmed by full disassembly of FUN_1000_8c34 (CS:0x8FBE-0x8FC3): reached",
@@ -20,7 +23,7 @@
     "DS:0x282:=0 for joyg playback, hard-coding this exact hero/camera pair for",
     "DS:0x3e6==2 (joyg1).",
     "",
-    "CORRECTION, later pass: the ORIGINAL segment A (ticks 0-18, contiguous)",
+    "CORRECTION, earlier pass: the ORIGINAL segment A (ticks 0-18, contiguous)",
     "sampled DS:0x282, DS:0x17a/0x17c, DS:0x377 and DS:0xa/0xc at an unpinned",
     "point within each tick (a Lua wait_frames(1) poll, timed to whenever",
     "DS:0x282 was observed to have changed -- see replay-diff.mjs's own header",
@@ -29,42 +32,95 @@
     "has not run yet if the poll lands early in the tick). Empirically this made",
     "ticks 0-2 correct (the poll happened to land past both events) and ticks",
     "3-18 each one recorded-input tick BEHIND where their own label claimed --",
-    "confirmed by direct comparison against this pass's own live reads, which",
-    "sample at CS:0x02F0 (after BOTH the camera final-restore and the",
-    "state-machine write, on every tick) and tag each reading by DS:0x282",
+    "confirmed by direct comparison against a paired-read live rebuild, which",
+    "samples at CS:0x02F0 (after BOTH the camera final-restore and the",
+    "state-machine write, on every tick) and tags each reading by DS:0x282",
     "itself rather than by poll timing. Because CS:0x02F0 supplies the LEAVING",
     "value of the tick that just ran (hero/state) and the ENTERING value of the",
     "NEXT tick (camera -- continuous, so leaving-T equals entering-T+1),",
     "building one honest tick=T record pairs the camera field from the",
     "cursor=T read with the hero/state fields from the cursor=T+1 read.",
-    "This correction is also what exposed and let this pass FIX a real port",
-    "bug: the original enters the TURN_LR/TURN_RL pivot (CS:0x5DFE) on ANY",
-    "first press from ARRIVAL, not just a reversal -- ticks 14-15 (state 2",
-    "then 1, hero frozen) were read by the OLD, wrongly-labelled capture as",
-    "state 4 then 2, hiding the pivot entirely. Fixed in",
-    "gods-web/src/game/player.js (_ground()); see that file's own citation",
-    "for the disassembly this rests on.",
-    "A SECOND divergence was found in this same pass and is NOW ALSO FIXED,",
-    "in a later pass of this same project: ticks 29-30 (hero frozen at 3448",
-    "on the tick RIGHT is first pressed again after the stop at tick 22,",
-    "moving only from the NEXT tick) showed the original also delays one",
-    "tick before resuming from a stopped WALK_R pose -- a different code",
-    "path than the ARRIVAL fix above (stateIndex is already WALK_R, not",
-    "ARRIVAL, when this delay happens). Root cause, confirmed by fresh",
-    "disassembly of CS:0x5ACC-0x5AD3 (state 0) / CS:0x5D17-0x5D1E (state 1):",
-    "the release path locks phase to a stopped-pose sentinel OUTSIDE the",
-    "normal 0-7 walk cycle (CS:0x5B1E/0x5B26/0x5B2B/0x5B33, values 0x39/0x2d)",
-    "-- confirming the untested candidate this file's own earlier revision",
-    "named. On the resume tick the handler steps as usual, but the SAME",
-    "clamp that caps a RAMPING phase at 7 sees the out-of-band sentinel and",
-    "immediately UNDOES that step, pinning CL:=7 in place before the shared",
-    "INC-CL/AND-CL,7 runs on it -- so the undo tick lands on phase 0, not 7;",
-    "the tick after that (phase back in-cycle) steps normally. Fixed in",
-    "gods-web/src/game/player.js (_ground()); see that file's own citation",
-    "for the disassembly this rests on, and src/verify/checks.js for the",
-    "phase-aware regression check this needed (X position alone cannot see",
-    "a wrong post-clamp phase -- an earlier attempt at this exact fix got",
-    "the phase wrong, 6 instead of 0, and only the phase check caught it)."
+    "This correction is also what exposed and let that pass FIX two real port",
+    "bugs, both in gods-web/src/game/player.js's _ground(): (1) the original",
+    "enters the TURN_LR/TURN_RL pivot (CS:0x5DFE) on ANY first press from",
+    "ARRIVAL, not just a reversal -- ticks 14-15 (state 2 then 1, hero frozen)",
+    "were read by the OLD, wrongly-labelled capture as state 4 then 2, hiding",
+    "the pivot entirely; and (2) resuming a walk from a stopped pose also costs",
+    "one tick, via the same walk-state phase clamp (CS:0x5ACC-0x5AD3 /",
+    "CS:0x5D17-0x5D1E) undoing the resume tick's own step when phase holds the",
+    "stopped-pose sentinel (0x39/0x2d) -- ticks 29-30. See player.js's own",
+    "citations for the disassembly both rest on.",
+    "",
+    "CORRECTION, later pass: segment B was REBUILT FROM SCRATCH via the SAME",
+    "CS:0x02F0/cursor-tagged/paired-read methodology segment A's own rebuild",
+    "used -- a single continuous, carefully-anchored live DOSBox session (two-",
+    "stage anchor to real tick 0 with no intermediate stop, then a conditional",
+    "execute breakpoint at CS:0x02F0 with DS:0x282==<target cursor> jumped",
+    "straight to each of 92 target cursor values in ascending order, zero",
+    "missed hits, zero cursor-tag mismatches across the whole run -- every",
+    "single read's own DS:0x282 matched the value its breakpoint's condition",
+    "asked for). DS:0x282 is a 16-bit WORD, not a byte -- segment A's own",
+    "cursor values never exceeded 30 so this never mattered before; segment B's",
+    "run up to 405 and MUST be read/compared as a word, not truncated to a",
+    "byte.",
+    "The going-in HYPOTHESIS for this rebuild was that segment B's OLD samples",
+    "carried the same unpinned-poll labelling bug segment A's did (both were",
+    "captured by the same discredited early-pass methodology). THAT HYPOTHESIS",
+    "IS REFUTED, not confirmed: the fresh, properly cursor-tagged live reads",
+    "reproduce the OLD file's own hero/state values almost exactly at every",
+    "sampled tick (e.g. old tick=166's {heroX:3764,state:1} matches this pass's",
+    "own cursor=167 read, {heroX:3764,state:1}, precisely the pairing this",
+    "convention predicts for an ACCURATE old reading, not a shifted one). The",
+    "OLD file's own camera field is the one place a small, consistent gap DOES",
+    "show up: old tick=166's camX=3556 versus this pass's freshly-paired",
+    "tick=166 camX=3560 -- exactly one camera-tick (4px) stale, the SAME",
+    "revert-window mechanism the tick-3 camera correction earlier in this file",
+    "documents, just recurring here rather than a new problem. Hero/state in",
+    "segment B was accurate all along; only its camera trailed by one tick.",
+    "",
+    "What the rebuild found INSTEAD is a real, substantial divergence between",
+    "the port and the original across this whole range, present already at the",
+    "very first tick sampled (158: port heroX=3752, live=3736, a gap of 16px)",
+    "and growing to a gap of 148px by tick 403/404. Critically, the gap is NOT",
+    "a smooth accumulation -- it is a STAIRCASE: long stretches where the gap",
+    "is EXACTLY CONSTANT across many sampled ticks (16px flat across ticks",
+    "158-182 [24 ticks]; 68px flat across 200-286 [86 ticks]; 148px flat across",
+    "316-403 [87 ticks]). A flat plateau this long is strong, direct evidence",
+    "the port's OWN physics are correct for dozens of consecutive ticks at a",
+    "time -- this is not a pervasive per-tick bug.",
+    "Between the plateaus the gap grows in three places: +52px somewhere",
+    "within ticks 182-200, +28px within 286-300, and +40px within 300-311 --",
+    "all three of these growth windows were sampled only at their two",
+    "endpoints, so nothing beyond the TOTAL growth across each gap is known;",
+    "the exact tick(s) responsible, and whether each is one event or several,",
+    "is genuinely unresolved, not merely unstated. One piece of growth IS",
+    "pinned at single-tick resolution, because it happened to fall inside a",
+    "consecutively-sampled run rather than a gap: ticks 311->312 and 312->313",
+    "each show live heroX flat (3700, unchanged) while the port takes its own",
+    "ordinary +4px step (136->140->144 in the port-minus-live gap) -- two",
+    "individually-confirmed ticks where the port walks and the original does",
+    "not, not a sampling artifact. (Growth continues in some unresolved way",
+    "through 313-316 too -- tick 314 was not sampled -- but only that first",
+    "pair is pinned to single-tick resolution; treat 311-316 as ONE DENSELY-",
+    "SAMPLED WINDOW within the same class of unresolved growth as the other",
+    "three, not as a qualitatively different, more-exact finding.)",
+    "",
+    "This shape -- long stretches of genuine lockstep, growth concentrated in",
+    "a handful of windows -- is most",
+    "consistent with something this replay harness (tools/replay-diff.mjs)",
+    "already discloses it does NOT model: objects/pickups/starburst/blocks/",
+    "debris are all null throughout, and trigger ACTION verbs never execute",
+    "(only selector 3's own condition evaluation runs). A pickup the recorded",
+    "path walks over, or a scripted trigger-driven pause/camera event, would",
+    "produce exactly this shape -- a real thing the harness can't see, not",
+    "necessarily a Player/Camera code bug. This is a LEAD, not a diagnosis:",
+    "nobody has yet live-investigated what specifically happens in the three",
+    "unsampled windows above (182-200, 286-300, 300-311), or the rest of the 311-316 growth beyond the two single-tick-pinned steps, to",
+    "identify the actual cause. Camera fields stay informational for this file",
+    "as a whole (see replay-diff.mjs's own header) -- not because of a",
+    "labelling risk (that hypothesis is now refuted for this file) but because",
+    "the SAME staircase pattern shows up in camX too, corroborating rather than",
+    "contradicting the hero-position finding."
   ],
   "seed": null,
   "samples": [
@@ -182,14 +238,6 @@
     },
     {
       "tick": 158,
-      "heroX": 3732,
-      "heroY": 608,
-      "state": 1,
-      "camX": 3528,
-      "camY": 528
-    },
-    {
-      "tick": 159,
       "heroX": 3736,
       "heroY": 608,
       "state": 1,
@@ -197,66 +245,18 @@
       "camY": 528
     },
     {
-      "tick": 160,
-      "heroX": 3740,
-      "heroY": 608,
-      "state": 1,
-      "camX": 3532,
-      "camY": 528
-    },
-    {
-      "tick": 161,
-      "heroX": 3744,
-      "heroY": 608,
-      "state": 1,
-      "camX": 3536,
-      "camY": 528
-    },
-    {
-      "tick": 162,
-      "heroX": 3748,
-      "heroY": 608,
-      "state": 1,
-      "camX": 3540,
-      "camY": 528
-    },
-    {
-      "tick": 163,
-      "heroX": 3752,
-      "heroY": 608,
-      "state": 1,
-      "camX": 3544,
-      "camY": 528
-    },
-    {
-      "tick": 164,
-      "heroX": 3756,
-      "heroY": 608,
-      "state": 1,
-      "camX": 3548,
-      "camY": 528
-    },
-    {
-      "tick": 165,
-      "heroX": 3760,
-      "heroY": 608,
-      "state": 1,
-      "camX": 3552,
-      "camY": 528
-    },
-    {
       "tick": 166,
       "heroX": 3764,
       "heroY": 608,
       "state": 1,
-      "camX": 3556,
+      "camX": 3560,
       "camY": 528
     },
     {
       "tick": 167,
       "heroX": 3764,
       "heroY": 608,
-      "state": 1,
+      "state": 3,
       "camX": 3560,
       "camY": 528
     },
@@ -277,72 +277,8 @@
       "camY": 528
     },
     {
-      "tick": 170,
-      "heroX": 3764,
-      "heroY": 608,
-      "state": 3,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 171,
-      "heroX": 3764,
-      "heroY": 608,
-      "state": 0,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 172,
-      "heroX": 3760,
-      "heroY": 608,
-      "state": 0,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 173,
-      "heroX": 3756,
-      "heroY": 608,
-      "state": 0,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 174,
-      "heroX": 3752,
-      "heroY": 608,
-      "state": 0,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
       "tick": 175,
-      "heroX": 3748,
-      "heroY": 608,
-      "state": 0,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 176,
       "heroX": 3744,
-      "heroY": 608,
-      "state": 0,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 177,
-      "heroX": 3740,
-      "heroY": 608,
-      "state": 0,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 178,
-      "heroX": 3736,
       "heroY": 608,
       "state": 0,
       "camX": 3560,
@@ -360,7 +296,7 @@
       "tick": 180,
       "heroX": 3732,
       "heroY": 608,
-      "state": 0,
+      "state": 2,
       "camX": 3560,
       "camY": 528
     },
@@ -381,223 +317,7 @@
       "camY": 528
     },
     {
-      "tick": 183,
-      "heroX": 3732,
-      "heroY": 608,
-      "state": 2,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 184,
-      "heroX": 3732,
-      "heroY": 608,
-      "state": 1,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 185,
-      "heroX": 3732,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 186,
-      "heroX": 3732,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 187,
-      "heroX": 3732,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 188,
-      "heroX": 3732,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 189,
-      "heroX": 3732,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 190,
-      "heroX": 3732,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 191,
-      "heroX": 3732,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 192,
-      "heroX": 3732,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 193,
-      "heroX": 3732,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 194,
-      "heroX": 3732,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 195,
-      "heroX": 3732,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 196,
-      "heroX": 3732,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 197,
-      "heroX": 3732,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 198,
-      "heroX": 3732,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 199,
-      "heroX": 3732,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
       "tick": 200,
-      "heroX": 3732,
-      "heroY": 608,
-      "state": 1,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 201,
-      "heroX": 3732,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 202,
-      "heroX": 3732,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 203,
-      "heroX": 3732,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 204,
-      "heroX": 3732,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 205,
-      "heroX": 3732,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 206,
-      "heroX": 3732,
-      "heroY": 608,
-      "state": 1,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 207,
-      "heroX": 3732,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 208,
-      "heroX": 3732,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 209,
-      "heroX": 3732,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 210,
       "heroX": 3732,
       "heroY": 608,
       "state": 5,
@@ -608,7 +328,7 @@
       "tick": 211,
       "heroX": 3732,
       "heroY": 608,
-      "state": 5,
+      "state": 3,
       "camX": 3560,
       "camY": 528
     },
@@ -629,88 +349,8 @@
       "camY": 528
     },
     {
-      "tick": 214,
-      "heroX": 3732,
-      "heroY": 608,
-      "state": 3,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 215,
-      "heroX": 3732,
-      "heroY": 608,
-      "state": 0,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 216,
-      "heroX": 3728,
-      "heroY": 608,
-      "state": 0,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 217,
-      "heroX": 3724,
-      "heroY": 608,
-      "state": 0,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 218,
-      "heroX": 3720,
-      "heroY": 608,
-      "state": 0,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 219,
-      "heroX": 3716,
-      "heroY": 608,
-      "state": 0,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
       "tick": 220,
-      "heroX": 3712,
-      "heroY": 608,
-      "state": 0,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 221,
       "heroX": 3708,
-      "heroY": 608,
-      "state": 0,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 222,
-      "heroX": 3704,
-      "heroY": 608,
-      "state": 0,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 223,
-      "heroX": 3700,
-      "heroY": 608,
-      "state": 0,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 224,
-      "heroX": 3696,
       "heroY": 608,
       "state": 0,
       "camX": 3560,
@@ -720,7 +360,7 @@
       "tick": 225,
       "heroX": 3696,
       "heroY": 608,
-      "state": 0,
+      "state": 2,
       "camX": 3560,
       "camY": 528
     },
@@ -741,175 +381,7 @@
       "camY": 528
     },
     {
-      "tick": 228,
-      "heroX": 3696,
-      "heroY": 608,
-      "state": 2,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 229,
-      "heroX": 3696,
-      "heroY": 608,
-      "state": 1,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 230,
-      "heroX": 3696,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 231,
-      "heroX": 3696,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 232,
-      "heroX": 3696,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 233,
-      "heroX": 3696,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 234,
-      "heroX": 3696,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 235,
-      "heroX": 3696,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 236,
-      "heroX": 3696,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 237,
-      "heroX": 3696,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 238,
-      "heroX": 3696,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 239,
-      "heroX": 3696,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
       "tick": 240,
-      "heroX": 3696,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 241,
-      "heroX": 3696,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 242,
-      "heroX": 3696,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 243,
-      "heroX": 3696,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 244,
-      "heroX": 3696,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 245,
-      "heroX": 3696,
-      "heroY": 608,
-      "state": 1,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 246,
-      "heroX": 3696,
-      "heroY": 608,
-      "state": 1,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 247,
-      "heroX": 3696,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 248,
-      "heroX": 3696,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 249,
       "heroX": 3696,
       "heroY": 608,
       "state": 5,
@@ -920,7 +392,7 @@
       "tick": 250,
       "heroX": 3696,
       "heroY": 608,
-      "state": 5,
+      "state": 3,
       "camX": 3560,
       "camY": 528
     },
@@ -944,85 +416,13 @@
       "tick": 253,
       "heroX": 3696,
       "heroY": 608,
-      "state": 3,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 254,
-      "heroX": 3696,
-      "heroY": 608,
-      "state": 0,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 255,
-      "heroX": 3692,
-      "heroY": 608,
-      "state": 0,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 256,
-      "heroX": 3688,
-      "heroY": 608,
-      "state": 0,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 257,
-      "heroX": 3684,
-      "heroY": 608,
-      "state": 0,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 258,
-      "heroX": 3680,
-      "heroY": 608,
-      "state": 0,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 259,
-      "heroX": 3676,
-      "heroY": 608,
       "state": 0,
       "camX": 3560,
       "camY": 528
     },
     {
       "tick": 260,
-      "heroX": 3672,
-      "heroY": 608,
-      "state": 0,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 261,
       "heroX": 3668,
-      "heroY": 608,
-      "state": 0,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 262,
-      "heroX": 3664,
-      "heroY": 608,
-      "state": 0,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 263,
-      "heroX": 3660,
       "heroY": 608,
       "state": 0,
       "camX": 3560,
@@ -1032,7 +432,7 @@
       "tick": 264,
       "heroX": 3660,
       "heroY": 608,
-      "state": 0,
+      "state": 2,
       "camX": 3560,
       "camY": 528
     },
@@ -1053,110 +453,6 @@
       "camY": 528
     },
     {
-      "tick": 267,
-      "heroX": 3660,
-      "heroY": 608,
-      "state": 2,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 268,
-      "heroX": 3660,
-      "heroY": 608,
-      "state": 1,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 269,
-      "heroX": 3660,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 270,
-      "heroX": 3660,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 271,
-      "heroX": 3660,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 272,
-      "heroX": 3660,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 273,
-      "heroX": 3660,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 274,
-      "heroX": 3660,
-      "heroY": 608,
-      "state": 1,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 275,
-      "heroX": 3660,
-      "heroY": 608,
-      "state": 1,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 276,
-      "heroX": 3660,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 277,
-      "heroX": 3660,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 278,
-      "heroX": 3660,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 279,
-      "heroX": 3660,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
       "tick": 280,
       "heroX": 3660,
       "heroY": 608,
@@ -1165,55 +461,7 @@
       "camY": 528
     },
     {
-      "tick": 281,
-      "heroX": 3660,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 282,
-      "heroX": 3660,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 283,
-      "heroX": 3660,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 284,
-      "heroX": 3660,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
       "tick": 285,
-      "heroX": 3660,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 286,
-      "heroX": 3660,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 287,
       "heroX": 3664,
       "heroY": 608,
       "state": 1,
@@ -1221,96 +469,8 @@
       "camY": 528
     },
     {
-      "tick": 288,
-      "heroX": 3672,
-      "heroY": 608,
-      "state": 1,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 289,
-      "heroX": 3672,
-      "heroY": 608,
-      "state": 1,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 290,
-      "heroX": 3680,
-      "heroY": 608,
-      "state": 1,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 291,
-      "heroX": 3684,
-      "heroY": 608,
-      "state": 1,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 292,
-      "heroX": 3688,
-      "heroY": 608,
-      "state": 1,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 293,
-      "heroX": 3688,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 294,
-      "heroX": 3688,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 295,
-      "heroX": 3688,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 296,
-      "heroX": 3688,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 297,
-      "heroX": 3688,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 298,
-      "heroX": 3692,
-      "heroY": 608,
-      "state": 1,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 299,
-      "heroX": 3696,
+      "tick": 286,
+      "heroX": 3668,
       "heroY": 608,
       "state": 1,
       "camX": 3560,
@@ -1325,90 +485,10 @@
       "camY": 528
     },
     {
-      "tick": 301,
-      "heroX": 3696,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 302,
-      "heroX": 3696,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 303,
-      "heroX": 3696,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 304,
-      "heroX": 3696,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 305,
-      "heroX": 3696,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 306,
-      "heroX": 3696,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 307,
-      "heroX": 3696,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 308,
-      "heroX": 3696,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 309,
-      "heroX": 3696,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 310,
-      "heroX": 3696,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
       "tick": 311,
       "heroX": 3700,
       "heroY": 608,
-      "state": 1,
+      "state": 5,
       "camX": 3560,
       "camY": 528
     },
@@ -1429,31 +509,7 @@
       "camY": 528
     },
     {
-      "tick": 314,
-      "heroX": 3700,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
       "tick": 315,
-      "heroX": 3700,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 316,
-      "heroX": 3700,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 317,
       "heroX": 3704,
       "heroY": 608,
       "state": 1,
@@ -1461,7 +517,7 @@
       "camY": 528
     },
     {
-      "tick": 318,
+      "tick": 316,
       "heroX": 3704,
       "heroY": 608,
       "state": 1,
@@ -1472,7 +528,7 @@
       "tick": 319,
       "heroX": 3704,
       "heroY": 608,
-      "state": 1,
+      "state": 3,
       "camX": 3560,
       "camY": 528
     },
@@ -1496,7 +552,7 @@
       "tick": 322,
       "heroX": 3704,
       "heroY": 608,
-      "state": 3,
+      "state": 0,
       "camX": 3560,
       "camY": 528
     },
@@ -1517,14 +573,6 @@
       "camY": 528
     },
     {
-      "tick": 325,
-      "heroX": 3704,
-      "heroY": 608,
-      "state": 0,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
       "tick": 326,
       "heroX": 3704,
       "heroY": 608,
@@ -1534,14 +582,6 @@
     },
     {
       "tick": 327,
-      "heroX": 3704,
-      "heroY": 608,
-      "state": 0,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 328,
       "heroX": 3700,
       "heroY": 608,
       "state": 0,
@@ -1549,7 +589,7 @@
       "camY": 528
     },
     {
-      "tick": 329,
+      "tick": 328,
       "heroX": 3696,
       "heroY": 608,
       "state": 0,
@@ -1557,7 +597,7 @@
       "camY": 528
     },
     {
-      "tick": 330,
+      "tick": 329,
       "heroX": 3692,
       "heroY": 608,
       "state": 0,
@@ -1565,24 +605,8 @@
       "camY": 528
     },
     {
-      "tick": 331,
+      "tick": 330,
       "heroX": 3688,
-      "heroY": 608,
-      "state": 0,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 332,
-      "heroX": 3684,
-      "heroY": 608,
-      "state": 0,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 333,
-      "heroX": 3680,
       "heroY": 608,
       "state": 0,
       "camX": 3560,
@@ -1608,7 +632,7 @@
       "tick": 336,
       "heroX": 3676,
       "heroY": 608,
-      "state": 0,
+      "state": 2,
       "camX": 3560,
       "camY": 528
     },
@@ -1632,244 +656,12 @@
       "tick": 339,
       "heroX": 3676,
       "heroY": 608,
-      "state": 2,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 340,
-      "heroX": 3676,
-      "heroY": 608,
       "state": 1,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 341,
-      "heroX": 3680,
-      "heroY": 608,
-      "state": 1,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 342,
-      "heroX": 3684,
-      "heroY": 608,
-      "state": 1,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 343,
-      "heroX": 3688,
-      "heroY": 608,
-      "state": 1,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 344,
-      "heroX": 3688,
-      "heroY": 608,
-      "state": 1,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 345,
-      "heroX": 3688,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 346,
-      "heroX": 3688,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 347,
-      "heroX": 3688,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 348,
-      "heroX": 3688,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 349,
-      "heroX": 3688,
-      "heroY": 608,
-      "state": 5,
       "camX": 3560,
       "camY": 528
     },
     {
       "tick": 350,
-      "heroX": 3688,
-      "heroY": 608,
-      "state": 1,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 351,
-      "heroX": 3688,
-      "heroY": 608,
-      "state": 1,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 352,
-      "heroX": 3688,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 353,
-      "heroX": 3688,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 354,
-      "heroX": 3688,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 355,
-      "heroX": 3688,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 356,
-      "heroX": 3688,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 357,
-      "heroX": 3688,
-      "heroY": 608,
-      "state": 1,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 358,
-      "heroX": 3688,
-      "heroY": 608,
-      "state": 1,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 359,
-      "heroX": 3688,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 360,
-      "heroX": 3688,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 361,
-      "heroX": 3688,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 362,
-      "heroX": 3688,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 363,
-      "heroX": 3688,
-      "heroY": 608,
-      "state": 1,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 364,
-      "heroX": 3688,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 365,
-      "heroX": 3688,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 366,
-      "heroX": 3688,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 367,
-      "heroX": 3688,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 368,
-      "heroX": 3688,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 369,
       "heroX": 3688,
       "heroY": 608,
       "state": 1,
@@ -1885,58 +677,10 @@
       "camY": 528
     },
     {
-      "tick": 371,
-      "heroX": 3688,
-      "heroY": 608,
-      "state": 1,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 372,
-      "heroX": 3688,
-      "heroY": 608,
-      "state": 1,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 373,
-      "heroX": 3688,
-      "heroY": 608,
-      "state": 1,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 374,
-      "heroX": 3688,
-      "heroY": 608,
-      "state": 1,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 375,
-      "heroX": 3688,
-      "heroY": 608,
-      "state": 1,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 376,
-      "heroX": 3688,
-      "heroY": 608,
-      "state": 1,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
       "tick": 377,
       "heroX": 3688,
       "heroY": 608,
-      "state": 1,
+      "state": 5,
       "camX": 3560,
       "camY": 528
     },
@@ -1957,74 +701,10 @@
       "camY": 528
     },
     {
-      "tick": 380,
-      "heroX": 3688,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 381,
-      "heroX": 3688,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 382,
-      "heroX": 3688,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 383,
-      "heroX": 3688,
-      "heroY": 608,
-      "state": 1,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 384,
-      "heroX": 3688,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 385,
-      "heroX": 3688,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 386,
-      "heroX": 3688,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 387,
-      "heroX": 3688,
-      "heroY": 608,
-      "state": 5,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
       "tick": 388,
       "heroX": 3688,
       "heroY": 608,
-      "state": 5,
+      "state": 3,
       "camX": 3560,
       "camY": 528
     },
@@ -2048,20 +728,12 @@
       "tick": 391,
       "heroX": 3688,
       "heroY": 608,
-      "state": 3,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 392,
-      "heroX": 3688,
-      "heroY": 608,
       "state": 0,
       "camX": 3560,
       "camY": 528
     },
     {
-      "tick": 393,
+      "tick": 392,
       "heroX": 3684,
       "heroY": 608,
       "state": 0,
@@ -2069,7 +741,7 @@
       "camY": 528
     },
     {
-      "tick": 394,
+      "tick": 393,
       "heroX": 3684,
       "heroY": 608,
       "state": 0,
@@ -2085,71 +757,7 @@
       "camY": 528
     },
     {
-      "tick": 396,
-      "heroX": 3684,
-      "heroY": 608,
-      "state": 0,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 397,
-      "heroX": 3684,
-      "heroY": 608,
-      "state": 0,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 398,
-      "heroX": 3684,
-      "heroY": 608,
-      "state": 0,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 399,
-      "heroX": 3684,
-      "heroY": 608,
-      "state": 0,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 400,
-      "heroX": 3684,
-      "heroY": 608,
-      "state": 0,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 401,
-      "heroX": 3684,
-      "heroY": 608,
-      "state": 0,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 402,
-      "heroX": 3684,
-      "heroY": 608,
-      "state": 0,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
       "tick": 403,
-      "heroX": 3684,
-      "heroY": 608,
-      "state": 0,
-      "camX": 3560,
-      "camY": 528
-    },
-    {
-      "tick": 404,
       "heroX": 3684,
       "heroY": 608,
       "state": 0,

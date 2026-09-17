@@ -91,9 +91,9 @@
  * RESULT, joyg1 (`--live tools/joyg1-live-capture.json`): ticks 0-30 now
  * match the live capture exactly on every field (hero X/Y, state, and — for
  * this rebuilt range — camera too). `FAIL first divergence at tick 158,
- * field 'heroX'` is the FIRST time this diff has ever actually walked into
- * segment B (158-404) — see the disclosure at the end of this list, not a
- * fourth lead to chase blind. Getting to a clean 0-30 took four real
+ * field 'heroX'` is a REAL, live-confirmed divergence in segment B — a
+ * genuine open lead, not a fixture artifact (see the segment-B rebuild
+ * entry below for the full shape). Getting to a clean 0-30 took four real
  * corrections, kept in order because each one taught something the next
  * needed:
  *
@@ -154,29 +154,61 @@
  *    `src/verify/checks.js`'s own regression block for that assertion.
  *    Fixed; ticks 29-30 now match exactly (3448 held, then 3452).
  *
- * `joyg1-live-capture.json`'s segment A was rebuilt this pass from paired
- * live reads (camera from the `cursor=T` read, hero/state from the
- * `cursor=T+1` read — the two fields are captured at different points
- * within `CS:0x02F0`'s single sample by construction, since camera is
- * "entering this tick" and hero is "leaving this tick", exactly like this
- * tool's own `trajectory[]`) — ticks 0,1,2,3,4,12-17,22,29,30 ONLY, each one
- * independently read; every other tick in 0-404, including several stretches
- * (5-11, 18-21, 23-28) that would have been safe to derive (a proven camera
- * fixed point, an endpoint-bounded linear walk), is left as a disclosed gap
- * rather than an asserted value — this project's own convention, so a future
- * diff can't mistake an interpolation for something independently read.
+ * `joyg1-live-capture.json`'s segment A was rebuilt from paired live reads
+ * (camera from the `cursor=T` read, hero/state from the `cursor=T+1` read —
+ * the two fields are captured at different points within `CS:0x02F0`'s
+ * single sample by construction, since camera is "entering this tick" and
+ * hero is "leaving this tick", exactly like this tool's own `trajectory[]`)
+ * — ticks 0,1,2,3,4,12-17,22,29,30 ONLY, each one independently read; every
+ * other tick in 0-404, including several stretches (5-11, 18-21, 23-28)
+ * that would have been safe to derive (a proven camera fixed point, an
+ * endpoint-bounded linear walk), is left as a disclosed gap rather than an
+ * asserted value — this project's own convention, so a future diff can't
+ * mistake an interpolation for something independently read.
  *
- * ⚠️ SEGMENT B (ticks 158-404) IS UNVERIFIED, NOT RE-CHECKED THIS PASS. It
- * predates both the ARRIVAL and resume-from-stop fixes and was carried over
- * unchanged from the SAME unreliable capture methodology fix #2 above
- * diagnosed (an unpinned Lua poll racing `CS:0x0254`'s write). Now that
- * ticks 0-30 are clean, this is the FIRST run where the diff has ever
- * actually reached segment B instead of stopping at an earlier, since-fixed
- * lead — so `FAIL first divergence at tick 158` is exactly the kind of
- * result fix #2 predicts a mis-timed sample would produce, not a fourth
- * confirmed port bug. Treat any FAIL at tick >=158 as fixture provenance
- * unknown until segment B gets the same live-paired rebuild segment A did;
- * do not change the port to chase it.
+ * ⚠️⚠️ SEGMENT B WAS REBUILT FROM SCRATCH IN A LATER PASS, WITH A SURPRISE:
+ * the labelling-bug hypothesis that motivated the rebuild ("segment B may
+ * carry the same unpinned-poll problem segment A did") is REFUTED, not
+ * confirmed. A fresh, cursor-tagged, paired-read live capture (the exact
+ * same methodology as segment A's own rebuild, 92 breakpoint stops, zero
+ * cursor-tag mismatches) reproduces the OLD segment B's own HERO/STATE
+ * values almost exactly at every sampled tick — those were accurate all
+ * along. The old file's CAMERA field is the one place a small, consistent
+ * gap shows up (old tick=166 camX=3556 vs. a fresh paired tick=166
+ * camX=3560 — exactly one camera-tick stale), the same revert-window
+ * mechanism documented earlier in this header, recurring here rather than
+ * a new problem.
+ * What the rebuild found INSTEAD is a real, substantial divergence between
+ * the port and the original, present already at the very first sampled
+ * tick (158: port heroX=3752, live=3736, 16px) and reaching 148px by tick
+ * 403. It is NOT a smooth per-tick drift — it is a STAIRCASE: long flat
+ * plateaus where port and live move in perfect lockstep (68px flat across
+ * ticks 200-286, 86 ticks; 148px flat across 316-403, 87 ticks) — a
+ * plateau this long is strong evidence the PORT'S OWN PHYSICS ARE CORRECT
+ * for dozens of ticks at a time, not "the port is generally wrong here."
+ * Between the plateaus the gap grows in three places (+52px somewhere in
+ * 182-200, +28px in 286-300, +40px in 300-311), each sampled only at its
+ * two endpoints — nothing beyond the TOTAL growth per gap is known, the
+ * exact tick(s) are NOT resolved. One exception, pinned to single-tick
+ * resolution because it fell inside a densely-sampled run rather than a
+ * gap: ticks 311→312 and 312→313 each show live heroX flat while the port
+ * takes its own ordinary step — two individually-confirmed ticks where the
+ * port walks and the original does not. (Growth continues through 313-316
+ * too, tick 314 unsampled — treat that as the SAME class of unresolved
+ * growth as the other three windows, not a fourth, more-exact one; only
+ * the 311→312/312→313 pair is actually pinned.)
+ * The shape (long lockstep, growth concentrated in a few windows) is most
+ * consistent with this harness's own disclosed gaps — no objects/pickups/
+ * starburst/blocks/debris (all null throughout) and no trigger ACTION
+ * verbs (only selector 3's own condition evaluation runs) — rather than a
+ * Player/Camera code bug. THIS IS A LEAD, NOT A DIAGNOSIS: nobody has
+ * live-investigated what actually happens in the three unresolved windows,
+ * or the rest of 313-316. Camera stays informational for this file as a
+ * whole not because of labelling risk (refuted above, for hero/state) but
+ * because camX shows the identical staircase, corroborating rather than
+ * contradicting the hero-position finding. See `joyg1-live-capture.json`'s
+ * own
+ * `_provenance` for the full tick-by-tick breakdown this rests on.
  *
  * RESULT, entity ticking (all three joygN, run with no --live — no entity
  * ground truth exists to check against, see the header above): the plane-B
