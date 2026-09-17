@@ -13,13 +13,57 @@
  *  - Only `joyg` files decode into gameplay ticks (`src/formats/joy.js`);
  *    `joyl` drives the title menu instead and is out of scope here.
  *  - This harness drives Player/Camera/Arsenal/DamageGrid via `stepHeroFrame`
- *    (game/frame.js) ONLY. It does not spawn or tick System-A/System-B
- *    entities, the starburst, destructible blocks, or objects/pickups —
- *    `objects`/`starburst`/`blocks`/`debris` are all passed as null. A tick
- *    where the live game had an enemy touch the hero, or the hero walk over
- *    a pickup, WILL diverge here, and that divergence is a harness
- *    limitation, not necessarily a port bug — read the divergence's field
- *    and tick before concluding either way.
+ *    (game/frame.js) ONLY for the hero half. `objects`/`starburst`/`blocks`/
+ *    `debris` are all still passed as null — no pickups, no destructible
+ *    blocks, no starburst chain reaction. A tick where the live game had the
+ *    hero walk over a pickup WILL diverge here, and that divergence is a
+ *    harness limitation, not necessarily a port bug.
+ *  - ENTITY TICKING (added later than the above): System-A and System-B
+ *    enemies ARE now spawned and ticked, the same call order `main.js`
+ *    itself uses — `events.step()` (plane-B probe -> event record -> the
+ *    selector-4/5 activation branches ONLY, see below) -> `runSpawns[A]()`
+ *    -> each system's own `e.tick()` loop (with the real pathfinder,
+ *    `pathfind-producers.js`'s `runSearch`) -> `stepCreatureDamage` (contact,
+ *    then the grid scan — the SAME call `frame.js` documents at CS:0x0285)
+ *    -> the CS:0xEDAA/0xDFF9 runtime-slot RELEASE loops -> `EnemyShots`/
+ *    `LineHazards` `.step()` (CS:0x02BA/0x02BD — after contact, so a shot an
+ *    entity fires THIS tick can still reach the hero this same tick, exactly
+ *    as frame.js's own `ENEMY_SHOTS_AT` note describes) -> the spawn-protect
+ *    countdown and `health.chase()`.
+ *    Still NOT ported into this harness, all cosmetic/item-flow with no
+ *    effect on the hero's own x/y/state/camera fields this tool compares:
+ *    steal-and-carry, the carried-item ease/drop, the death-time item drop,
+ *    the group-elimination reward popup (all popup.js — no `Popup` instance
+ *    exists here), nest/statue/ce64/pat-objects/selector-2/line-barriers,
+ *    the message line, zone teleport/exit, and every TRIGGER ACTION verb
+ *    (selector 3's own evaluator runs and consumes its event record, but
+ *    `EventRunner.actionCtx` is left null, so a fired trigger's verb —
+ *    door/lever/etc. — never executes; the SPAWN selectors 1/2/4/5 are
+ *    handled earlier in `dispatchEvent` regardless of `actionCtx` and are
+ *    unaffected by this). Debris puffs from a creature hit or a terrain-
+ *    stopped enemy shot are also not spawned (`debris: null` throughout).
+ *  - Entity AI randomness (`pathfind-producers.js`'s `runSearch`, the hit-
+ *    spark jitter) is seeded with `new GodsRandom(1)` — the SAME arbitrary
+ *    constant `main.js` itself already uses (not a new choice introduced by
+ *    this file). The live capture's own `seed` field is always `null` (the
+ *    real seed is the BIOS tick count at boot, unrecoverable — see
+ *    `docs/camera-and-world-nav.md`'s Randomness section), so ANY rng-
+ *    branching entity behavior is unvalidatable against DOSBox by
+ *    construction — a limitation of what can be captured, not of this code.
+ *  - Adding entity ticking is disclosed as adding SIMULATION COMPLETENESS,
+ *    not VERIFICATION: `joyg1-live-capture.json` records only
+ *    `{tick,heroX,heroY,state,camX,camY}` — no entity ground truth exists to
+ *    diff against. If the hero/camera divergence below ever changes as a
+ *    result of entity ticking being added, that is evidence this wiring
+ *    perturbed the hero path (a bug to find), not a new port finding — the
+ *    fixed showcase spawn is far from anything that could reach the hero in
+ *    the first several ticks, and re-running `--live` after this change
+ *    reproduced the exact same tick 0-2 match / tick 3 divergence as before.
+ *  - A tick where the live game had an enemy touch the hero WILL still
+ *    diverge here if this port's own entity spawn/AI logic disagrees with
+ *    the original at that point — that's a real thing to read, same as any
+ *    other divergence this tool reports; it's just not yet checkable against
+ *    a live capture at the entity level, only at the hero/camera level.
  *  - The attract-mode entry point's tick-0 initial condition is now KNOWN,
  *    not derived from a live capture: full disassembly of `FUN_1000_8c34`
  *    (CS:0x8FBE-0x8FC3), called from `FUN_1000_006f`'s own per-level init
@@ -65,6 +109,25 @@
  * what made ticks 0-2 line up; comparing post-update values put every tick
  * off by one instead.
  *
+ * RESULT, entity ticking (all three joygN, run with no --live — no entity
+ * ground truth exists to check against, see the header above): the plane-B
+ * probe -> event dispatch chain genuinely fires (2/1/1 records consumed for
+ * joyg1/2/3, each a real selector-3 trigger evaluation — confirmed against
+ * an independent static census of PLEV1B's own plane-B cells, which found
+ * 12 real selector-4/5 spawn cells on that level, none of them anywhere near
+ * the showcase's fixed spawn column), but ZERO System-A/System-B group
+ * activations occur on any of the three recordings: the attract-mode
+ * showcase spawn point and the short path each recording walks from it
+ * simply never comes near a spawn-trigger tile. That is a measured outcome
+ * of this specific fixed path, not a claim that spawn dispatch is broken or
+ * untested — see the `events:`/`entities:` lines this tool prints, which
+ * report it explicitly rather than silently show "0 entities" with no way
+ * to tell an untested path from an exercised-but-empty one. Re-running the
+ * `--live` diff after adding entity ticking reproduced the EXACT SAME tick
+ * 0-2 match / tick 3 camY divergence as before this change (still
+ * port=526/live=524) — the required check that this addition didn't perturb
+ * the hero/camera path it cannot itself verify.
+ *
  * USAGE
  *   node tools/replay-diff.mjs <joygN> [--live capture.json] [--ticks N]
  *
@@ -92,9 +155,22 @@ const { decodeJoyRecording, JOYG_WORLD } = await import('../src/formats/joy.js')
 const { parseWeapons } = await import('../src/game/weapons.js');
 const { Player } = await import('../src/game/player.js');
 const { Arsenal } = await import('../src/game/hero-fire.js');
-const { DamageGrid } = await import('../src/game/collision.js');
+const { DamageGrid, damageForTag, despawnConsumedHit } = await import('../src/game/collision.js');
 const { Camera } = await import('../src/game/camera.js');
-const { stepHeroFrame } = await import('../src/game/frame.js');
+const { stepHeroFrame, stepCreatureDamage } = await import('../src/game/frame.js');
+const { parsePalfils, palfilsNameFor, EventRunner } = await import('../src/game/events.js');
+const { parseGroupsB, parseGroupsA, GroupSlots, MAX_ENTITIES,
+        groupSlotReleasable } = await import('../src/game/spawn.js');
+const { EntityB, MODE, groundBelow, EST } = await import('../src/game/entity.js');
+const { EntityA, EST: ESTA } = await import('../src/game/entity-a.js');
+const { runSearch } = await import('../src/game/pathfind-producers.js');
+const { VERDICT_NONE } = await import('../src/game/pathfind.js');
+const { GodsRandom } = await import('../src/game/random.js');
+const { Health } = await import('../src/game/combat.js');
+const { INVULN_TICKS_SPAWN } = await import('../src/game/consumables.js');
+const { EnemyShots } = await import('../src/game/enemy-shots.js');
+const { LineHazards } = await import('../src/game/line-hazard.js');
+const { MarkerList } = await import('../src/game/markers.js');
 
 /* The three shipped lengths, INCLUDING the trailing 0xFF sentinel —
  * docs/asset-formats.md's own re-measured figures. Pinned here as the
@@ -142,13 +218,19 @@ console.log(`  ${lenOk ? 'ok  ' : 'FAIL'}  decoded ${ticks.length} ticks, termin
 console.log(`  ${liveBitsClean ? 'ok  ' : 'FAIL'}  no non-terminator byte sets bits 4-6`);
 if (!lenOk) { console.error('\nFixture mismatch — aborting before replay.'); process.exit(1); }
 
-/* ── 2. load world 1B/2B/3B — planeB (collision terrain) and weapons only.
- * stepHeroFrame's other systems (objects/starburst/blocks/debris) are all
- * null per this file's disclosed scope above, so nothing else is needed. */
+/* ── 2. load world 1B/2B/3B — planeB (collision terrain), weapons, and the
+ * level's own PALFILS (events + the System-A/System-B group descriptor
+ * tables entities spawn from — see the header's ENTITY TICKING section).
+ * stepHeroFrame's own other systems (objects/starburst/blocks/debris) stay
+ * null per this file's disclosed scope above. */
 const world = JOYG_WORLD[n];
 const key = `${world}B`;
 const map = parseMap(dclDecompress(raw(`PLEV${key}.MAP`)).data);
 const weapons = parseWeapons(dclDecompress(raw(`PWEAPONS.00${world}`)).data);
+const palfilsBytes = dclDecompress(raw(palfilsNameFor(key))).data;
+const palfils = parsePalfils(palfilsBytes);
+const levelGroupsB = parseGroupsB(palfilsBytes);
+const levelGroupsA = parseGroupsA(palfilsBytes);
 
 /* ── 3. initial conditions ────────────────────────────────────────────
  * FUN_1000_8c34's own showcase-spawn table (JOYG_SHOWCASE_SPAWN above) is
@@ -174,6 +256,90 @@ const arsenal = new Arsenal(weapons);
 const grid = new DamageGrid();
 const cam = new Camera(startCamX, startCamY);
 
+/* ── 3b. entity systems (System A / System B) — see the header's ENTITY
+ * TICKING section for exactly what is and is not ported here. */
+const events = new EventRunner(map, palfils);
+const slotsB = new GroupSlots();
+const slotsA = new GroupSlots();
+const enemiesB = [];
+const enemiesA = [];
+const runtimeGroupsB = [];   // {desc, members, slot, released} — release bookkeeping only
+const runtimeGroupsA = [];
+events.onSpawnB = (param) => {
+  const d = levelGroupsB[param];
+  if (!d || !d.live) return;
+  if (slotsB.activate(d)) entityActivationsB++;
+};
+events.onSpawnA = (param) => {
+  const d = levelGroupsA[param];
+  if (!d || !d.live) return;
+  if (slotsA.activate(d)) entityActivationsA++;
+};
+/* CS:0xec60 — main.js's own `runSpawns`, ported verbatim (see main.js's own
+ * citation for the count-0/oversized-count quirks reproduced here too). */
+const runSpawnsB = () => {
+  for (const slot of slotsB.slots) {
+    if (slot.state !== 2) continue;
+    const d = slot.desc;
+    if (d.count === 0) continue;
+    const cnt = Math.min(d.count, MAX_ENTITIES);
+    const x = d.tileX * 32, y = d.tileY * 16;
+    const onGround = groundBelow(map.planeB, x, y);
+    const mode = ((d.flags >> 9) & 1) + (onGround ? 0 : 2);
+    let delay = 0;
+    const members = [];
+    for (let i = 0; i < cnt; i++) {
+      const e = Object.assign(
+        new EntityB({ x, y, mode, speed: d.speed, hp: d.hp || 1, cls: d.cls, delay }),
+        { desc: d });
+      enemiesB.push(e); members.push(e);
+      delay += d.stagger;
+    }
+    runtimeGroupsB.push({ desc: d, members, slot, released: false });
+    slot.state = 1;
+  }
+};
+/* CS:0xde7d — main.js's own `runSpawnsA`, ported verbatim. */
+const runSpawnsA = () => {
+  for (const slot of slotsA.slots) {
+    if (slot.state !== 2) continue;
+    const d = slot.desc;
+    if (d.count === 0) continue;
+    const cnt = Math.min(d.count, MAX_ENTITIES);
+    const x = d.tileX * 32, y = d.tileY * 16;
+    const members = [];
+    for (let i = 0; i < cnt; i++) {
+      const e = Object.assign(
+        new EntityA({ x, y, cls: d.cls, hp: d.hp || 1, delay: 0 }),
+        { desc: d });
+      enemiesA.push(e); members.push(e);
+    }
+    runtimeGroupsA.push({ desc: d, members, slot, released: false });
+    slot.state = 1;
+  }
+};
+const health = new Health();
+let fxInvuln = INVULN_TICKS_SPAWN;                        // CS:0x0860 — spawn protection
+const shots = new EnemyShots();
+const lineHazards = new LineHazards();
+const markerList = new MarkerList();                      // stays empty — objects is null
+/* `new GodsRandom(1)` — see the header's caveat: matches main.js's own
+ * pre-existing constant-seed convention, not independently chosen here. */
+const rng = new GodsRandom(1);
+const difficulty = 0;                                     // DS:0x365 — world 1 is unscaled
+/* The SAME closure shape main.js's own `decodeTag` uses (game/collision.js's
+ * `damageForTag`/`despawnConsumedHit`), needed by `stepCreatureDamage`'s grid
+ * scan to resolve what a projectile-stamped cell actually is. */
+const decodeTag = (tag, mode = 0) => {
+  const d = damageForTag(
+    tag, arsenal.slots.map((s) => s.weapon),
+    Object.fromEntries(arsenal.slots.filter((s) => s.st).map((s) => [s.weapon, s.st])),
+    mode);
+  despawnConsumedHit(d, arsenal.weapons, arsenal.slots.map((s) => s.area));
+  return d;
+};
+let entityActivationsB = 0, entityActivationsA = 0, contactsTotal = 0, killsTotal = 0;
+
 /* ── 4. replay ─────────────────────────────────────────────────────────── */
 const trajectory = [];
 const n_ticks = Math.min(ticks.length, tickCap);
@@ -185,6 +351,89 @@ for (let i = 0; i < n_ticks; i++) {
     cam: { x: cam.snapX, y: cam.snapY }, world,
     tock: (i % 2) + 1,
   });
+
+  /* ── entity ticking — same relative order as main.js's tick, with every
+   * skipped subsystem between these calls named in the header. `events.step`
+   * runs the plane-B probe; its selector-4/5 branches (System-B/System-A
+   * group activation) fire regardless of `actionCtx`, so they work with no
+   * further wiring — see EventRunner.dispatchEvent's own early-return shape. */
+  events.step(player.x, player.y, events.makeState({ timer: i }));
+  runSpawnsB();
+  /* THE HUNT — CS:0xf11f/0xf1e5, ported verbatim from main.js's own loop
+   * (only a walking entity, aligned to a tile, standing on ground searches). */
+  for (const e of enemiesB) {
+    let verdict = VERDICT_NONE;
+    const walking = e.mode === MODE.WALK_L || e.mode === MODE.WALK_R;
+    if (e.alive && walking && (e.x & 0x1c) === 0 && groundBelow(map.planeB, e.x, e.y)) {
+      verdict = runSearch(e, {
+        planeB: map.planeB, camX: cam.snapX, camY: cam.snapY,
+        heroX: player.x, heroY: player.y, desc: e.desc,
+        rnd: rng.next(), world,
+        markers: markerList.entries, markersOverride: markerList.override,
+      }).verdict;
+    }
+    const muzzleB = e.tick(map.planeB, verdict, e.desc);   // CS:0xE659, before the mode dispatch
+    if (muzzleB && muzzleB.hazard) {
+      if (muzzleB.attackBits === 1) {
+        lineHazards.spawnJittered(muzzleB.x, muzzleB.y, player.x, player.y,
+                                   muzzleB.n, () => rng.next());
+      } else {
+        lineHazards.spawnAtHero(muzzleB.x, muzzleB.y, player.x, player.y, muzzleB.n);
+      }
+    } else if (muzzleB) {
+      shots.fire(muzzleB.x, muzzleB.y, muzzleB.dir, { x: cam.snapX, y: cam.snapY });
+    }
+    /* Steal-and-carry / death-time drop are NOT ported here — cosmetic
+     * item flow with no effect on the fields this tool compares; see header. */
+  }
+  runSpawnsA();
+  /* System A's own six-stage pipeline, CS:0xe001 — same call as main.js's. */
+  for (const e of enemiesA) {
+    const muzzle = e.tick({ x: player.x, y: player.y }, e.desc, () => rng.next(), false,
+                           { x: cam.snapX, y: cam.snapY }, markerList.entries, grid, null);
+    if (muzzle && muzzle.hazard) {
+      if (muzzle.attackBits === 1) {
+        lineHazards.spawnJittered(muzzle.x, muzzle.y, player.x, player.y,
+                                   muzzle.n, () => rng.next());
+      } else {
+        lineHazards.spawnAtHero(muzzle.x, muzzle.y, player.x, player.y, muzzle.n);
+      }
+    } else if (muzzle) {
+      shots.fire(muzzle.x, muzzle.y, muzzle.dir, { x: cam.snapX, y: cam.snapY });
+    }
+  }
+  /* CS:0x0285 — contact, then the damage-grid scan; frame.js's own
+   * stepCreatureDamage, the SAME function main.js calls. */
+  const dmg = stepCreatureDamage([...enemiesB, ...enemiesA], {
+    grid, cam: { x: cam.snapX, y: cam.snapY },
+    hero: { x: player.x, y: player.y, state: player.stateIndex },
+    health, decodeTag, difficulty, arsenal,
+    rng: () => rng.next(), debris: null,
+    invuln: fxInvuln > 0 ? 1 : 0, sfx: null,
+  });
+  contactsTotal += dmg.touched; killsTotal += dmg.killed;
+  /* CS:0xEDAA/0xDFF9 — release a group's runtime slot once every member is
+   * fully FREE (the reward-popup loops main.js also runs here are skipped —
+   * cosmetic, see header). */
+  for (const g of runtimeGroupsB) {
+    if (g.released) continue;
+    if (!groupSlotReleasable(g.members, g.desc.count, EST.FREE)) continue;
+    g.released = true; g.slot.state = 0;
+  }
+  for (const g of runtimeGroupsA) {
+    if (g.released) continue;
+    if (!groupSlotReleasable(g.members, g.desc.count, ESTA.FREE)) continue;
+    g.released = true; g.slot.state = 0;
+  }
+  /* CS:0x02BA/0x02BD — AFTER contact, so a shot fired by an entity THIS tick
+   * can still reach the hero this same tick (frame.js's ENEMY_SHOTS_AT note). */
+  const heroSnap = { x: player.x, y: player.y, state: player.stateIndex };
+  const healthAdapter = { invulnerable: fxInvuln > 0, hurt: (dn) => health.damage(dn) };
+  shots.step({ x: cam.snapX, y: cam.snapY }, heroSnap, map.planeB, healthAdapter, null);
+  lineHazards.step({ x: cam.snapX, y: cam.snapY }, heroSnap, map.planeB, healthAdapter, null, i % 2);
+  if (fxInvuln > 0) fxInvuln--;
+  health.chase();
+
   /* Log the SNAPSHOT (camera as it stood entering this tick, what this
    * tick's own physics/render used), not the just-updated cam.x/y — the
    * live capture reads DS:0xa/0xc, which camera.js's own header documents
@@ -194,6 +443,22 @@ for (let i = 0; i < n_ticks; i++) {
                      camX: cam.snapX, camY: cam.snapY });
   cam.update(player.x, player.y, { world, sublevel: 1 });
 }
+
+/* `events.consumedEvents.size` is every plane-B event record the probe ever
+ * reached and consumed (any selector); `events.log.length` is only the
+ * subset that were selector-3 TRIGGER evaluations that actually fired. The
+ * gap between them and `entityActivationsB/A` is what a reader needs to
+ * tell "the probe found nothing at all near this path" apart from "it found
+ * events, just none were spawns" — see the header's zero-activations note. */
+console.log(`\n  events: ${events.consumedEvents.size} record(s) consumed, ` +
+            `${events.log.length} trigger evaluation(s) fired`);
+console.log(`  entities: ${entityActivationsB} System-B group activation(s), ` +
+            `${entityActivationsA} System-A group activation(s), ` +
+            `${enemiesB.length + enemiesA.length} entities spawned total, ` +
+            `${contactsTotal} hero contact(s), ${killsTotal} kill(s), ` +
+            `hero health target=${health.target} bar=${health.bar}` +
+            (slotsB.lostActivations || slotsA.lostActivations
+              ? ` (lost activations: B=${slotsB.lostActivations} A=${slotsA.lostActivations})` : ''));
 
 console.log(`\n  replayed ${trajectory.length} ticks through the port's physics.`);
 console.log(`  final: hero=(${player.x},${player.y}) state=${player.stateIndex} cam=(${cam.x},${cam.y})`);
