@@ -284,13 +284,22 @@ export class LineBarriers {
    * once armed and are untouched here, matching the original: `DI+4>1`
    * (settle/disabled) returns immediately at `FUN_1000_7845`'s own top.
    *
-   * Placement in `main.js`'s per-tick order is NOT traced to an exact
-   * `CS:` call site relative to the other systems -- the doc only pins this
-   * system's OWN internal structure and the self-modifying `nop`/`ret` gate
-   * shape (shared with `CS:0xAD88`, selector2.js's turret driver), not where
-   * in the frame that gate itself sits. Called once per tick, grouped with
-   * the other "per-tick pool advance" systems (`lineHazards.step`), which is
-   * a reasonable but disclosed placement choice, not a proven one.
+   * Placement in `main.js`'s per-tick order is now `[PROVEN]` by disassembly
+   * (`get_xrefs_to` on `CS:0x767A`, this system's own self-modifying gate --
+   * see `frame.js`'s `LINE_BARRIERS_AT`): called from exactly two places,
+   * `FUN_1000_006F` at `CS:0x01F2` and the death driver `FUN_1000_09BB` at
+   * `CS:0x09C7`, BOTH unconditional -- so this must run every tick whether
+   * or not the hero is mid-death, and within the ordinary tick it is one of
+   * the EARLIEST systems, called before pickup/projectiles/starburst/the
+   * player state machine/selector-2/System-B entities/enemy shots/the
+   * line-hazard pool/the health-bar chase. This corrects an earlier pass
+   * that shipped `tick()`'s own call site near the END of `main.js`'s tick
+   * instead, grouped with `lineHazards.step()` and disclosed only as
+   * unproven -- the real site was one `get_xrefs_to` away, and that
+   * placement was backwards, not merely unpinned. See `main.js`'s own call
+   * site for the one small, disclosed residual (`grid.clear()`/
+   * `blocks.step()` run after this call in the port, before it in the
+   * original -- semantically inert, since this system touches neither).
    */
   tick() {
     for (const state of this.slots) {

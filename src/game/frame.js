@@ -45,6 +45,29 @@ export const FRAME_ORDER = [
  *  chase — see game/line-hazard.js. */
 export const LINE_HAZARDS_AT = 0x02bd;
 
+/** `CS:0x01F2` — `CALL 0x767A`, the line-barrier rescan (game/line-barriers.js's
+ *  `tick()`). `[PROVEN]`, found by `get_xrefs_to` on `0x767A`: called from
+ *  TWO places, `FUN_1000_006F` at exactly this address and `FUN_1000_09BB`
+ *  (the death-sequence driver) at `CS:0x09C7` — so it runs every tick
+ *  UNCONDITIONALLY, dead or alive, never gated behind the death check.
+ *  Within `FUN_1000_006F` it is reached by BOTH arms of the `CS:0x01E5` mode
+ *  branch, before the conditional pickup block (`0x0206`) and before every
+ *  unconditional system after it (projectiles `0x020F`, starburst `0x0212`,
+ *  the hunter-list reset `0x021E`, selector-2 `0x0223`, the player state
+ *  machine `0x0254`, System-B entities `0x0285`, enemy shots `0x02BA`, the
+ *  line-hazard pool `0x02BD` above, the health-bar chase `0x02C6`) — i.e. it
+ *  is one of the EARLIEST systems in the whole tick, not one of the last.
+ *  This is a correction, not a new finding: an earlier pass shipped
+ *  `lineBarriers.tick()` grouped with `lineHazards.step()` near the END of
+ *  main.js's tick, disclosed as "not pinned to an exact CS: call site" —
+ *  that framing was wrong in a specific way: the site was one `get_xrefs_to`
+ *  away, and the placement that shipped was backwards. Not exported for
+ *  `stepHeroFrame` to call directly, unlike `FRAME_ORDER`'s own entries:
+ *  `stepHeroFrame` is itself gated behind `!deathSeq` in main.js, and this
+ *  call must NOT be — see the main.js call site for where it actually
+ *  lives, matching `LINE_HAZARDS_AT`'s own citation-only precedent. */
+export const LINE_BARRIERS_AT = 0x01f2;
+
 /* ⚠️ THE TWO PROJECTILE SYSTEMS SIT ON OPPOSITE SIDES OF THE PLAYER.
  * The hero's shots step at CS:0x020F, BEFORE the state machine emits at
  * CS:0x0254 — so a hero shot cannot hit anything on its spawn tick. Enemy

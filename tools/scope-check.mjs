@@ -81,3 +81,85 @@ export async function checkScope(path, names) {
     };
   });
 }
+
+/** Find every top-level CallExpression whose callee matches `calleeSrc`
+ *  (the callee's own exact source text, e.g. `'stepHeroFrame'` or
+ *  `'lineBarriers.tick'`), each annotated with the chain of enclosing
+ *  SCOPEY-or-IfStatement ancestors so a caller can ask "was this call
+ *  reached only through a particular branch". */
+function findCalls(ast, src, calleeSrc) {
+  const found = [];
+  (function walk(node, ancestors) {
+    if (!node || typeof node.type !== 'string') return;
+    const next = node.type === 'IfStatement' || SCOPEY.has(node.type)
+      ? [...ancestors, node] : ancestors;
+    if (node.type === 'CallExpression'
+        && src.slice(node.callee.start, node.callee.end) === calleeSrc) {
+      found.push({ node, ancestors });
+    }
+    for (const k of Object.keys(node)) {
+      const v = node[k];
+      if (Array.isArray(v)) v.forEach((n) => walk(n, next));
+      else if (v && typeof v.type === 'string') walk(v, next);
+    }
+  })(ast, []);
+  return found;
+}
+
+/**
+ * Prove a call-site ORDERING fact in main.js's tick — the class of bug this
+ * file's own header describes (a statement moved to the wrong place, which
+ * `vite build`, the invariant suite, and an automated browser tab all fail
+ * to catch — see the top-of-file comment). Checks two things about a single
+ * named call (`calleeSrc`, e.g. `'lineBarriers.tick'`):
+ *   - it occurs, in source order, BEFORE another named call (`beforeSrc`);
+ *   - if `notInsideIfTest` is given (a `!ident`-shaped test's source text,
+ *     e.g. `'!deathSeq'`), the call is not nested inside that IfStatement's
+ *     consequent — i.e. it isn't accidentally gated by a check GAME.EXE's
+ *     own disassembly proves it must NOT be gated by (see frame.js's
+ *     `LINE_BARRIERS_AT` for the two-call-site proof this guards).
+ *  Returns suite-shaped rows: {pass, name, detail}. Degrades to a skip note
+ *  if acorn is not installed, matching `checkScope`. */
+export async function checkCallOrder(path, { calleeSrc, beforeSrc, notInsideIfTest }) {
+  let acorn;
+  try { acorn = await import('acorn'); } catch {
+    return [{ note: true, pass: true, name: 'call-order check skipped — acorn not installed',
+              detail: 'npm install, then re-run; this check needs a real parser' }];
+  }
+  const src = readFileSync(path, 'utf8');
+  const lineOf = (i) => src.slice(0, i).split('\n').length;
+  const ast = acorn.parse(src, { ecmaVersion: 'latest', sourceType: 'module' });
+
+  const rows = [];
+  const calls = findCalls(ast, src, calleeSrc);
+  const befores = findCalls(ast, src, beforeSrc);
+  if (calls.length !== 1 || befores.length !== 1) {
+    return [{ pass: false, name: `\`${calleeSrc}\` runs before \`${beforeSrc}(...)\``,
+               detail: `expected exactly one call site each, found ${calls.length} `
+                 + `of \`${calleeSrc}\` and ${befores.length} of \`${beforeSrc}\` — `
+                 + 'was one renamed, duplicated, or removed?' }];
+  }
+  const [call] = calls, [before] = befores;
+  rows.push({
+    pass: call.node.start < before.node.start,
+    name: `\`${calleeSrc}\` runs before \`${beforeSrc}(...)\``,
+    detail: `\`${calleeSrc}\` at line ${lineOf(call.node.start)}, `
+      + `\`${beforeSrc}\` at line ${lineOf(before.node.start)}`,
+  });
+
+  if (notInsideIfTest) {
+    const guarding = call.ancestors.find((a) => a.type === 'IfStatement'
+      && src.slice(a.test.start, a.test.end) === notInsideIfTest
+      && call.node.start >= a.consequent.start && call.node.start <= a.consequent.end);
+    rows.push({
+      pass: !guarding,
+      name: `\`${calleeSrc}\` is not gated behind \`if (${notInsideIfTest})\``,
+      detail: guarding
+        ? `the call at line ${lineOf(call.node.start)} is inside the `
+          + `\`${notInsideIfTest}\` block (lines ${lineOf(guarding.consequent.start)}-`
+          + `${lineOf(guarding.consequent.end)}) — GAME.EXE calls this UNCONDITIONALLY`
+        : `line ${lineOf(call.node.start)} is not inside any \`${notInsideIfTest}\` block`,
+    });
+  }
+  return rows;
+}

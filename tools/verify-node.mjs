@@ -473,13 +473,32 @@ for (const r of await checkMusic(fetchRaw)) {
    * cleanly and throws only when the tick runs — which neither the bundler
    * nor this suite nor a hidden (rAF-throttled) browser tab ever does. So
    * prove the bindings the reordering actually carried. */
-  const { checkScope } = await import('./scope-check.mjs');
+  const { checkScope, checkCallOrder } = await import('./scope-check.mjs');
   popupOrder.push(...await checkScope(join(here, '..', 'src', 'main.js'),
     ['statueResult', 'camNow', 'dropCarriedIntoWorld', 'patGroups', 'selectorTwo']));
 
   console.log('\n  the single popup slot — who wins it, and when it lands '
     + '(FUN_1000_006f call order):');
   for (const r of popupOrder) {
+    if (!r.pass && !r.note) bad++;
+    console.log(line(r));
+  }
+
+  /* game/frame.js's own LINE_BARRIERS_AT (CS:0x01F2, get_xrefs_to-proven this
+   * session): the line-barrier rescan is one of the EARLIEST systems in the
+   * real tick, called unconditionally from BOTH FUN_1000_006f and the death
+   * driver FUN_1000_09BB — never gated behind the death check. An earlier
+   * pass shipped it near the END of main.js's tick instead, grouped with
+   * lineHazards.step(), disclosed as merely "not pinned to an exact CS: call
+   * site" — this is the check that placement never had, and the one that
+   * would have caught it being wrong rather than just unproven. */
+  const barrierOrder = await checkCallOrder(join(here, '..', 'src', 'main.js'), {
+    calleeSrc: 'lineBarriers.tick', beforeSrc: 'stepHeroFrame',
+    notInsideIfTest: '!deathSeq',
+  });
+  console.log("\n  the line-barrier rescan's own tick position (CS:0x01F2 vs. "
+    + '0x09C7, both unconditional):');
+  for (const r of barrierOrder) {
     if (!r.pass && !r.note) bad++;
     console.log(line(r));
   }

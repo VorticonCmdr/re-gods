@@ -1428,6 +1428,24 @@ async function main() {
         if (o.dead || o.type !== CE64_OBJECT_TYPE || !(o.flag6 & 1)) continue;
         if (ce64Creatures.spawn(o.x - cam.snapX, o.y, cam.snapX)) o.dead = true;
       }
+      /* CS:0x01F2 — the line-barrier rescan (game/line-barriers.js's own
+       * `tick()`), advancing every CYCLING selector-7-10 barrier one
+       * Bresenham leg. `[PROVEN]` this session (frame.js's own
+       * `LINE_BARRIERS_AT`, get_xrefs_to on CS:0x767A): called from BOTH
+       * FUN_1000_006f (here, unconditionally, before pickup/projectiles/
+       * the player) AND the death driver FUN_1000_09BB at CS:0x09C7 — so it
+       * must run every tick regardless of `deathSeq`, which is why this call
+       * sits ABOVE that gate rather than inside it. Corrects an earlier
+       * pass that shipped this call near the END of the tick instead,
+       * grouped with `lineHazards.step()` and disclosed only as "not pinned
+       * to an exact CS: call site" — the site was one `get_xrefs_to` away,
+       * and that placement was backwards, not merely unproven. One disclosed
+       * residual: `grid.clear()`/`blocks.step()` (CS:0x01CC/0x01DF) run
+       * inside `stepHeroFrame` below, i.e. AFTER this call, where the
+       * original runs them BEFORE — semantically inert, since this system
+       * touches neither the damage grid nor destructible blocks. Settle
+       * barriers (the vast majority) are untouched by this call. */
+      lineBarriers.tick();
       /* CS:0x01BD's own `jmp 0x9bb` skips the player state machine entirely
        * once the hero is dead (game/death.js) — everything else in this
        * tick (enemies, hazards, projectiles, events) keeps running, matching
@@ -2278,13 +2296,6 @@ async function main() {
         level.map.planeB,
         { invulnerable: fx.invuln > 0, hurt: (n) => health.damage(n) },
         debris, tock);
-      /* CS:0x767B-0x76FF — the line-barrier rescan (game/line-barriers.js's
-       * own `tick()`), advancing every CYCLING selector-7-10 barrier one
-       * Bresenham leg. Grouped here with the other per-tick pool systems;
-       * see that method's own header for why this exact position in the
-       * frame is a disclosed placement choice, not a traced one. Settle
-       * barriers (the vast majority) are untouched by this call. */
-      lineBarriers.tick();
       /* CS:0x02c6 — the bar chases the target one unit per frame, and the
        * death test reads the BAR, so a fatal hit leaves a rescue window. */
       /* CS:0x0186 `dec word [0x2fa]` floored at CS:0x018C, CS:0xA99B
