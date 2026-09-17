@@ -130,7 +130,7 @@ import { expandMapObjects, allocObject, OBJECT_SLOTS, activationBox,
          stepObjectFall, isFallEligible, BOUNCE_DELTA, FALL_STEP,
          WORLD_HEIGHT, STRADDLE_OFFSET, BOUNCE_TERMINAL, ACTIVATION_MARGIN,
          dropCarriedItem, buildDrawSequence } from '../game/objects.js';
-import { GodsRandom } from '../game/random.js';
+import { GodsRandom, RANDOM_TABLE_WORDS } from '../game/random.js';
 import { CLASS_TABLES, EMPTY_CLASS, HAZARD_CLASS, HAZARD_HANDLERS,
          HAZARD_SPRITE_BASE, POOL_SLOTS, POOL_STRIDE,
          POOL_TENANTS } from '../game/entity-classes.js';
@@ -728,6 +728,52 @@ export async function checkDescriptorAnchors(fetchRaw) {
       `caught by that shape four times — starburst particles, hits-to-break, ` +
       `the block's first shot, and this`);
 
+    /* ── UNKNOWN_random_mixer — CLOSED, [PROVEN] live in DOSBox ───────────
+     * Session capture: breakpointed FUN_1000_37f6's own entry (live CS
+     * 0x036D, resolved from a byte-signature mem_scan of the mixer's own
+     * bytes — the arbitrary segment a bare pause lands in is NOT reliable,
+     * it can be mid-driver code with no relation to GAME.EXE at all), read
+     * the real entry seed [0x122] = 0x6189, ran to FUN_1000_37f6's RET, and
+     * dumped the live 512-byte table at segment 0x136A offset 0x7e14 (the
+     * live equivalent of Ghidra's 1ffd:7e14 — confirmed the SAME segment
+     * serves both DS and ES here). This is that exact capture, base64. */
+    {
+      /* atob(), not Buffer — this file runs in-browser too (the verify
+       * panel), where Buffer does not exist. */
+      const b64 = 'H7uo4s0fGCe0YGW53OSlFUg7FkKl1tFPK8PPdJGBMqPwzPlnf7Ho/k89mEg5y+tu' +
+        'W6mi0F9Ft971VeHrXwc+CHwaeijwcm+LTr4K7AkOkhAmNUpSH+KjHsQljGeVsTz/' +
+        '5z5ITZnEK31ZmKCO0LG2//M/YE9Jwgt2mYaiq9DXO01/xOd8wZsQi7C+9u3xDeIV' +
+        'xjsKQ53UIUlLyI9qk6Uyx/149Zd4neKA1KG8y+FvT6sK1o9Ol8E3c+GI0rsy4wAA' +
+        '8CNkbcWsnt+nV8Xtlw0uFV46OkB90OFEy92NURHnvxB8Nf5Sd+NzHOQiTG8Vqr7U' +
+        'Z0nHyJdro6fSwb1z9Yn6ueLl2RcwPWZIxcoTbSusQt4fVDXodwJuBlwKOBxyImBu' +
+        'TaiO0odDh9UVS6PO32Gzu/DjfR34IPRp5aHeyyVvx6oa1S9K18y3Z+Ox0P8/P/hO' +
+        'ecHrclmLIr7S7LkP8hNmMcpeH/UhIsZuAakW0DdEZ9zVUiHj3xy8I/xt9a0AAOdR' +
+        'xecXESw23lY37/MKZh3OIJhpPaFuykVsh66a2S9dVfC1LG5/U540hHis5N5TVa3q' +
+        'xwWOD5wTujFyX2/2QSYGYoG+lO01DWoU1jiqR93ZoV1J8Y0unnkzlXSaeojkul7h' +
+        'oRrAKYRxB4+esqr7yzMQWSv8SToUQCHQWUS73G1TUeA=';
+      const bin = atob(b64);
+      const liveTable = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) liveTable[i] = bin.charCodeAt(i);
+
+      const r = new GodsRandom(0x6189);
+      const ported = new Uint8Array(512);
+      for (let i = 0; i < RANDOM_TABLE_WORDS; i++) {
+        ported[i * 2] = r.table[i] & 0xff;
+        ported[i * 2 + 1] = (r.table[i] >> 8) & 0xff;
+      }
+      let identical = liveTable.length === ported.length;
+      for (let i = 0; identical && i < ported.length; i++) {
+        if (liveTable[i] !== ported[i]) identical = false;
+      }
+      check(`GodsRandom(0x6189) reproduces the live-captured 512-byte table exactly`,
+        identical,
+        `mix16() run 256 times from the real entry seed, plus the two forced ` +
+        `zeros, against a live DOSBox capture of the same table — byte-for-` +
+        `byte identical across all 512 bytes, forced zeros (at byte offsets ` +
+        `190 and 380 in this capture) included. This is the whole closure: ` +
+        `disassembly alone would only be [STATIC]`);
+    }
+
     check(`the brood array is ${BROOD_SLOTS} x ${BROOD_STRIDE} bytes and children land one tile BELOW`,
       BROOD_SLOTS === 16 && BROOD_STRIDE === 0x10 && BROOD_Y_OFFSET === 0x18
         && BROOD_HP === 0x2b,
@@ -815,7 +861,17 @@ export async function checkDescriptorAnchors(fetchRaw) {
         const f8 = new Set(), fA = new Set();
         let kids = 0;
         for (let seed = 0; seed < 40; seed++) {
-          const pool = new Nests(2, new GodsRandom(seed));
+          /* ⚠️ Spread, not raw 0..39: FUN_1000_2375 has a genuine "doubling
+           * prefix" for any seed < 128 — with the high byte at 0, every mix
+           * just doubles the low byte until it overflows past 0x80, so a
+           * tiny seed's first ~7-8 table entries are pure powers of two
+           * (2,4,8,16,...) with almost no low-bit variety. [0x122] in the
+           * real game is a live BIOS tick count (uniform over 0..0xFFFF, so
+           * <128 only ~0.2% of boots) — raw loop indices are not
+           * representative of that, and they starve this check of the
+           * spread it needs to see the real -3..3 / -5..-2 ranges. */
+          const s = (256 + seed * 397) & 0xffff;
+          const pool = new Nests(2, new GodsRandom(s));
           const brood = { spawn: (x, y, a, b) => { f8.add(a); fA.add(b); kids++; return true; } };
           pool.spawn(0, 200, 0);
           pool.slots[0].state = NST.AIM_LEFT; pool.slots[0].hp = -1;
@@ -7790,9 +7846,17 @@ export async function checkWeaponsProjectiles(fetchRaw) {
       'while DS:0x34d is set, so an INACTIVE burst always spawns whatever the ' +
       'stale age reads. That pair of conditions is the whole termination proof');
 
-    /* GRAVITY EVERY EIGHTH FRAME — a sixth rule, and the only uncapped one. */
+    /* GRAVITY EVERY EIGHTH FRAME — a sixth rule, and the only uncapped one.
+     * ⚠️ A real GodsRandom would confound this: CS:0xA57D's chain reburst
+     * (below) draws every tick the chain window is open and, at age 0,
+     * chainThreshold(0) = 380 — well above a "normal" mixer draw's typical
+     * magnitude, so a chain reliably fires and refills all 80 slots inside
+     * a few ticks, sometimes recycling slot 2 itself and resetting its vy.
+     * That is real starburst behaviour, but it is not what this check is
+     * for — isolate gravity timing with a stub draw safely above any
+     * reachable chainThreshold (max 380) so no chain ever fires. */
     {
-      const sb = new Starburst(new GodsRandom(1));
+      const sb = new Starburst({ next: () => 0xffff });
       sb.spawn(400, 300);
       const grid = new DamageGrid();
       const vys = [];
@@ -7835,7 +7899,17 @@ export async function checkWeaponsProjectiles(fetchRaw) {
        * exactly the gap that let a swapped projectile/player order survive
        * before frame.js existed. */
       const lvl = parseMap(dclDecompress(await fetchRaw('game/PLEV1A.MAP')).data);
-      const sb = new Starburst(new GodsRandom(9));
+      /* ⚠️ Scripted, not a real GodsRandom: this test wants EXACTLY one
+       * chain reburst (16 = 8 + 8), and a real mixer draw easily clears
+       * chainThreshold(0) = 380 for every one of the 8 live particles this
+       * single step() call offers a chance to (see the gravity test above),
+       * so a real seed can trigger anywhere from 0 to 8 rebursts depending
+       * on draw luck. Fire the very first draw low (guaranteed <=
+       * threshold) and every draw after high (guaranteed > the max
+       * reachable threshold of 380) so exactly one reburst happens, from
+       * whichever particle is walked first — deterministic either way. */
+      let sbDraws = 0;
+      const sb = new Starburst({ next: () => (sbDraws++ === 0 ? 0 : 0xffff) });
       sb.spawn(400, 300);
       const before = sb.slots.map((sl) => `${sl.x},${sl.y}`).join('|');
       const g = new DamageGrid();
