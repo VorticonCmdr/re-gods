@@ -24,6 +24,18 @@
  *    showcase spot) is NOT reproduced — this harness cannot derive tick-0's
  *    hero position/state/camera from first principles. A live capture must
  *    supply them; see --live below.
+ *  - Ground truth for `joyg` CANNOT be captured by polling DS:0x282 (the
+ *    playback cursor) — confirmed by disassembly (Gods/docs/asset-formats.md,
+ *    the "cursor reset only on joyl" note): CS:0x2DCC resets it to 0 on the
+ *    joyl branch, but the joyg branch (CS:0x2DD5-0x2DEE) never does, so the
+ *    cursor's value at joyg1's own tick 0 depends on whatever ran before it
+ *    and is not a reliable tick index. A live capture attempt this session
+ *    watched the cursor run past the 405-byte PJOYG1.DAT buffer into the
+ *    thousands with DS:0x3bd still set (the documented "no bounds check"
+ *    behavior). The next attempt at a `--live` capture should anchor tick 0
+ *    with an EXECUTE breakpoint at CS:0x2DEE (the `JMP 0x6B00` itself, the
+ *    instant joyg1's file is loaded and real gameplay begins) or at
+ *    FUN_1000_006f's first entry for the level, not a memory-polled flag.
  *
  * USAGE
  *   node tools/replay-diff.mjs <joygN> [--live capture.json] [--ticks N]
