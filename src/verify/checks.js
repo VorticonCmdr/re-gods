@@ -14444,8 +14444,13 @@ export async function checkDeath(fetchRaw) {
    * (48px) below a 64-row map's own row 62, putting the hero's 48px-tall
    * hitbox past the bottom of the world entirely, with nothing to stand on.
    * This is the user-reported "respawns near the start but too low, falls
-   * out of the screen" bug, reproduced against the actual shipped level. */
-  if (fetchRaw) {
+   * out of the screen" bug, reproduced against the actual shipped level.
+   * `checkDeath` is node-only (not wired into `runAllChecks`, so the
+   * browser panel never runs it either way — a pre-existing gap, not one
+   * this block introduces), and its one caller (`verify-node.mjs`) always
+   * passes `fetchRaw`, so this runs unconditionally rather than degrading
+   * silently. */
+  {
     const mapBuf = dclDecompress(await fetchRaw('game/PLEV1A.MAP')).data;
     const map = parseMap(mapBuf);
     const world1Spawn = { x: 64, y: 944 };   // main.js's own SPAWN_TABLE[1], live-confirmed DS:0x15a/0x15c
