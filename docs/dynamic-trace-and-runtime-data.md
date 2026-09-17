@@ -258,6 +258,43 @@ A port need not implement any of this to be faithful to the shipped game — the
 
 ⚠️⚠️ **CORRECTION, a later session — "no producer" is WRONG. A real, working password generator exists: `FUN_1000_69d7`, dispatched from the level-exit flow.** See *`UNKNOWN_level_exit_destination` — CLOSED*, above: bit 10 of a completed world's own `+0x1e` destination-record field (set on every real "LEVEL ONE"/"TWO"/"THREE" exit — i.e. on every real level completion in worlds 1–3) calls `FUN_1000_69d7`, which reads the current (just-completed) world `[0x42]`, indexes this SAME `DS:0x42a` password-pointer table, and — **only if that world's own slot is currently empty** — generates and writes a fresh 3-character password there via `CS:0x6A6B`, then displays it (3 pieces of text via the shared centering-draw routine `CS:0x646f`, the same "LOADING" title-card convention). `CS:0x6A6B` was disassembled fresh and is not a stub: it draws three values through the shared mixer/random source (`FUN_1000_2375`/`FUN_1000_3836`), each range-reduced via `/0x9d9 (2521) + 1` to **1..26** — exactly this project's own 1-based hiscore-name alphabet, the identical encoding the `"ENTER A PASSWORD"` grid-entry screen compares against. So the earlier "`DS:0x432`/`0x436`/`0x43a` have no writer anywhere in `GAME.EXE`" claim (repeated here and in the `HISCORES.BIN` section) is refuted: `FUN_1000_69d7` writes exactly these three addresses (via the `DS:0x42a`-indexed pointer table), and a legitimate player who finishes world 1, 2, or 3 for the first time in a session **does** receive a real, correctly-encoded password for that world — reachable by ordinary play, not just the attract-mode bypass. This was missed by the earlier pass's exhaustive-writer search for the same reason `FUN_1000_6ad4` (the key-inventory clear, same section) was missed: both are reached only through the level-exit bit-dispatch table, a register-indirect call invisible to a literal-address write scan. The feature is **not** cut — it works, is reachable, and produces a valid, enterable password; only the "no producer" framing was wrong. (The hiscore-screen "hint" text at `FUN_1000_32fe`, described just above, therefore also becomes real in practice once a world-2 password has actually been generated — it is no longer permanently three blank glyphs.)
 
+### In-gameplay ESC (quit) and P (pause) — `FUN_1000_031a`'s own ASCII keyboard poll `[PROVEN]`
+
+Not previously documented anywhere in this project: the per-tick gameplay function `FUN_1000_031a` (called from the main loop `FUN_1000_006f`, `CS:0x0092`) polls the raw BIOS keyboard once per frame at `CS:0x0335` (`CALL FUN_1000_2503`, an `INT 16h AH=1` peek then `AH=0` read, `CF` set only on a hit, `AL`=ASCII/`AH`=scancode). This is a *separate* mechanism from the movement/fire input (the packed byte at `DS:0x382`, built from a raw-scancode `INT 9` ISR the driver installs — `docs/drivers-and-memory.md`'s exports 33-35 — and scoped, per the shipped `GODS.INI`, to exactly the 5 configured scancodes: up/down/left/right/fire). `FUN_1000_2503` has only 4 call sites in the whole binary — this one, the title menu (`FUN_1000_2c82`), the password/hiscore grid (`FUN_1000_2eb0`, whose keyboard half is already documented dead code), and a generic "wait for fire or timeout" helper (`FUN_1000_255d`) that discards the key value entirely — so the branches below are the *only* ASCII-keyboard behaviour reachable during real gameplay:
+
+```
+0335  call 0x1000:2503        ; AL=ascii, CF=key-available
+0338  jnc 0x1000:0349         ; no key -> flush stale input, continue
+033a  cmp al,0x1b             ; ESC?
+033c  jnz 0x1000:0341
+033e  jmp 0x1000:0996         ; -> "QUIT GAME" text (1ffd:ec1d) then falls into
+                               ;    the title-menu loop FUN_1000_2c82
+0341  cmp al,0x70             ; 'p'?
+0343  jz 0x1000:0357
+0345  cmp al,0x50             ; 'P'?
+0347  jz 0x1000:0357
+0349  call 0x1000:24f0        ; flush stale keyboard input, fall through, continue
+...
+0357  mov byte[0x3ac],0       ; PAUSE: a tight busy-wait, nothing else runs —
+035c  call 0x1000:2503        ;   no render, no tick — until ANY key is read
+035f  jnc 0x1000:0357
+0361  cmp al,0x20             ; space?
+0363  jnz 0x1000:036d
+0365  mov byte[0x3ac],1       ; only Space sets this; any other key leaves it 0
+036a  jmp 0x1000:013c         ; either way, back to the main tick loop — RESUMED
+036d  jmp 0x1000:013c
+```
+
+`DS:0x3ac` itself has no other reader anywhere in `GAME.EXE` (only these two writers, plus two unrelated `mov …,0` resets elsewhere that never feed a comparison) — confirmed by `search_instructions` across the whole program, not just `get_xrefs_to` (which structurally misses DS-relative real-mode operands, per this project's own `ghidra-evidence` discipline). So it is write-only/vestigial: the pause's practical effect is identical regardless of which key ends the busy-wait.
+
+**Both confirmed live in DOSBox**, execute breakpoints resolved through `debug_map_to_live` (`CS_GAME` range: Ghidra's `1000:xxxx` labels are live segment `0x036D`, *not* `0x1000` — a fixed relocation, easy to get wrong):
+- A breakpoint at `CS:0x033E` (live `877:830`) fired with `AL=0x1B` the instant ESC was pressed during real gameplay; the screen was back at the title menu (`BEGIN QUEST`/`ENTER PASSWORD`/`EXIT TO DOS`) one capture later. Whether `FUN_1000_0996`'s own `"QUIT GAME"` text (drawn via `FUN_1000_489d`, `SI=0xec1d`) is actually visible for a frame before the title backdrop overdraws it was **not** settled — a breakpoint right after the draw call (`CS:0x09A1`) still showed the old gameplay frame in VRAM, and the next capture already showed the title menu, so this pass could not catch a transient flash either way. Left `[UNKNOWN]`, low-stakes.
+- A breakpoint at the pause loop head (`CS:0x0357`, live `877:855`) fired immediately on resume after pressing `P`; two screen captures one second apart, mid-pause, were pixel-identical (hero position, HP, money, `INVULN` counter all frozen); pressing an arbitrary non-space key (`A`) resumed ticking (confirmed via the HUD's own counters changing again) without quitting; and pressing **ESC while paused** also just resumed — it does **not** reach `FUN_1000_0996` at all, since the pause sub-loop has no ESC special-case, only a space-vs-not-space branch after the wait ends.
+
+No other hidden keys: the string table (all 144 entries, searched exhaustively) has nothing cheat/debug-shaped, and the only two `INT 16h` call sites in the whole binary are `FUN_1000_2503` (above) and `FUN_1000_24f0` (a pure discard-and-flush, no dispatch).
+
+**Ported** to `gods-web/src/main.js` — a `paused` flag gates the tick callback (not the render callback, so a paused frame keeps redrawing the same frozen state, matching the original's silent freeze with no "PAUSED" overlay); the keydown handler checks `paused` before `Escape` so a paused ESC can't fall through to the quit case, exactly mirroring the asm ordering above. The `"QUIT GAME"` text flash was not ported, since its visibility was never confirmed live.
+
 ## Formats validated by reconstruction `[PROVEN]`
 
 Every format above was originally proven by *reading* disassembly. All of the major ones have now also been proven by *rebuilding* — extractors were written and the output inspected. This is the strongest available check: a wrong format still produces a valid file, but not a coherent one.
