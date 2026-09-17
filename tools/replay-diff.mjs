@@ -111,22 +111,34 @@
  *
  * RESULT, entity ticking (all three joygN, run with no --live — no entity
  * ground truth exists to check against, see the header above): the plane-B
- * probe -> event dispatch chain genuinely fires (2/1/1 records consumed for
- * joyg1/2/3, each a real selector-3 trigger evaluation — confirmed against
- * an independent static census of PLEV1B's own plane-B cells, which found
- * 12 real selector-4/5 spawn cells on that level, none of them anywhere near
- * the showcase's fixed spawn column), but ZERO System-A/System-B group
- * activations occur on any of the three recordings: the attract-mode
- * showcase spawn point and the short path each recording walks from it
- * simply never comes near a spawn-trigger tile. That is a measured outcome
- * of this specific fixed path, not a claim that spawn dispatch is broken or
- * untested — see the `events:`/`entities:` lines this tool prints, which
- * report it explicitly rather than silently show "0 entities" with no way
- * to tell an untested path from an exercised-but-empty one. Re-running the
- * `--live` diff after adding entity ticking reproduced the EXACT SAME tick
- * 0-2 match / tick 3 camY divergence as before this change (still
- * port=526/live=524) — the required check that this addition didn't perturb
- * the hero/camera path it cannot itself verify.
+ * probe -> event dispatch chain fires on every recording (2/1/1 records
+ * consumed for joyg1/2/3, each a real selector-3 trigger evaluation), but
+ * ZERO System-A/System-B group activations occur on any of them — a static
+ * census of all three levels' own plane-B cells (12/32/26 real selector-4/5
+ * spawn cells on PLEV1B/2B/3B respectively) found none within reach of any
+ * recording's own fixed showcase path: joyg1 walks x=[3424,3844] at y=608
+ * (PLEV1B's cells top out at x=2752); joyg2 walks x=[160,448] at y=960
+ * (PLEV2B's cells top out at y=928, and none share joyg2's x range at that
+ * y); joyg3 walks x=[96,444] at y=[80,160] (PLEV3B's cells start at y=176).
+ * So the selector-4/5 BRANCHES of `dispatchEvent` — `runSpawns[A]()`, both
+ * entity `tick()` loops, `runSearch`, `stepCreatureDamage`'s loop body, the
+ * slot-release loops, and every muzzle-routing branch — never execute on any
+ * shipped recording; that is a measured property of these three fixed
+ * paths, not a claim that spawn dispatch is broken. Those code paths were
+ * smoke-tested separately this session (not left in the shipped tool): a
+ * forced `events.onSpawnB(3)` — a real census-verified param on PLEV1B — ran
+ * `runSpawnsB`/`e.tick()`/the release loop end to end with no error, and a
+ * synthetic entity placed directly on the joyg1 showcase spawn point drove a
+ * full contact through `stepCreatureDamage` (health.target 24 -> 19, entity
+ * state -> dying) with no error either. Neither test is reachable from the
+ * shipped recordings themselves, hence not left as a runtime option here.
+ * See the `events:`/`entities:` lines this tool prints on every run, which
+ * report the consumed/fired/activation counts explicitly rather than
+ * silently show "0 entities" with no way to tell an untested path from an
+ * exercised-but-empty one. Re-running the `--live` diff after adding entity
+ * ticking reproduced the EXACT SAME tick 0-2 match / tick 3 camY divergence
+ * as before this change (still port=526/live=524) — the required check that
+ * this addition didn't perturb the hero/camera path it cannot itself verify.
  *
  * USAGE
  *   node tools/replay-diff.mjs <joygN> [--live capture.json] [--ticks N]
@@ -356,7 +368,13 @@ for (let i = 0; i < n_ticks; i++) {
    * skipped subsystem between these calls named in the header. `events.step`
    * runs the plane-B probe; its selector-4/5 branches (System-B/System-A
    * group activation) fire regardless of `actionCtx`, so they work with no
-   * further wiring — see EventRunner.dispatchEvent's own early-return shape. */
+   * further wiring — see EventRunner.dispatchEvent's own early-return shape.
+   * `timer: i` is this REPLAY's own tick index, not main.js's `clock.tick` —
+   * a session-global counter that, on the real attract-mode path, has
+   * already been running since the title screen. A timer-comparing trigger
+   * condition (COND `case 7`/`8` etc., trigger.js) would see a different
+   * value here; none of the events actually reached on these three
+   * recordings are timer-gated, so this has not been exercised either way. */
   events.step(player.x, player.y, events.makeState({ timer: i }));
   runSpawnsB();
   /* THE HUNT — CS:0xf11f/0xf1e5, ported verbatim from main.js's own loop
