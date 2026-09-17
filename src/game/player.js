@@ -789,15 +789,38 @@ export class Player {
    * 9,8,6. No X step, no fire/jump/crouch test anywhere in either body —
    * the turn is a stationary pivot, committed for its 2-3 ticks.
    *
-   * NOT MODELLED: the LEFT/RIGHT-held branch above (`5dc2` / its state-3
-   * mirror) cancels an in-progress turn back into the OTHER turn state.
-   * This port lets a turn run to completion regardless of input during its
-   * ~200ms window (2-3 ticks at 15Hz) — a disclosed simplification, not a
-   * guess at the byte-level fallthrough into the shared counter tail,
-   * which was not resolved with full confidence this pass.
+   * THE CANCEL BRANCH — now ported, `[PROVEN]` by a fresh
+   * `disassemble_bytes` over CS:0x5dbb-0x5dfa (GAME.EXE) that resolved the
+   * one byte this port previously left unread: what sits at 0x5dc7-0x5dc9,
+   * right after state 2's `MOV [0x377],3`. It is `JMP 0x5e9b` (`e9 d1 00`),
+   * straight to the epilogue — NOT a fallthrough into the counter tail at
+   * 0x5dca. So the cancel is unconditional and instantaneous: on a tick
+   * where the OTHER direction is held, the state flips (2<->3) and `CL`
+   * (phase) is left completely untouched — no ramp step happens that tick.
+   * This is why the cancel is invisible on screen: base(2) == base(3) == 8,
+   * so sprite = 8 + sign_extend(CL) renders identically either way. State
+   * 3's mirror (`CS:0x5de3`-`0x5dea`) is byte-identical in shape, testing
+   * RIGHT (0x8) instead of LEFT (0x4).
+   *
+   * The cancel does NOT reset `CL` to the other state's own entry value —
+   * it inherits whatever the ramp had reached. So the resulting reversal's
+   * length depends on WHEN the cancel fires, not just that it fired: a
+   * same-tick cancel (CL still 0) hands state 3 a `dec/js` one step from
+   * firing — 1 more tick to WALK_L. A cancel on the ramp's last tick (CL
+   * already 2, about to exit) hands state 3 a `dec/js` three steps out —
+   * 3 more ticks. A late cancel can therefore take LONGER to resolve than
+   * an uncancelled turn (2-3 ticks) would have, not "just as fast" — the
+   * bytes don't reset the counter, they only redirect it.
+   *
+   * Holding BOTH directions at once makes the cancel test true in both
+   * states, so the pivot oscillates 2<->3 forever, `CL` frozen at whatever
+   * it was on the first cancel, without ever reaching WALK_L/WALK_R —
+   * reproduced here, not smoothed over (see the `both keys held` case in
+   * checks.js).
    */
-  _turn() {
+  _turn(input) {
     if (this.stateIndex === S.TURN_LR) {
+      if (input.left) { this.stateIndex = S.TURN_RL; return; }   // CS:0x5dc2
       this.phase += 1;
       if (this.phase >= 3) {
         this.phase = 6;
@@ -805,6 +828,7 @@ export class Player {
         this.facing = +1;
       }
     } else {
+      if (input.right) { this.stateIndex = S.TURN_LR; return; }  // CS:0x5de5
       this.phase -= 1;
       if (this.phase < 0) {
         this.phase = 6;
@@ -824,7 +848,7 @@ export class Player {
      * jump or crouch test of their own — see `_turn`'s own header for the
      * fresh disassembly this rests on. */
     if (this.stateIndex === S.TURN_LR || this.stateIndex === S.TURN_RL) {
-      this._turn();
+      this._turn(input);
       return;
     }
     const moving = input.left || input.right;

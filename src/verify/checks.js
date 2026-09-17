@@ -8597,6 +8597,67 @@ export async function checkWeaponsProjectiles(fetchRaw) {
         fromStop.tick(flat, I({ right: true }));
         check('reversing from the STOPPED pose (not actively walking) also enters the turn',
           fromStop.stateIndex === PS.TURN_LR);
+
+        /* ── THE CANCEL BRANCH — CS:0x5dc2 (state 2) / CS:0x5de5 (state 3),
+         * now ported. User-reported: "the turning animation ... feels not
+         * as smooth as in the dosbox version" (e.g. lining up on a lever).
+         * A fresh `disassemble_bytes` over CS:0x5dbb-0x5dfa found `JMP
+         * 0x5e9b` at 0x5dc7 (bytes `e9 d1 00`) — straight to the epilogue,
+         * NOT a fallthrough into the `INC CL` ramp at 0x5dca. So the
+         * cancel is unconditional and leaves `cl` untouched; since
+         * base(2)==base(3)==8 it renders IDENTICALLY on the tick it
+         * fires — only the eventual exit direction changes. */
+        const cancel = new Player(10 * 32, 9 * 16);
+        for (let i = 0; i < 4; i++) cancel.tick(flat, I());
+        for (let i = 0; i < 4; i++) cancel.tick(flat, I({ left: true }));
+        cancel.tick(flat, I({ right: true }));
+        check('cancel setup: entered state 2 (turn left->right) with cl=0',
+          cancel.stateIndex === PS.TURN_LR && cancel.phase === 0);
+        /* Ramp ONE tick with no input first, so the cancel below fires at
+         * cl=1, not cl=0 — at cl=0 a missing cancel (this.phase+=1 => 1)
+         * and a real cancel (stateIndex flips, phase stays 0) land on
+         * DIFFERENT states but the sprite-identity check below can't tell
+         * apart "cancel happened" from "cancel is a no-op", since base(2)
+         * and base(3) are equal by construction. Ramping first makes the
+         * post-cancel (state, phase) pair distinguish all three readings:
+         * a missing cancel gives (TURN_LR, 2); a fallthrough-into-the-ramp
+         * misreading of the bytes gives (TURN_RL, 2); the real jump-to-
+         * epilogue behaviour gives (TURN_RL, 1). */
+        cancel.tick(flat, I());
+        check('...ramps one tick with no input (cl:=1, CS:0x5dca, still state 2)',
+          cancel.stateIndex === PS.TURN_LR && cancel.phase === 1);
+        const spriteBeforeCancel = spriteFor(cancel.stateIndex, cancel.phase);
+        cancel.tick(flat, I({ left: true }));   // LEFT held again -> cancel (0x5dc2)
+        check('holding the reversed direction cancels into state 3 with cl UNTOUCHED (0x5dc2, JMP not fallthrough)',
+          cancel.stateIndex === PS.TURN_RL && cancel.phase === 1);
+        check('...NOTE (table property, not a port test): base(2)==base(3)==8, so that cancel tick renders IDENTICALLY',
+          spriteFor(cancel.stateIndex, cancel.phase) === spriteBeforeCancel);
+        cancel.tick(flat, I({ left: true }));
+        cancel.tick(flat, I({ left: true }));
+        check('...then state 3\'s OWN descending ramp counts cl back down (1->0->-1) to WALK_L, cl:=6',
+          cancel.state === ST.GROUND && cancel.stateIndex === PS.WALK_L
+            && cancel.phase === 6 && cancel.facing === -1);
+
+        /* Holding BOTH directions makes each state's own cancel test true
+         * EVERY tick, so the pivot must strictly ALTERNATE 2,3,2,3,... —
+         * "wedged in one state forever" is a different bug and would fail
+         * this, not just "eventually reaches WALK_L/WALK_R". `cl` is never
+         * touched (every tick takes the early-return cancel branch), so it
+         * stays frozen at whatever it was on the first cancel. */
+        const both = new Player(10 * 32, 9 * 16);
+        for (let i = 0; i < 4; i++) both.tick(flat, I());
+        for (let i = 0; i < 4; i++) both.tick(flat, I({ left: true }));
+        both.tick(flat, I({ right: true }));
+        const bothPath = [];
+        for (let i = 0; i < 10; i++) {
+          both.tick(flat, I({ left: true, right: true }));
+          bothPath.push(both.stateIndex);
+        }
+        const strictlyAlternates = bothPath.every((s, i) =>
+          (s === PS.TURN_LR || s === PS.TURN_RL) &&
+          (i === 0 || s !== bothPath[i - 1]));
+        check('holding BOTH directions ALTERNATES the pivot 2,3,2,3,... every tick, never completing (CS:0x5dc2/0x5de5 both true)',
+          strictlyAlternates);
       }
 
     }
