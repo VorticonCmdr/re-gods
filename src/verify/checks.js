@@ -343,6 +343,34 @@ export async function runAllChecks(fetchRaw) {
     const rawPal = await fetchRaw(`game/PLEVEL${k}.PI1`);
     const palImg = decodePI1(dclDecompress(rawPal).data);
     check(`PLEVEL${k}.PI1 palette IS ST 3-bit (every nibble <= 7)`, st3(palImg));
+
+    /* `UNKNOWN_level_palette_source` — CLOSED `[PROVEN]` live in DOSBox: the
+     * file's own slots 0/1 are NOT what GAME.EXE installs. Intercepting the
+     * real INT 10h AX=1012h DAC-set call for a clean world-1 load (main.js's
+     * own `PALETTE_SLOT01_OVERRIDE`) found slot 0 = ST 0x0000 (black) and
+     * slot 1 = ST 0x0247 (a blue), not the file's own 0x0333/0x0400 (gray,
+     * then red) — identical for 1A and 1B. This is the user-reported bug:
+     * world 1's background rendered red in the port, blue in the original.
+     * Pin the file's own (superseded) words here so a future PLEVEL*.PI1
+     * edit can't silently change what this override is correcting for. */
+    if (k[0] === '1') {
+      check(`PLEVEL${k}.PI1's own slot 0/1 are the SUPERSEDED words (0x0333/`
+        + '0x0400) main.js\'s PALETTE_SLOT01_OVERRIDE replaces, not the real '
+        + 'live DAC values (0x0000/0x0247)',
+        palImg.paletteRaw[0] === 0x0333 && palImg.paletteRaw[1] === 0x0400,
+        `got 0x${palImg.paletteRaw[0].toString(16)}/0x${palImg.paletteRaw[1].toString(16)}`);
+    }
+  }
+
+  /* The override math itself: ST component n -> round(n * 255 / 7), the
+   * same conversion decodePI1 itself uses for every other slot. */
+  {
+    const stToRgb = (n) => Math.round((n * 255) / 7);
+    check('PALETTE_SLOT01_OVERRIDE\'s world-1 slot 1 (73,146,255) is exactly '
+      + 'ST 0x0247 (R=2,G=4,B=7) converted the same way decodePI1 converts '
+      + 'every other palette word',
+      stToRgb(2) === 73 && stToRgb(4) === 146 && stToRgb(7) === 255,
+      `${stToRgb(2)},${stToRgb(4)},${stToRgb(7)}`);
   }
 
   check(`DCL consumes input exactly on all 8 maps`, dclExact === 8, `${dclExact}/8`);
