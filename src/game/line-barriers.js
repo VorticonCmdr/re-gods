@@ -69,13 +69,21 @@
  *     unreachable" findings; this port's cycling code path handles them
  *     correctly too (nothing here is 2-point-specific) but they cannot be
  *     reached by any shipped trigger.
- *     ⚠️ STILL NOT REPRODUCED, disclosed: the exact `DI+5`/1-based-index
- *     starting value on a FRESH arm (never-before-cycled slot) is inferred
- *     from `FUN_1000_78E9`/`0x790E`'s own bump-and-wrap arithmetic applied
- *     to a zeroed runtime slot (`0 -> 1` forward, `0 -> 4` backward), not
- *     read live — this determines only WHICH of the two ping-pong endpoints
- *     a barrier starts by walking toward, not the ping-pong itself, and
- *     matches the only shipped shape (2 populated points) either way.
+ *     The `DI+5`/1-based-index starting value on a FRESH arm is now CLOSED,
+ *     `[PROVEN]` live this session: the arm dispatcher itself (`CS:0x7665`,
+ *     `MOV byte[DI+5],0`) unconditionally zeroes it right before dispatching
+ *     through the type trampoline, for EVERY arm regardless of type (settle
+ *     or cycle) — confirmed both by direct disassembly of `CS:0x75FC..0x7679`
+ *     (an unconditional immediate-operand write, not data-dependent) and by
+ *     a live DOSBox breakpoint at `CS:0x7669` catching a genuine fresh arm
+ *     (`PLEV1A` record 2's runtime slot, `DS:0x1cd6`: `x=y=0xFFFF`, `DI+4=
+ *     0xFF` — the true "never-armed" sentinel state — immediately followed
+ *     by `DI+5` reading `0x00`). `FUN_1000_78E9`/`0x790E`'s own bump
+ *     arithmetic (`0+1=1` forward, `0-1` wraps to `4` backward, both directly
+ *     disassembled, pure register ops with no other dependency) then makes
+ *     `bump1Based(0, direction)` below the PROVEN starting point, not an
+ *     inference — matching `arm()`'s own `bump1Based(0, direction)` call
+ *     exactly.
  *   - The exact sprite `FUN_1000_7779` draws. It goes through graphics
  *     export 1 (the same masked blit `selector2.js`'s turrets use),
  *     selected by the record's own `+0x16..+0x19` "obstacle type" byte —
@@ -117,9 +125,11 @@ function classifyType(typeVal) {
 }
 
 /** `FUN_1000_78E9`/`FUN_1000_790E`'s own `DI+5` bump: +1 or -1, wrapping the
- *  1-based point index into 1..4. Called with `0` for a fresh arm (a never-
- *  before-cycled runtime slot reads 0), matching both functions' own
- *  `bVar1 = DI+5 +/- 1` arithmetic starting from that zeroed value. */
+ *  1-based point index into 1..4. Called with `0` for a fresh arm — `[PROVEN]`
+ *  live this session (see the file header): `CS:0x7665` unconditionally
+ *  zeroes the runtime slot's own `DI+5` on every arm, confirmed live at a
+ *  genuine fresh arm (`PLEV1A` record 2), so `bVar1 = 0 +/- 1` is the real
+ *  starting arithmetic, not an inference from an assumed-zeroed slot. */
 function bump1Based(idx1, direction) {
   let n = idx1 + direction;
   if (n > 4) n = 1;
