@@ -46,12 +46,20 @@
  *
  * RESULT, joyg1 (`--live tools/joyg1-live-capture.json`): ticks 0-2 match
  * the live capture EXACTLY across hero X/Y, state and camera. Tick 3 then
- * diverges by 2px on camY (port 526, live 524) — the port's camera pans one
- * step early; the live trace shows the SAME step landing at tick 4 instead,
- * self-correcting by tick 6. This looks like a one-tick stall in the
- * original's own vertical-scroll epilogue that this port's `Camera#update`
- * (game/camera.js) doesn't model — a real, disclosed lead, not chased down
- * further this pass. Camera fields are compared using `cam.snapX/snapY`
+ * diverges by 2px on camY (port 526, live 524); the live trace's own delta
+ * sequence from tick 0 (+8,+4,+0,+2,+1,+1) is otherwise IDENTICAL to what
+ * Camera#update's own proven formula produces (+8,+4,+2,+1,+1) except for
+ * one extra tick's worth of stall — i.e. every observed delta is one the
+ * formula can produce, just attributed to a different tick than the port's.
+ * WHETHER that's a real one-tick stall in the original or an artifact of
+ * this capture's own sampling (it samples on DS:0x282 changing, at
+ * CS:0x24DB — early in FUN_1000_006f, well before the camera epilogue at
+ * CS:0x0254 — so a sample can land before or after that SAME tick's camera
+ * update depending on exactly where a `wait_frames(1)` poll fell) is NOT
+ * resolved. A precise per-tick sample (an execute breakpoint at CS:0x02C6,
+ * after the epilogue, instead of polling the cursor) would settle it; not
+ * done this pass. Do not read this as a confirmed port bug. Camera fields
+ * are compared using `cam.snapX/snapY`
  * (the pre-update snapshot each tick's own physics ran against), not the
  * just-updated `cam.x/y` — matching DS:0xa/0xc's own live-read timing is
  * what made ticks 0-2 line up; comparing post-update values put every tick
