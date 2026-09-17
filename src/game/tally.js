@@ -62,13 +62,16 @@
  *                                          blocks for a FIRE press then a
  *                                          release; simplified here to a
  *                                          single press edge)
- * The original draws all three lines through a distinct, unidentified font
- * (`FUN_1000_224e`, glyph = byte+0x3f, not PSMLFNT's identity map) as an
- * overlay on the STILL-VISIBLE game world underneath (confirmed live: the
- * hero and level tiles are visible behind the text in both captures) — this
- * module reuses the already-ported, already-verified PSMLFNT font instead,
- * a disclosed port-level substitution, not a fidelity claim, matching this
- * project's own precedent (title-menu.js's own erase/confirm icon note).
+ * The original draws all three lines through a distinct font (`FUN_1000_224e`,
+ * glyph = byte+0x3f, not PSMLFNT's identity map) as an overlay on the
+ * STILL-VISIBLE game world underneath (confirmed live: the hero and level
+ * tiles are visible behind the text in both captures). ⚠️ CORRECTED, a later
+ * pass: this font is IDENTIFIED, not unidentified — it is PGODFONT, the SAME
+ * font the title menu and the "QUIT GAME" screen use (see title-menu.js's
+ * `MENU_ADVANCE` citation for the full derivation and live confirmation).
+ * This module now draws through `menuGlyphs`/`MENU_ADVANCE` (main.js), not
+ * PSMLFNT — the disclosed substitution this comment used to describe is
+ * fixed, not merely disclosed, as of this pass.
  * The two bonus-line ICONS (a life icon before the time-bonus line, a heart
  * before the health-bon line, visible in the live capture) are likewise
  * unidentified sprites — reproduced here as plain text labels instead of
@@ -89,7 +92,7 @@
  * call and plays `CHA_CHING_SFX` through `audio/audio-bus.js`.
  */
 
-import { drawCentered } from './title-menu.js';
+import { drawCentered, MENU_ADVANCE } from './title-menu.js';
 
 export const TIME_BONUS_PER_LIFE = 2000;      // CS:0x67b8
 export const HEALTH_BONUS_PER_HP = 80;        // CS:0x67b8
@@ -198,26 +201,26 @@ export class TallyScreen {
   }
 
   /** @param {import('../render/renderer.js').Renderer} renderer
-   *  @param {?object} glyphs PSMLFNT, see header for why not the original's own font
+   *  @param {?object} glyphs the MENU font — main.js's `menuGlyphs` (PGODFONT), see header
    *  @param {?Array} digitFrames `hud-digits.js`'s `sliceDigitFrames()` output */
   draw(renderer, glyphs, digitFrames) {
     if (this.phase === 'password' && this.password) {
-      drawCentered(renderer, glyphs, `LEVEL ${this.password.worldNumber} PASSWORD`, 8);
-      drawCentered(renderer, glyphs, this.password.code, 24);
-      drawCentered(renderer, glyphs, 'FIRE TO CONTINUE', 158);
+      drawCentered(renderer, glyphs, `LEVEL ${this.password.worldNumber} PASSWORD`, 8, MENU_ADVANCE);
+      drawCentered(renderer, glyphs, this.password.code, 24, MENU_ADVANCE);
+      drawCentered(renderer, glyphs, 'FIRE TO CONTINUE', 158, MENU_ADVANCE);
       return;
     }
-    drawCentered(renderer, glyphs, `${this.title} COMPLETED`, 8);
+    drawCentered(renderer, glyphs, `${this.title} COMPLETED`, 8, MENU_ADVANCE);
     let y = 32;
     if (this.timeBonus > 0) {
-      drawCentered(renderer, glyphs, `LIVES   ${this.lives} X ${TIME_BONUS_PER_LIFE}`, y);
+      drawCentered(renderer, glyphs, `LIVES   ${this.lives} X ${TIME_BONUS_PER_LIFE}`, y, MENU_ADVANCE);
       y += 16;
     }
     if (this.healthBonus > 0) {
-      drawCentered(renderer, glyphs, `HEALTH  ${this.health} X ${HEALTH_BONUS_PER_HP}`, y);
+      drawCentered(renderer, glyphs, `HEALTH  ${this.health} X ${HEALTH_BONUS_PER_HP}`, y, MENU_ADVANCE);
       y += 16;
     }
-    drawCentered(renderer, glyphs, 'BONUS', 120);
+    drawCentered(renderer, glyphs, 'BONUS', 120, MENU_ADVANCE);
     drawPoolDigits(renderer, digitFrames, this.pool);
   }
 }

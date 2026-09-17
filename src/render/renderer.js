@@ -164,15 +164,23 @@ export class Renderer {
     this.fillRect(x + w - 1, y, 1, h, index);
   }
 
-  /** Expand indices through the 16-entry palette and present. */
-  present(palette) {
+  /**
+   * Expand indices through the 16-entry palette and present.
+   * @param {number} [fadeT] 1 = normal, 0 = black — a linear DAC-style scale
+   *   of every channel, used for the "QUIT GAME" fade-out (main.js). The
+   *   original does this with real palette-fade driver exports (7/8/9 —
+   *   "Palette blank / fade-out / fade-in", docs/drivers-and-memory.md);
+   *   this reproduces the visible RESULT of a fade, not that mechanism or
+   *   its exact timing/curve — see this file's own header disclosure.
+   */
+  present(palette, fadeT = 1) {
     const px = this.frame.data;
     const buf = this.buf;
     for (let i = 0, j = 0; i < buf.length; i++, j += 4) {
       const c = buf[i] * 4;
-      px[j]     = palette[c];
-      px[j + 1] = palette[c + 1];
-      px[j + 2] = palette[c + 2];
+      px[j]     = (palette[c] * fadeT) | 0;
+      px[j + 1] = (palette[c + 1] * fadeT) | 0;
+      px[j + 2] = (palette[c + 2] * fadeT) | 0;
       px[j + 3] = 255;
     }
     this.offCtx.putImageData(this.frame, 0, 0);

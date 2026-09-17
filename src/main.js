@@ -88,7 +88,7 @@ import { scanZones, unpackTeleportDest, resolveExitDestination,
          passwordWorldForSlot, passwordToString, PASSWORD_SLOTS } from './game/zones.js';
 import { DeathBurst, findRespawnPosition, loseLife,
          gameOverPlaceholder, DEATH_SFX } from './game/death.js';
-import { TitleMenu, PasswordEntry, MENU_CLICK_SFX, MENU_CONFIRM_SFX } from './game/title-menu.js';
+import { TitleMenu, PasswordEntry, MENU_CLICK_SFX, MENU_CONFIRM_SFX, drawCentered, MENU_ADVANCE } from './game/title-menu.js';
 import { ShopScreen, BUY_CONFIRM_SFX } from './game/shop.js';
 import { TallyScreen, CHA_CHING_SFX } from './game/tally.js';
 import { WebAudioBus } from './audio/audio-bus.js';
@@ -346,7 +346,27 @@ async function loadSprites(world) {
   const fontBase = ranges.find((r) => r.stem === 'PSMLFNT');
   const glyphs = fontBase
     ? frames.slice(fontBase.base, fontBase.base + fontBase.count) : null;
-  return { frames, ranges, glyphs, glyphBase: fontBase ? fontBase.base : -1,
+  /* `menuGlyphs` — PGODFONT, byte-indexed to match `glyphs`' own convention
+   * even though the original's OWN indexing isn't ASCII-shaped (byte+0x3F,
+   * a fixed constant landing on this group's own base — see title-menu.js's
+   * MENU_ADVANCE citation). PGODFONT's records 0-25 line up with real ASCII
+   * 'A'-'Z' directly (confirmed both by that offset arithmetic and visually,
+   * `tools/atlas-render.mjs PGODFONT`: literal gold A-Z in order), so this
+   * array is built with real ASCII codes as keys for drawText/drawCentered's
+   * own `charCodeAt` lookup — a port-side convenience, not a claim that the
+   * original indexes it this way. Digits '0'-'9' are ALSO remapped here
+   * (records 29-38, one past the 3 unidentified marks at 26-28) since
+   * gods-web/game/tally.js builds its bonus-line strings with real ASCII
+   * digits; nothing else beyond A-Z/0-9 is defined (no period, no icons —
+   * see title-menu.js's own still-open note on records 26-28/39/40). */
+  const menuFontBase = ranges.find((r) => r.stem === 'PGODFONT');
+  let menuGlyphs = null;
+  if (menuFontBase) {
+    menuGlyphs = [];
+    for (let c = 0; c < 26; c++) menuGlyphs[0x41 + c] = frames[menuFontBase.base + c];
+    for (let d = 0; d < 10; d++) menuGlyphs[0x30 + d] = frames[menuFontBase.base + 29 + d];
+  }
+  return { frames, ranges, glyphs, glyphBase: fontBase ? fontBase.base : -1, menuGlyphs,
            palette: images.PALWAYS1.palette, total: map.length };
 }
 
@@ -1287,6 +1307,22 @@ async function main() {
    *       before `Escape`). */
   let paused = false;
 
+/* CS:0x0996-0x09A6: ESC's target draws "QUIT GAME" (the SAME menu font as
+ * above — see title-menu.js's MENU_ADVANCE citation) then calls the fade-out
+ * driver export before falling into the title-menu loop — user-confirmed
+ * live in DOSBox: "QUIT GAME is shortly on screen while the screen fades
+ * out and exits to the menu". `uiState = 'quitting'` reproduces the VISIBLE
+ * shape of that (frozen last game frame, "QUIT GAME" overlaid, palette
+ * fading to black, then the menu) over `QUIT_FADE_MS` — a port-level
+ * duration, not a byte-cited one: CS:0x359D is a single opaque driver call
+ * with no GAME.EXE-side loop to time, so how long the real fade actually
+ * takes is unmeasured, unlike everything else this pass confirmed with a
+ * breakpoint. `quitFade.snapshot` is the world's own index buffer at the
+ * instant ESC was pressed, so the frozen scene keeps rendering correctly
+ * without re-running the (now-stopped) per-tick draw pipeline. */
+const QUIT_FADE_MS = 600;
+let quitFade = null;   // null | { snapshot: Uint8Array, palette: Uint8Array|number[], start: number }
+
   /* Gods/docs/dynamic-trace-and-runtime-data.md: UP/DOWN plays click sfx
    * 0x119, FIRE plays confirm sfx 0x233 — see title-menu.js's own citation
    * for the LEFT/RIGHT generalisation. Both `TitleMenu` and `PasswordEntry`
@@ -1358,7 +1394,13 @@ async function main() {
      * checked before the Escape/KeyP branches below so a paused ESC can't
      * fall through to the quit case; see the `paused` declaration above. */
     if (paused) { paused = false; e.preventDefault(); return; }
-    if (e.code === 'Escape') { paused = false; uiState = 'menu'; e.preventDefault(); return; }
+    if (e.code === 'Escape') {
+      paused = false;
+      quitFade = { snapshot: renderer.buf.slice(), palette: level.palette, start: performance.now() };
+      uiState = 'quitting';
+      e.preventDefault();
+      return;
+    }
     if (e.code === 'KeyP') { paused = true; e.preventDefault(); return; }
     const k = KEYMAP[e.code]; if (k) { input[k] = true; e.preventDefault(); }
     /* CS:0x0943's own game-over sequence exits into the title/attract-mode
@@ -2434,15 +2476,33 @@ async function main() {
       cam.update(player.x, player.y, levelInfo);
     },
     () => {
+      /* uiState === 'quitting' — see the `quitFade` declaration above.
+       * Restoring the snapshot every frame (rather than drawing it once)
+       * is what keeps this state's own render independent of the world's
+       * per-tick pipeline, which `paused`-style is NOT running here (ticks
+       * are already gated off by `uiState !== 'game'` in the tick callback
+       * above). Driven off wall-clock time, not a frame/tick count, so it
+       * is not subject to the display's own refresh rate. */
+      if (uiState === 'quitting' && quitFade) {
+        renderer.buf.set(quitFade.snapshot);
+        const elapsed = performance.now() - quitFade.start;
+        const fadeT = Math.max(0, 1 - elapsed / QUIT_FADE_MS);
+        const menuGlyphs = hero && hero.menuGlyphs;
+        drawCentered(renderer, menuGlyphs, 'QUIT GAME', 92, MENU_ADVANCE);
+        renderer.present(quitFade.palette, fadeT);
+        if (elapsed >= QUIT_FADE_MS) { uiState = 'menu'; quitFade = null; }
+        return;
+      }
       /* uiState !== 'game': draw the title screen instead of the world.
        * `hero.frames[169]` is the 208x46 GODS title logo — descriptor #169
        * in the "always" atlas group (PALWAYS1+2+3+PGODFONT), loaded by
-       * loadSprites() for every world, so it and `hero.glyphs` (PSMLFNT)
-       * are already available here with no extra fetch — see loadSprites()'s
-       * own header for the #169 anchor. */
+       * loadSprites() for every world, so it, `hero.glyphs` (PSMLFNT) and
+       * `hero.menuGlyphs` (PGODFONT — the menu's OWN font, see title-menu.js's
+       * MENU_ADVANCE citation) are already available here with no extra
+       * fetch — see loadSprites()'s own header for the #169 anchor. */
       if (uiState !== 'game') {
-        const glyphs = hero && hero.glyphs, logo = hero && hero.frames[169];
-        if (uiState === 'menu') titleMenu.draw(renderer, glyphs, logo, titleBackground);
+        const glyphs = hero && hero.glyphs, menuGlyphs = hero && hero.menuGlyphs, logo = hero && hero.frames[169];
+        if (uiState === 'menu') titleMenu.draw(renderer, glyphs, menuGlyphs, logo, titleBackground);
         else if (uiState === 'password') passwordEntry.draw(renderer, glyphs, titleBackground);
         else if (uiState === 'shop' && shopScreen) shopScreen.draw(renderer, glyphs);
         if (uiState === 'exit') renderer.presentBlack();   // QUIT's stand-in — see Renderer's own header
@@ -2823,7 +2883,7 @@ async function main() {
        * still-running game world already left in VRAM (see tally.js's own
        * header: both live captures show the hero and level tiles visible
        * underneath the text). */
-      if (tallyScreen) tallyScreen.draw(renderer, hero && hero.glyphs, digitFrames);
+      if (tallyScreen) tallyScreen.draw(renderer, hero && hero.menuGlyphs, digitFrames);
 
       renderer.present(level.palette);
 

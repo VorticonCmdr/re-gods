@@ -75,6 +75,39 @@ import { PASSWORD_LENGTH } from './zones.js';
 export const ADVANCE = 0x0a;    // 10 — the same per-glyph step message.js uses
 export const DIAMOND = '\x11';  // CS:0x4443's own separator glyph, reused as a cursor
 
+/* MENU_ADVANCE/MENU_FONT — CS:0x224E, the routine the menu's own redraw
+ * (CS:0x311C, called from FUN_1000_2c82) and the "QUIT GAME" screen
+ * (CS:0x489D->0x646F->0x224E) both draw through — confirmed live in DOSBox
+ * this session (breakpoints at CS:0x033E/CS:0x0357 established the ESC/pause
+ * mechanism; a user report that "QUIT GAME" flashes on screen during the
+ * fade-out prompted checking its font, which turned out to be the SAME one
+ * the menu itself uses, not PSMLFNT):
+ *   224E: for each byte — 0 -> stop; 0x20 (space) -> advance only, no blit;
+ *         else -> blit descriptor (byte + 0x3F), then unconditionally
+ *         ADD [x],0x10 (16px, not PSMLFNT's 10px).
+ * `byte + 0x3F` is a FIXED constant, not a runtime-snapshotted base like
+ * PSMLFNT's own DS:0x27E (message.js) — so it targets a fixed spot in the
+ * "always" group's global descriptor numbering, present on every level.
+ * 'A' (0x41) + 0x3F = 128, which is EXACTLY PGODFONT's own base in that
+ * numbering (main.js's loadSprites(): PALWAYS1(39)+PALWAYS2(72)+PALWAYS3(17)
+ * = 128, then PGODFONT) — matching main.js's own independently-established
+ * anchor for descriptor #169 (PGODFONT's LAST record, the title logo,
+ * 128+41=169). Confirmed visually too: rendering PGODFONT's own records
+ * 0-25 (tools/atlas-render.mjs) shows literal gold A-Z letters, in order,
+ * in the exact style visible on the real title screen. Records 29-38 are
+ * digits 0-9 (not at the ASCII-matching offset — the original's own digit
+ * strings for this font must use a different byte, since 26-28 hold three
+ * short marks not yet identified, and 39/40 are a left-arrow and a circular
+ * icon — which ALSO settles title-menu.js's own previously-unlocated
+ * erase/confirm icon sprites for the password grid below, not yet wired up
+ * to use them (PasswordEntry still uses PSMLFNT throughout — a disclosed,
+ * still-open follow-up, not fixed by this pass).
+ * PSMLFNT (message.js's own font, `glyphs` below) remains genuinely correct
+ * for the password grid and the in-level message line — this citation only
+ * corrects the MENU/QUIT-GAME/tally-screen font, previously assumed (menu)
+ * or explicitly disclosed as a stand-in (tally.js) to be PSMLFNT too. */
+export const MENU_ADVANCE = 0x10;   // 16
+
 /* Gods/docs/dynamic-trace-and-runtime-data.md's own title-screen trace:
  * "UP -> cursor -1, clamp at 0, click sfx 0x119, redraw" / "FIRE -> confirm
  * sfx 0x233 (same sound the grid-entry widget uses to confirm)" — one
@@ -95,23 +128,23 @@ export const MENU_CONFIRM_SFX = 0x233;
  * distinct strings for two distinct UI elements, not one reused label. */
 export const MENU_OPTIONS = ['BEGIN QUEST', 'ENTER PASSWORD', 'EXIT TO DOS'];
 
-function textWidth(text) { return text.length * ADVANCE; }
+function textWidth(text, advance) { return text.length * advance; }
 
 /** Draw `text` left-to-right from (x, y), one glyph sprite per character. */
-export function drawText(renderer, glyphs, text, x, y) {
+export function drawText(renderer, glyphs, text, x, y, advance = ADVANCE) {
   if (!glyphs) return;
   let cx = x;
   for (let i = 0; i < text.length; i++) {
     const f = glyphs[text.charCodeAt(i)];
     if (f) renderer.blitSprite(f, cx, y);
-    cx += ADVANCE;
+    cx += advance;
   }
 }
 
 /** Draw `text` horizontally centred on the 320px screen at row `y`. */
-export function drawCentered(renderer, glyphs, text, y) {
-  const x = ((SCREEN_W - textWidth(text)) / 2) | 0;
-  drawText(renderer, glyphs, text, x, y);
+export function drawCentered(renderer, glyphs, text, y, advance = ADVANCE) {
+  const x = ((SCREEN_W - textWidth(text, advance)) / 2) | 0;
+  drawText(renderer, glyphs, text, x, y, advance);
 }
 
 /**
@@ -135,7 +168,13 @@ export class TitleMenu {
     return null;
   }
 
-  draw(renderer, glyphs, logo, background) {
+  /** @param {object} glyphs PSMLFNT — used ONLY for the port-only control-hint
+   *    caption below, which has no original-game string to match (not found
+   *    anywhere in this project's own string-table dump or live captures).
+   *  @param {object} menuGlyphs the MENU font (PGODFONT, main.js's own
+   *    `menuGlyphs`) — see MENU_ADVANCE's own citation above. Real strings
+   *    (MENU_OPTIONS) draw through this one, not PSMLFNT. */
+  draw(renderer, glyphs, menuGlyphs, logo, background) {
     if (background) renderer.blitBackground(background);
     else renderer.clear(0);
     let y = 10;
@@ -151,9 +190,13 @@ export class TitleMenu {
       const line = i === this.cursor
         ? `>  ${MENU_OPTIONS[i]}  <`
         : `   ${MENU_OPTIONS[i]}   `;
-      drawCentered(renderer, glyphs, line, y);
+      drawCentered(renderer, menuGlyphs, line, y, MENU_ADVANCE);
       y += 32;
     }
+    /* At MENU_ADVANCE (16px/glyph) this 29-character line would run 464px —
+     * wider than the 320px screen — so it stays on PSMLFNT/ADVANCE, which
+     * is also the more honest choice: it's a port-only addition with no
+     * original string to match a font against in the first place. */
     drawCentered(renderer, glyphs, 'ARROWS SELECT  SPACE CONFIRM', 182);
   }
 }
@@ -169,7 +212,23 @@ export class TitleMenu {
  * pixel fidelity: the real erase/confirm cells are a left-arrow icon and a
  * distinct circular icon (not a PSMLFNT glyph — reading it precisely would
  * need locating its own sprite asset, not attempted this pass), reproduced
- * here as '<'/'=' for the same glyph-safety reasons the header explains. */
+ * here as '<'/'=' for the same glyph-safety reasons the header explains.
+ * ⚠️ LEAD, not yet closed: a later pass (see MENU_ADVANCE's own citation
+ * above) found the grid's OWN drawer, CS:0x30D4 — `FUN_1000_356e` blitting
+ * descriptor `0x80 + n` for cell `n`, i.e. PGODFONT's own records 0-39 in
+ * row-major order, the SAME atlas MENU_ADVANCE identifies (`0x80` = 128 =
+ * PGODFONT's base). Records 0-25 line up exactly with this grid's own
+ * `A`-`Z` (cells 0-25), and PGODFONT's last two records (39/40, past this
+ * grid's own 0-39 range by one) ARE a left-arrow and a circular icon
+ * on inspection (`tools/atlas-render.mjs PGODFONT`) — a strong lead for the
+ * erase/confirm sprites this note has been calling unlocated. But records
+ * 26-28 render as three short, unidentified marks, not `.`/space/space as
+ * this grid's own `GRID_CELLS` below assumes, so the exact cell<->record
+ * correspondence for row 4 onward is NOT re-derived here, and `PasswordEntry`
+ * still draws through PSMLFNT, unchanged — swapping it needs that mapping
+ * pinned down first (ideally cross-checked against a live capture the way
+ * the grid's own geometry was), not assumed from the sequential-index
+ * pattern alone. */
 const GRID_COLS = 8, GRID_ROWS = 5;
 const GRID_CELLS = [
   'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H',
