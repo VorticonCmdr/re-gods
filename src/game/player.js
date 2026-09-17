@@ -396,6 +396,24 @@ function climbableHere(map, x, y) {
   return climbableHereCol(map, x, y) !== null;
 }
 
+/* CS:0x14ED3/0x14F15 (state 8) and their mirrors CS:0x150D2/0x15114 (state
+ * 9) — the mid-air ladder-grab test. UNLIKE `climbableHereCol` above, this
+ * has NO straddle split: the caller already requires `x & 0x1f == 0`
+ * (exact tile alignment), so the column is always `si+0`, never `si+1`. The
+ * two directions are also NOT mirrors of each other here: UP tests only the
+ * current row; DOWN additionally accepts the row directly below (matching
+ * the asymmetry documented elsewhere in this file between ladder-ascend and
+ * ladder-descend entries). Both call sites in `_jump()` already guarantee
+ * alignment before calling either of these. */
+function climbableAtAlignedCol(map, x, y) {
+  return cellAt(map, mapCursor(x, y)) === CELL_CLIMBABLE;
+}
+function climbableAtAlignedColOrBelow(map, x, y) {
+  const si = mapCursor(x, y);
+  return cellAt(map, si) === CELL_CLIMBABLE
+      || cellAt(map, si + MAP_COLS) === CELL_CLIMBABLE;
+}
+
 /* CS:0x4A36/0x59AB/0x5A3C/0x5BF3/0x5C80 — the ladder X snap, and it is NOT
  * unconditional. `add word [0x17a],0x20` runs ONLY on the col-1 (one column
  * right) match; the col-0 (the hero's OWN column) match jumps straight to
@@ -455,6 +473,13 @@ export class Player {
     this.facing = 1;
     this.doubleJump = false; // DS:0x174 != 0
     this.fromLadder = false; // seeds the ladder-jump phase, see _ground
+    /* DS:0x1b4 — the X the CURRENT jump launched from. Its only four writers
+     * in the original are the two ground take-offs (CS:0x5A14/0x5C58) and the
+     * two ladder jump-offs (CS:0x590F/0x5924); its only readers are the
+     * mid-air ladder-grab checks in `_jump()`. It exists purely to block an
+     * instant re-grab of the column just launched from (X hasn't moved yet on
+     * the wind-up ticks) — never cleared, exactly like the original. */
+    this.jumpTakeoffX = null;
 
     /* Original-machine mirrors, for rendering. */
     this.stateIndex = S.FALL_R;   // DS:0x377
@@ -1127,6 +1152,7 @@ export class Player {
         this.stateIndex = this.facing < 0 ? S.JUMP_L : S.JUMP_R;
         this.phase = this.fromLadder ? LADDER_JUMP_PHASE[this.stateIndex] : 0;
         this.fromLadder = false;
+        this.jumpTakeoffX = this.x;   // CS:0x5A14/0x5C58 — see jumpTakeoffX's own note
         return;
       }
       const climbCol = climbableHereCol(map, this.x, this.y);
@@ -1159,6 +1185,59 @@ export class Player {
      * never 0x04/0x08, so direction cannot be steered while rising. Horizontal
      * motion is a hard-coded +/-4 gated on `cmp byte [0x358],4; jl`. */
     if (this.jumpCursor >= 4) this._walk(map, this.facing);
+
+    /* CS:0x4EBE-0x4F49 (state 8) / CS:0x50BD-0x5148 (state 9) — grab a
+     * ladder OUT OF MID-AIR. Reported live: pressing UP while airborne and
+     * positioned over a ladder grabs it immediately, at whatever height the
+     * hero happens to be — this port had no such check at all, so a jump
+     * arc carried straight over a ladder into FALL/GROUND instead.
+     *
+     * Tested every tick with NO cursor gate whatsoever — unlike the X-step's
+     * `cursor >= 4` and the early-land check's `cursor >= 0x16` just below,
+     * this fires from the very first wind-up tick. Only `jumpTakeoffX`
+     * (above) suppresses it on the ticks right after take-off. UP tests only
+     * the current row; DOWN also accepts the row below (asymmetric, matching
+     * the ascend/descend entries documented elsewhere in this file) — see
+     * `climbableAtAlignedCol`/`climbableAtAlignedColOrBelow`'s own note for
+     * why neither reuses `climbableHereCol`'s straddle split.
+     *
+     * The snap is NOT a full tile-row snap: `AND [0x17c],0xFFF8` (all four
+     * sites agree — CS:0x4EDD/0x4F26/0x50DC/0x5125), a fine 8 px snap that
+     * keeps the hero at very nearly the height it was grabbed at, unlike a
+     * ground-based mount's 16 px row snap. Getting this wrong to 0xfff0
+     * would be invisible to a casual read since both round DOWN.
+     *
+     * The original lands UP in state 14 (ascend) and DOWN in state 13
+     * (descend); this port already collapses both into `S.CLIMB` (see
+     * `UNMODELLED_PHASE_STATES` in states.js), so both land in the same
+     * place here too — a pre-existing, disclosed simplification, not
+     * reinvented for this fix. */
+    if (this.x !== this.jumpTakeoffX && (this.x & 0x1f) === 0) {
+      if (input.up && climbableAtAlignedCol(map, this.x, this.y)) {
+        this.x &= 0xffe0;
+        this.y &= 0xfff8;
+        this.ladderFacing = 0;
+        this.state = ST.CLIMB;
+        this.stateIndex = S.CLIMB;
+        this.phase = 2;
+        this.ladderPingPong = false;
+        this.dismountHold = 0;
+        this.fromLadder = true;
+        return;
+      }
+      if (input.down && climbableAtAlignedColOrBelow(map, this.x, this.y)) {
+        this.x &= 0xffe0;
+        this.y &= 0xfff8;
+        this.ladderFacing = 0;
+        this.state = ST.CLIMB;
+        this.stateIndex = S.CLIMB;
+        this.phase = 2;
+        this.ladderPingPong = false;
+        this.dismountHold = 0;
+        this.fromLadder = false;
+        return;
+      }
+    }
 
     /* CS:0x4F49-0x4F6C (state 8) / CS:0x5148-0x516B (state 9) — an
      * EARLY-LANDING check this port lacked entirely. Once the cursor reaches
@@ -1328,6 +1407,7 @@ export class Player {
       this.stateIndex = dir > 0 ? S.JUMP_R : S.JUMP_L;
       this.phase = LADDER_JUMP_PHASE[this.stateIndex];
       this.fromLadder = false;
+      this.jumpTakeoffX = this.x;   // CS:0x590F/0x5924 — see jumpTakeoffX's own note
       return;
     }
 

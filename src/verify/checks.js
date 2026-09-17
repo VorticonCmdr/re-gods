@@ -5882,6 +5882,90 @@ export async function checkWeaponsProjectiles(fetchRaw) {
       'does, regardless of the 3px off-grid rung the jump-off started from');
   }
 
+  /* ── grabbing a ladder OUT OF MID-AIR (CS:0x4EBE-0x4F49 state 8 /
+   * CS:0x50BD-0x5148 state 9) — reported live: pressing UP while airborne
+   * and positioned over a ladder grabs it immediately, at the hero's OWN
+   * height. This port previously had no such check: a jump arc carried
+   * straight over a ladder into FALL/GROUND. See `_jump()`'s own note for
+   * the full disassembly; these assertions target the four details a
+   * plausible-looking reimplementation could still get wrong. */
+  {
+    /* The Y snap is 8px (`AND [0x17c],0xFFF8`), NOT the 16px tile-row snap
+     * every ground-based mount uses. y=127 sits in row 7 (112-127) with
+     * y%16=15 — deliberately chosen so a wrong 0xFFF0 mask (112) is
+     * distinguishable from the correct 0xFFF8 one (120); most y values in
+     * this band would make the two masks agree and hide the bug. */
+    const p = new Player(20 * 32, 127);           // x=640, tile-aligned to col 20
+    p.state = ST.JUMP; p.jumpCursor = 0; p.facing = 1;
+    p.tick(flatMap(), IN({ up: true }), null);
+    check(`mid-air UP grabs a ladder overhead and snaps Y to a multiple of ` +
+          `8, not the full 16px tile row`,
+      p.state === ST.CLIMB && p.stateIndex === PS.CLIMB && p.phase === 2
+        && p.x === 640 && p.y === 120,
+      `state=${p.state} x=${p.x} y=${p.y} (expected CLIMB, x=640, y=120 — ` +
+      `a wrong 0xFFF0 mask would give y=112)`);
+  }
+  {
+    /* Asymmetric climbable test: UP checks ONLY the hero's own row; DOWN
+     * also accepts the row directly below (CS:0x14F15/0x14F1A and mirror).
+     * This map has climbable ONLY one row below the hero's own row. */
+    const n = MC * 64;
+    const planeB = new Uint8Array(n);
+    planeB[7 * MC + 5] = CELL_CLIMBABLE;           // row 7 only, col 5
+    const oneBelowMap = { planeA: new Uint8Array(n), planeB,
+                           widthPx: 4096, heightPx: 1024 };
+    const y0 = 6 * 16;                             // row 6 — climbable cell is ONE row below
+
+    const pUp = new Player(5 * 32, y0);
+    pUp.state = ST.JUMP; pUp.jumpCursor = 0; pUp.facing = 1;
+    pUp.tick(oneBelowMap, IN({ up: true }), null);
+    check(`mid-air UP refuses a ladder whose only climbable cell is one row below`,
+      pUp.state === ST.JUMP, `state=${pUp.state}`);
+
+    const pDown = new Player(5 * 32, y0);
+    pDown.state = ST.JUMP; pDown.jumpCursor = 0; pDown.facing = 1;
+    pDown.tick(oneBelowMap, IN({ down: true }), null);
+    check(`mid-air DOWN accepts that SAME one-row-below cell — the ` +
+          `asymmetry is real, not a copy-paste of the UP test`,
+      pDown.state === ST.CLIMB && pDown.stateIndex === PS.CLIMB,
+      `state=${pDown.state}`);
+  }
+  {
+    /* The jumpTakeoffX latch (DS:0x1b4): taking off from a ladder's own
+     * column with a direction held JUMPS (moving bypasses the ground climb
+     * check), and the very next tick must NOT instantly re-grab that same
+     * column — but holding UP through the whole arc DOES grab one column
+     * over, once X no longer matches the latch. An end-to-end test through
+     * the real _ground()->_jump() transition, not a hand-set state. */
+    const m = flatMap();                           // ladder at cols 20/21
+    const p = new Player(20 * 32, 9 * 16);         // standing on the ladder's own column
+    for (let i = 0; i < 4; i++) p.tick(m, IN(), null);
+    p.tick(m, IN({ up: true, right: true }), null); // take off
+    check(`taking off with a direction held JUMPS even from a ladder's own column`,
+      p.state === ST.JUMP, `state=${p.state}`);
+    /* Not asserting the exact latched pixel: this port's _ground() applies
+     * that tick's own horizontal step (line ~935) BEFORE reaching the UP
+     * handler that seeds the latch, whereas the original's state 0/1
+     * handlers test UP first and return before ever reaching their own
+     * X-step (CS:0x5C42 sits well before the "continue walking" X-step
+     * later in the same handler) — a pre-existing, separate ordering
+     * divergence, not introduced by or fixed in this pass. What matters
+     * here is only that SOME value gets latched and suppresses an instant
+     * re-grab, which the next two assertions test behaviourally. */
+    p.tick(m, IN({ up: true }), null);              // cursor 0 -> 2, X unchanged
+    check(`...and the immediate next tick does NOT re-grab the column just ` +
+          `launched from (X hasn't moved yet)`,
+      p.state === ST.JUMP, `state=${p.state}`);
+    let grabbed = false;
+    for (let i = 0; i < 20 && !grabbed; i++) {
+      p.tick(m, IN({ up: true }), null);
+      grabbed = p.state === ST.CLIMB;
+    }
+    check(`...but ONE COLUMN OVER, still holding UP through the arc, grabs ` +
+          `normally once X no longer matches the latch`,
+      grabbed && p.x === 21 * 32, `state=${p.state} x=${p.x}`);
+  }
+
   /* ── ladder-entry X snap is NOT unconditional (CS:0x4A36/0x59AB/0x5A3C/
    * 0x5BF3/0x5C80) — reported live as "instead of standing on top the
    * character stands in it". `add word [0x17a],0x20` runs ONLY on the col+1
