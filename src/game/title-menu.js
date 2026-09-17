@@ -94,19 +94,52 @@ export const DIAMOND = '\x11';  // CS:0x4443's own separator glyph, reused as a 
  * anchor for descriptor #169 (PGODFONT's LAST record, the title logo,
  * 128+41=169). Confirmed visually too: rendering PGODFONT's own records
  * 0-25 (tools/atlas-render.mjs) shows literal gold A-Z letters, in order,
- * in the exact style visible on the real title screen. Records 29-38 are
- * digits 0-9 (not at the ASCII-matching offset — the original's own digit
- * strings for this font must use a different byte, since 26-28 hold three
- * short marks not yet identified, and 39/40 are a left-arrow and a circular
- * icon — which ALSO settles title-menu.js's own previously-unlocated
- * erase/confirm icon sprites for the password grid below, not yet wired up
- * to use them (PasswordEntry still uses PSMLFNT throughout — a disclosed,
- * still-open follow-up, not fixed by this pass).
+ * in the exact style visible on the real title screen.
+ * PGODFONT's FULL record map, pixel-verified this pass per-record (an
+ * earlier revision of this comment had the digits and icons each one
+ * record too high, from misreading a cropped strip render rather than
+ * each record's own exact bounds):
+ *   0-25    'A'-'Z'
+ *   26      '.'
+ *   27      two small dots (unidentified — not used by any string this
+ *           port draws through this font)
+ *   28-37   '0'-'9'
+ *   38      LEFT-pointing arrow  (pixel-verified: touches the sprite's own
+ *           left edge only at its middle rows — the point — and its right
+ *           edge across a wide row band — the tail)
+ *   39      a small circular icon with text too fine to read at 16x16
+ *   40      RIGHT-pointing arrow (mirror of 38's own edge-touch profile)
+ *   41      the 208x46 title logo (not 16x16 like 0-40 — main.js's own
+ *           #169 anchor)
+ * CS:0x3148-0x3179 (FUN_1000_311c, right after the 3 option lines) blits
+ * descriptor 0xA8 (128+40, the RIGHT arrow) at fixed X=0x18(24), then 0xA6
+ * (128+38, the LEFT arrow) at fixed X=0x118(280), both at the SAME row the
+ * selected option's own text uses (Y := cursor*32+0x52, matching FUN_1000_
+ * 646f's own three Y args 0x52/0x72/0x92 exactly) — i.e. the LEFT-side icon
+ * points RIGHT/inward and the RIGHT-side icon points LEFT/inward, matching
+ * this doc's own already-established "inward-pointing arrows on both
+ * sides" finding and the real screenshot. These are FIXED-position sprite
+ * blits, not flowed text characters — MENU_ARROW_LEFT/RIGHT below, used
+ * directly by TitleMenu.draw(), not through `menuGlyphs`'s own ASCII '<'/
+ * '>' (which this font has no glyphs for at all, silently rendering
+ * nothing — the bug a user report caught after the font swap).
+ * Records 39-40's own circular icon and RIGHT arrow are also a real,
+ * pixel-verified lead for title-menu.js's own previously-unlocated
+ * erase/confirm icon sprites for the password grid below (FUN_1000_30d4
+ * blits through this SAME atlas, `0x80+n` for cell `n`) — NOT wired up
+ * there yet (`PasswordEntry` still uses PSMLFNT throughout, a disclosed,
+ * still-open follow-up), since that grid's own exact cell<->record
+ * correspondence past 'A'-'Z' (records 26/27's own two unidentified marks
+ * don't match `GRID_CELLS`' assumed `.`/space/space) isn't re-derived here.
  * PSMLFNT (message.js's own font, `glyphs` below) remains genuinely correct
  * for the password grid and the in-level message line — this citation only
  * corrects the MENU/QUIT-GAME/tally-screen font, previously assumed (menu)
  * or explicitly disclosed as a stand-in (tally.js) to be PSMLFNT too. */
 export const MENU_ADVANCE = 0x10;   // 16
+export const MENU_ARROW_LEFT_DESC = 168;   // 0xA8 = 128+40 — RIGHT-pointing arrow, drawn at the LEFT slot
+export const MENU_ARROW_RIGHT_DESC = 166;  // 0xA6 = 128+38 — LEFT-pointing arrow, drawn at the RIGHT slot
+export const MENU_ARROW_LEFT_X = 0x18;     // 24
+export const MENU_ARROW_RIGHT_X = 0x118;   // 280
 
 /* Gods/docs/dynamic-trace-and-runtime-data.md's own title-screen trace:
  * "UP -> cursor -1, clamp at 0, click sfx 0x119, redraw" / "FIRE -> confirm
@@ -173,8 +206,11 @@ export class TitleMenu {
    *    anywhere in this project's own string-table dump or live captures).
    *  @param {object} menuGlyphs the MENU font (PGODFONT, main.js's own
    *    `menuGlyphs`) — see MENU_ADVANCE's own citation above. Real strings
-   *    (MENU_OPTIONS) draw through this one, not PSMLFNT. */
-  draw(renderer, glyphs, menuGlyphs, logo, background) {
+   *    (MENU_OPTIONS) draw through this one, not PSMLFNT.
+   *  @param {?object} arrowLeft `hero.frames[MENU_ARROW_LEFT_DESC]` (a
+   *    RIGHT-pointing arrow — see MENU_ADVANCE's own citation for why).
+   *  @param {?object} arrowRight `hero.frames[MENU_ARROW_RIGHT_DESC]`. */
+  draw(renderer, glyphs, menuGlyphs, arrowLeft, arrowRight, logo, background) {
     if (background) renderer.blitBackground(background);
     else renderer.clear(0);
     let y = 10;
@@ -184,13 +220,17 @@ export class TitleMenu {
     }
     y += 28;
     for (let i = 0; i < MENU_OPTIONS.length; i++) {
-      /* CONFIRMED against the live capture: the selected option is flanked
-       * by inward-pointing arrows on BOTH sides ("> LABEL <"), not a single
-       * leading marker. */
-      const line = i === this.cursor
-        ? `>  ${MENU_OPTIONS[i]}  <`
-        : `   ${MENU_OPTIONS[i]}   `;
-      drawCentered(renderer, menuGlyphs, line, y, MENU_ADVANCE);
+      drawCentered(renderer, menuGlyphs, MENU_OPTIONS[i], y, MENU_ADVANCE);
+      /* CS:0x3148-0x3179 — FIXED-position sprite blits, not text flanking the
+       * label (an earlier revision of this line drew literal '<'/'>' glyphs
+       * inline, which silently rendered as nothing once menuGlyphs (PGODFONT)
+       * replaced PSMLFNT here, since PGODFONT has no ASCII '<'/'>' at all —
+       * see MENU_ADVANCE's own citation for the real descriptors/positions
+       * and the live-confirmed "inward-pointing" placement). */
+      if (i === this.cursor) {
+        if (arrowLeft) renderer.blitSprite(arrowLeft, MENU_ARROW_LEFT_X, y);
+        if (arrowRight) renderer.blitSprite(arrowRight, MENU_ARROW_RIGHT_X, y);
+      }
       y += 32;
     }
     /* At MENU_ADVANCE (16px/glyph) this 29-character line would run 464px —

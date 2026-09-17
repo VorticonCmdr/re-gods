@@ -88,7 +88,7 @@ import { scanZones, unpackTeleportDest, resolveExitDestination,
          passwordWorldForSlot, passwordToString, PASSWORD_SLOTS } from './game/zones.js';
 import { DeathBurst, findRespawnPosition, loseLife,
          gameOverPlaceholder, DEATH_SFX } from './game/death.js';
-import { TitleMenu, PasswordEntry, MENU_CLICK_SFX, MENU_CONFIRM_SFX, drawCentered, MENU_ADVANCE } from './game/title-menu.js';
+import { TitleMenu, PasswordEntry, MENU_CLICK_SFX, MENU_CONFIRM_SFX, drawCentered, MENU_ADVANCE, MENU_ARROW_LEFT_DESC, MENU_ARROW_RIGHT_DESC } from './game/title-menu.js';
 import { ShopScreen, BUY_CONFIRM_SFX } from './game/shop.js';
 import { TallyScreen, CHA_CHING_SFX } from './game/tally.js';
 import { WebAudioBus } from './audio/audio-bus.js';
@@ -354,17 +354,21 @@ async function loadSprites(world) {
    * `tools/atlas-render.mjs PGODFONT`: literal gold A-Z in order), so this
    * array is built with real ASCII codes as keys for drawText/drawCentered's
    * own `charCodeAt` lookup — a port-side convenience, not a claim that the
-   * original indexes it this way. Digits '0'-'9' are ALSO remapped here
-   * (records 29-38, one past the 3 unidentified marks at 26-28) since
-   * gods-web/game/tally.js builds its bonus-line strings with real ASCII
-   * digits; nothing else beyond A-Z/0-9 is defined (no period, no icons —
-   * see title-menu.js's own still-open note on records 26-28/39/40). */
+   * original indexes it this way. Digits '0'-'9' are ALSO remapped here,
+   * since gods-web/game/tally.js builds its bonus-line strings with real
+   * ASCII digits — records 28-37, PIXEL-VERIFIED per-record this pass (an
+   * earlier revision of this comment had them one off, at 29-38, having
+   * mis-read record 29 as '0' from a cropped strip render; record 28 is the
+   * real '0' — see title-menu.js's own MENU_ADVANCE citation for the full
+   * record map, corrected there too). Nothing else beyond A-Z/0-9 is
+   * defined (no period, no icons — the menu's own arrow sprites are fixed-
+   * position blits, not flowed text, see MENU_ARROW_LEFT/RIGHT below). */
   const menuFontBase = ranges.find((r) => r.stem === 'PGODFONT');
   let menuGlyphs = null;
   if (menuFontBase) {
     menuGlyphs = [];
     for (let c = 0; c < 26; c++) menuGlyphs[0x41 + c] = frames[menuFontBase.base + c];
-    for (let d = 0; d < 10; d++) menuGlyphs[0x30 + d] = frames[menuFontBase.base + 29 + d];
+    for (let d = 0; d < 10; d++) menuGlyphs[0x30 + d] = frames[menuFontBase.base + 28 + d];
   }
   return { frames, ranges, glyphs, glyphBase: fontBase ? fontBase.base : -1, menuGlyphs,
            palette: images.PALWAYS1.palette, total: map.length };
@@ -2502,7 +2506,8 @@ let quitFade = null;   // null | { snapshot: Uint8Array, palette: Uint8Array|num
        * fetch — see loadSprites()'s own header for the #169 anchor. */
       if (uiState !== 'game') {
         const glyphs = hero && hero.glyphs, menuGlyphs = hero && hero.menuGlyphs, logo = hero && hero.frames[169];
-        if (uiState === 'menu') titleMenu.draw(renderer, glyphs, menuGlyphs, logo, titleBackground);
+        const arrowLeft = hero && hero.frames[MENU_ARROW_LEFT_DESC], arrowRight = hero && hero.frames[MENU_ARROW_RIGHT_DESC];
+        if (uiState === 'menu') titleMenu.draw(renderer, glyphs, menuGlyphs, arrowLeft, arrowRight, logo, titleBackground);
         else if (uiState === 'password') passwordEntry.draw(renderer, glyphs, titleBackground);
         else if (uiState === 'shop' && shopScreen) shopScreen.draw(renderer, glyphs);
         if (uiState === 'exit') renderer.presentBlack();   // QUIT's stand-in — see Renderer's own header
