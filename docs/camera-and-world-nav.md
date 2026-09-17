@@ -358,8 +358,37 @@ Verified under DOSBox rather than inferred, on a level already past those trigge
 
 `GAME.EXE` has only 14 `MUL`/`IMUL` instructions total, all register-operand: **there is no LCG or multiply-based generator.**
 
-1. **Seed** (`1000:236c`, once at init): `sub ah,ah / int 1Ah / mov [0x122],dx` — the low word of the BIOS tick count. **Wall-clock seeded, so the original is not reproducible run-to-run.**
-2. **Mixer** `FUN_1000_2375` — a hand-rolled bytewise `RCR`/`XOR` shuffle over `[0x122]`.
-3. **Table** `FUN_1000_37f6` — 256 words into `1ffd:7e14`, regenerated **once per level load** (called from `1000:2b2a`, right after the `.MAP` loader), retried if all-zero, then 1–2 entries forced to zero.
+1. **Seed** (`1000:236c`, once at init): `sub ah,ah / int 1Ah / mov [0x122],dx` — the low word of the BIOS tick count. **Wall-clock seeded, so the original is not reproducible run-to-run.** `get_xrefs_to` on `1000:236c` finds exactly one caller, `FUN_1000_229a` (`1000:22ac`), itself called exactly once, from `entry` (`1000:0042`) — so `[0x122]` is **never reseeded again for the life of the process**. Every later table regen (one per level load) and every password draw (`FUN_1000_6a6b`, below) consumes from wherever the mixer chain was left by whatever ran before it.
+2. **Mixer** `FUN_1000_2375` — a hand-rolled bytewise `RCR`/`XOR` shuffle over `[0x122]`. **`UNKNOWN_random_mixer` — CLOSED, `[PROVEN]` live in DOSBox.** This was never actually a registered `UNKNOWN_*` in this project's own ledger — it lived only as an inline TODO in `gods-web/src/game/random.js` ("the MIXER is NOT ported... UNKNOWN_random_mixer"), an untracked loose end of the same shape as items 20/21 in `docs/open-questions-history.md`. Full disassembly (`1000:2375`-`23a5`, 26 instructions):
+   ```
+   2377  mov ax,[0x122]        ; AX = seed
+   237a  mov dl,al             ; DL = low byte
+   237c  mov cl,ah             ; CL = high byte
+   237e  mov al,cl             ; AL = high byte too
+   2380  rcr al,1
+   2382  xor cl,al             ; clears CF
+   2384  rcr al,1
+   2386  rcr al,1
+   2388  xor cl,al             ; clears CF
+   238a  rcr al,1
+   238c  xor dl,al             ; clears CF
+   238e  rcr al,1
+   2390  rcr al,1
+   2392  and al,1              ; clears CF
+   2394  shl dl,1
+   2396  rcl cl,1              ; consumes SHL's carry-out
+   2398  add al,dl
+   239a  mov dl,al
+   239c  mov ah,cl
+   239e  mov al,dl
+   23a0  mov [0x122],ax        ; new seed
+   23a5  ret
+   ```
+   Bit-exactness of an `RCR`/`RCL` chain depends entirely on what sets `CF` going in. Tracing every flag-producing instruction between the function's three call sites and the mixer's own first `RCR` shows `CF_in = 0` for **every single call** the table generator makes (258 of them: `XOR DX,DX` precedes the loop's first call, `OR DX,AX` precedes every later one, `CMP DX,0` precedes the first forced-zero call, and `AND AX,0xFE` precedes the second) — so for this consumer the function is a pure, external-state-free map from the 16-bit seed to the next one. (Its only other caller, the password generator `FUN_1000_6a6b`, has `CF_in=0` for two of its three calls too; the third follows a `DIV`, whose `CF` this project has not pinned down — moot for the table, and password generation is not ported.)
+
+   **Live verification.** Breakpointed `FUN_1000_37f6`'s own entry (live `CS 0x036D`, resolved by a `mem_scan` byte-signature match on the mixer's own 49 bytes rather than trusted from an arbitrary pause — a bare pause landed mid-driver code with zero relation to `GAME.EXE` on the first attempt, a useful reminder that CS at a random stop is not evidence of anything). Read the real entry seed, `[0x122] = 0x6189`. Ran to the function's `RET` and dumped the live 512-byte table at segment `0x136A` offset `0x7e14` (the live equivalent of `1ffd:7e14` — confirmed the SAME segment serves both `DS` and `ES` here, so the earlier framing "1ffd" for the DS-relative `[0x122]` and "1ffd:7e14" for the ES-relative table were always the same live segment, not merely Ghidra's shared numbering). Running the disassembled algorithm above 256 times from `0x6189`, then applying the two forced-zero draws exactly as `FUN_1000_37f6` does, reproduces **all 512 bytes byte-for-byte**, forced zeros (at byte offsets 190 and 380 in this capture) included. Ported verbatim as `mix16()` in `gods-web/src/game/random.js`, with a regression check (`GodsRandom(0x6189)` against this exact capture) in `gods-web/src/verify/checks.js`.
+
+   **A genuine, newly-discovered property of the algorithm**: any seed `< 128` produces a pure *doubling* sequence in the table's early entries. With the seed's high byte at 0, the whole `RCR`/`XOR` chain reduces to a no-op (everything XORs against 0), and the only real arithmetic left is `SHL DL,1` — so each mix just doubles the low byte until it first reaches ≥ 128 (about 7-8 draws), only then does the chain genuinely mix. `[0x122]` in the real game is a live BIOS tick count, uniform over 0..0xFFFF, so this fires on well under 1% of boots and was presumably never noticed; it is a real weakness of this 1991 hand-rolled shuffle, not a port bug — confirmed by hand-deriving the closed form for the H=0 case and checking it against `mix16()`'s own output.
+3. **Table** `FUN_1000_37f6` — 256 words into `1ffd:7e14`, regenerated **once per level load** (called from `1000:2b2a`, right after the `.MAP` loader). The draw cursor `[0x160]` is reset to 0 immediately after the 256-word fill succeeds (`CMP DX,0` / `JNZ` on an `OR`-accumulator over every drawn word), **before** the two forced zeros are written — so a port that reads the cursor between fill and forced-zero would see it mid-reset. Retried (re-enters from the top, continuing the same mixer chain — *not* restarting from the original seed) if the fill comes out entirely zero; live-tracing this session showed that is a real, if narrow, hang risk in `GAME.EXE` itself, since 0 is a genuine fixed point of the mixer (see above) — a boot whose BIOS tick count happens to be exactly 0 makes this function retry forever. Then exactly two more mixer draws pick the entries forced to zero: the first `AND AX,0xFE` (byte offset 0..254, i.e. word index 0..127 only — the first half of the table only), the second `AND AX,0x1FE` (byte offset 0..510, any of the 256 words) — so "1-2 entries forced to zero" is exact: two draws, one net zeroed entry only when they collide on the same word index.
 4. **Draw** `FUN_1000_3836` — **59 call sites**, the game's only random source: return `[0x7e14 + [0x160]]`, then `[0x160] = ([0x160] + 2) & 0x1FF`.
 
