@@ -7848,13 +7848,20 @@ export async function checkWeaponsProjectiles(fetchRaw) {
 
     /* GRAVITY EVERY EIGHTH FRAME — a sixth rule, and the only uncapped one.
      * ⚠️ A real GodsRandom would confound this: CS:0xA57D's chain reburst
-     * (below) draws every tick the chain window is open and, at age 0,
-     * chainThreshold(0) = 380 — well above a "normal" mixer draw's typical
-     * magnitude, so a chain reliably fires and refills all 80 slots inside
-     * a few ticks, sometimes recycling slot 2 itself and resetting its vy.
-     * That is real starburst behaviour, but it is not what this check is
-     * for — isolate gravity timing with a stub draw safely above any
-     * reachable chainThreshold (max 380) so no chain ever fires. */
+     * (below) draws every tick the chain window is open, and at age 0
+     * chainThreshold(0) = 380 is actually WELL BELOW a typical 16-bit
+     * mixer draw (P(draw <= 380) is only ~0.6%, so on its own a chain is
+     * unlikely, not reliable, per tick). What makes it reliable in practice
+     * is the seeds used elsewhere in this file: they fall in the mixer's
+     * doubling-prefix range (see random.js — any seed < 128 produces a run
+     * of tiny early draws), and once ONE chain fires the pool refills toward
+     * 80 live particles, each drawing its own roll every tick — so the
+     * self-reinforcing cascade, not the raw per-draw odds, is what refills
+     * all 80 slots inside a few ticks and sometimes recycles slot 2 itself,
+     * resetting its vy. That is real starburst behaviour, but it is not
+     * what this check is for — isolate gravity timing with a stub draw
+     * safely above any reachable chainThreshold (max 380) so no chain
+     * ever fires. */
     {
       const sb = new Starburst({ next: () => 0xffff });
       sb.spawn(400, 300);
