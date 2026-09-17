@@ -90,24 +90,76 @@
  *
  * RESULT, joyg1 (`--live tools/joyg1-live-capture.json`): ticks 0-2 match
  * the live capture EXACTLY across hero X/Y, state and camera. Tick 3 then
- * diverges by 2px on camY (port 526, live 524); the live trace's own delta
- * sequence from tick 0 (+8,+4,+0,+2,+1,+1) is otherwise IDENTICAL to what
- * Camera#update's own proven formula produces (+8,+4,+2,+1,+1) except for
- * one extra tick's worth of stall — i.e. every observed delta is one the
- * formula can produce, just attributed to a different tick than the port's.
- * WHETHER that's a real one-tick stall in the original or an artifact of
- * this capture's own sampling (it samples on DS:0x282 changing, at
- * CS:0x24DB — early in FUN_1000_006f, well before the camera epilogue at
- * CS:0x0254 — so a sample can land before or after that SAME tick's camera
- * update depending on exactly where a `wait_frames(1)` poll fell) is NOT
- * resolved. A precise per-tick sample (an execute breakpoint at CS:0x02C6,
- * after the epilogue, instead of polling the cursor) would settle it; not
- * done this pass. Do not read this as a confirmed port bug. Camera fields
- * are compared using `cam.snapX/snapY`
- * (the pre-update snapshot each tick's own physics ran against), not the
- * just-updated `cam.x/y` — matching DS:0xa/0xc's own live-read timing is
- * what made ticks 0-2 line up; comparing post-update values put every tick
- * off by one instead.
+ * diverges by 2px on camY (port 526, live 524). Camera fields are compared
+ * using `cam.snapX/snapY` (the pre-update snapshot each tick's own physics
+ * ran against), not the just-updated `cam.x/y` — matching DS:0xa/0xc's own
+ * live-read timing is what made ticks 0-2 line up; comparing post-update
+ * values put every tick off by one instead.
+ *
+ * ⚠️ **CONFIRMED, `[PROVEN]` live in DOSBox this session — this is a REAL
+ * divergence, not a sampling artifact.** An earlier pass of this session left
+ * it unresolved because the only live evidence was a Lua script polling
+ * `DS:0x282` roughly once per frame, which samples at an unpinned point
+ * within the tick. This pass settled it with an execute breakpoint at
+ * `CS:0x02C6` (right after the camera epilogue, before the health-bar
+ * chase — see frame.js's own `FRAME_ORDER`), reading `DS:0xa/0xc` (camera)
+ * and `DS:0x282` (cursor, which tells you EXACTLY which recorded-input pass
+ * you're reading — real_tick = cursor_after_increment - 1) at every hit.
+ * Five consecutive samples this way:
+ *
+ *     pass consuming ticks[2] -> POST camY=524   (cursor 2->3)
+ *     pass consuming ticks[3] -> POST camY=526   (cursor 3->4)
+ *     pass consuming ticks[4] -> POST camY=527   (cursor 4->5)
+ *     pass consuming ticks[5] -> POST camY=528   (cursor 5->6)
+ *     pass consuming ticks[6] -> PRE  camY=528, BX register read LIVE at
+ *                                 CS:0x5F33 = 0x50 (80) EXACTLY — the dead-
+ *                                 zone boundary, confirming the camera has
+ *                                 already settled to 608-80=528 (hero.y=608,
+ *                                 unmoving throughout — confirmed by reading
+ *                                 DS:0x17a/0x17c at every hit too).
+ *
+ * These five values are EXACTLY what the earlier, ambiguously-sampled
+ * `joyg1-live-capture.json` already showed (524,526,527,528,528) — an
+ * independent method (register-precise, tagged by a ground-truth counter
+ * instead of frame-polling) reproducing the old capture's numbers exactly is
+ * strong confirmation, not a coincidence.
+ *
+ * WHERE IT DIVERGES: `ticks[0]` and `ticks[1]` run normally in the original
+ * (512->520->524, matching the port's own trajectory[0..2] exactly — this
+ * prefix rests on the EARLIER capture plus the port's own agreement with it,
+ * not on this session's own cursor-tagged reads, which start at ticks[2]).
+ * The pass that consumes `ticks[2]` is where the two diverge: the ORIGINAL
+ * produces a ZERO delta there (524 stays 524), while the PORT's
+ * `Camera#update()` computes bx=608-524=84, dx=(84-80)>>1=2, a nonzero step
+ * to 526 — one tick too early. From `ticks[3]` onward the original's own
+ * deltas exactly resume the formula the port already implements, just one
+ * pass later than the port assumes (real[N] for N>=3 equals what the
+ * formula computes starting one index earlier) — so this is a single
+ * missing no-op tick at one specific point (the pass consuming `ticks[2]`),
+ * not a wrong formula and not a constant one-tick offset applied everywhere.
+ *
+ * WHAT IS STILL NOT KNOWN: `Camera#update()`'s own arithmetic is disassembly-
+ * confirmed correct (CS:0x5F33-0x5F51 matches game/camera.js's vertical
+ * branch instruction for instruction) — every pass that DOES apply a step
+ * computes the SAME step the port computes. What's missing is WHY the
+ * original's pass consuming `ticks[2]` specifically skips applying it. Not
+ * yet located: whether `FUN_1000_4993` (the player state machine `CS:0x0254`
+ * calls, which contains the camera epilogue) gates the camera call itself on
+ * some condition true only for that one pass (an ARRIVAL-state artifact,
+ * hero.stateIndex=4 throughout this window — untested), or something else.
+ * The discriminating next probe: re-anchor to a fresh joyg1 spawn and break
+ * at `CS:0x5F33` itself (not `CS:0x02C6`) on passes 0-3, reading live `BX`
+ * each time — if pass 2's own `BX` reads 84 (matching the port's own
+ * computed bx) but still produces no step, the bug is IN the epilogue's own
+ * branch/rounding; if the epilogue's `CS:0x5EA4` entry is never reached at
+ * all on that pass, something upstream (FUN_1000_4993's own dispatch) is
+ * gating the call. Not done this session — this pass confirms the
+ * divergence is real and pins it to one exact tick; it does not fix it.
+ * `Camera#update()` itself is not touched here — its arithmetic is proven
+ * correct on every pass that runs; the defect is a missing call on one pass,
+ * not a wrong formula, and patching the formula (or special-casing tick 0,
+ * an earlier, since-corrected hypothesis this same session) would encode a
+ * guess into code that's already proven right.
  *
  * RESULT, entity ticking (all three joygN, run with no --live — no entity
  * ground truth exists to check against, see the header above): the plane-B
