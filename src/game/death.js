@@ -105,11 +105,26 @@ export class DeathBurst {
   }
 }
 
-/* CS:0x0365a, 14 x {i16 planeBOffset, i16 dx, i16 dy} — read directly off
- * the image. Tried in this exact order; the FIRST cell that reads exactly
- * 0xFF (this project's own already-closed "valid respawn arrival tile"
- * marker) wins, and if NONE match, entry 13's own {dx,dy} is applied
- * anyway (CS:0x08AF-0x08B5 falls through unconditionally). */
+/* SS:0x365a, 15 x {i16 planeBOffset, i16 dx, i16 dy} — 90 bytes, not the 84
+ * (14-entry) this project had on record until this session. `[PROVEN]` live
+ * this session: a forced world-1 death (mem_write DS:0x192/0x19a to 0, the
+ * health target/bar, to trip CS:0x01BD's death test without combat) hit
+ * FUN_1000_0845's respawn search with NO 0xFF match anywhere near PLEV1A's
+ * own static spawn (64,944) -- and the hero landed at (64,944) EXACTLY, no
+ * offset, not the 14-entry reading's own last-entry fallback of (-32,+48).
+ * Reading SS:0x365a live (90 bytes, matching the disassembly's `DI==0x36AE`
+ * at the fallthrough) found the reason: entries 0-13 below are the real,
+ * CHECKED candidates (`CS:0x08AA`'s `CMP byte[BX+SI],0xFF`), but the loop
+ * (`BP` seeded to 13, `DEC BP`/`JNS` — 14 iterations) walks DI one step
+ * PAST entry 13 before exiting on no match, landing on a 15th record this
+ * project's earlier pass never transcribed: `{offset:0, dx:0, dy:0}` — a
+ * deliberate, clean all-zero sentinel, not adjacent garbage. It is never
+ * itself tested for 0xFF (the loop simply stops and uses it), so the true
+ * fallback is "apply no offset at all," not entry 13's real, meaningful
+ * (-32,+48). Appending it here as entry 14 is transparent AND harmless if
+ * the search loop below ever does test it: its own `offset` field (0)
+ * would probe the landing tile itself, and either a match or the unchanged
+ * fallthrough apply the identical {dx:0,dy:0}. */
 export const ARRIVAL_ZONE_TABLE = Object.freeze([
   { offset: 1, dx: 32, dy: 0 },        // one right
   { offset: -1, dx: -32, dy: 0 },      // one left
@@ -125,6 +140,7 @@ export const ARRIVAL_ZONE_TABLE = Object.freeze([
   { offset: 384, dx: 0, dy: 48 },      // three rows down
   { offset: 385, dx: 32, dy: 48 },     // three rows down, one right
   { offset: 383, dx: -32, dy: 48 },    // three rows down, one left
+  { offset: 0, dx: 0, dy: 0 },         // fallback sentinel -- land on the spawn tile itself
 ]);
 
 /**
@@ -135,6 +151,13 @@ export const ARRIVAL_ZONE_TABLE = Object.freeze([
  * origin, then radiates outward through `ARRIVAL_ZONE_TABLE` looking for a
  * plane-B cell tagged exactly `0xFF`.
  *
+ * If none of the 14 real candidates match, the true fallback (`[PROVEN]`
+ * live this session, see `ARRIVAL_ZONE_TABLE`'s own header) is the table's
+ * 15th, all-zero sentinel entry — land exactly on the rounded spawn tile,
+ * no offset. This is always ground the hero was already safely standing on
+ * (it's the level's own spawn point), unlike the meaningful-but-wrong
+ * offset this project's earlier, 14-entry reading of the table applied.
+ *
  * @param {number} spawnX @param {number} spawnY the level's static spawn point
  * @param {Uint8Array|number[]} planeB
  * @returns {{x:number, y:number}}
@@ -143,7 +166,11 @@ export function findRespawnPosition(spawnX, spawnY, planeB) {
   const roundedX = (spawnX + 0x10) & 0xffe0;   // CS:0x087A/0x0880
   const roundedY = (spawnY + 0x8) & 0xfff0;    // CS:0x087D/0x0883
   const baseIdx = (roundedX >> 5) + (roundedY >> 4) * MAP_COLS;   // CS:0x0886-0x089F
-  let chosen = ARRIVAL_ZONE_TABLE[ARRIVAL_ZONE_TABLE.length - 1];  // ⚠️ CS:0x08AF-0x08B5 fallthrough
+  /* CS:0x08AF-0x08B5's own fallthrough: defaulting to the table's OWN last
+   * entry is exactly right now that entry is the true 15-record table's
+   * all-zero sentinel, not (as before this session) entry 13's real offset
+   * mistaken for the fallback. */
+  let chosen = ARRIVAL_ZONE_TABLE[ARRIVAL_ZONE_TABLE.length - 1];
   for (const entry of ARRIVAL_ZONE_TABLE) {
     const idx = baseIdx + entry.offset;
     const cell = (idx >= 0 && idx < planeB.length) ? planeB[idx] : 0;

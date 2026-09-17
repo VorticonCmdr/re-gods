@@ -14187,7 +14187,7 @@ export async function checkLineBarriers(fetchRaw) {
  * the lives/respawn fork (CS:0x0930-0x0943), and the respawn arrival-tile
  * search (CS:0x0873-0x08BD, inside FUN_1000_0845). See game/death.js.
  */
-export function checkDeath() {
+export async function checkDeath(fetchRaw) {
   const { results, check } = makeChecker();
 
   /* ── Health#dead / Health#respawn ────────────────────────────────────── */
@@ -14284,7 +14284,7 @@ export function checkDeath() {
    * that would surface it going wrong. */
   {
     const MAP_COLS = 128;
-    const emptyPlaneB = new Uint8Array(MAP_COLS * 64);   // no 0xFF anywhere -> always the entry-13 fallback
+    const emptyPlaneB = new Uint8Array(MAP_COLS * 64);   // no 0xFF anywhere -> always the zero-offset fallback
     const spawnX = 200, spawnY = 300;
 
     const h = new Health(24, 24);
@@ -14324,8 +14324,13 @@ export function checkDeath() {
     check('cycle: only 2 respawns were logged — the game-over death never '
       + 'calls health.respawn()/findRespawnPosition at all', respawnLog.length === 2);
     check('cycle: every logged respawn landed at the SAME fallback position '
-      + '(entry 13, the only candidate against an all-zero plane B)',
+      + '(the zero-offset sentinel, the only outcome against an all-zero plane B)',
       respawnLog.every((r) => r.pos.x === respawnLog[0].pos.x && r.pos.y === respawnLog[0].pos.y));
+    check('cycle: that fallback position is the rounded spawn tile itself, '
+      + 'no offset — the corrected 15-entry table\'s sentinel, not the '
+      + 'earlier (wrong) 14-entry reading\'s entry-13 offset',
+      respawnLog[0].pos.x === ((spawnX + 0x10) & 0xffe0)
+      && respawnLog[0].pos.y === ((spawnY + 0x8) & 0xfff0));
 
     /* The window this test exists to probe: respawn leaves bar=1, and 23
      * ticks of Health#chase() are needed to reach target (24) again. During
@@ -14350,31 +14355,43 @@ export function checkDeath() {
       stillAliveThroughChase && h2.bar === HEALTH_MAX);
   }
 
-  /* ── ARRIVAL_ZONE_TABLE / findRespawnPosition — CS:0x365a, CS:0x0873 ──── */
+  /* ── ARRIVAL_ZONE_TABLE / findRespawnPosition — SS:0x365a, CS:0x0873 ──── */
   {
-    check('the arrival-zone table has exactly 14 entries', ARRIVAL_ZONE_TABLE.length === 14);
+    check('the arrival-zone table has exactly 15 entries — 14 real candidates '
+      + 'plus the all-zero fallback sentinel this project only found by '
+      + 'reading SS:0x365a live this session (90 bytes, not the 84 an '
+      + 'earlier pass had on record)', ARRIVAL_ZONE_TABLE.length === 15);
     check('entry 0 is "one right" (+1 cell, +32px)',
       ARRIVAL_ZONE_TABLE[0].offset === 1 && ARRIVAL_ZONE_TABLE[0].dx === 32 && ARRIVAL_ZONE_TABLE[0].dy === 0);
-    check('the last entry is "three rows down, one left" — the CS:0x08AF-'
-      + '0x08B5 fallthrough target when nothing matches',
+    check('entry 13 is "three rows down, one left" — a real, checked '
+      + 'candidate, NOT the fallthrough target (an earlier pass mistook it '
+      + 'for the fallback; live DOSBox proved otherwise)',
       ARRIVAL_ZONE_TABLE[13].offset === 383 && ARRIVAL_ZONE_TABLE[13].dx === -32
       && ARRIVAL_ZONE_TABLE[13].dy === 48);
+    check('entry 14 is the all-zero sentinel — the CS:0x08AF-0x08B5 '
+      + 'fallthrough target when none of entries 0-13 match, `[PROVEN]` '
+      + 'live: a forced world-1 death landed the hero at exactly the '
+      + 'rounded spawn tile, DS:0x17a/0x17c reading (64,944) with zero '
+      + 'offset, not entry 13\'s real (-32,+48)',
+      ARRIVAL_ZONE_TABLE[14].offset === 0 && ARRIVAL_ZONE_TABLE[14].dx === 0
+      && ARRIVAL_ZONE_TABLE[14].dy === 0);
 
     const MAP_COLS = 128;
     const planeB = new Uint8Array(MAP_COLS * 64);   // all zero: solid=0, "arrival"=0xff nowhere yet
 
     /* Spawn at (100, 100) rounds (per CS:0x087A/0x0880) to X=(100+16)&~31=96,
-     * Y=(100+8)&~15=96. With no 0xFF cell anywhere, the fallback (entry 13,
-     * -32,+48) must apply. */
+     * Y=(100+8)&~15=96. With no 0xFF cell anywhere, the true fallback (the
+     * zero-offset sentinel) must apply — landing exactly on the rounded
+     * spawn tile, not entry 13's real (-32,+48). */
     const spawnX = 100, spawnY = 100;
     const roundedX = (spawnX + 0x10) & 0xffe0, roundedY = (spawnY + 0x8) & 0xfff0;
     check('rounds to the tile origin exactly as CS:0x087A-0x0883 does',
       roundedX === 96 && roundedY === 96);
     const noMatch = findRespawnPosition(spawnX, spawnY, planeB);
-    check('with no 0xFF cell anywhere, the LAST entry (13) still applies — '
-      + 'CS:0x08AF-0x08B5 falls through unconditionally, it does not return '
-      + 'the raw landing position',
-      noMatch.x === roundedX - 32 && noMatch.y === roundedY + 48);
+    check('with no 0xFF cell anywhere, the ZERO-OFFSET sentinel applies — '
+      + 'CS:0x08AF-0x08B5 falls through unconditionally to the rounded '
+      + 'landing tile itself, live-proven in DOSBox this session',
+      noMatch.x === roundedX && noMatch.y === roundedY);
 
     /* Now mark the FIRST candidate cell (offset +1, "one right") as 0xFF and
      * confirm it wins over the fallback. */
@@ -14409,7 +14426,7 @@ export function checkDeath() {
     const wrongVal = findRespawnPosition(spawnX, spawnY, withWrongValue);
     check('a solid (1) cell at a candidate offset does NOT match — only '
       + 'EXACTLY 0xFF does (CS:0x08AA `cmp byte[bx+si],0xff`)',
-      wrongVal.x === roundedX - 32 && wrongVal.y === roundedY + 48);   // falls back to entry 13
+      wrongVal.x === roundedX && wrongVal.y === roundedY);   // falls back to the zero-offset sentinel
 
     /* Out-of-range probe indices (negative or past the array) must not throw
      * and must simply read as "no match" (0), not crash the search. */
@@ -14419,6 +14436,60 @@ export function checkDeath() {
         try { findRespawnPosition(0, 0, tinyPlaneB); return true; }
         catch { return false; }
       })());
+  }
+
+  /* ── the real bug: PLEV1A's own static spawn (64,944) has no 0xFF cell
+   * anywhere among the 14 real candidates, so every world-1 death used to
+   * fall to the (wrong) entry-13 offset, landing at (32,992) — three tiles
+   * (48px) below a 64-row map's own row 62, putting the hero's 48px-tall
+   * hitbox past the bottom of the world entirely, with nothing to stand on.
+   * This is the user-reported "respawns near the start but too low, falls
+   * out of the screen" bug, reproduced against the actual shipped level. */
+  if (fetchRaw) {
+    const mapBuf = dclDecompress(await fetchRaw('game/PLEV1A.MAP')).data;
+    const map = parseMap(mapBuf);
+    const world1Spawn = { x: 64, y: 944 };   // main.js's own SPAWN_TABLE[1], live-confirmed DS:0x15a/0x15c
+
+    const MAP_COLS = 128;
+    const roundedX = (world1Spawn.x + 0x10) & 0xffe0, roundedY = (world1Spawn.y + 0x8) & 0xfff0;
+    const baseIdx = (roundedX >> 5) + (roundedY >> 4) * MAP_COLS;
+    const anyMatch = ARRIVAL_ZONE_TABLE.slice(0, 14)
+      .some((e) => map.planeB[baseIdx + e.offset] === 0xff);
+    check('PLEV1A has no 0xFF arrival marker among the 14 real candidates '
+      + 'near the static spawn — confirming the zero-offset sentinel is '
+      + 'the path every world-1 death actually takes, not an untested edge '
+      + 'case', !anyMatch);
+
+    const pos = findRespawnPosition(world1Spawn.x, world1Spawn.y, map.planeB);
+    check('a world-1 respawn now lands exactly on the spawn tile (64,944) — '
+      + 'the fix for the reported bug', pos.x === 64 && pos.y === 944);
+
+    /* Confirm that landing spot is real, standing ground: this is the SAME
+     * solidity test player.js's own `solidThreeBelow` uses (3 rows/48px
+     * below the hero's own Y, matching the hero's height) — the exact
+     * probe that read out of bounds (always "not solid") at the OLD, wrong
+     * fallback position (32,992), which is why the hero fell through. */
+    const col = pos.x >> 5, row = pos.y >> 4;
+    const solidBelow = map.planeB[(row + 3) * MAP_COLS + col] === 1
+      || map.planeB[(row + 3) * MAP_COLS + col + 1] === 1;
+    check('the corrected landing position has real solid ground 3 rows '
+      + '(48px, the hero\'s own height) below it — the hero stands, rather '
+      + 'than falling through an out-of-bounds probe the way the old '
+      + '(32,992) fallback did', solidBelow);
+
+    /* The bug this replaces: prove the OLD (wrong, pre-this-session) entry-
+     * 13 fallback really did compute an out-of-bounds ground probe, so the
+     * regression this test guards against is the real, reproduced failure,
+     * not a hypothetical one. */
+    const oldFallbackX = roundedX - 32, oldFallbackY = roundedY + 48;
+    const oldCol = oldFallbackX >> 5, oldRow = oldFallbackY >> 4;
+    const oldProbeRow = oldRow + 3;
+    check('the OLD entry-13 fallback landed at (32,992), row 62 of a 64-row '
+      + 'map — its own 3-rows-below ground probe (row 65) is out of bounds, '
+      + 'reading as "not solid" no matter what the map contains, which is '
+      + 'exactly why the hero fell through',
+      oldFallbackX === 32 && oldFallbackY === 992 && oldProbeRow >= 64,
+      `old fallback (${oldFallbackX},${oldFallbackY}), ground probe row ${oldProbeRow} of 64`);
   }
 
   return results;

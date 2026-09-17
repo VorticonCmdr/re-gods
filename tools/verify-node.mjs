@@ -345,7 +345,7 @@ if (!clampOk) bad++;
 console.log('\n  death: the burst, the lives/respawn fork, and the arrival-'
   + 'tile search (CS:0x09BB/0x0930-0x0943/0x0873-0x08BD):');
 const { checkDeath } = await import('../src/verify/checks.js');
-for (const r of checkDeath()) {
+for (const r of await checkDeath(fetchRaw)) {
   if (!r.pass && !r.note) bad++;
   console.log(line(r));
 }
