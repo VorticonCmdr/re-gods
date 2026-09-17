@@ -906,11 +906,37 @@ export class Player {
                                { x: this.x, y: this.y });
       this.leverToggled = pickup.leverToggle.lastToggle;
     }
-    if (input.left)  this._walk(map, -1);
-    if (input.right) this._walk(map, +1);
+    let stepDelta = 0;
+    if (input.left  && this._walk(map, -1)) stepDelta = -WALK_STEP;
+    if (input.right && this._walk(map, +1)) stepDelta = +WALK_STEP;
 
     if (moving) {
       this.stateIndex = this.facing < 0 ? S.WALK_L : S.WALK_R;
+      /* CS:0x5ACC-0x5AD3 (state 0) / CS:0x5D17-0x5D1E (state 1), fresh
+       * disassembly this session — a SECOND divergence surfaced as a side
+       * effect of the ARRIVAL fix above, now closed. The "locked stopped
+       * pose" release block below (CS:5B1E/5B26 left, 5B2B/5B33 right)
+       * pins `phase` to a facing-specific sentinel OUTSIDE the 8-frame
+       * cycle — 0x39=57 left, 0x2d=45 right — while leaving stateIndex at
+       * WALK_L/WALK_R. On the very next pressed tick the handler steps
+       * [0x17a] as usual, but THIS SAME clamp — tested against the phase
+       * value from BEFORE this tick's own increment — finds it > 7 and
+       * immediately UNDOES that step (`SUB`/`ADD` mirrors the `ADD`/`SUB`
+       * it just did), pinning `CL:=7` in place BEFORE the SAME shared
+       * `INC CL / AND CL,7` below runs on it — so the undo tick's own
+       * phase lands on 0, not 7; the NEXT tick (phase 0, back in-cycle)
+       * then steps normally. Live-confirmed against PJOYG1.DAT's own
+       * SECOND "right" press (recorded tick 29, the first press after the
+       * tick-22 stop): heroX holds at 3448 for one more tick, stepping to
+       * 3452 only on tick 30 — this port previously stepped immediately on
+       * the resume tick AND (invisibly to `tools/replay-diff.mjs`, which
+       * tracks no phase field) landed on the wrong post-undo phase, 6
+       * instead of 0, in an earlier revision of this very fix.
+       *   Gated on `stepDelta !== 0`: a tick where `_walk` returns false
+       * (wall-blocked) never reached the ADD/SUB in the original either
+       * (CS:5A8C-0x5AA5 / 5CD6-5CF0 jump straight past it, see the wall-
+       * probe header above), so there is nothing here to undo. */
+      if (stepDelta !== 0 && this.phase > 7) { this.x -= stepDelta; this.phase = 7; }
       /* CS:5AD8 `inc cl` / 5ADA `and cl,7` — an 8-frame cycle. */
       this.phase = (this.phase + 1) & (WALK_CYCLE - 1);
       /* CS:5AAD and 5ABA both `mov ax,0x20e / call 0x22ca` — the footstep

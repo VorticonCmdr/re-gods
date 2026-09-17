@@ -88,11 +88,12 @@
  *    going nonzero from LEFTOVER state, not from this actual reset site)
  *    and is superseded by this finding, not consistent with it.
  *
- * RESULT, joyg1 (`--live tools/joyg1-live-capture.json`): ticks 0-28 now
+ * RESULT, joyg1 (`--live tools/joyg1-live-capture.json`): ticks 0-30 now
  * match the live capture exactly on every field (hero X/Y, state, and — for
- * this rebuilt range — camera too). `FAIL first divergence at tick 29,
- * field 'heroX': port=3452 live=3448` is a second, real, NOT YET FIXED
- * divergence — see its own paragraph below. Getting here took three real
+ * this rebuilt range — camera too). `FAIL first divergence at tick 158,
+ * field 'heroX'` is the FIRST time this diff has ever actually walked into
+ * segment B (158-404) — see the disclosure at the end of this list, not a
+ * fourth lead to chase blind. Getting to a clean 0-30 took four real
  * corrections, kept in order because each one taught something the next
  * needed:
  *
@@ -132,6 +133,26 @@
  *    verified against 6 live-measured ticks (13-18) with an exact match.
  *    Fixing the labelling bug from step 2 let this get verified properly
  *    instead of against another mis-timed sample.
+ * 4. Fixing #3 surfaced a SECOND, structurally different lead at the exact
+ *    next opportunity to test it: `ticks[29]` (the first "right" press
+ *    after 7 neutral ticks) — `FAIL tick 29, field 'heroX': port=3452
+ *    live=3448`. `stateIndex` was already `S.WALK_R` here, not `ARRIVAL`,
+ *    so this was a different code path — traced live to the SAME family of
+ *    bug, one level down: the "locked stopped pose" release block
+ *    (`CS:5B1E`/`5B26` left, `5B2B`/`5B33` right) pins `phase` to a facing
+ *    sentinel OUTSIDE the normal 0-7 cycle (0x39=57 left, 0x2d=45 right).
+ *    On the next pressed tick the walk-state handler (`CS:0x5ACC-0x5AD3`
+ *    state 0, `CS:0x5D17-0x5D1E` state 1) steps `[0x17a]` as always, but
+ *    the SAME clamp that normally caps a RAMPING phase at 7 sees the
+ *    sentinel, fires, and immediately UNDOES that step — pinning `CL:=7`
+ *    in place before the shared `INC CL/AND CL,7` runs on it, landing the
+ *    undo tick's own phase on 0 (not 7). `game/player.js`'s `_ground()`
+ *    modelled the ramp's `+1 & 7` but not this clamp at all, so it stepped
+ *    immediately on the resume tick — invisible to X/Y/state alone in an
+ *    early attempt at this exact fix, which got the post-clamp phase wrong
+ *    (6 instead of 0) in a way only a phase-aware check could catch; see
+ *    `src/verify/checks.js`'s own regression block for that assertion.
+ *    Fixed; ticks 29-30 now match exactly (3448 held, then 3452).
  *
  * `joyg1-live-capture.json`'s segment A was rebuilt this pass from paired
  * live reads (camera from the `cursor=T` read, hero/state from the
@@ -144,22 +165,18 @@
  * fixed point, an endpoint-bounded linear walk), is left as a disclosed gap
  * rather than an asserted value — this project's own convention, so a future
  * diff can't mistake an interpolation for something independently read.
- * Ticks 158-404 (segment B) were NOT re-verified this pass and may carry the
- * same label bug wherever a field changes — treat any FAIL past tick 30
- * with that in mind, not as an automatic new lead.
  *
- * ⚠️ SECOND DIVERGENCE, NOT YET FIXED: resuming from a STOPPED walk also
- * delays a tick, through a DIFFERENT code path than the ARRIVAL fix above.
- * Live-confirmed: `ticks[21]` is the last held "right" before 7 neutral
- * ticks, then `ticks[29]` presses "right" again — the original's hero stays
- * frozen at 3448 through the pass consuming `ticks[29]` (cursor 30) and
- * only starts moving on the pass consuming `ticks[30]` (cursor 31, ->3452).
- * `stateIndex` is already `S.WALK_R` (not `ARRIVAL`) the whole time, so this
- * is NOT the same branch — root cause not located this pass. `Camera#update`
- * fields against this specific fixture are still marked informational-only
- * below, since only ticks 0-30 were rebuilt — camera correctness itself is
- * NOT in question (proven above), only whether THIS particular file can be
- * trusted past tick 30.
+ * ⚠️ SEGMENT B (ticks 158-404) IS UNVERIFIED, NOT RE-CHECKED THIS PASS. It
+ * predates both the ARRIVAL and resume-from-stop fixes and was carried over
+ * unchanged from the SAME unreliable capture methodology fix #2 above
+ * diagnosed (an unpinned Lua poll racing `CS:0x0254`'s write). Now that
+ * ticks 0-30 are clean, this is the FIRST run where the diff has ever
+ * actually reached segment B instead of stopping at an earlier, since-fixed
+ * lead — so `FAIL first divergence at tick 158` is exactly the kind of
+ * result fix #2 predicts a mis-timed sample would produce, not a fourth
+ * confirmed port bug. Treat any FAIL at tick >=158 as fixture provenance
+ * unknown until segment B gets the same live-paired rebuild segment A did;
+ * do not change the port to chase it.
  *
  * RESULT, entity ticking (all three joygN, run with no --live — no entity
  * ground truth exists to check against, see the header above): the plane-B

@@ -8776,6 +8776,57 @@ export async function checkWeaponsProjectiles(fetchRaw) {
           left.stateIndex === PS.TURN_RL && left.phase === 0 && left.x === 10 * 32);
       }
 
+      /* ── RESUME-FROM-STOP, CS:0x5ACC-0x5AD3 (state 0) / CS:0x5D17-0x5D1E
+       * (state 1) — a SECOND divergence, found live as a side effect of the
+       * ARRIVAL fix above and now closed the same way. The "locked stopped
+       * pose" release block (CS:5B1E/5B26 left, 5B2B/5B33 right, see the
+       * `else` branch below in player.js) pins `phase` to a facing sentinel
+       * OUTSIDE the 8-frame cycle (0x39=57 left, 0x2d=45 right) while
+       * leaving stateIndex at WALK_L/WALK_R. On the very next pressed tick
+       * the handler steps [0x17a] as always, but the SAME clamp that
+       * normally caps a ramping phase at 7 — tested against the PRE-
+       * increment phase — finds the sentinel > 7 and immediately UNDOES
+       * that step, pinning CL:=7 BEFORE the shared INC-CL/AND-CL,7 below
+       * runs on it — so the undo tick's own phase lands on 0, not 7; the
+       * NEXT tick (phase 0, back in-cycle) steps normally. Live-confirmed
+       * against PJOYG1.DAT's own second "right" press (recorded tick 29,
+       * right after the tick-22 stop): heroX holds at 3448 one more tick,
+       * stepping to 3452 only on tick 30 — this port previously stepped
+       * immediately on the resume tick. */
+      {
+        const flat = { planeA: new Uint8Array(N), planeB, widthPx: 4096, heightPx: 1024 };
+
+        const resumeR = new Player(10 * 32, 9 * 16);
+        resumeR.state = ST.GROUND; resumeR.stateIndex = PS.WALK_R;
+        resumeR.phase = 0x2d; resumeR.facing = +1;
+        resumeR.tick(flat, I({ right: true }));
+        check('resume-from-stop (WALK_R, phase=0x2d locked sentinel): first press UNDOES its own step (CS:0x5D17-0x5D1E), net zero X, cl clamped to 7 THEN incremented to 0',
+          resumeR.x === 10 * 32 && resumeR.phase === 0);
+        resumeR.tick(flat, I({ right: true }));
+        check('...second tick (phase back in-cycle at 0) finally walks',
+          resumeR.x === 10 * 32 + WALK_STEP && resumeR.phase === 1);
+
+        const resumeL = new Player(10 * 32, 9 * 16);
+        resumeL.state = ST.GROUND; resumeL.stateIndex = PS.WALK_L;
+        resumeL.phase = 0x39; resumeL.facing = -1;
+        resumeL.tick(flat, I({ left: true }));
+        check('mirror: resume-from-stop (WALK_L, phase=0x39) also undoes its own step (CS:0x5ACC-0x5AD3), net zero X, cl clamped to 7 THEN incremented to 0',
+          resumeL.x === 10 * 32 && resumeL.phase === 0);
+        resumeL.tick(flat, I({ left: true }));
+        check('...second tick finally walks',
+          resumeL.x === 10 * 32 - WALK_STEP && resumeL.phase === 1);
+
+        /* Sanity: an ORDINARY ramping phase (0-7, e.g. entering from a
+         * fresh press with phase already mid-cycle) must NOT trigger the
+         * clamp — only the two out-of-band sentinels do. */
+        const ordinary = new Player(10 * 32, 9 * 16);
+        ordinary.state = ST.GROUND; ordinary.stateIndex = PS.WALK_R;
+        ordinary.phase = 7; ordinary.facing = +1;
+        ordinary.tick(flat, I({ right: true }));
+        check('an ordinary in-cycle phase (7, the top of the real 0-7 range) steps normally, no false-positive undo',
+          ordinary.x === 10 * 32 + WALK_STEP && ordinary.phase === 0);
+      }
+
     }
   }
 
