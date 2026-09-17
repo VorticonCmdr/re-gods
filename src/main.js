@@ -1172,7 +1172,7 @@ async function main() {
      * level change (see its own comment), so a full restart has to clear
      * it explicitly here instead, the same asymmetry as arsenal above. */
     health.familiarEnergy = -1; health.familiarPower = 0; health.familiarWings = 0;
-    deathSeq = null; gameOverState = null; lastDeathBurstFx = [];
+    deathSeq = null; gameOverState = null; lastDeathBurstFx = []; paused = false;
     await switchLevel(key);             // CS:0x914c's own two callers both fall into world 1
   }
 
@@ -1248,7 +1248,7 @@ async function main() {
       inventory,
       state: { health, arsenal },
       purse,
-      onDone: () => { uiState = 'game'; shopScreen = null; },
+      onDone: () => { uiState = 'game'; shopScreen = null; paused = false; },
     });
   }
 
@@ -1266,6 +1266,26 @@ async function main() {
   const titleMenu = new TitleMenu();
   let passwordEntry = null;
   let shopScreen = null;
+  /* ESC-to-quit and P-to-pause, live-confirmed in DOSBox (breakpoints at
+   * CS:0x033E and CS:0x0357, GAME.EXE's per-tick FUN_1000_031a):
+   *   CS:0x0335 CALL FUN_1000_2503 (INT 16h AH=1 peek / AH=0 read) ->
+   *     AL==0x1B (ESC)  -> JMP FUN_1000_0996, which falls straight into the
+   *       title-menu loop FUN_1000_2c82 (Begin Quest / Enter Password / Exit
+   *       to DOS) — confirmed AL=0x011B at the breakpoint, screen back at the
+   *       title menu one frame later.
+   *     AL=='p'/'P'     -> CS:0x0357: a tight busy-wait (MOV [0x3ac],0 / CALL
+   *       FUN_1000_2503 / JNC loop) that runs NOTHING else — no rendering, no
+   *       ticks — until ANY key is read; confirmed live by an execute
+   *       breakpoint at the loop head firing immediately after P, and by two
+   *       frozen-then-resumed screen captures. Only Space sets [0x3ac]:=1 on
+   *       exit (any other key leaves it 0); [0x3ac] itself has no reader
+   *       anywhere else in GAME.EXE, so the practical effect is identical
+   *       either way — the pause loop just falls through the SAME resume on
+   *       any key. Confirmed live that ESC while paused does NOT quit — the
+   *       pause loop has no ESC special-case, so it just unpauses like any
+   *       other key (see the keydown handler below, which checks `paused`
+   *       before `Escape`). */
+  let paused = false;
 
   /* Gods/docs/dynamic-trace-and-runtime-data.md: UP/DOWN plays click sfx
    * 0x119, FIRE plays confirm sfx 0x233 — see title-menu.js's own citation
@@ -1334,6 +1354,12 @@ async function main() {
       handleTitleKey(e.code);
       return;
     }
+    /* Paused (CS:0x0357's own busy-wait) resumes on ANY key, ESC included —
+     * checked before the Escape/KeyP branches below so a paused ESC can't
+     * fall through to the quit case; see the `paused` declaration above. */
+    if (paused) { paused = false; e.preventDefault(); return; }
+    if (e.code === 'Escape') { paused = false; uiState = 'menu'; e.preventDefault(); return; }
+    if (e.code === 'KeyP') { paused = true; e.preventDefault(); return; }
     const k = KEYMAP[e.code]; if (k) { input[k] = true; e.preventDefault(); }
     /* CS:0x0943's own game-over sequence exits into the title/attract-mode
      * system — this port has no attract-mode/hiscore cascade, but it does
@@ -1414,6 +1440,12 @@ async function main() {
        * header comment above. */
       if (uiState !== 'game') return;
       if (transitioning) return;    // a level load is in flight — hold the frame
+      /* CS:0x0357's own busy-wait: pressing P freezes ticking until any key
+       * is pressed — see the `paused` declaration and keydown handler above.
+       * The render callback below still runs every rAF frame as usual; with
+       * nothing left ticking, it just keeps redrawing the same frozen state,
+       * matching the original's own silent freeze (no "PAUSED" overlay). */
+      if (paused) return;
       /* Not modelled from a specific address: the original's own game-over
        * path (CS:0x0943-0x0993) exits into the title/attract-mode system
        * this port's own title menu now stands in for (see the 'KeyR'
