@@ -197,18 +197,63 @@
  * too, tick 314 unsampled — treat that as the SAME class of unresolved
  * growth as the other three windows, not a fourth, more-exact one; only
  * the 311→312/312→313 pair is actually pinned.)
- * The shape (long lockstep, growth concentrated in a few windows) is most
- * consistent with this harness's own disclosed gaps — no objects/pickups/
- * starburst/blocks/debris (all null throughout) and no trigger ACTION
- * verbs (only selector 3's own condition evaluation runs) — rather than a
- * Player/Camera code bug. THIS IS A LEAD, NOT A DIAGNOSIS: nobody has
- * live-investigated what actually happens in the three unresolved windows,
- * or the rest of 313-316. Camera stays informational for this file as a
- * whole not because of labelling risk (refuted above, for hero/state) but
- * because camX shows the identical staircase, corroborating rather than
- * contradicting the hero-position finding. See `joyg1-live-capture.json`'s
- * own
- * `_provenance` for the full tick-by-tick breakdown this rests on.
+ * ⚠️⚠️⚠️ THE MECHANISM IS IDENTIFIED — no further DOSBox session was
+ * needed; the answer was a missing line in THIS FILE, not in the original.
+ * (The per-window ARITHMETIC below is consistent with it but not fully
+ * pinned to single-tick resolution — see the honest gap before treating
+ * this as exhaustively closed.) `arsenal` above (`new Arsenal(weapons)`)
+ * is never `.equip()`'d anywhere in this harness. `Arsenal#allocate()`
+ * (`src/game/hero-fire.js`) therefore always returns null (every slot's
+ * `weapon` stays `-1`, and `allocateShots` in `src/game/weapons.js`
+ * rejects any slot with `weapon < 0` before it can allocate anything), so
+ * `Player#_tryFire()` NEVER succeeds — this harness's hero cannot enter
+ * the fire-halt states (5/6, which `player.js` documents as moving
+ * nothing for their whole animation cycle) for any tick of any replay,
+ * ever. The original DOES carry a weapon here — CS:0x8FD2 grants ONE OF
+ * THREE scripted loadouts (2x5+6x3, or 2x3/5x5/4x1) keyed on the same
+ * attract-cycler state joyg1's own spawn table uses (see `checks.js`'s
+ * own "the attract-mode grant is NOT a starting loadout" note) — WHICH of
+ * the three applies to joyg1 specifically is NOT established by this
+ * pass, so a fix here needs that resolved first, not just one `.equip()`
+ * call. Whichever it is, a fire press while walking genuinely halts the
+ * original for a multi-tick animation cycle that this harness's hero just
+ * walks straight through. Direct confirmation sits in this file's own
+ * `samples` already: every live `state:5` reading (ticks 200, 240, 280,
+ * 300, 311-313, 377-379) lands exactly where the recording holds fire,
+ * while the port's own `trajectory` never once emits state 5 anywhere.
+ * Quantitatively, counting recorded ticks with BOTH fire and a direction
+ * held (the only ticks that could possibly cost a step either way) against
+ * each window's growth: 183-200 has 9 such ticks against 13 steps of
+ * growth; 287-300 has 5 against 7; 301-311 has 7 against 10 — consistently
+ * UNDER, consistent with (not independently proven as) one successful
+ * fire-while-walking press halting the original for several ticks, not
+ * just the one that triggered it — an INFERENCE from a code comment, not
+ * a per-tick measurement; the exact responsible tick(s) inside each
+ * window remain genuinely unresolved, only the overall mechanism is
+ * closed. Same inference explains growth bleeding forward into the
+ * nominally fire-tick-free 311-313/314-316 tail (immediately after
+ * 301-311's own bursts). The two flat plateaus (200-286, 316-403) contain
+ * real fire+direction ticks too (3 and 0) yet show no growth — checked
+ * precisely against the port's own trajectory, not asserted: of the three
+ * in 200-286 (228, 267, 284), TWO are turn-pivot exits (228: heroX flat
+ * 3764 across 227→228, state 2→1; 267: heroX flat 3728 across 266→267,
+ * state 2→1) which never step in either version regardless of fire
+ * (`_turn()`'s own citation). The THIRD, tick 284, is NOT a turn-exit —
+ * it's the first tick of an ordinary WALK_R resume-from-stop (RIGHT
+ * genuinely re-presses at 284 after releasing at 280, heroX flat
+ * 3728 across 283→284, steps normally 284→285) — the SAME already-fixed
+ * resume-delay clamp documented earlier in this header, which holds
+ * regardless of fire; fire happening to be held that same tick is
+ * coincidental, not causal. All three are explained by mechanisms already
+ * ported and already verified correct.
+ * CONCLUSION: a harness gap (this file never equips a weapon), not a
+ * `Player.js`/`Camera.js` bug. Whether and how to equip the correct one
+ * of CS:0x8FD2's three scripted loadouts — and whether doing so disturbs
+ * the long plateaus this correction relies on as evidence the port's own
+ * walk/turn/resume physics are correct — is a separate decision for
+ * whoever
+ * maintains this harness next, deliberately not resolved here. See
+ * `joyg1-live-capture.json`'s own `_provenance` for the full writeup.
  *
  * RESULT, entity ticking (all three joygN, run with no --live — no entity
  * ground truth exists to check against, see the header above): the plane-B
