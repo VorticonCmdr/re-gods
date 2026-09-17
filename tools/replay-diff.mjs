@@ -88,83 +88,78 @@
  *    going nonzero from LEFTOVER state, not from this actual reset site)
  *    and is superseded by this finding, not consistent with it.
  *
- * RESULT, joyg1 (`--live tools/joyg1-live-capture.json`): ticks 0-13 match
- * the live capture exactly on hero X/Y and state (the fields this tool
- * actually treats as pass/fail — see the DOUBLE CORRECTION below for why
- * camX/camY are informational only against this fixture, not compared).
- * `FAIL first divergence at tick 14, field 'heroX': port=3428 live=3424` —
- * a genuine, NOT YET INVESTIGATED lead this DOUBLE CORRECTION surfaced by
- * removing the camera fields that were previously masking it (the earlier,
- * camera-inclusive diff always hit its FAIL at tick 3 first). Camera fields
- * are still logged using `cam.snapX/snapY` (the pre-update snapshot each
- * tick's own physics ran against), matching DS:0xa/0xc's own live-read
- * timing — see the correction below for why that timing convention is
- * right but this particular fixture still can't be trusted on those two
- * fields.
+ * RESULT, joyg1 (`--live tools/joyg1-live-capture.json`): ticks 0-28 now
+ * match the live capture exactly on every field (hero X/Y, state, and — for
+ * this rebuilt range — camera too). `FAIL first divergence at tick 29,
+ * field 'heroX': port=3452 live=3448` is a second, real, NOT YET FIXED
+ * divergence — see its own paragraph below. Getting here took three real
+ * corrections, kept in order because each one taught something the next
+ * needed:
  *
- * ⚠️⚠️ **DOUBLE CORRECTION, `[PROVEN]` live in DOSBox — the "CONFIRMED real
- * divergence" text this replaces was itself wrong, and the mechanism that
- * disproves it is the real finding here.** That pass sampled `DS:0xa/0xc` at
- * `CS:0x02C6` and got 5 values matching the (also-wrong) `joyg1-live-
- * capture.json`, and read that agreement as confirmation. It wasn't:
- * `CS:0x02C6` sits INSIDE a save/revert/restore window this pass found by
- * single-stepping, so both captures were reading the same STALE value for
- * the wrong reason, not independently confirming a real divergence.
+ * 1. A first pass called a tick-3 camY mismatch (port 526, live 524) a
+ *    real port bug, then retracted it: the sample point used to "confirm"
+ *    it (`CS:0x02C6`) turns out to sit INSIDE a save/revert/restore dance
+ *    `FUN_1000_006f` does around the camera every tick —
  *
- * THE MECHANISM, read straight off `FUN_1000_006f`'s own disassembly:
+ *        CS:0x023C-0x0245  snapshot [0xa]/[0xc] -> [0x1ae]/[0x1b0]  (OLD)
+ *        CS:0x0254         CALL 0x4993 -- state machine, writes the NEW
+ *                           camera value straight into [0xa]/[0xc]
+ *        CS:0x0257-0x0260  stash the NEW value -> [0x26e]/[0x270]
+ *        CS:0x0263-0x026C  REVERT [0xa]/[0xc] back to the OLD value
+ *        CS:0x02C6         (inside the reverted window — reads OLD)
+ *        CS:0x02E4-0x02ED  RESTORE [0xa]/[0xc] to the NEW value
  *
- *     CS:0x023C-0x0245  snapshot [0xa]/[0xc] -> [0x1ae]/[0x1b0]   (OLD value)
- *     CS:0x0254         CALL 0x4993 -- the state machine, which INCLUDES
- *                        the camera epilogue and writes the NEW value
- *                        straight into [0xa]/[0xc]
- *     CS:0x0257-0x0260  stash the NEW value -> [0x26e]/[0x270]
- *     CS:0x0263-0x026C  REVERT [0xa]/[0xc] back to the OLD snapshot value
- *     CS:0x02C6         (this tool's earlier sample point -- inside the
- *                        reverted window, reads the OLD value)
- *     CS:0x02E4-0x02ED  RESTORE [0xa]/[0xc] to the NEW value, right before
- *                        the tick returns
+ *    proven by single-stepping one pass and watching `DS:0xc` become 526,
+ *    revert to 524, then get restored to 526 — all in the same tick. Five
+ *    live `BX` reads at `CS:0x5F33` (never reverted) matched the port's own
+ *    formula with zero gaps, so `Camera#update()` was never the problem.
+ * 2. That meant `joyg1-live-capture.json` itself was unreliable — not just
+ *    for camera. Its `tick` label is the raw `DS:0x282` cursor value
+ *    observed at an unpinned Lua poll, which (for ticks 3 on, empirically)
+ *    landed one recorded-input tick BEHIND where the label claimed, for
+ *    HERO fields too (no revert needed there — `CS:0x0254`'s own write
+ *    just hadn't run yet at poll time). Re-running the diff on hero/state
+ *    alone (camera excluded as informational) surfaced a SECOND masked
+ *    lead: `FAIL tick 14, field 'heroX': port=3428 live=3424`.
+ * 3. Investigating THAT lead live (breaking at `CS:0x02F0`, after both the
+ *    camera restore and the state write, tagged by `DS:0x282` itself rather
+ *    than poll timing) found it was real: `CS:0x5DFE`, state 4 (ARRIVAL)'s
+ *    OWN handler — disassembled fresh — routes ANY first directional press
+ *    through the `TURN_LR`/`TURN_RL` pivot (`stateIndex:=2, phase:=2` for
+ *    RIGHT; `stateIndex:=3, phase:=0` for LEFT), never walking that tick,
+ *    unlike states 0/1's own reversal-only pivot. `game/player.js`'s
+ *    `_ground()` had no ARRIVAL case at all and walked immediately. Fixed;
+ *    verified against 6 live-measured ticks (13-18) with an exact match.
+ *    Fixing the labelling bug from step 2 let this get verified properly
+ *    instead of against another mis-timed sample.
  *
- * So for the ENTIRE stretch between `CS:0x026C` and `CS:0x02E4` -- which
- * covers the object pass, projectiles, the plane-B event probe, entities and
- * the health-bar chase, i.e. most of the tick's own body -- `[0xa]/[0xc]`
- * holds the PREVIOUS tick's camera, not the one this tick just computed.
- * Proven by single-stepping one specific pass (the one consuming `ticks[2]`):
- * watched `DS:0xc` become 526 the instruction after the `ADD` at `CS:0x5F45`
- * runs, watched it get reverted to 524 at `CS:0x026C`, and watched it
- * restored to 526 again at `CS:0x02E4` -- all in the SAME tick.
+ * `joyg1-live-capture.json`'s segment A was rebuilt this pass from paired
+ * live reads (camera from the `cursor=T` read, hero/state from the
+ * `cursor=T+1` read — the two fields are captured at different points
+ * within `CS:0x02F0`'s single sample by construction, since camera is
+ * "entering this tick" and hero is "leaving this tick", exactly like this
+ * tool's own `trajectory[]`) — ticks 0,1,2,3,4,12-17,22,29,30 ONLY, each one
+ * independently read; every other tick in 0-404, including several stretches
+ * (5-11, 18-21, 23-28) that would have been safe to derive (a proven camera
+ * fixed point, an endpoint-bounded linear walk), is left as a disclosed gap
+ * rather than an asserted value — this project's own convention, so a future
+ * diff can't mistake an interpolation for something independently read.
+ * Ticks 158-404 (segment B) were NOT re-verified this pass and may carry the
+ * same label bug wherever a field changes — treat any FAIL past tick 30
+ * with that in mind, not as an automatic new lead.
  *
- * THE REAL VALUE MATCHES THE PORT, WITH NO GAPS. Breaking at `CS:0x5F33`
- * (the vertical dead-zone `CMP BX,0x50`, freshly computed each pass, never
- * reverted) and reading live `BX` for five CONSECUTIVE passes from a clean
- * tick-0 anchor gave 96, 88, 84, 82, 81 for the passes consuming
- * `ticks[0..4]` -- EXACTLY `608 - camY` using the PORT's OWN trajectory
- * (512, 520, 524, 526, 527). No stall, no skipped tick, no off-by-one:
- * `Camera#update()`'s formula and timing both check out, gaplessly, across
- * the whole window the earlier pass thought diverged.
- *
- * WHAT THIS MEANS FOR `joyg1-live-capture.json`: it is **not byte-reliable
- * for camera fields**, full stop -- not just at tick 3. Its own provenance
- * says `tick` is the raw `DS:0x282` cursor value observed at an unpinned
- * `wait_frames(1)` poll, which can land anywhere in a tick, including inside
- * the revert window discovered above. Its own samples land on DIFFERENT
- * sides of that window from tick to tick with no way to tell which from the
- * file alone: tick1=520 is a post-restore (fresh) read, tick3=524 is an
- * in-window (stale) read -- both real DS:0xa/0xc bytes, at different phases
- * of different ticks. Ticks 0-2 happening to match the port was not evidence
- * the fixture is reliable; it was three polls that happened to land outside
- * the window. hero X/Y and state are NOT known to share this problem --
- * nothing in the disassembly above touches `DS:0x17a/0x17c` or `DS:0x377`,
- * and this whole analysis rests on a hero that never moves (ARRIVAL state,
- * `heroY=608` constant throughout) — untested for a moving hero — so this
- * finding is scoped to the camera fields specifically, not the whole
- * fixture, and the diff below only compares camX/camY informationally,
- * never as a FAIL, against this specific capture file.
- *
- * `Camera#update()` is confirmed correct, not merely unvalidated — do not
- * "fix" it. A clean re-capture (sampling at `CS:0x02E4` or later, or via
- * `CS:0x5F33`'s own never-reverted `BX` the way this pass did) would fix
- * the fixture instead; not done as a committed artifact this pass, since the
- * live table above already closes the question directly.
+ * ⚠️ SECOND DIVERGENCE, NOT YET FIXED: resuming from a STOPPED walk also
+ * delays a tick, through a DIFFERENT code path than the ARRIVAL fix above.
+ * Live-confirmed: `ticks[21]` is the last held "right" before 7 neutral
+ * ticks, then `ticks[29]` presses "right" again — the original's hero stays
+ * frozen at 3448 through the pass consuming `ticks[29]` (cursor 30) and
+ * only starts moving on the pass consuming `ticks[30]` (cursor 31, ->3452).
+ * `stateIndex` is already `S.WALK_R` (not `ARRIVAL`) the whole time, so this
+ * is NOT the same branch — root cause not located this pass. `Camera#update`
+ * fields against this specific fixture are still marked informational-only
+ * below, since only ticks 0-30 were rebuilt — camera correctness itself is
+ * NOT in question (proven above), only whether THIS particular file can be
+ * trusted past tick 30.
  *
  * RESULT, entity ticking (all three joygN, run with no --live — no entity
  * ground truth exists to check against, see the header above): the plane-B
@@ -546,15 +541,16 @@ console.log(`  final: hero=(${player.x},${player.y}) state=${player.stateIndex} 
  * actually present in the capture are compared.
  *
  * CAMERA FIELDS ARE INFORMATIONAL ONLY, NOT A PASS/FAIL CRITERION — see the
- * header's DOUBLE CORRECTION. `joyg1-live-capture.json` samples DS:0xa/0xc at
- * an unpinned point in each tick (its own provenance: `tick` is the raw
- * `DS:0x282` cursor value at an unpinned `wait_frames(1)` poll), and a live
- * DOSBox trace this session proved that window can read either this tick's
- * fresh camera value or the PREVIOUS tick's, depending on exactly where the
- * poll landed relative to a save/revert/restore dance in `FUN_1000_006f`
- * (`CS:0x026C`...`CS:0x02E4`) neither this tool nor that capture's own author
- * knew about at capture time. A camX/camY mismatch against THIS FILE is
- * fixture noise, not a port lead — do not read one as a divergence. */
+ * header's numbered correction. `Camera#update()` itself is proven correct
+ * (live `BX` reads at `CS:0x5F33`, never gapped) and ticks 0-30 of
+ * `joyg1-live-capture.json` were rebuilt this pass specifically to be
+ * camera-reliable too — but ticks 158-404 (segment B) were NOT re-verified
+ * and may still carry the same save/revert/restore sampling risk
+ * (`CS:0x026C`...`CS:0x02E4` in `FUN_1000_006f`) the header describes, so
+ * camX/camY stay informational-only against this file as a whole rather
+ * than switching per tick range. A camX/camY mismatch here is fixture risk,
+ * not an automatic port lead — do not read one as a divergence without
+ * independently re-checking it live, the same way this pass did. */
 if (live) {
   const FAIL_FIELDS = ['heroX', 'heroY', 'state'];
   const INFO_FIELDS = ['camX', 'camY'];
@@ -584,9 +580,15 @@ if (live) {
     console.log(`  FAIL  first divergence at tick ${firstDivergence.tick}, field '${firstDivergence.field}':` +
                 ` port=${firstDivergence.port} live=${firstDivergence.live}`);
     const portAt = (t) => trajectory.find((x) => x.tick === t);
-    const prevTick = firstDivergence.tick - 1;
-    console.log(`  context (tick ${prevTick}): port=${JSON.stringify(portAt(prevTick))}` +
-                ` live=${JSON.stringify(live.byTick.get(prevTick))}`);
+    /* The fixture can be sparse (disjoint ranges, deliberate gaps — see its
+     * own _provenance) so `tick - 1` may not exist in it; walk back to the
+     * nearest tick this fixture actually has a sample for. */
+    let prevTick = firstDivergence.tick - 1;
+    while (prevTick >= 0 && !live.byTick.has(prevTick)) prevTick--;
+    if (prevTick >= 0) {
+      console.log(`  context (tick ${prevTick}): port=${JSON.stringify(portAt(prevTick))}` +
+                  ` live=${JSON.stringify(live.byTick.get(prevTick))}`);
+    }
   }
 } else {
   console.log('\n  (no --live capture given — decode/replay self-check only, no diff run)');

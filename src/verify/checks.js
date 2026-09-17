@@ -8741,6 +8741,41 @@ export async function checkWeaponsProjectiles(fetchRaw) {
           strictlyAlternates);
       }
 
+      /* ── ARRIVAL's OWN turn entry, CS:0x5DFE — a MISSING case, now ported.
+       * State 4 (ARRIVAL/spawn) has its OWN handler, structurally different
+       * from states 0/1's reversal-only pivot above: it tests RIGHT then
+       * LEFT unconditionally and, on either, jumps STRAIGHT to the turn
+       * state with a FIXED entry phase — `MOV [0x377],2 ; MOV CL,2` for
+       * RIGHT, `MOV [0x377],3 ; XOR CL,CL` for LEFT — never walking that
+       * tick, and with no fire test either (a bare `JMP 0x5e9b`). Without
+       * this case, `_ground()` fell into the generic `moving` branch and
+       * walked on the very first pressed tick — `tools/replay-diff.mjs`'s
+       * own PJOYG1.DAT replay caught this live: the original holds the
+       * hero for two full ticks (ARRIVAL -> TURN_LR -> WALK_R) before its
+       * first real step, landing on the recording's own tick 16; this port
+       * previously walked on tick 14, two ticks early. */
+      {
+        const flat = { planeA: new Uint8Array(N), planeB, widthPx: 4096, heightPx: 1024 };
+
+        const right = new Player(10 * 32, 9 * 16);
+        right.state = ST.GROUND; right.stateIndex = PS.ARRIVAL;
+        right.tick(flat, I({ right: true }));
+        check('ARRIVAL + RIGHT enters the turn (state 2) with entry cl=2 (CS:0x5E05/0x5E0A), not an instant walk',
+          right.stateIndex === PS.TURN_LR && right.phase === 2 && right.x === 10 * 32);
+        right.tick(flat, I({ right: true }));
+        check('...one tick later the ramp (cl:=2+1>=3) exits to WALK_R, STILL no step this tick',
+          right.stateIndex === PS.WALK_R && right.x === 10 * 32);
+        right.tick(flat, I({ right: true }));
+        check('...and only the THIRD tick actually walks (CS:0x5DFE\'s own 2-tick startup cost)',
+          right.x === 10 * 32 + WALK_STEP);
+
+        const left = new Player(10 * 32, 9 * 16);
+        left.state = ST.GROUND; left.stateIndex = PS.ARRIVAL;
+        left.tick(flat, I({ left: true }));
+        check('mirror: ARRIVAL + LEFT enters state 3 with entry cl=0 (CS:0x5E19/0x5E1E, asymmetric with the RIGHT arm)',
+          left.stateIndex === PS.TURN_RL && left.phase === 0 && left.x === 10 * 32);
+      }
+
     }
   }
 

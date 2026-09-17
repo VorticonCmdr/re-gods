@@ -876,6 +876,25 @@ export class Player {
       if (this.stateIndex === S.WALK_R && input.left) {
         this.stateIndex = S.TURN_RL; this.phase = 2; return;
       }
+      /* CS:0x5DFE — state 4 (ARRIVAL)'s OWN handler, tested fresh this
+       * session: `TEST [0x382],8 (RIGHT) / JZ ... / MOV [0x377],2 ; MOV
+       * CL,2 ; JMP 0x5e9b` then, on the LEFT arm, `MOV [0x377],3 ; XOR
+       * CL,CL ; JMP 0x5e9b`. Unlike states 0/1 (which only pivot on a
+       * genuine reversal, above), ARRIVAL routes EVERY first press through
+       * the turn pivot, never walking the same tick — no fire test either,
+       * an unconditional jump straight to the epilogue. The entry phases
+       * are swapped from 0/1's own reversal entries (0 for 0->2, 2 for
+       * 1->3): CS:0x5E0A really does load CL with 2 on the RIGHT arm, and
+       * CS:0x5E1E zeroes it on the LEFT arm. Live-confirmed against
+       * PJOYG1.DAT's own first "right" press (recorded input tick 14):
+       * the original holds hero X for two full ticks (ARRIVAL -> TURN_LR
+       * -> WALK_R) before the first real step, landing exactly on
+       * PJOYG1.DAT's own tick 16 — this port previously walked on tick 14,
+       * two ticks early, `tools/replay-diff.mjs`'s own once-masked lead. */
+      if (this.stateIndex === S.ARRIVAL) {
+        if (input.right) { this.stateIndex = S.TURN_LR; this.phase = 2; return; }
+        if (input.left) { this.stateIndex = S.TURN_RL; this.phase = 0; return; }
+      }
       this.facing = input.right ? +1 : -1;
       if (this._tryFire(this.facing > 0 ? 5 : 6, input, fire)) return;
     } else if (this.stateIndex === S.WALK_L || this.stateIndex === S.WALK_R) {
