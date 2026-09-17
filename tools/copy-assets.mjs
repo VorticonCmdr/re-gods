@@ -76,6 +76,12 @@ const WANTED = [
   // (checked once this session, not restaged here — see checkMusic()'s own
   // note for exactly what that claim rests on).
   'PGODSRLA.RL',
+  // Recorded attract-mode joystick input (game/formats/joy.js), used by the
+  // replay-diff harness (tools/replay-diff.mjs) to check the port's physics
+  // against a live DOSBox trace of the same fixed input. Only the `joyg`
+  // files decode into gameplay ticks — `joyl` drives the title menu instead
+  // (docs/asset-formats.md) — so only those three are staged here.
+  'PJOYG1.DAT','PJOYG2.DAT','PJOYG3.DAT',
 ];
 
 if (!existsSync(SRC)) {
