@@ -925,24 +925,39 @@ export class Player {
        * it just did), pinning `CL:=7` in place BEFORE the SAME shared
        * `INC CL / AND CL,7` below runs on it — so the undo tick's own
        * phase lands on 0, not 7; the NEXT tick (phase 0, back in-cycle)
-       * then steps normally. Live-confirmed against PJOYG1.DAT's own
-       * SECOND "right" press (recorded tick 29, the first press after the
-       * tick-22 stop): heroX holds at 3448 for one more tick, stepping to
-       * 3452 only on tick 30 — this port previously stepped immediately on
-       * the resume tick AND (invisibly to `tools/replay-diff.mjs`, which
-       * tracks no phase field) landed on the wrong post-undo phase, 6
-       * instead of 0, in an earlier revision of this very fix.
+       * then steps normally. The mechanism above is from fresh
+       * disassembly this session, not a live single-step; the observed
+       * behaviour it explains — PJOYG1.DAT's own SECOND "right" press
+       * (recorded tick 29, the first press after the tick-22 stop): heroX
+       * held at 3448 for one more tick, stepping to 3452 only on tick 30 —
+       * is a prior session's live DOSBox capture, now baked into
+       * `tools/joyg1-live-capture.json`. This port previously stepped
+       * immediately on the resume tick AND (invisibly to
+       * `tools/replay-diff.mjs`, which tracks no phase field) landed on
+       * the wrong post-undo phase, 6 instead of 0, in an earlier revision
+       * of this very fix — caught only by the phase-aware regression
+       * check below, not by any live or replayed hero-position match.
        *   Gated on `stepDelta !== 0`: a tick where `_walk` returns false
        * (wall-blocked) never reached the ADD/SUB in the original either
        * (CS:5A8C-0x5AA5 / 5CD6-5CF0 jump straight past it, see the wall-
        * probe header above), so there is nothing here to undo. */
+      /* CS:5AAD/0x5ABA (state 0) and CS:0x5CF8/0x5D05 (state 1) both test
+       * the footstep sound against CL exactly as the dispatcher handed it
+       * to this handler — BEFORE the undo-clamp above and BEFORE this
+       * tick's own `INC CL / AND CL,7` below, both of which mutate `phase`.
+       * Captured here, before either runs. Getting this ordering backwards
+       * (testing phase AFTER those, as an earlier revision of this port
+       * did) is invisible on an ordinary ramping tick, where old and new
+       * phase rarely straddle 2/6, but is wrong on principle — only a
+       * direct assertion against this pre-clamp value can catch it. */
+      const preClampPhase = this.phase;
       if (stepDelta !== 0 && this.phase > 7) { this.x -= stepDelta; this.phase = 7; }
       /* CS:5AD8 `inc cl` / 5ADA `and cl,7` — an 8-frame cycle. */
       this.phase = (this.phase + 1) & (WALK_CYCLE - 1);
       /* CS:5AAD and 5ABA both `mov ax,0x20e / call 0x22ca` — the footstep
        * sound, twice per cycle at opposite phases. No audio yet; the flag is
        * exposed so the hook exists and is dated by evidence, not invented. */
-      this.footstep = WALK_FOOTSTEP_PHASES.includes(this.phase);
+      this.footstep = WALK_FOOTSTEP_PHASES.includes(preClampPhase);
     } else {
       /* ⚠️ CORRECTED — an earlier revision of this port had EVERY release enter
        * state 26 (idle), rendering the single direction-neutral sprite 25

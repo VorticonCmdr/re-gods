@@ -6812,18 +6812,30 @@ export async function checkWeaponsProjectiles(fetchRaw) {
     p.tick(m, IN({ right: true }), a);           // enter WALK_R
     let phase = p.phase;                          // the real post-entry phase
     const seq = [], expected = [];
+    /* ⚠️ CORRECTED — an earlier revision of this check advanced `phase`
+     * BEFORE testing WALK_FOOTSTEP_PHASES, predicting against the phase
+     * AFTER each tick's own `INC CL / AND CL,7`. A fresh disassembly of
+     * CS:0x5AAD/0x5ABA (state 0) and CS:0x5CF8/0x5D05 (state 1), done while
+     * chasing the resume-from-stop bug elsewhere in this file, shows the
+     * real footstep test runs BEFORE that increment, against the phase the
+     * dispatcher handed the handler at entry — so this check must predict
+     * from the CURRENT `phase`, then advance its own tracker for next time,
+     * not the other way around. The old ordering happened to match this
+     * port's own (then also backwards) footstep timing, so both sides
+     * agreed with each other and neither with the original — see
+     * player.js's `_ground()` for the fix this test now verifies. */
     for (let i = 0; i < 16; i++) {                // two full 8-tick cycles
-      p.tick(m, IN({ right: true }), a);
-      phase = (phase + 1) & 7;
       expected.push(WALK_FOOTSTEP_PHASES.includes(phase) ? 1 : 0);
+      p.tick(m, IN({ right: true }), a);
       seq.push(p.footstep ? 1 : 0);
+      phase = (phase + 1) & 7;
     }
     check(`footstep fires exactly twice per 8-tick walk cycle — not once, ` +
           `not every tick`,
       seq.filter((v) => v).length === 4 && seq.join('') === expected.join(''),
       `footstep over 16 sustained walking ticks: ${seq.join('')}, expected ` +
       `${expected.join('')} from WALK_FOOTSTEP_PHASES=` +
-      `[${WALK_FOOTSTEP_PHASES.join(',')}] applied to the real post-entry ` +
+      `[${WALK_FOOTSTEP_PHASES.join(',')}] applied to the PRE-increment ` +
       `phase — the same gate CS:0x5AAD/0x5ABA apply`);
     /* ⚠️ The check above recomputes `expected` from the SAME
      * WALK_FOOTSTEP_PHASES array and `(phase+1)&7` recurrence `_ground`
@@ -8788,11 +8800,13 @@ export async function checkWeaponsProjectiles(fetchRaw) {
        * increment phase — finds the sentinel > 7 and immediately UNDOES
        * that step, pinning CL:=7 BEFORE the shared INC-CL/AND-CL,7 below
        * runs on it — so the undo tick's own phase lands on 0, not 7; the
-       * NEXT tick (phase 0, back in-cycle) steps normally. Live-confirmed
-       * against PJOYG1.DAT's own second "right" press (recorded tick 29,
-       * right after the tick-22 stop): heroX holds at 3448 one more tick,
-       * stepping to 3452 only on tick 30 — this port previously stepped
-       * immediately on the resume tick. */
+       * NEXT tick (phase 0, back in-cycle) steps normally. The mechanism
+       * is from fresh disassembly this session; the behaviour it explains
+       * — PJOYG1.DAT's own second "right" press (recorded tick 29, right
+       * after the tick-22 stop): heroX held at 3448 one more tick, stepped
+       * to 3452 only on tick 30, this port previously stepping immediately
+       * — is a prior session's live DOSBox capture, baked into
+       * tools/joyg1-live-capture.json, not re-run live this pass. */
       {
         const flat = { planeA: new Uint8Array(N), planeB, widthPx: 4096, heightPx: 1024 };
 
@@ -8825,6 +8839,29 @@ export async function checkWeaponsProjectiles(fetchRaw) {
         ordinary.tick(flat, I({ right: true }));
         check('an ordinary in-cycle phase (7, the top of the real 0-7 range) steps normally, no false-positive undo',
           ordinary.x === 10 * 32 + WALK_STEP && ordinary.phase === 0);
+
+        /* CS:0x5CF8/0x5D05 (state 1) — the footstep sound tests CL exactly
+         * as the dispatcher handed it in, BEFORE this tick's own clamp and
+         * INC-CL/AND-CL,7 both mutate `phase`. An earlier revision of this
+         * exact resume-from-stop fix tested the NEW (post-increment) phase
+         * instead — silent on the resume tick itself (old cl=45/57 is
+         * never 2 or 6 either way, so that tick alone couldn't expose the
+         * ordering bug) but wrong on an ORDINARY walk tick, where old
+         * cl=2/6 is common. Direct proof the port now reads the pre-clamp
+         * value, not the reachable-but-untested new one. */
+        const foot1 = new Player(10 * 32, 9 * 16);
+        foot1.state = ST.GROUND; foot1.stateIndex = PS.WALK_R;
+        foot1.phase = 2; foot1.facing = +1;
+        foot1.tick(flat, I({ right: true }));
+        check('footstep sound fires on old cl=2 (CS:0x5CF8) — testing the NEW phase (3) instead would wrongly report silence',
+          foot1.footstep === true);
+
+        const foot2 = new Player(10 * 32, 9 * 16);
+        foot2.state = ST.GROUND; foot2.stateIndex = PS.WALK_R;
+        foot2.phase = 1; foot2.facing = +1;
+        foot2.tick(flat, I({ right: true }));
+        check('...and does NOT false-positive the tick before: old cl=1 is silent even though the NEW phase (2) would wrongly say yes',
+          foot2.footstep === false);
       }
 
     }
