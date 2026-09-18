@@ -1727,6 +1727,10 @@ let quitFade = null;   // null | { snapshot: Uint8Array, palette: Uint8Array|num
        * own `this.axeBounced` is a lifetime total (for the HUD); the
        * returned `axeBounced` is the per-tick delta this hook needs. */
       for (let i = 0; i < fr.projectiles.axeBounced; i++) audio.play(AXE_BOUNCE_SFX);
+      /* The time bomb's own bounce/land/detonate ids — Arsenal.step()
+       * (hero-fire.js) already collects one entry per event this tick,
+       * same shape as `hits`/`axeBounced` above. */
+      for (const id of fr.projectiles.bombSfx) audio.play(id);
       for (const c of fr.consumed) {
         consumed++;
         postPickupMessage(c);

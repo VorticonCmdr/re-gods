@@ -101,7 +101,8 @@ import { DeathBurst, DEATH_BURST_TEMPLATE, DEATH_BURST_TICKS,
          DEATH_BURST_SPRITE_BASE, ARRIVAL_ZONE_TABLE, findRespawnPosition,
          loseLife, gameOverPlaceholder, DEATH_SFX } from '../game/death.js';
 import { Arsenal, spawnableWeapons, FIRE_CAPABLE_STATES, LEVER_STATES,
-         INVENTORY_STATES, MAGIC_AXE_WEAPON } from '../game/hero-fire.js';
+         INVENTORY_STATES, MAGIC_AXE_WEAPON,
+         TIME_BOMB_WEAPON } from '../game/hero-fire.js';
 import { pickUpWeapon, chooseSlot, heroTouches, stepPickups, PICKUP_BOX,
          isWeaponPickup, weaponIndexOf, FIREBALL,
          consumableRank, keyHotPoint, objectNearHotPoint, scanForKey,
@@ -217,7 +218,9 @@ import { SLOT_STRIDE, PROJECTILE_SIZE, GROUP_STRIDE, GROUP_ENTRIES,
          spawnHunterVolley, stepHunterCoast, HUNTER_COAST_SENTINEL,
          HUNTER_COAST_TICK, HUNTER_COAST_REAIM_AT,
          FUSE_START, FUSE_EXPLODE, BOMB_FRAGMENTS, BOMB_SPRITE_BASE,
-         BOMB_BOUNCE, BOMB_GRAVITY_CAP, stepTimeBomb,
+         BOMB_BOUNCE, BOMB_GRAVITY_CAP, BOMB_LANDED, stepTimeBomb,
+         BOMB_DETONATE_SFX, BOMB_THUD_SFX, bombWallAt, bombGroundAt,
+         spawnTimeBombVolley,
          PROJECTILE_VELOCITY, setWeaponArc, resetWeaponArc,
          MOVER_WALK, CULL, stepProjectiles,
          DECODED_MOVERS, stepMoverFrame, projectileSprite, FIRE_SFX,
@@ -4302,9 +4305,13 @@ export async function checkWeaponsProjectiles(fetchRaw) {
     `right ${[...refR].sort((a, b) => a - b).join(',')} across ${all.length} records`);
 
   /* The parity is pinned by the table itself, not by the weapon data: entry
-   * 12 trampolines into the LEFT body and 13 into the RIGHT one. */
+   * 12 trampolines into the LEFT body and 13 into the RIGHT one. ⚠️ Only
+   * over handlers actually IN `HANDLERS` — 8/9 (time bomb, a later pass)
+   * are decoded too but reached through their own `spawnTimeBombVolley`,
+   * not this table, so they carry no `HANDLERS[i].facing` to check. */
   check(`even table indices are left-facing, odd are right-facing`,
-    DECODED_HANDLERS.every((i) => HANDLERS[i].facing === (i % 2 ? +1 : -1)),
+    DECODED_HANDLERS.filter((i) => i in HANDLERS)
+      .every((i) => HANDLERS[i].facing === (i % 2 ? +1 : -1)),
     'entry 12 = `sub bx,8 / jmp 0x991c` (left body), 13 = `... jmp 0x98d1` (right)');
 
   check(`the highest handler index shipped data references is within the table`,
@@ -5556,15 +5563,133 @@ export async function checkWeaponsProjectiles(fetchRaw) {
     'CS:0xa0a0 `add dx,2 / and dx,3 / jnz` gates it on the FUSE value, so the ' +
     'fall is stepped rather than smooth — a fifth distinct gravity rule');
 
+  /* ⚠️ CORRECTED, a later pass: vx decay used to be gated on `(fuse & 3) ===
+   * 0`, its own offset schedule. Fresh disassembly of the WHOLE mover shows
+   * the vx-decay gate (CS:0xA129/0xA176) reads the SAME mutated register the
+   * gravity gate (CS:0xA0A3) already left at `(fuse + 2) & 3` — gravity and
+   * vx-decay fire on IDENTICAL ticks, not offset ones. Undetected until now
+   * because `stepTimeBomb` was never wired into `Arsenal.step()`. */
+  {
+    const s = { vx: 8, vy: 0, phase: -1 };
+    const p = { tag: 1, x: 0, y: 0, dir: FUSE_START };
+    const vxSeen = [];
+    for (let t = 0; t < 6; t++) { stepTimeBomb(p, s, { x: 0, y: 0 }, null); vxSeen.push(s.vx); }
+    check(`bomb vx decay shares gravity's OWN gate, (fuse + 2) & 3 === 0`,
+      vxSeen.join(',') === '8,7,7,7,7,6',
+      `vx over 6 ticks from a fuse of ${FUSE_START} (0x2f): ${vxSeen.join(',')} — ` +
+      'the gate is true only when fuse mod 4 === 2 (fuse 0x2e, then 0x2a four ' +
+      'ticks later), the SAME schedule gravity uses, not an independent ' +
+      "4th-tick counter of vx's own");
+  }
+
+  /* ── the spawn handler, CS:0x9a51 (right) / 0x9a7a (left) ─────────────── */
+  {
+    const right = spawnTimeBombVolley({ x: 100, y: 200 }, 7, true);
+    const left = spawnTimeBombVolley({ x: 100, y: 200 }, 7, false);
+    check(`spawnTimeBombVolley reproduces CS:0x9a51/0x9a7a exactly`,
+      right.entries.length === 1 && left.entries.length === 1
+      && right.entries[0].x === 116 && left.entries[0].x === 100
+      && right.entries[0].y === 168 && left.entries[0].y === 168
+      && right.entries[0].dir === FUSE_START && left.entries[0].dir === FUSE_START
+      && right.vx === 4 && left.vx === -4,
+      `right ${JSON.stringify(right)} / left ${JSON.stringify(left)} — only the ` +
+      'right muzzle gets the +0x10 X nudge (CS:0x9a51), both round Y the same ' +
+      'way (CS:0x9a66/0x9a5a), and vx is +4/-4 by facing (CS:0x9a54/0x9a7a)');
+
+    check(`handlers 8/9 (time bomb) are in DECODED_HANDLERS`,
+      DECODED_HANDLERS.includes(8) && DECODED_HANDLERS.includes(9),
+      `${JSON.stringify(DECODED_HANDLERS)} — a still later pass than the one ` +
+      'that first listed 8/9 as undecoded above');
+  }
+
+  /* ── bombWallAt / bombGroundAt geometry, CS:0xA134-0xA170 / 0xA1F0-0xA248 */
+  {
+    const planeB = new Uint8Array(MC * 4);
+    planeB[2 * MC + 1] = 1;                    // solid at row 2, col 1
+    check(`bombWallAt hits the current cell, either direction`,
+      bombWallAt(1 * 32 + 5, 2 * 16 + 5, +1, planeB) === true
+      && bombWallAt(1 * 32 + 5, 2 * 16 + 5, -1, planeB) === true
+      && bombWallAt(0 * 32 + 5, 2 * 16 + 5, +1, planeB) === false,
+      'CS:0xA158 tests the probed cell directly; CS:0xA139 rounds X with ' +
+      '`+0xf` moving right, CS:0xA184 floors it moving left, but a cell this ' +
+      'far from either boundary resolves the same either way');
+    check(`bombWallAt also hits when the cell ONE ROW BELOW is solid`,
+      bombWallAt(1 * 32 + 5, 1 * 16 + 5, +1, planeB) === true,
+      'CS:0xA15D `cmp byte[si+0x80],1` — a ledge one row down also bounces it');
+    check(`bombGroundAt lands when below is solid and here is clear`,
+      bombGroundAt(1 * 32 + 5, 1 * 16 + 5, planeB) === true
+      && bombGroundAt(1 * 32 + 5, 2 * 16 + 5, planeB) === false,
+      'CS:0xA211-0xA21B — the simple case only; a bomb already embedded in ' +
+      'a solid cell does not land from this test alone (CS:0xA21D onward, ' +
+      'the diagonal sub-tile case, is what bombGroundAt\'s second branch is)');
+  }
+
+  /* ══ END TO END: the time bomb through a real Arsenal ═══════════════════
+   *
+   * Was previously dead code end to end — the spawn handler was undecoded
+   * (Arsenal.emit would have counted it as `undecodedHandler` and dropped
+   * the shot) and the mover was never dispatched (a spawned record would
+   * have been silently mis-routed through the common mover's velocity
+   * table, where a fuse of 0x2f indexes nothing and the record just sits,
+   * counted as `outOfRange`, forever). Both are exercised here together. */
+  {
+    const bombWeapons = sets[0].map((w) => ({ ...w }));
+    const ar = new Arsenal(bombWeapons);
+    ar.equip(0, TIME_BOMB_WEAPON);
+    const alloc = ar.allocate();
+    ar.emit(alloc, 100, 100, true);
+    check(`END TO END: firing the time bomb spawns a real record, not a drop`,
+      ar.undecodedHandler === 0 && ar.slots[0].area[0].tag !== 0
+      && ar.slots[0].area[0].dir === FUSE_START,
+      `undecodedHandler=${ar.undecodedHandler}, ` +
+      `area[0]=${JSON.stringify(ar.slots[0].area[0])} — handler 9 (right) ` +
+      'now resolves through spawnTimeBombVolley');
+
+    const cam0 = { x: 0, y: 0 };
+    let sawExplode = false, outOfRangeSeen = 0;
+    for (let t = 0; t < FUSE_START + 2 && !sawExplode; t++) {
+      const r = ar.step(cam0, new DamageGrid(), null, 1);
+      outOfRangeSeen += ar.outOfRange;
+      if (r.bombSfx.includes(BOMB_DETONATE_SFX)) sawExplode = true;
+    }
+    check(`END TO END: the mover is dispatched (not routed through the ` +
+          `common mover's outOfRange fallback), and it detonates on schedule`,
+      sawExplode && outOfRangeSeen === 0 && ar.slots[0].area[0].tag === 0,
+      `sawExplode=${sawExplode}, outOfRange=${outOfRangeSeen}, ` +
+      `final tag=${ar.slots[0].area[0].tag} — BOMB_DETONATE_SFX ` +
+      `(0x${BOMB_DETONATE_SFX.toString(16)}) reached Arsenal.step()'s own ` +
+      'bombSfx array, and the record despawns itself so the same explosion ' +
+      "can't refire every tick forever (see stepTimeBomb's own disclosed " +
+      'despawn-site caveat)');
+  }
+
+  check(`the time bomb's own SFX ids have synthesized voices`,
+    BOMB_DETONATE_SFX === 0x1022 && BOMB_THUD_SFX === 0x0609 &&
+      BOMB_DETONATE_SFX in SFX_VOICES && BOMB_THUD_SFX in SFX_VOICES,
+    `BOMB_DETONATE_SFX=0x${BOMB_DETONATE_SFX.toString(16)} ` +
+    `BOMB_THUD_SFX=0x${BOMB_THUD_SFX.toString(16)} — the detonation id used ` +
+    'to be carried as the bare low byte 0x22, the one bare-byte citation in ' +
+    "this project that was never actually re-checked against a fresh MOV " +
+    'AX,imm read; CS:0xA27C reads `mov ax,0x1022`');
+
   results.push({
     name: 'the movers, and which are wired into the running build',
     note: true, pass: true,
-    detail: 'All SIX movers are decoded and ported (checks above). What the ' +
-      'integrated build steps is the common mover only (CS:0x9c6d, weapon ' +
-      '+0x1A == 0), because the other five belong to weapons whose SPAWN ' +
-      'handlers are undecoded — so those weapons cannot produce a projectile ' +
-      'for their mover to move. Decoding handler pairs 2/3, 6/7, 8/9, 10/11 ' +
-      'and 14/15 is what unlocks them, not more mover work.',
+    detail: 'All SIX movers are decoded and ported (checks above). ⚠️ ' +
+      'CORRECTED, a later pass: this note used to say the integrated build ' +
+      'steps the common mover only, "because the other five belong to ' +
+      'weapons whose spawn handlers are undecoded" — stale even before the ' +
+      'time bomb pass below, since Arsenal.step() (hero-fire.js) already ' +
+      'special-cases the hunter (CS:0x9ef7) and the magic axe (CS:0xa678) ' +
+      'by weapon index, both with decoded 10/11 and 14/15 spawn handlers. ' +
+      'This pass adds the time bomb (CS:0xa058), via its own ' +
+      '`spawnTimeBombVolley` rather than a `HANDLERS` table entry, since ' +
+      'its muzzle offset and initial vx differ by facing in a shape the ' +
+      'shared spawner cannot express — handlers 8/9 are decoded but NOT in ' +
+      'the generic `HANDLERS` object. Four movers are now integrated: ' +
+      'common, hunter, magic axe, time bomb. Only fireball (2/3, spawn ' +
+      'handler undecoded) and flame (mover 2 is NULL, and it is placed in ' +
+      'no shipped level) remain unreachable.',
   });
 
   /* ══ THE INTEGRATED CHAIN ═══════════════════════════════════════════════
@@ -6530,7 +6655,7 @@ export async function checkWeaponsProjectiles(fetchRaw) {
     const stems = ok.map((i) => (dmap[PINNED_SPRITE[i]] || {}).stem);
     const objectStems = GROUP_STEMS.objects;
     check(`every spawnable weapon's pinned sprite resolves inside \`objects\``,
-      ok.length === 7 && stems.length === 7
+      ok.length === 8 && stems.length === 8
         && stems.every((s) => s && objectStems.includes(s)),
       `descriptors ${ok.map((i) => PINNED_SPRITE[i]).join(', ')} -> ` +
       `${stems.join(', ')}. main.js loads always + objects + level<N>; a ` +
@@ -6541,15 +6666,18 @@ export async function checkWeaponsProjectiles(fetchRaw) {
   /* ── how much of the arsenal is actually reachable ────────────────────── */
   {
     const s = spawnableWeapons(w1);
-    check(`exactly 7 of the 11 shipped weapons have a decoded spawn handler`,
-      s.ok.length === 7 && s.ok.join() === '0,4,5,7,8,9,10',
+    check(`exactly 8 of the 11 shipped weapons have a decoded spawn handler`,
+      s.ok.length === 8 && s.ok.join() === '0,1,4,5,7,8,9,10',
       `handlers 12/13 are decoded but NO shipped weapon references them; the ` +
-      `hunter (8) uses its OWN pair (10/11, the 3-shot fan) and the magic ` +
-      `axe (9) its own (14/15, which ALSO seeds a companion state record — ` +
-      `see spawnAxeVolley), rather than the 0/1 the other five share, so the ` +
+      `time bomb (1) uses its own spawner (\`spawnTimeBombVolley\`, a later ` +
+      `pass — see that function's own citation), the hunter (8) uses its ` +
+      `OWN pair (10/11, the 3-shot fan) and the magic axe (9) its own ` +
+      `(14/15, which ALSO seeds a companion state record — see ` +
+      `spawnAxeVolley), rather than the 0/1 the other five share, so the ` +
       `decoded set covers ${s.ok.length} weapons in practice, not 4 families ` +
-      `of 11. The other four are counted at the call site rather than ` +
-      `throwing, the same treatment the out-of-range \`dir\` gets`);
+      `of 11. The other three (fireball, flame, spear) are counted at the ` +
+      `call site rather than throwing, the same treatment the out-of-range ` +
+      `\`dir\` gets`);
     const cut = s.blocked.filter((b) => b.cut);
     check(`the one weapon with a NULL handler pair is the cut "flame"`,
       cut.length === 1 && cut[0].index === CUT_WEAPON,

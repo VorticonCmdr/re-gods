@@ -141,16 +141,19 @@ export const HANDLERS = {
   15: { facing: +1, dx: 0x10, dy: -0x10, dirs: [1, 0, 2], at: 0x9b15 },
 };
 
-/* Handlers 2/3, 6/7, 8/9 and 16..21 are not decoded. Shipped weapons
- * reference 2/3 (fireball), 6/7 (spear) and 8/9 (time bomb). ⚠️ CORRECTION —
- * this line used to read "8/9 (hunter), 10/11 (time bomb)", backwards from
- * the table this project's own CLAUDE.md records elsewhere (time bomb 8/9,
- * hunter 10/11) and from what CS:0x9a82/0x9aca actually decode to (the
- * 3-shot fan above, matching the hunter's own documented mover). It also
- * used to list 14/15 (magic axe) here — those are decoded too now, see
- * HANDLERS[14]/[15] above. UNKNOWN_projectile_handlers stands for 2/3, 6/7,
- * 8/9 only. */
-export const DECODED_HANDLERS = [0, 1, 10, 11, 12, 13, 14, 15];
+/* Handlers 2/3 and 6/7 are not decoded. Shipped weapons reference 2/3
+ * (fireball) and 6/7 (spear). ⚠️ CORRECTION — this line used to read "8/9
+ * (hunter), 10/11 (time bomb)", backwards from the table this project's own
+ * CLAUDE.md records elsewhere (time bomb 8/9, hunter 10/11) and from what
+ * CS:0x9a82/0x9aca actually decode to (the 3-shot fan above, matching the
+ * hunter's own documented mover). It also used to list 14/15 (magic axe)
+ * here — those are decoded too now, see HANDLERS[14]/[15] above.
+ * UNKNOWN_projectile_handlers stands for 2/3, 6/7 only — 8/9 (time bomb) is
+ * decoded too, a later pass, but through `spawnTimeBombVolley` rather than
+ * this table: its muzzle offset and initial vx differ by facing in a shape
+ * `HANDLERS`'s uniform `{dx, dy, dirs}` record can't express (see that
+ * function's own citation). */
+export const DECODED_HANDLERS = [0, 1, 8, 9, 10, 11, 12, 13, 14, 15];
 
 /**
  * CS:0x98d1 — how many of the three entries a volley fills.
@@ -937,7 +940,14 @@ export const axeSprite = (weaponFrame, i) =>
  *   A261  dec word [di+0x6]
  *   A06B  cmp dx,0 / jns fly / jmp 0xa273     ; negative -> EXPLODE
  *   A273  cmp dx,-1 / jz  0xa27b              ; exactly -1 is the trigger
- *   A27C  sfx 0x22 ; si = 0x8eda ; cx = 0x0a  ; ten fragments
+ *   A27C  sfx 0x1022 ; si = 0x8eda ; cx = 0x0a  ; ten fragments
+ *
+ * ⚠️ **CORRECTED, a later session (a Ghidra re-read while wiring this mover
+ * into `Arsenal.step()`).** This used to read "sfx 0x22" — unlike every other
+ * bare-low-byte citation in this file, that one was never actually re-checked
+ * against a fresh `MOV AX,imm` read. `CS:0xA27C` is `mov ax,0x1022`: the FULL
+ * word passed to `call 0x22ca` is **`0x1022`**, not `0x22`. Corrected here and
+ * in `Gods/docs/combat-and-projectiles.md`.
  *
  * Its spawn handler seeds 0x2f = 47, so the fuse is 47 ticks ~ 3.1 s at 15 Hz.
  * The sprite is `0x153 + (fuse & 3)` and 0x153 is 339 = PINNED_SPRITE[1], the
@@ -952,12 +962,56 @@ export const axeSprite = (weaponFrame, i) =>
  * per-projectile storage — safe because the time bomb's max-shots is 1.
  *
  *   gravity   A0A8  inc [0x1ca] capped at 4, ONLY when (fuse + 2) & 3 == 0
- *   vx decay  A130  dec [0x1c8] every 4th tick, toward zero
+ *   vx decay  A130  dec/inc [0x1c8] toward zero, on the SAME gate as gravity
  *   wall      A16C  neg word [0x1c8]      <- NEGATES, unlike the axe's fixed 4
  *   land      A234  and bx,~0xf ; [0x1ca] = 0 ; [0x1cc] = 0x64
  *
- * ⚠️ The wall probe rounds x with `add cx,0xf` (CS:0xA139), not the `+8` the
- * terrain-stop path uses and not a plain floor. Three roundings in this file.
+ * ⚠️ **CORRECTED, the same session.** This used to say vx decays "every 4th
+ * tick" on its OWN gate, `(fuse & 3) === 0`. Fresh disassembly of the whole
+ * mover (`CS:0xA058`-`0xA24D`, not just the previously-cited fragments) shows
+ * the vx-decay gate (`CS:0xA129`/`0xA176`) reads the SAME register the
+ * gravity gate (`CS:0xA0A3`) already left at `(fuse + 2) & 3` — `DX` is
+ * mutated once at the top of the tick and never reloaded before either test.
+ * Gravity and vx-decay fire on the IDENTICAL ticks, not offset ones. This
+ * port's `stepTimeBomb` had carried the wrong (unoffset) gate since it was
+ * first written, undetected because the function was never wired into
+ * `Arsenal.step()` and so never exercised.
+ *
+ * ⚠️ The wall probe rounds x with `add cx,0xf` (CS:0xA139) when moving RIGHT
+ * only; moving LEFT (CS:0xA181-0xA186) skips that add and floors plainly —
+ * a FOURTH rounding convention in this file, not merely a third, and it
+ * differs by direction within this ONE mover. The probe then tests BOTH the
+ * cell at that column/row (`CS:0xA158`) and the cell one row below it
+ * (`CS:0xA15D`, `+0x80`) — a wall OR an unsupported ledge both bounce it,
+ * playing `BOMB_THUD_SFX` (`CS:0xA165`).
+ *
+ * The GROUND test run every ordinary tick (`CS:0xA1F0`-`0xA248`, once the
+ * bomb is not mid-row-crossing) probes the SAME `row*128+col` table this
+ * project already uses for `planeB`: land when the cell one row below is
+ * solid and the current cell is not (`CS:0xA211`-`0xA21B`), OR — only when
+ * the X sub-tile is in the right half of its cell — when the diagonal
+ * down-right neighbour is solid and its same-row neighbour is not
+ * (`CS:0xA21D`-`0xA232`, the same "which corner" shape `axeWallAt` already
+ * uses for the magic axe). Landing snaps Y to the tile row and sets
+ * `state.phase = BOMB_LANDED`; the actual "just landed" thud
+ * (`BOMB_THUD_SFX`, `CS:0xA1D7`) doesn't play until the FOLLOWING tick, when
+ * `BOMB_LANDED` transitions to phase 0 — landing itself is silent.
+ *
+ * ⚠️ **Disclosed, not modelled**: a THIRD, more elaborate ground/landing
+ * branch (`CS:0xA0B9`-`0xA0F1`) that runs only on the specific tick the
+ * bomb's Y crosses a tile-row boundary, testing TWO rows below plus a
+ * diagonal case with its own separate geometry — an edge-case shortcut for
+ * landing mid-fall on a ledge corner, not a different mechanism from the
+ * ordinary ground test above, and rare enough (one specific tick, one
+ * specific row-boundary crossing) that this port uses the ordinary
+ * per-tick ground test unconditionally instead. Also disclosed: a per-phase
+ * repeat of `BOMB_THUD_SFX` during the settling bounce, gated on a byte
+ * table this project could not resolve statically (`SS:0x5450`, in the
+ * STACK segment rather than the code/data segment every other cited table
+ * in this project lives in — its live per-run contents aren't recoverable
+ * from the EXE image alone). And the ten-fragment debris burst
+ * (`BOMB_FRAGMENTS`) is reported as a count, not rendered as particles —
+ * this port has no fragment-particle system to feed it.
  */
 export const FUSE_START = 0x2f;           // 47 ticks ~ 3.1 s
 export const FUSE_EXPLODE = -1;           // CS:0xa273 `cmp dx,0xffff / jz`
@@ -965,6 +1019,11 @@ export const BOMB_FRAGMENTS = 10;         // CS:0xa286 `mov cx,0x0a`
 export const BOMB_SPRITE_BASE = 0x153;    // 339 = PINNED_SPRITE[1]
 export const BOMB_GRAVITY_CAP = 4;        // CS:0xa0ac
 export const BOMB_LANDED = 0x64;          // CS:0xa240
+/* CORRECTED from the bare low byte `0x22` — see the header above. */
+export const BOMB_DETONATE_SFX = 0x1022;  // CS:0xa27c
+/* The wall bounce (CS:0xA165) and the landed->settling transition
+ * (CS:0xA1D7) share this one id. */
+export const BOMB_THUD_SFX = 0x0609;      // CS:0xa1d8 / 0xa165
 
 /* DS:0xdf2c — 24 signed bytes, the damped settling bounce after landing.
  * Four arcs of falling amplitude: 9 entries peaking at 4, then 7 at 3, then
@@ -976,34 +1035,98 @@ export const BOMB_BOUNCE = [
   -1, 0, 1,
 ];
 
-/** CS:0xa058 — one tick. `state` carries the three globals for this slot. */
-export function stepTimeBomb(p, state, cam, wallAt) {
+/**
+ * CS:0xA1F0 (right-ward rounding) / CS:0xA181 (left-ward, no `+0xf`) —
+ * the ordinary per-tick ground probe, and CS:0xA134 — the wall/ledge bounce
+ * probe. Both share the `row*128+col` addressing `axeWallAt` already uses.
+ */
+function bombCell(x, y, planeB) {
+  const col = (x & ~0x1f) >> 5, row = (y & ~0xf) >> 4;
+  if (col < 0 || col > 127 || row < 0 || row > 63) return null;
+  const idx = row * 128 + col;
+  const at = (off) => {
+    const j = idx + off;
+    return j >= 0 && j < planeB.length && planeB[j] === 1;
+  };
+  return at;
+}
+
+/** CS:0xA134-0xA170 — a wall (or an unsupported ledge below) bounces vx. */
+export function bombWallAt(x, y, dirSign, planeB) {
+  if (!planeB) return false;
+  const wx = dirSign >= 0 ? (x + 0xf) & ~0x1f : x & ~0x1f;   // CS:0xA139 vs 0xA184
+  const at = bombCell(wx, y, planeB);
+  if (!at) return false;
+  return at(0) || at(128);                                   // CS:0xA158 / 0xA15D
+}
+
+/** CS:0xA1F0-0xA248 — the ordinary per-tick landing probe. */
+export function bombGroundAt(x, y, planeB) {
+  if (!planeB) return false;
+  const at = bombCell(x, y, planeB);
+  if (!at) return false;
+  if (at(128) && !at(0)) return true;                        // CS:0xA211-0xA21B
+  if ((x & 0x1f) > 0xf && at(129) && !at(1)) return true;     // CS:0xA21D-0xA232
+  return false;
+}
+
+/**
+ * CS:0xa058 — one tick. `state` carries the three globals for this slot
+ * ({phase, vx, vy}); safe as one object per slot (not per record) because
+ * the time bomb's max-shots is 1. `wallAt`/`groundAt` should be
+ * `bombWallAt`/`bombGroundAt` above, bound to a `planeB`.
+ */
+export function stepTimeBomb(p, state, cam, wallAt, groundAt) {
   if (!p || p.tag === 0) return { status: 'empty' };
   if (p.dir < 0) {                                    // CS:0xa06b
     return { status: p.dir === FUSE_EXPLODE ? 'explode' : 'spent',
-             fragments: p.dir === FUSE_EXPLODE ? BOMB_FRAGMENTS : 0 };
+             fragments: p.dir === FUSE_EXPLODE ? BOMB_FRAGMENTS : 0,
+             sfx: p.dir === FUSE_EXPLODE ? BOMB_DETONATE_SFX : null };
   }
+  let sfx = null;
   if (state.phase < 0) {                              // still flying
-    if (((p.dir + 2) & 3) === 0) {                    // CS:0xa0a0 — every 4th tick
+    /* CS:0xA0A3/0xA129/0xA176 — gravity and the vx decay share ONE gate,
+     * `(fuse + 2) & 3 === 0`; see the header's correction above. */
+    const tick4 = ((p.dir + 2) & 3) === 0;
+    if (tick4) {                                      // CS:0xa0a0
       state.vy = Math.min(BOMB_GRAVITY_CAP, state.vy + 1);
     }
     p.y += state.vy;
-    if (((p.dir) & 3) === 0) {                        // CS:0xa12b — vx decays
+    if (tick4) {                                       // CS:0xa129/0xa176
       state.vx += state.vx > 0 ? -1 : (state.vx < 0 ? 1 : 0);
     }
     p.x += state.vx;
-    if (wallAt && wallAt(p.x, p.y)) { state.vx = -state.vx; }   // CS:0xa16c
-    if (state.landed) {                               // CS:0xa234
+    if (wallAt && wallAt(p.x, p.y, state.vx >= 0 ? 1 : -1)) {  // CS:0xa16c
+      state.vx = -state.vx;
+      sfx = BOMB_THUD_SFX;
+    }
+    if (groundAt && groundAt(p.x, p.y)) {              // CS:0xa234
       p.y &= ~0xf; state.vy = 0; state.phase = BOMB_LANDED;
     }
   } else if (state.phase === BOMB_LANDED) {           // CS:0xa1d7 — just landed
-    state.phase = 0; p.y -= 4;
+    state.phase = 0; p.y -= 4; sfx = BOMB_THUD_SFX;
   } else {                                            // the settling bounce
     p.y += BOMB_BOUNCE[state.phase];
     state.phase = state.phase + 1 >= BOMB_BOUNCE.length ? 0 : state.phase + 1;
   }
   p.dir -= 1;                                         // CS:0xa261 — the fuse
-  return { status: 'fly', sprite: BOMB_SPRITE_BASE + (p.dir & 3) };
+  return { status: 'fly', sprite: BOMB_SPRITE_BASE + (p.dir & 3), sfx };
+}
+
+/**
+ * CS:0x9a51 (right) / CS:0x9a7a (left) — the time bomb's own spawn handler
+ * (PWEAPONS handler indices 9/8, `Gods/docs/consumables-and-treasure.md`'s
+ * "Entries 8/9" closure). Unlike the shared `spawnVolley` table, the muzzle
+ * offset and the initial `state.vx` differ by facing, so this weapon needs
+ * its own spawner rather than a `HANDLER_TABLE` entry.
+ */
+export function spawnTimeBombVolley(m, tag, right) {
+  const x = right ? m.x + 0x10 : m.x;         // CS:0x9a51 — right-only muzzle nudge
+  const y = (m.y - 0x20) & 0xfffc;            // CS:0x9a66/0x9a5a
+  return {
+    entries: [{ tag, x, y, dir: FUSE_START }],
+    vx: right ? 4 : -4,                       // CS:0x9a54 / 0x9a7a
+  };
 }
 
 /* ── The hunter's steering, CS:0x9f61 — `UNKNOWN_hunter_turn` CLOSED ─────

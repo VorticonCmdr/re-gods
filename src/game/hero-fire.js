@@ -60,9 +60,11 @@
 
 import { WEAPON_SLOTS, MAX_SUBSLOTS, tagFor, allocateShots, armWeapon,
          reloadWorld } from './weapons.js';
-import { spawnVolley, spawnAxeVolley, spawnHunterVolley, stepProjectiles,
-         stepHunterArray, stepMagicAxe, axeWallAt, newAxeState,
+import { spawnVolley, spawnAxeVolley, spawnHunterVolley, spawnTimeBombVolley,
+         stepProjectiles, stepHunterArray, stepMagicAxe, stepTimeBomb,
+         axeWallAt, bombWallAt, bombGroundAt, newAxeState,
          DECODED_HANDLERS, NULL_HANDLERS, AREA_ENTRIES, ENTRIES_REACHABLE, GROUP_ENTRIES,
+         MOVER_WALK,
          muzzle } from './projectiles.js';
 
 /** CS:0x9130/0x9137/0x913E all compare a slot word against 8 — the hunter.
@@ -74,6 +76,9 @@ export const HUNTER_WEAPON = 8;
 /** Weapon index 9 — the magic axe, the only weapon with a companion state
  *  array (`Slot.axeState`, alongside its ordinary projectile records). */
 export const MAGIC_AXE_WEAPON = 9;
+/** Weapon index 1 — the time bomb. Mover index 3 (weapon `+0x1A`); spawn
+ *  handlers 8 (left) / 9 (right), see `spawnTimeBombVolley`. */
+export const TIME_BOMB_WEAPON = 1;
 
 /** Player states whose handler reaches the allocator (see the census above). */
 export const FIRE_CAPABLE_STATES = [0, 1, 8, 9, 11, 12, 13, 14];
@@ -113,6 +118,13 @@ export class Slot {
      * `weapon === MAGIC_AXE_WEAPON`, same as every other slot carries
      * fields other weapons never touch. */
     this.axeState = newAxeState();
+    /* DS:0x1c8/0x1ca/0x1cc — the time bomb's own globals. One object per
+     * slot rather than truly global, which is safe for the same reason the
+     * original gets away with globals at all: max-shots is 1, so at most
+     * one time-bomb record is ever live in a given slot. `phase < 0` means
+     * "still flying" (the mover's own sentinel, CS:0xa188). Reset fresh on
+     * every throw in `emit()` below. */
+    this.bombState = { phase: -1, vx: 0, vy: 0 };
   }
 
   /** CS:0x9724 — a sub-slot is free when all THREE of its records are empty. */
@@ -215,11 +227,14 @@ export class Arsenal {
    * ⚠️ THE GUARD, and why it is a counter rather than a throw. `spawnVolley`
    * raises on an undecoded handler, which is right for a unit test and wrong
    * on a path that runs whenever the player presses fire: of the 11 shipped
-   * weapons only SIX use a decoded pair — five share 0/1 (knife, lightning
-   * bolt, throwing star, axe, mace) and the hunter uses its own 10/11 (the
-   * 3-shot fan, see projectiles.js). The other five would kill the frame.
+   * weapons only SEVEN reach a decoded spawner — five share 0/1 (knife,
+   * lightning bolt, throwing star, axe, mace), the hunter uses its own
+   * 10/11 (the 3-shot fan, see projectiles.js), and the time bomb uses its
+   * own 8/9 (`spawnTimeBombVolley`, a later pass — its muzzle offset and
+   * initial vx differ by facing in a shape `HANDLERS`'s uniform record can't
+   * express). The other four (fireball 2/3, spear 6/7) would kill the frame.
    * Handlers 12/13 are decoded but no shipped weapon references them, so the
-   * decoded set covers 6 of 11 in practice, not "a family of 4" against 11.
+   * decoded set covers 7 of 11 in practice, not "a family of 4" against 11.
    *
    * Same reasoning as the `dir` guard in stepProjectiles: skip and count, so a
    * routing bug is visible in the panel instead of fatal in play.
@@ -239,10 +254,14 @@ export class Arsenal {
                        { slot: a.slot, sel: this.altSelect, alt: null });
       const isAxe = handler === 14 || handler === 15;
       const isHunter = handler === 10 || handler === 11;
+      const isBomb = handler === 8 || handler === 9;
+      const bombSpawn = isBomb ? spawnTimeBombVolley(m, a.tag, handler === 9) : null;
       const { entries, states, facing } = isAxe
         ? spawnAxeVolley(s.st, handler, a.tag, m.x, m.y)
         : isHunter
         ? spawnHunterVolley(s.st, handler, a.tag, m.x, m.y)
+        : isBomb
+        ? { entries: bombSpawn.entries, states: null, facing: handler === 9 ? +1 : -1 }
         : spawnVolley(s.st, handler, a.tag, m.x, m.y);
       /* CS:0x98EA (right handlers) / CS:0x9935 (left) — the spawn handler
        * ITSELF writes weapon +0x0e every time it fires, which is what lets
@@ -259,6 +278,11 @@ export class Arsenal {
         rec.tag = e.tag; rec.x = e.x; rec.y = e.y; rec.dir = e.dir;
         if (isAxe) Object.assign(s.axeState[head + k], states[k]);
       });
+      /* CS:0x9A54/0x9A5A — the spawn handler ITSELF seeds the time bomb's
+       * globals (vx from facing, vy=0, phase=-1/"still flying"), not the
+       * mover. Fresh per throw, same reason `axeState` is seeded per entry
+       * above. */
+      if (isBomb) Object.assign(s.bombState, { phase: -1, vx: bombSpawn.vx, vy: 0 });
       n += entries.length;
       this.fired++;
     }
@@ -267,11 +291,13 @@ export class Arsenal {
 
   /**
    * CS:0x9455 — walk the three slots and run each one's mover.
-   * The common mover (weapon +0x1A == 0) and the hunter (CS:0x9ef7,
-   * `stepHunterArray`) are stepped here; the other four (fireball, time
-   * bomb, magic axe, and flame's null mover) are ported in projectiles.js
-   * but are per-weapon and wired as those weapons become reachable. Counted,
-   * not silently skipped.
+   * The common mover (weapon +0x1A == 0), the hunter (CS:0x9ef7,
+   * `stepHunterArray`), the magic axe (CS:0xa678, `stepMagicAxe`) and the
+   * time bomb (CS:0xa058, `stepTimeBomb`, a later pass) are stepped here.
+   * The other two (fireball and flame's null mover) are ported in
+   * projectiles.js but not yet reachable — no shipped weapon uses flame
+   * (`CUT_WEAPON`), and fireball's own spawn handler (2/3) is still
+   * undecoded. Counted, not silently skipped.
    *
    * @param {?object} debris  the DS:0x8b4c owner — the hunter's no-target
    *   arm (CS:0xA00D) drops a moving spark into it when it finds nothing.
@@ -280,6 +306,7 @@ export class Arsenal {
     let moved = 0, culled = 0;
     let axeBounced = 0;                           // this tick's bounce count
     const hits = [];                              // this tick's terrain-stops
+    const bombSfx = [];                           // this tick's bomb bounce/land/detonate ids
     for (const s of this.slots) {
       if (s.weapon < 0) continue;                // CS:0x9477 `cmp [di],0 / jns`
       const w = this.weapons[s.weapon];
@@ -304,6 +331,35 @@ export class Arsenal {
         this.axeExpired = (this.axeExpired || 0) + r.expired;
         continue;
       }
+      if (s.weapon === TIME_BOMB_WEAPON) {
+        const wallAt = (x, y, dirSign) => bombWallAt(x, y, dirSign, planeB);
+        const groundAt = (x, y) => bombGroundAt(x, y, planeB);
+        for (let i = 0; i < MOVER_WALK; i++) {
+          const p = s.area[i];
+          if (!p || p.tag === 0) continue;
+          const r = stepTimeBomb(p, s.bombState, cam, wallAt, groundAt);
+          if (r.sfx) bombSfx.push(r.sfx);
+          if (r.status === 'explode') {
+            this.bombFragments = (this.bombFragments || 0) + r.fragments;
+            /* ⚠️ DISCLOSED, not a faithful reproduction: the real despawn
+             * site for this record's tag is still unlocated (the far call
+             * at CS:0xA2A8 — see Gods/docs/combat-and-projectiles.md's
+             * `UNKNOWN_timebomb_refire`). Left uncleared, `status==='explode'`
+             * would refire BOMB_DETONATE_SFX and re-count BOMB_FRAGMENTS
+             * every tick forever, which is strictly worse than a one-shot
+             * clear here — so this port despawns the record itself the
+             * instant it's processed. Whether the ORIGINAL then lets the
+             * same weapon be re-armed is the open question above; this port
+             * currently cannot either way (no path resets `s.bombState`
+             * except a fresh throw, and `weapons.js`'s allocator needs the
+             * sub-slot's records to read empty to free it). */
+            p.tag = 0;
+          }
+          moved++;
+          continue;
+        }
+        continue;
+      }
       const r = stepProjectiles(s.area, cam, {
         grid, weapon: w, planeB, world, planeA, blocks,
         weaponIndex: s.weapon, pickupCount: s.st ? s.st.count : 0 });
@@ -320,7 +376,7 @@ export class Arsenal {
      * HUD, but a per-tick audio hook needs to know what happened just now,
      * which is exactly what frame.js's `projectiles` return value never
      * carried until this pass. */
-    return { moved, culled, hits, axeBounced };
+    return { moved, culled, hits, axeBounced, bombSfx };
   }
 
   /** Every live projectile, for the renderer. */

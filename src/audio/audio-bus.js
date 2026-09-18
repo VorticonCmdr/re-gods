@@ -106,9 +106,22 @@
  * Roland-only alternate kill sound `0x0e49`
  * (CS:0xABB7/0xABD1, gated on `DS:0x35e`, audible on only 3 specific
  * creature classes and only under that one driver — see
- * Gods/docs/drivers-and-memory.md's "Sound: a 13-slot interface"), and
- * `0x22` bomb detonation (CS:0xA27C).
+ * Gods/docs/drivers-and-memory.md's "Sound: a 13-slot interface").
  * See checks.js's own "sound ids" note for the same list kept in sync.
+ *
+ * ⚠️ A still later pass wired the time bomb (`hero-fire.js`'s
+ * `TIME_BOMB_WEAPON`, previously dead code — its spawn handler was
+ * undecoded and its mover was never dispatched from `Arsenal.step()`).
+ * That pass also caught and fixed a citation bug: this file used to list
+ * `0x22` bomb detonation as a disclosed non-wire, taking `Gods/docs/
+ * combat-and-projectiles.md`'s own citation at face value — but unlike
+ * every OTHER bare-low-byte id already corrected in this project
+ * (`0x1c`→`0x041c`, `0x1d`→`0x21d`, `0x09`→`0x209`), that one had never
+ * actually been re-checked against a fresh `MOV AX,imm` read. It wasn't a
+ * full word missed by convention; it was simply never verified. A Ghidra
+ * read of `CS:0xA27C` found `mov ax,0x1022` — the real id is `0x1022`, not
+ * `0x22` — corrected here and in that doc. The time bomb's OTHER sound,
+ * the bounce/land thud `0x0609` (`CS:0xA165`/`0xA1D7`), is wired too.
  */
 
 function scheduleTone(ctx, dest, t0, { freq, dur, type = 'square', gain = 0.2, slideTo, delay = 0 }) {
@@ -221,6 +234,19 @@ export const SFX_VOICES = {
    * the axe keeps flying, it hasn't stopped. */
   0x0209: (ctx, dest, t0) =>
     scheduleTone(ctx, dest, t0, { freq: 1200, dur: 0.04, type: 'triangle', gain: 0.14, slideTo: 700 }),
+  /* projectiles.js's BOMB_THUD_SFX — the time bomb bouncing off a wall, or
+   * settling onto the ground the tick after it lands. A low, damped thump —
+   * heavier than the projectile terrain-stop above, since this is a whole
+   * bomb landing, not a shot. */
+  0x0609: (ctx, dest, t0) =>
+    scheduleNoise(ctx, dest, t0, { dur: 0.09, gain: 0.22, filterFreq: 200 }),
+  /* projectiles.js's BOMB_DETONATE_SFX — the time bomb's own fuse running
+   * out. A sharp burst, distinct from every other voice here: this is the
+   * loudest, lowest one-shot event in the game. */
+  0x1022: (ctx, dest, t0) => {
+    scheduleNoise(ctx, dest, t0, { dur: 0.22, gain: 0.32, filterFreq: 900 });
+    scheduleTone(ctx, dest, t0, { freq: 90, dur: 0.3, type: 'sawtooth', gain: 0.22, slideTo: 40 });
+  },
 };
 
 /** Node-testable: records ids instead of making sound. */
