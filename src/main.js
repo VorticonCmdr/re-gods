@@ -94,6 +94,7 @@ import { DEFAULT_TABLE, encodeScoreBytes, rankOf, insertAt, bcdToNumber } from '
 import { decodeJoyRecording } from './formats/joy.js';
 import { CYCLE, JOYG_SHOWCASE_SPAWN, JOYG_SHOWCASE_LOADOUT, fileNameFor, nextState } from './game/attract.js';
 import { ShopScreen, BUY_CONFIRM_SFX } from './game/shop.js';
+import { Intro, buildIntroAssets } from './game/intro.js';
 import { TallyScreen, CHA_CHING_SFX } from './game/tally.js';
 import { WebAudioBus } from './audio/audio-bus.js';
 import { parseMusContainer, isSmf } from './audio/mus-container.js';
@@ -428,6 +429,16 @@ async function loadTitleBackground() {
   return decodePI1(raw);
 }
 
+/* INTROV.EXE's own pre-game sequence (game/intro.js) — see that file's own
+ * header for the full asset/glyph-layout citation. */
+async function loadIntroAssets() {
+  const logoBg = decodePI1(dclDecompress(await fetchRaw('game/PSTBACK.PI1')).data);
+  const portraitBg = decodePI1(dclDecompress(await fetchRaw('game/PONE.PI1')).data);
+  const fontImg = decodePI1(dclDecompress(await fetchRaw('game/PINTROFT.PI1')).data);
+  const fontAtlas = parseAtlas(dclDecompress(await fetchRaw('game/PINTROFT.DAT')).data);
+  return buildIntroAssets(fontImg, fontAtlas, logoBg, portraitBg);
+}
+
 /* Draw a whole atlas into a canvas as a labelled grid, so the decoded frames
  * are inspectable rather than merely asserted to be correct. */
 async function renderAtlas(name, canvas) {
@@ -596,6 +607,11 @@ async function main() {
   try {
     titleBackground = await loadTitleBackground();
   } catch (e) { console.error('title background failed to load', e); }
+
+  let introAssets = null;
+  try {
+    introAssets = await loadIntroAssets();
+  } catch (e) { console.error('intro assets failed to load', e); }
 
   /* The true shipped "TOP TEN GODS" defaults (game/formats/hiscores.js's
    * own `DEFAULT_TABLE`, hardcoded rather than fetched — see that export's
@@ -1450,7 +1466,13 @@ async function main() {
    * input already fills every tick via the `input` object below. 'exit' is
    * this port's stand-in for QUIT's `INT 21h AH=4Ch` — see
    * Renderer.presentDosExit(). */
-  let uiState = 'menu';   // 'menu'|'password'|'name-entry'|'hiscore-table'|'game-over-fade'|'shop'|'game'|'exit'|'quitting'
+  /* Boots into 'intro' (INTROV.EXE's own pre-game sequence, game/intro.js)
+   * rather than straight into 'menu' — GODS.EXE's real launch chain always
+   * runs INTROV.EXE before GAME.EXE ever gets control (Gods/docs/dynamic-
+   * trace-and-runtime-data.md). Any key skips it (see the keydown handler
+   * below), matching a live-confirmed DOSBox test. */
+  let uiState = 'intro';   // 'intro'|'menu'|'password'|'name-entry'|'hiscore-table'|'game-over-fade'|'shop'|'game'|'exit'|'quitting'
+  const intro = new Intro();
   const titleMenu = new TitleMenu();
   let passwordEntry = null;
   let nameEntry = null;
@@ -1625,6 +1647,12 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
     Enter: 'fire',
   };
   addEventListener('keydown', (e) => {
+    /* INTROV.EXE's own "any key skips straight to the title menu" —
+     * live-confirmed (Enter, from mid-poem, landed on the real menu with no
+     * intermediate screen). Checked before every other branch, including
+     * attract, since attract mode is only ever reachable once 'menu' has
+     * already been entered. */
+    if (uiState === 'intro') { uiState = 'menu'; e.preventDefault(); return; }
     /* A real keypress during attract-mode playback always wins — port-only
      * (see game/attract.js's own header: the original has no clean way to
      * distinguish a real key from the recording's own writes to the SAME
@@ -1724,6 +1752,10 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
 
   const clock = new Clock(
     () => {
+      /* The intro (game/intro.js) freezes everything else exactly like the
+       * title menu/password/shop screens already do — it owns its own
+       * clock and never reads `input` (skipping is keydown-driven, above). */
+      if (uiState === 'intro') { intro.step(); return; }
       /* Attract-mode playback (game/attract.js) overrides `input` from the
        * decoded recording, BEFORE anything below reads it — a `joyl` tick
        * feeds the menu/password widgets exactly like a real keypress would
@@ -2941,6 +2973,13 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
        * `hero.menuGlyphs` (PGODFONT — the menu's OWN font, see title-menu.js's
        * MENU_ADVANCE citation) are already available here with no extra
        * fetch — see loadSprites()'s own header for the #169 anchor. */
+      if (uiState === 'intro') {
+        if (introAssets) {
+          intro.draw(renderer, introAssets);
+          renderer.present(intro.palette(introAssets), intro.fadeT());
+        }
+        return;
+      }
       if (uiState !== 'game') {
         const glyphs = hero && hero.glyphs, menuGlyphs = hero && hero.menuGlyphs, logo = hero && hero.frames[169];
         const arrowLeft = hero && hero.frames[MENU_ARROW_LEFT_DESC], arrowRight = hero && hero.frames[MENU_ARROW_RIGHT_DESC];

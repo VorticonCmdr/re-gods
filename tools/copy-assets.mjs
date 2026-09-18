@@ -64,6 +64,16 @@ const WANTED = [
   // DOSBox capture of the real title screen, not merely inferred from its
   // palette — see title-menu.js's own header.
   'PBACKSCR.PI1',
+  // INTROV.EXE's own pre-game sequence (game/intro.js): PSTBACK.PI1 (the
+  // "GODS" logo card's stone-wall/helmet backdrop — despite the name
+  // overlap with the status panel, this is a DIFFERENT, INTROV-owned file),
+  // PONE.PI1 (the hero-portrait backdrop behind the 8-page story crawl),
+  // and PINTROFT.PI1/.DAT (the intro's own 3-in-1 font atlas: credits caps,
+  // the "GODS" logo wordmark glyphs, and the story-poem font — same
+  // 2+10*count descriptor schema as every other P*.DAT, see formats/
+  // atlas.js). All three confirmed live in DOSBox and by direct decode —
+  // see intro.js's own header.
+  'PSTBACK.PI1','PONE.PI1','PINTROFT.PI1','PINTROFT.DAT',
   // #11 audio, music half. GAME.EXE's own only music-related string literals
   // are `pgods.mus`/`gods.mus` (Table 2/Table 1) — a raw byte scan of both
   // GAME.EXE and TGAME.EXE found no reference at all to any of the other
