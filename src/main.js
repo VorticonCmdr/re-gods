@@ -99,6 +99,8 @@ import { TallyScreen, CHA_CHING_SFX } from './game/tally.js';
 import { WebAudioBus } from './audio/audio-bus.js';
 import { parseMusContainer, isSmf } from './audio/mus-container.js';
 import { MusicPlayer } from './audio/music-player.js';
+import { PcmPlayer } from './audio/pcm-player.js';
+import { parseSbVoice, SB_VOICE_SAMPLE_RATE_HZ } from './formats/sb-voice.js';
 
 const LEVELS = ['1A','1B','2A','2B','3A','3B','4A','4B'];
 
@@ -614,16 +616,30 @@ async function main() {
   } catch (e) { console.error('intro assets failed to load', e); }
 
   /* INTROV.EXE's own music — PMUSIC.MUS, a single SMF blob (see copy-
-   * assets.mjs's own citation for why this file and not PDEMOSB4.SB, the
-   * one GODS.INI here actually selects). Reuses `musicPlayer` (declared
-   * above for the level-music dev picker) rather than a second player —
-   * only one track is ever audible at a time regardless. */
+   * assets.mjs's own citation for why this file and not PGODMUS2.MUS, the
+   * one GODS.INI here actually selects for the music bed). Reuses
+   * `musicPlayer` (declared above for the level-music dev picker) rather
+   * than a second player — only one track is ever audible at a time
+   * regardless. */
   let introMusicBlob = null;
   try {
     const raw = dclDecompress(await fetchRaw('game/PMUSIC.MUS')).data;
     const blobs = parseMusContainer(raw);
     if (blobs[0] && isSmf(blobs[0])) introMusicBlob = blobs[0];
   } catch (e) { console.error('intro music failed to load', e); }
+
+  /* PDEMOSB4.SB — the real Sound-Blaster digitized voice sample GODS.INI's
+   * shipped config actually plays, layered under the music bed (copy-
+   * assets.mjs's own citation; format/rate decoded and live-confirmed in
+   * DOSBox, see formats/sb-voice.js's header). Played once, as a bonus
+   * layer on top of the PMUSIC.MUS substitute, via a separate PcmPlayer
+   * so it doesn't interrupt/replace the SMF scheduling above. */
+  let introVoicePcm = null;
+  try {
+    const raw = dclDecompress(await fetchRaw('game/PDEMOSB4.SB')).data;
+    const { clips } = parseSbVoice(raw);
+    if (clips[0]) introVoicePcm = clips[0].pcm;
+  } catch (e) { console.error('intro voice sample failed to load', e); }
 
   /* The true shipped "TOP TEN GODS" defaults (game/formats/hiscores.js's
    * own `DEFAULT_TABLE`, hardcoded rather than fetched — see that export's
@@ -1497,9 +1513,14 @@ async function main() {
    * a way to hear it without cutting it short. Either path is a real user
    * gesture; a synthetic/automated one (Chrome-automation dispatch) is
    * NOT one and will not unlock it, matching the browser's own policy. */
-  if (introMusicBlob) musicPlayer.play(introMusicBlob);
+  const introVoicePlayer = new PcmPlayer();
+  const playIntroAudio = () => {
+    if (introMusicBlob) musicPlayer.play(introMusicBlob);
+    if (introVoicePcm) introVoicePlayer.play(introVoicePcm, SB_VOICE_SAMPLE_RATE_HZ);
+  };
+  playIntroAudio();
   const unlockIntroAudio = () => {
-    if (uiState === 'intro' && introMusicBlob) musicPlayer.play(introMusicBlob);
+    if (uiState === 'intro') playIntroAudio();
   };
   addEventListener('pointerdown', unlockIntroAudio, { once: true });
   const titleMenu = new TitleMenu();
@@ -1681,7 +1702,7 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
      * intermediate screen). Checked before every other branch, including
      * attract, since attract mode is only ever reachable once 'menu' has
      * already been entered. */
-    if (uiState === 'intro') { uiState = 'menu'; musicPlayer.stop(); e.preventDefault(); return; }
+    if (uiState === 'intro') { uiState = 'menu'; musicPlayer.stop(); introVoicePlayer.stop(); e.preventDefault(); return; }
     /* A real keypress during attract-mode playback always wins — port-only
      * (see game/attract.js's own header: the original has no clean way to
      * distinguish a real key from the recording's own writes to the SAME
@@ -1788,7 +1809,7 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
         intro.step();
         /* The real sequence does not loop (game/intro.js's own DOES NOT
          * LOOP header note) — it runs once and hands off, same as a skip. */
-        if (intro.done) { uiState = 'menu'; musicPlayer.stop(); }
+        if (intro.done) { uiState = 'menu'; musicPlayer.stop(); introVoicePlayer.stop(); }
         return;
       }
       /* Attract-mode playback (game/attract.js) overrides `input` from the

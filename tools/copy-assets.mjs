@@ -80,11 +80,20 @@ const WANTED = [
   // are — it sits in INTROV.EXE's general always-loaded asset cluster
   // instead (execution-and-boot.md's own citation). The real shipped
   // GODS.INI here selects Sound Blaster, whose own intro track is
-  // PDEMOSB4.SB (raw digitized PCM, format/rate not decoded this pass) —
-  // PMUSIC.MUS is a disclosed substitute using this port's own already-
-  // working SMF player, not a claim that it's what GODS.INI's actual
-  // config would play.
+  // PDEMOSB4.SB — PMUSIC.MUS is a disclosed substitute using this port's
+  // own already-working SMF player, not a claim that it's what GODS.INI's
+  // actual config would play.
   'PMUSIC.MUS',
+  // PDEMOSB4.SB — the REAL Sound-Blaster-only digitized voice sample
+  // GODS.INI's shipped config actually plays (layered under PGODMUS2.MUS,
+  // execution-and-boot.md's "intro sound-file list"). Format and playback
+  // rate are now decoded (formats/sb-voice.js's own header: raw 8-bit
+  // unsigned mono PCM, DSP time constant 0xA0 live-confirmed in DOSBox by
+  // breakpointing PLAYER.BIN's own DSP-command-write primitive, effective
+  // rate 1,000,000/96 ≈ 10417 Hz) — played by this port as an authentic
+  // bonus layer alongside the PMUSIC.MUS substitute, not a replacement for
+  // it (PGODMUS2.MUS itself is not decoded/ported).
+  'PDEMOSB4.SB',
   // #11 audio, music half. GAME.EXE's own only music-related string literals
   // are `pgods.mus`/`gods.mus` (Table 2/Table 1) — a raw byte scan of both
   // GAME.EXE and TGAME.EXE found no reference at all to any of the other
