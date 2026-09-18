@@ -93,10 +93,14 @@ order, every tick this screen is open):
   other unidentified mark — it now is, independently, by this second mechanism
   converging on the identical record for the identical alphabet code.
 - **`FUN_1000_3097` — the cursor.** A small animated icon (4-frame cycle,
-  descriptor `0x57 + phase`, an "always"-group sprite not chased down further)
-  blitted directly at the selected cell's own position (`X=(cursor&7)*32+40,
-  Y=(cursor>>3)*24+40`) — the SAME grid geometry `FUN_1000_30d4` uses, confirming
-  both functions share one coordinate scheme.
+  descriptor `0x57 + phase` = global 87-90) blitted directly at the selected
+  cell's own position (`X=(cursor&7)*32+40, Y=(cursor>>3)*24+40`) — the SAME
+  grid geometry `FUN_1000_30d4` uses, confirming both functions share one
+  coordinate scheme. Descriptors 87-90 are PALWAYS2 records 48-51 (`tools/
+  atlas-render.mjs PALWAYS2` in `gods-web`): a 4-frame white/gold twinkling
+  sparkle-star animation, rotating through its points — a sensible, legible
+  cursor icon for a letter grid, drawn ON TOP of the selected cell's own
+  letter (overlapping it), not offset beside it.
 
 Live-confirmed visually in a `gods-web` port session this pass: matching a
 user-supplied screenshot of the real screen pixel-for-pixel in layout (title font,
@@ -465,4 +469,14 @@ the wrong-guess bounce back to the menu) in a running `gods-web` session.
   was not itself fully disassembled — its exact retry/collision behavior against
   the other two already-stored passwords is unread.
 - `FUN_1000_3097`'s own cursor sprite (descriptor `0x57+phase`, a 4-frame
-  animation) was not chased down to a named asset.
+  animation) is now identified as a twinkling star — CLOSED, see *The exact
+  rendering*, above.
+- `FUN_1000_224e`'s own "space advances but does not blit" behavior (already
+  on record in `gods-web/src/game/title-menu.js`'s own header) is the reason
+  flowed text like `"ENTER A PASSWORD"` has a true gap between words while
+  the password grid's own row-4 space CELL still shows a real glyph (record
+  27) — two different call sites of the same font family, correctly
+  behaving differently, not a contradiction. Worth stating explicitly here
+  since a first port-side implementation conflated the two and blitted
+  record 27 for every space in flowed text too, producing a visible mark
+  between every word — fixed in `gods-web`.
