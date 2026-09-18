@@ -83,6 +83,50 @@ def extract_instrument(blob):
     }
 
 
+def instrument_to_registers(op1, op2, waves):
+    """Turns the 13-byte operator-parameter blocks + 2 wave-select bytes
+    (as extracted above) into real OPL2 register:value pairs, per the 8
+    register-setter functions disassembled in Ghidra (FUN_0000_1e9a/1e86/
+    1640/1848/1807/17c6/176f/172f — see drivers-and-memory.md's own table
+    for the full citation). `rec[+N]` below refers to the driver's own
+    14-byte-stride per-operator record; our extracted 13-byte op1/op2
+    blocks hold its bytes +0..+12, and its +13 (the wave-select byte) is
+    the corresponding byte of the separate 2-byte `waves` field.
+
+    Formulas are exact EXCEPT total level (registers 0x40/0x43): the real
+    driver scales it through a runtime volume/velocity lookup-table
+    multiply (DAT_0000_1491/DAT_0000_1634) this project has not decoded,
+    so this function substitutes the stored base level UN-scaled — audibly
+    louder/quieter than the original, not a claim of exactness for that
+    one field. Every other register (mult, AD, SR, wave, feedback/
+    connection) is a direct, proven bit-packed copy of the stored bytes.
+    Global/runtime registers (0xBD, 0x08) and the 0xC0 gating/channel-index
+    tables are runtime state, not per-instrument data, and are omitted —
+    a caller wanting a full note-on sequence must still supply those.
+    """
+    def op_regs(rec, wave_byte):
+        r20 = ((0x80 if rec[9] else 0) | (0x40 if rec[10] else 0) |
+               (0x20 if rec[5] else 0) | (0x10 if rec[11] else 0) | (rec[1] & 0xf))
+        r40 = (rec[0] << 6) | (0x3F - rec[8] if rec[8] <= 0x3F else 0)  # level UNSCALED, see docstring
+        r60 = (rec[3] << 4) | (rec[6] & 0xf)
+        r80 = (rec[4] << 4) | (rec[7] & 0xf)
+        rE0 = wave_byte & 3
+        return {'0x20': r20, '0x40': r40, '0x60': r60, '0x80': r80, '0xE0': rE0}
+    op1b = bytes.fromhex(op1) if isinstance(op1, str) else op1
+    op2b = bytes.fromhex(op2) if isinstance(op2, str) else op2
+    wb = bytes.fromhex(waves) if isinstance(waves, str) else waves
+    # 0xC0 (feedback/connection) is channel-, not operator-, level: DAT_0000_1409's
+    # own gate ({0,0,0,1,1,1,...}) means the FIRST operator of each channel is the
+    # one that writes it — op1 here plays that role, so its own rec[+2]/rec[+12]
+    # are what a real note-on would use.
+    feedback_connection = (op1b[2] << 1) | (1 if op1b[12] == 0 else 0)
+    return {
+        'op1': op_regs(op1b, wb[0]),
+        'op2': op_regs(op2b, wb[1]),
+        '0xC0': feedback_connection,
+    }
+
+
 def extract_type2_channel_table(blob):
     """The three non-SMF 'type 2' blobs' own already-documented raw 9x19
     per-channel table at blob offset 0x201 (513) — NOT the same shape as
@@ -110,6 +154,7 @@ def main():
         inst = extract_instrument(blob)
         if inst:
             conforming += 1
+            inst['registers'] = instrument_to_registers(inst['op1'], inst['op2'], inst['waves'])
             out[i] = {'kind': 'op1_op2_wave', **inst}
             continue
         t2 = extract_type2_channel_table(blob)
