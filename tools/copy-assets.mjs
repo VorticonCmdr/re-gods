@@ -76,12 +76,25 @@ const WANTED = [
   // (checked once this session, not restaged here — see checkMusic()'s own
   // note for exactly what that claim rests on).
   'PGODSRLA.RL',
-  // Recorded attract-mode joystick input (game/formats/joy.js), used by the
-  // replay-diff harness (tools/replay-diff.mjs) to check the port's physics
-  // against a live DOSBox trace of the same fixed input. Only the `joyg`
-  // files decode into gameplay ticks — `joyl` drives the title menu instead
-  // (docs/asset-formats.md) — so only those three are staged here.
+  // Recorded attract-mode joystick input (game/formats/joy.js). `joyg`
+  // decodes into real GAMEPLAY ticks — used both by the replay-diff harness
+  // (tools/replay-diff.mjs, checking the port's physics against a live
+  // DOSBox trace of the same fixed input) and by the attract-mode cycler
+  // (game/attract.js). `joyl` drives the title-menu loop with the SAME
+  // format instead (docs/asset-formats.md) — staged for the cycler too, a
+  // later addition than replay-diff.mjs's own original three-file staging.
   'PJOYG1.DAT','PJOYG2.DAT','PJOYG3.DAT',
+  'PJOYL1.DAT','PJOYL2.DAT','PJOYL3.DAT',
+  // NOT HISCORES.BIN — deliberately. Unlike every other file in this list,
+  // it is not pristine shipped data: it is mutable runtime state this
+  // project's own DOSBox sessions have already overwritten with real play
+  // data (see git history — it no longer holds the shipped 9-Greek-gods
+  // table). Staging the live working-tree copy would make gods-web's own
+  // "default hiscore table" reflect whatever happens to be on THIS
+  // machine, not a real player's first launch. game/formats/hiscores.js
+  // hardcodes the true shipped defaults instead (from `git show
+  // HEAD:HISCORES.BIN`, cross-checked against Gods/docs/dynamic-trace-and-
+  // runtime-data.md's own decode).
 ];
 
 if (!existsSync(SRC)) {

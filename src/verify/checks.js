@@ -20,8 +20,13 @@ import { scanZones, unpackTeleportDest, resolveExitDestination,
          clearNonPotionInventory, generatePassword, passwordSlotForWorld,
          passwordWorldForSlot, passwordToString, PASSWORD_LENGTH,
          PASSWORD_SLOTS } from '../game/zones.js';
-import { TitleMenu, PasswordEntry, MENU_OPTIONS,
-         MENU_CLICK_SFX, MENU_CONFIRM_SFX } from '../game/title-menu.js';
+import { TitleMenu, PasswordEntry, NameEntry, HiscoreTable, HISCORE_TABLE_TICKS,
+         MENU_OPTIONS, MENU_CLICK_SFX, MENU_CONFIRM_SFX } from '../game/title-menu.js';
+import { ALPHABET_CHARS, charToCode, codeToChar, encodeName, decodeName,
+         NAME_BYTES, SCORE_BYTES, TABLE_RECORDS, encodeScoreBytes, decodeScoreBytes,
+         bcdToNumber, bcdDigitString, DEFAULT_TABLE, insertAt, rankOf } from '../formats/hiscores.js';
+import { CYCLE, JOYG_SHOWCASE_SPAWN, JOYG_SHOWCASE_LOADOUT, fileNameFor, nextState }
+  from '../game/attract.js';
 import { ShopScreen, GRID_COLS, GRID_ROWS, GRID_SLOTS, EXIT_SLOT, DATA_SLOTS,
   WEAPON_ID_BASE, PRICES, BUY_CONFIRM_SFX } from '../game/shop.js';
 import { TallyScreen, timeBonus, healthBonus, moneyBonus, POOL_STEP,
@@ -9087,7 +9092,18 @@ export async function checkWeaponsProjectiles(fetchRaw) {
       'DS:0x3e6 — the six-state ATTRACT-MODE cycler — and both fall through to ' +
       'CS:0x8FBE `mov byte [0x3bd],1`, the joystick-playback flag. A third ' +
       'variant at CS:0x8F5F grants 2x3 / 5x5 / 4x1. Those are the demo\'s ' +
-      'weapons, set up beside its scripted camera and hero position.',
+      'weapons, set up beside its scripted camera and hero position. ⚠️ A ' +
+      'later pass (while porting the title-screen/attract-mode system) ' +
+      'traced the FULL surrounding dispatch (CS:0x8F31-0x8F5F, one level up ' +
+      'from what this note itself found) and resolved which branch belongs ' +
+      'to which world: DS:0x3e6==2 (world 1, the cycler\'s own post-increment ' +
+      'value) reaches CS:0x8F5F\'s 2x3/5x5/4x1 grant directly; ==4 (world 2) ' +
+      'and ==0/wrapped (world 3) both reach FUN_1000_8fd2\'s shared 2x5/6x3 ' +
+      'grant. Both this note\'s own weapon-grant finding and the pre-existing ' +
+      'JOYG_SHOWCASE_SPAWN table turn out to be the SAME gated block ' +
+      '(CS:0x8F3B\'s one-shot DS:0x3e7 flag), not two independent findings — ' +
+      'see game/attract.js\'s own JOYG_SHOWCASE_LOADOUT, now wired into ' +
+      'main.js\'s enterAttractState via the real pickUpWeapon dispatcher.',
   });
 
   results.push({
@@ -14208,6 +14224,14 @@ export function checkLevers() {
  */
 export function checkTitleMenu() {
   const { results, check } = makeChecker();
+  /* Every widget below is `step(input)`-driven now, not keydown-driven — see
+   * title-menu.js's own header for why. `I()` is the same held-state shape
+   * `main.js` polls every tick; `press(widget, dir)` fires ONE edge (press
+   * then release across two ticks) since `step()`'s own edge-detection would
+   * otherwise treat a second same-key call with no release as a held key,
+   * not a second press — exactly the behaviour a real keyboard also has. */
+  const I = (o = {}) => ({ up: false, down: false, left: false, right: false, fire: false, ...o });
+  const press = (w, key) => { const r = w.step(I({ [key]: true })); w.step(I()); return r; };
 
   /* ── TitleMenu — CS:0x2D09's own UP/DOWN clamp and FIRE dispatch ─────── */
   {
@@ -14218,35 +14242,95 @@ export function checkTitleMenu() {
 
     const m = new TitleMenu();
     check('starts at cursor 0', m.cursor === 0);
-    check('UP clamps at 0, does not wrap to the last option — CS:0x2D18',
-      m.onKeyDown('ArrowUp') === null && m.cursor === 0);
-    check('DOWN advances one at a time', m.onKeyDown('ArrowDown') === null && m.cursor === 1);
-    m.onKeyDown('ArrowDown');
-    check('DOWN clamps at the last option, does not wrap — CS:0x2D28',
-      m.cursor === 2 && m.onKeyDown('ArrowDown') === null && m.cursor === 2);
-    check('FIRE at cursor 2 dispatches "exit"', m.onKeyDown('Space') === 'exit');
+    const up1 = press(m, 'up');
+    check('UP clamps at 0, does not wrap to the last option — CS:0x2D18, and plays the click sfx',
+      up1.sfx === MENU_CLICK_SFX && m.cursor === 0);
+    check('DOWN advances one at a time', press(m, 'down').sfx === MENU_CLICK_SFX && m.cursor === 1);
+    press(m, 'down');
+    check('DOWN clamps at the last option, does not wrap — CS:0x2D28', m.cursor === 2);
+    m.step(I({ down: true }));   // press, held (no release yet)
+    const heldDown = m.step(I({ down: true }));   // still held, no release in between
+    check('holding DOWN with no release in between does not re-fire the edge',
+      heldDown === null && m.cursor === 2);
+    m.step(I());
+    const fire1 = press(m, 'fire');
+    check('FIRE at cursor 2 dispatches "exit", with the confirm sfx',
+      fire1.action === 'exit' && fire1.sfx === MENU_CONFIRM_SFX);
 
     const m2 = new TitleMenu();
-    check('FIRE at cursor 0 dispatches "begin"', m2.onKeyDown('Space') === 'begin');
+    check('FIRE at cursor 0 dispatches "begin"', press(m2, 'fire').action === 'begin');
     const m3 = new TitleMenu();
-    m3.onKeyDown('ArrowDown');
-    check('FIRE at cursor 1 dispatches "password"', m3.onKeyDown('Space') === 'password');
+    press(m3, 'down');
+    check('FIRE at cursor 1 dispatches "password"', press(m3, 'fire').action === 'password');
   }
 
   /* ── PasswordEntry — the grid, CS:0x2e2f-0x2ea8's own buffer/submit shape */
   {
     const p = new PasswordEntry();
     check('starts empty, at the grid\'s first cell', p.buffer.length === 0 && p.row === 0 && p.col === 0);
-    check('LEFT/UP clamp at 0, not wrap',
-      p.onKeyDown('ArrowLeft') === null && p.onKeyDown('ArrowUp') === null
-      && p.row === 0 && p.col === 0);
+    press(p, 'left'); press(p, 'up');
+    check('LEFT/UP clamp at cursor 0 (the shared final clamp, CS:0x2FC8-0x2FD2), '
+      + 'not wrap to the last cell', p.cursor === 0 && p.row === 0 && p.col === 0);
+
+    /* ⚠️ REGRESSION GUARD for the fix that made `PJOYL2.DAT`/`PJOYL3.DAT`'s
+     * own password-screen navigation actually reach the confirm cell: the
+     * grid's cursor is ONE FLAT 0..39 index (`DS:0x385`), not independent
+     * row/col fields. RIGHT is a bare `+1` (CS:0x2F72) with no per-row
+     * clamp, so at the last column of a row it crosses straight into the
+     * FIRST column of the next row — a real mechanic, not a bug to route
+     * around (an earlier revision of this port clamped RIGHT/LEFT to the
+     * current row, which is exactly what left `PJOYL2.DAT`'s own recorded
+     * navigation wandering the grid for its entire ~2200-tick length
+     * without ever reaching "+"). */
+    {
+      /* Literal 8 here, not an imported GRID_COLS — checks.js already binds
+       * that name to shop.js's own (differently-sized) grid constant. */
+      const PW_GRID_COLS = 8;
+      const g = new PasswordEntry();
+      for (let i = 0; i < PW_GRID_COLS - 1; i++) press(g, 'right');   // walk to the last cell of row 0
+      check('7x RIGHT from cell 0 reaches col 7 of row 0 (the H cell), not further',
+        g.cursor === PW_GRID_COLS - 1 && g.row === 0 && g.col === PW_GRID_COLS - 1, g.cursor);
+      press(g, 'right');
+      check('one more RIGHT crosses the row boundary into row 1 col 0 (the I '
+        + 'cell) — CS:0x2F72\'s own bare `ADD [0x385],1`, not a row-local wrap',
+        g.cursor === PW_GRID_COLS && g.row === 1 && g.col === 0, g.cursor);
+    }
+
+    /* ⚠️ REGRESSION GUARD, same fix: CS:0x2F72-0x2FB9 has NO debounce latch
+     * on any of the four directions (unlike FIRE's own DS:0x380) — holding a
+     * direction moves ONE CELL PER TICK it's held, not once per press-
+     * release cycle. An earlier revision of this port was edge-triggered
+     * (`dirPrev`), which under-moves by however many ticks a real recording
+     * holds a direction — the other half of the same navigation-drift bug
+     * `PJOYL2.DAT` exposed. */
+    {
+      const g = new PasswordEntry();
+      const held = I({ right: true });
+      for (let i = 0; i < 5; i++) g.step(held);   // held for 5 consecutive ticks, no release
+      check('holding RIGHT for 5 consecutive ticks moves 5 cells, not 1 '
+        + '(no debounce on the grid\'s own directions)', g.cursor === 5, g.cursor);
+    }
+
+    /* ⚠️ REGRESSION GUARD, same fix: a held FIRE suspends grid navigation
+     * entirely (CS:0x2F41 routes every repeat-hold tick straight to the
+     * idle/redraw path, never reaching CS:0x2F72's direction dispatch) —
+     * distinct from the ordinary edge/no-op FIRE behaviour tested elsewhere
+     * in this file, and only observable by holding a DIRECTION at the same
+     * time as an already-held FIRE. */
+    {
+      const g = new PasswordEntry();
+      g.step(I({ fire: true }));                  // fresh FIRE press: types 'A', cursor stays 0
+      const r = g.step(I({ fire: true, right: true }));   // FIRE still held + RIGHT newly held
+      check('a held FIRE blocks RIGHT from moving the cursor this same tick',
+        r === null && g.cursor === 0, JSON.stringify({ r, cursor: g.cursor }));
+    }
 
     /* Type exactly PASSWORD_LENGTH letters via RIGHT+FIRE, matching the
      * 'B','C','D' sequence this session verified live in a browser. */
     const typed = [];
     for (let i = 0; i < PASSWORD_LENGTH; i++) {
-      p.onKeyDown('ArrowRight');
-      p.onKeyDown('Space');
+      press(p, 'right');
+      press(p, 'fire');
       typed.push(p.buffer[p.buffer.length - 1]);
     }
     check(`fills exactly PASSWORD_LENGTH (${PASSWORD_LENGTH}) letters, one per FIRE`,
@@ -14254,29 +14338,42 @@ export function checkTitleMenu() {
     check('typed letters are the grid cells actually stepped through, in order',
       typed.join('') === 'BCD', typed.join(''));
 
-    p.onKeyDown('ArrowRight');
-    p.onKeyDown('Space');
+    press(p, 'right');
+    press(p, 'fire');
     check('FIRE past a full buffer is a no-op, not a 4th letter',
       p.buffer.length === PASSWORD_LENGTH);
 
-    check('DEL (Backspace) pops the last letter', (() => {
-      p.onKeyDown('Backspace');
+    check('eraseKey (Backspace) pops the last letter — a real-keyboard-only '
+      + 'convenience, not a step() edge (the original per-tick joystick byte '
+      + 'has no backspace bit)', (() => {
+      p.eraseKey();
       return p.buffer.length === PASSWORD_LENGTH - 1;
     })());
     p.buffer.push('D');   // restore, so the submit test below sees BCD again
 
     /* Navigate to the '=' (OK) cell — row 4, col 7 (index 39, the confirmed
      * 8x5 grid) — and submit. */
-    for (let i = 0; i < 4; i++) p.onKeyDown('ArrowDown');
-    for (let i = 0; i < 3; i++) p.onKeyDown('ArrowRight');
-    const submitResult = p.onKeyDown('Space');
+    for (let i = 0; i < 4; i++) press(p, 'down');
+    for (let i = 0; i < 3; i++) press(p, 'right');
+    const submitResult = press(p, 'fire');
     check('OK at a full buffer submits the typed string, joined in cell order',
       submitResult && submitResult.submit === 'BCD', JSON.stringify(submitResult));
 
-    const escResult = new PasswordEntry().onKeyDown('Escape');
+    /* ⚠️ FIXED — CS:0x3030 submits WHATEVER is typed, not exactly PASSWORD_
+     * LENGTH characters (LetterGrid#fire's own citation) — needed for the
+     * attract-mode "L"+digit bypass (docs/passwords.md), a real 2-character
+     * submission the old exactly-N gate would have silently discarded. */
+    const short = new PasswordEntry();
+    press(short, 'fire');   // 'A' at (0,0)
+    for (let i = 0; i < 4; i++) press(short, 'down');
+    for (let i = 0; i < 7; i++) press(short, 'right');
+    const shortSubmit = press(short, 'fire');
+    check('the confirm cell submits early (1 char), not just at exactly maxLength',
+      shortSubmit && shortSubmit.submit === 'A', JSON.stringify(shortSubmit));
+
     check('ESC cancels (a port-only convenience — the original grid has no '
       + 'back, only the wrong-guess bounce CS:0x2e8a already reproduces)',
-      escResult && escResult.cancel === true);
+      new PasswordEntry().cancel().cancel === true);
   }
 
   /* ── The slot<->world round trip main.js's title-screen dispatch relies
@@ -14302,11 +14399,155 @@ export function checkTitleMenu() {
     const pw = generatePassword(rng);
     const str = passwordToString(pw);
     check('a generated password, once stringified, is exactly PASSWORD_LENGTH '
-      + 'uppercase A-Z letters — the exact format PasswordEntry.onKeyDown\'s '
+      + 'uppercase A-Z letters — the exact format PasswordEntry.step()\'s '
       + 'own submit string must match to unlock anything',
       str.length === PASSWORD_LENGTH && /^[A-Z]+$/.test(str), str);
   }
 
+  /* ── NameEntry — the SAME shared grid, `maxLength` NAME_BYTES not
+   * PASSWORD_LENGTH, no hint row (`docs/dynamic-trace-and-runtime-data.md`'s
+   * "hiscore name-entry screen" section). ────────────────────────────── */
+  {
+    const n = new NameEntry();
+    check('maxLength is NAME_BYTES (16), not PASSWORD_LENGTH', n.maxLength === NAME_BYTES);
+    for (let i = 0; i < NAME_BYTES + 2; i++) { press(n, 'right'); press(n, 'fire'); }
+    check('typing past maxLength does not overflow the buffer',
+      n.buffer.length === NAME_BYTES, n.buffer.length);
+    /* Confirm at LESS than maxLength — the SAME fixed bug PasswordEntry's
+     * own test above covers, exercised here on the actually-16-wide widget
+     * a real hiscore entry uses (a real name is rarely exactly 16 chars). */
+    const short = new NameEntry();
+    press(short, 'fire');
+    for (let i = 0; i < 4; i++) press(short, 'down');
+    for (let i = 0; i < 7; i++) press(short, 'right');
+    const shortSubmit = press(short, 'fire');
+    check('NameEntry also submits early, not just at exactly maxLength',
+      shortSubmit && shortSubmit.submit === 'A', JSON.stringify(shortSubmit));
+  }
+
+  /* ── HiscoreTable — "TOP TEN GODS", FUN_1000_255d's own fire-or-timeout */
+  {
+    const entries = Array.from({ length: TABLE_RECORDS },
+      () => ({ name: 'X', scoreBytes: new Uint8Array(SCORE_BYTES) }));
+    const t = new HiscoreTable(entries);
+    check('a FIRE press dismisses it well before the timeout',
+      press(t, 'fire') === true);
+
+    const t2 = new HiscoreTable(entries);
+    let firstDismissTick = -1;
+    for (let i = 1; i <= HISCORE_TABLE_TICKS && firstDismissTick < 0; i++) {
+      if (t2.step(I())) firstDismissTick = i;
+    }
+    check(`the timeout dismisses at EXACTLY tick ${HISCORE_TABLE_TICKS}, no input at all`,
+      firstDismissTick === HISCORE_TABLE_TICKS, firstDismissTick);
+  }
+
+  /* ── hiscores.js — the corrected HISCORES.BIN codec (name 16 bytes/score
+   * 4-byte BCD, NOT the original 18+2 reading — see that module's own
+   * header for the byte-level evidence this correction rests on). ─────── */
+  {
+    check('ALPHABET_CHARS is exactly the 38-cell grid alphabet (A-Z, ., ' +
+      'space, 0-9) — the SAME table title-menu.js\'s own GRID_CELLS uses',
+      ALPHABET_CHARS.length === 38 && ALPHABET_CHARS[0] === 'A'
+      && ALPHABET_CHARS[25] === 'Z' && ALPHABET_CHARS[26] === '.'
+      && ALPHABET_CHARS[27] === ' ' && ALPHABET_CHARS[28] === '0'
+      && ALPHABET_CHARS[37] === '9', ALPHABET_CHARS.join(''));
+    check('charToCode/codeToChar round-trip, 1-based (A=1..Z=26, per the ' +
+      'HERACLES/ZEUS/... table this project already decoded)',
+      charToCode('A') === 1 && charToCode('Z') === 26 && codeToChar(1) === 'A'
+      && charToCode('0') === 29 && codeToChar(0) === '' && charToCode('?') === 0);
+    const encoded = encodeName('HERACLES');
+    check('encodeName is exactly NAME_BYTES (16) wide, 0-padded after the name',
+      encoded.length === NAME_BYTES && encoded[7] === charToCode('S') && encoded[8] === 0,
+      Array.from(encoded).join(','));
+    check('decodeName is the exact inverse', decodeName(encoded) === 'HERACLES');
+    check('a full 16-character name round-trips with NO padding at all — ' +
+      'the exact shape this correction was found from (a real captured ' +
+      'name this wide, immediately followed by score bytes)',
+      decodeName(encodeName('AZQRXVX5ZRR.TM4')) === 'AZQRXVX5ZRR.TM4');
+
+    /* CS:0x1950's own packed-BCD shape (game/treasure.js's Score) round-
+     * tripped through the on-disk big-endian byte order this module's own
+     * header derived from the shipped file. */
+    const scoreBytes = Uint8Array.from([0x09, 0x37, 0x01, 0x00]);   // Score.bytes: low pair first, value 13709
+    const disk = encodeScoreBytes(scoreBytes);
+    check('encodeScoreBytes reverses Score.bytes into on-disk big-endian order',
+      Array.from(disk).join(',') === '0,1,55,9', Array.from(disk).join(','));
+    check('bcdToNumber decodes the on-disk bytes as packed BCD',
+      bcdToNumber(disk) === 13709, bcdToNumber(disk));
+    check('decodeScoreBytes is the exact inverse of encodeScoreBytes',
+      Array.from(decodeScoreBytes(disk)).join(',') === Array.from(scoreBytes).join(','));
+    check('bcdDigitString draws all 8 raw digits with genuine leading ' +
+      'zeros (CS:0x33A2-0x33B7) — NOT a space-padded decimal string',
+      bcdDigitString(disk) === '00013709', bcdDigitString(disk));
+    check('bcdDigitString on an all-zero score is EIGHT zero digits, not ' +
+      'an empty/blank string',
+      bcdDigitString(new Uint8Array(SCORE_BYTES)) === '00000000');
+
+    /* CS:0x329A-0x32B6's own insert-and-shift-down. */
+    const table = Array.from({ length: TABLE_RECORDS },
+      (_, i) => ({ name: `P${i}`, scoreBytes: new Uint8Array(SCORE_BYTES), score: (9 - i) * 100 }));
+    check('rankOf finds the first slot a beaten score displaces',
+      rankOf(table, 250) === 7 && rankOf(table, 1000) === 0 && rankOf(table, 0) === -1,
+      JSON.stringify([rankOf(table, 250), rankOf(table, 1000), rankOf(table, 0)]));
+    const before9 = table[9];
+    insertAt(table, 7, { name: 'NEW', scoreBytes: new Uint8Array(SCORE_BYTES), score: 250 });
+    check('insertAt shifts every lower entry down one and drops the old last slot',
+      table[7].name === 'NEW' && table[8].name === 'P7' && table.length === TABLE_RECORDS
+      && table[9] !== before9, table.map((e) => e.name).join(','));
+  }
+
+  /* ── attract.js — the 6-state joyl/joyg cycler, CS:0x2DA6-0x2DEE ──────── */
+  {
+    check('6 states, alternating joyl/joyg (even/odd), worlds 1-3 in order',
+      CYCLE.length === 6
+      && CYCLE.every((e, i) => e.kind === (i % 2 === 0 ? 'joyl' : 'joyg'))
+      && CYCLE[1].world === 1 && CYCLE[3].world === 2 && CYCLE[5].world === 3,
+      JSON.stringify(CYCLE));
+    check('nextState wraps 5 -> 0, CS:0x2DAD\'s own `cmp al,5`',
+      nextState(0) === 1 && nextState(4) === 5 && nextState(5) === 0);
+    check('fileNameFor matches the real shipped filenames',
+      fileNameFor(CYCLE[0]) === 'PJOYL1.DAT' && fileNameFor(CYCLE[1]) === 'PJOYG1.DAT'
+      && fileNameFor(CYCLE[3]) === 'PJOYG2.DAT');
+    check('every joyg world has both a showcase spawn and a showcase loadout',
+      [1, 2, 3].every((w) => JOYG_SHOWCASE_SPAWN[w] && JOYG_SHOWCASE_LOADOUT[w]
+        && JOYG_SHOWCASE_LOADOUT[w].length > 0));
+    check('world 1\'s own loadout is the UNIQUE 3-weapon grant, not the ' +
+      'worlds 2/3 shared one (CS:0x8F5F vs FUN_1000_8fd2)',
+      JOYG_SHOWCASE_LOADOUT[1].length === 3
+      && JSON.stringify(JOYG_SHOWCASE_LOADOUT[2]) === JSON.stringify(JOYG_SHOWCASE_LOADOUT[3])
+      && JSON.stringify(JOYG_SHOWCASE_LOADOUT[1]) !== JSON.stringify(JOYG_SHOWCASE_LOADOUT[2]));
+  }
+
+  return results;
+}
+
+/**
+ * `hiscores.js`'s own `DEFAULT_TABLE` — the true shipped "TOP TEN GODS"
+ * defaults (`git show HEAD:HISCORES.BIN` in the `Gods` repo), hardcoded
+ * rather than fetched at runtime — see that export's own citation for why
+ * `Gods/HISCORES.BIN` itself is mutable dev-session state, not a fetchable
+ * asset, and is deliberately absent from `tools/copy-assets.mjs`.
+ */
+export function checkHiscoresFile() {
+  const { results, check } = makeChecker();
+  check('exactly TABLE_RECORDS (10) default entries', DEFAULT_TABLE.length === TABLE_RECORDS);
+  const names = DEFAULT_TABLE.map((e) => e.name);
+  check('the exact 10 names this project already published — 9 Greek ' +
+    'deity/hero names plus the AAAAAA placeholder, in slot order',
+    names.join(',') === ['AAAAAA', 'HERACLES', 'ZEUS', 'HERA', 'APOLLO',
+      'POSEIDON', 'DIONYSUS', 'ARES', 'ATHENA', 'HERMES'].join(','),
+    names.join(','));
+  check('record 0 (AAAAAA) is the only one with a non-zero score, ' +
+    'matching the documented value 7819 exactly',
+    DEFAULT_TABLE[0].score === 7819 && DEFAULT_TABLE.slice(1).every((e) => e.score === 0),
+    DEFAULT_TABLE.map((e) => e.score).join(','));
+  check('every default name fits the corrected 16-byte field with room to ' +
+    'spare (none of the 10 shipped names are anywhere near 16 characters, ' +
+    'so this correction does not change what this table decodes to)',
+    names.every((n) => n.length <= NAME_BYTES));
+  check('scoreBytes round-trips through bcdToNumber back to the same score',
+    DEFAULT_TABLE.every((e) => bcdToNumber(e.scoreBytes) === e.score));
   return results;
 }
 

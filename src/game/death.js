@@ -20,15 +20,21 @@
  * hero's THIRD death that ends the game, not the second.
  *
  * This port keeps the burst, the fork, and the respawn positioning byte-
- * exact. It does NOT attempt CS:0x0943-0x0993's own game-over sequence (a
- * 150-iteration palette fade, the hiscore name-entry/table screens, then a
- * jump into the attract-mode demo cycler) — that is this project's title-
- * screen/attract-mode system, which does not exist in this port at all, and
- * building it is a UI/design undertaking well beyond a byte-level port.
- * `gameOverPlaceholder` below is an explicit, disclosed substitute: it
- * reports that the game is over and lets the caller decide what a browser
- * "new game" affordance should look like, rather than silently reproducing
- * nothing.
+ * exact.
+ *
+ * ⚠️ **SUPERSEDED, a later pass.** This header used to say the port does NOT
+ * attempt CS:0x0943-0x0993's own game-over sequence (the 150-iteration
+ * palette fade, the hiscore name-entry/table screens, the attract-mode demo
+ * cycler) because "that is this project's title-screen/attract-mode system,
+ * which does not exist in this port at all." It now does — see
+ * `game/title-menu.js`'s `NameEntry`/`HiscoreTable` and `game/attract.js`.
+ * `main.js`'s own death/game-over block calls those directly on the third
+ * life lost, not `gameOverPlaceholder` below. That function stays exported
+ * (and tested — `verify/checks.js`) as a documented, deliberate STAGE this
+ * port went through, not deleted history: it was the honest placeholder for
+ * exactly the gap this later pass closed, and the palette fade itself
+ * remains unported (a purely cosmetic transition, `CS:0x359D`, disclosed as
+ * out of scope the same way `shop.js`'s own held-direction auto-repeat is).
  */
 
 import { MAP_COLS } from './statue.js';

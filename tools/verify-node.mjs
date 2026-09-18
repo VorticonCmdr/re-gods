@@ -270,6 +270,13 @@ for (const r of await checkLineBarriers(fetchRaw)) {
   console.log(line(r));
 }
 
+console.log('\n  the shipped HISCORES.BIN defaults, hardcoded against the corrected 16+4 layout:');
+const { checkHiscoresFile } = await import('../src/verify/checks.js');
+for (const r of checkHiscoresFile()) {
+  if (!r.pass && !r.note) bad++;
+  console.log(line(r));
+}
+
 console.log('\n  the retracting spike hazard (CS:0x1B72/0x1AF6, types 50/117/130):');
 const { checkSpikes } = await import('../src/verify/checks.js');
 for (const r of checkSpikes()) {

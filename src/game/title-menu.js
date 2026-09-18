@@ -1,8 +1,34 @@
-/* title-menu.js — the title screen: a 3-option menu plus the letter-grid
- * password entry, closing a gap main.js's own comments flagged explicitly:
- * "this port has no title screen to route 'new game' through" and
- * zones.js's `UNKNOWN_password_entry_ui` ("the grid-entry UI that would let
- * a player TYPE one back in is a disclosed gap").
+/* title-menu.js — the title screen: a 3-option menu, the letter-grid
+ * password/name entry, and the "TOP TEN GODS" hiscore table, closing a gap
+ * main.js's own comments flagged explicitly: "this port has no title screen
+ * to route 'new game' through" and zones.js's `UNKNOWN_password_entry_ui`
+ * ("the grid-entry UI that would let a player TYPE one back in is a
+ * disclosed gap").
+ *
+ * ⚠️ **A later pass converted every widget here from keydown-driven to
+ * TICK-POLLED (`step(input)`, the same shape `game/shop.js`'s `ShopScreen`
+ * already has), while porting the title-screen/attract-mode system
+ * (`game/attract.js`).** This was not a style change: the original's own
+ * menu is itself polled once per logic frame off the SAME per-tick
+ * `DS:0x382` byte real gameplay input reads — see `docs/dynamic-trace-and-
+ * runtime-data.md`'s "The title screen" section: "UP -> cursor -1, clamp at
+ * 0, click sfx 0x119, redraw" (from the poll_input head, not a keyboard
+ * event). Once the attract-mode cycler needs to feed a `joyl` RECORDING'S
+ * ticks into this exact same dispatch (`docs/passwords.md`'s "the recorded
+ * demo navigating this same title menu with fake joystick input"), a
+ * keydown-only widget has nowhere to receive them — `step(input)` is the
+ * one entry point BOTH a real keyboard (via main.js's own shared `input`
+ * object) and a decoded recording (`formats/joy.js`) drive identically, so
+ * the two can never drift into two different behaviours. Every SFX play
+ * that used to live in main.js's `handleTitleKey` (keyed off the raw
+ * KeyboardEvent code) now lives in each widget's own `step()` instead — MORE
+ * faithful, not just relocated: the original plays the click/confirm sound
+ * from the menu's OWN dispatch, never from a key event itself. Real-keyboard
+ * convenience-only actions with no `input` bit of their own (ESC, Backspace
+ * — the original's per-frame joystick byte has no such bits) stay as
+ * separate methods (`cancel()`/`eraseKey()`), called directly by main.js's
+ * keydown handler and never reachable from a recording, exactly matching
+ * `DS:0x382`'s own real shape.
  *
  * PROVENANCE
  *   The menu's DISPATCH is [PROVEN] — see Gods/docs/dynamic-trace-and-
@@ -40,18 +66,39 @@
  *   message pointer), confirmed both by static citation and by the same
  *   live capture above.
  *
+ *   The SAME grid+keyboard loop (`FUN_1000_2eb0`) also drives the hiscore
+ *   NAME-ENTRY screen (`"ENTER YOUR NAME HERO"`, `1ffd:eba7`, `NameEntry`
+ *   below) — `docs/dynamic-trace-and-runtime-data.md`'s own "hiscore
+ *   name-entry screen" section. ⚠️ **The keyboard half of that shared loop
+ *   is PROVEN DEAD CODE, not a disclosed simplification**: `CS:0x2F1A`'s own
+ *   `CMP reg,0` can never set the carry flag (unsigned subtraction of 0
+ *   never borrows), so the gate that would route a real BIOS keypress to
+ *   the ASCII classifier (`CS:0x2FDA`) is UNREACHABLE by construction — a
+ *   genuine authoring bug in the shipped `GAME.EXE`, confirmed live (a
+ *   breakpointed Enter keypress was traced landing at the grid/fire test,
+ *   never the ASCII path). The ONLY way to submit a name (or a password) on
+ *   any real copy of this game is the on-screen letter grid via FIRE — this
+ *   module never had to choose between porting the grid and porting a
+ *   keyboard path, because only one of the two ever worked in the original.
+ *   `NameEntry`'s own `maxLength` (16, not `PasswordEntry`'s 3) and its
+ *   confirm gate (submits WHATEVER's typed, not exactly-N — a bug fix, see
+ *   `LetterGrid#fire`'s own citation) both come from this being the
+ *   general-purpose shared widget, not a password-specific one.
+ *
  *   The grid's exact VISUAL geometry — `UNKNOWN_password_grid_layout` — is
  *   now [PROVEN] too, CLOSED this same session: an 8-column x 5-row, 40-cell
  *   grid (`A-H`/`I-P`/`Q-X`/`Y Z . <space> 0 1 2 3`/`4 5 6 7 8 9` then an
- *   erase icon then a confirm icon), read directly off a live capture and
- *   CROSS-VALIDATED against Gods/docs/dynamic-trace-and-runtime-data.md's
- *   own earlier, independent finding — a different session moved the
- *   cursor "from index 34 to 39" via "5x KBD_right" while completing a real
- *   hiscore entry, and row-major index 34 in THIS grid is row 4 col 2 while
- *   39 is row 4 col 7, exactly 5 columns apart. See `GRID_CELLS` below for
- *   the full citation and the two genuinely-still-open loose ends (the
- *   erase/confirm icons' own sprite source, and one obscured cell read from
- *   alphabet ordering rather than a clean pixel match).
+ *   erase icon then a distinct circular confirm icon (neither icon matched
+ *   to a `PSMLFNT` glyph — their own sprite source not chased down)), read
+ *   directly off a live capture and CROSS-VALIDATED against Gods/docs/
+ *   dynamic-trace-and-runtime-data.md's own earlier, independent finding —
+ *   a different session moved the cursor "from index 34 to 39" via "5x
+ *   KBD_right" while completing a real hiscore entry, and row-major index
+ *   34 in THIS grid is row 4 col 2 while 39 is row 4 col 7, exactly 5
+ *   columns apart. `GRID_CELLS` below is now built from `formats/
+ *   hiscores.js`'s own `ALPHABET_CHARS` (the SAME 38-entry table the
+ *   HISCORES.BIN name codec uses — both are literally the one alphabet the
+ *   game itself has), not a second, hand-copied literal array.
  *
  *   GLYPH SAFETY: every string this module draws is built ONLY from
  *   characters Gods/docs/message-line.md's own "notable slots" table names
@@ -71,6 +118,7 @@
 
 import { SCREEN_W } from '../formats/pi1.js';
 import { PASSWORD_LENGTH, passwordToString } from './zones.js';
+import { ALPHABET_CHARS, NAME_BYTES, bcdDigitString } from '../formats/hiscores.js';
 
 export const ADVANCE = 0x0a;    // 10 — the same per-glyph step message.js uses
 
@@ -143,13 +191,12 @@ export const MENU_ARROW_RIGHT_X = 0x118;   // 280
 /* Gods/docs/dynamic-trace-and-runtime-data.md's own title-screen trace:
  * "UP -> cursor -1, clamp at 0, click sfx 0x119, redraw" / "FIRE -> confirm
  * sfx 0x233 (same sound the grid-entry widget uses to confirm)" — one
- * confirm id serves BOTH `TitleMenu` and `PasswordEntry`, not two. The
- * click fires on any cursor move in the citation (UP/DOWN); this port
- * generalises it to LEFT/RIGHT too for the password grid's own 2-D
- * navigation, a disclosed generalisation rather than a byte-cited claim for
- * that axis specifically. main.js's `handleTitleKey` is the one place both
- * widgets' key handling passes through, so it is also the one place these
- * are played, rather than threading an audio dependency into either class. */
+ * confirm id serves BOTH `TitleMenu` and `PasswordEntry`/`NameEntry`, not a
+ * separate one each. The click fires on any cursor move in the citation
+ * (UP/DOWN); this port generalises it to LEFT/RIGHT too for the grid's own
+ * 2-D navigation, a disclosed generalisation rather than a byte-cited claim
+ * for that axis specifically. Every widget below plays these from its own
+ * `step()`, not from a raw key event — see this file's own header. */
 export const MENU_CLICK_SFX = 0x119;
 export const MENU_CONFIRM_SFX = 0x233;
 
@@ -190,30 +237,39 @@ export function drawCentered(renderer, glyphs, text, y, advance = ADVANCE) {
 }
 
 /**
- * CS:0x2CAF-0x2E26 — the menu's own cursor/dispatch. Purely event-driven off
- * keydown (the 15 Hz tick loop is frozen while any non-'game' uiState is
- * active — see main.js), which is a port-level simplification of a menu
- * that, in the original, is itself polled once per logic frame.
+ * CS:0x2CAF-0x2E26 — the menu's own cursor/dispatch, now tick-polled off the
+ * shared `input` object (see this file's own header for why) rather than
+ * keydown-driven.
  */
 export class TitleMenu {
-  constructor() { this.cursor = 0; }
+  constructor() {
+    this.cursor = 0;
+    this.dirPrev = { up: false, down: false };
+    this.firePrev = false;
+  }
 
-  /** @returns {'begin'|'password'|'exit'|null} */
-  onKeyDown(code) {
-    if (code === 'ArrowUp' || code === 'KeyW') {
-      this.cursor = Math.max(0, this.cursor - 1);                      // CS:0x2D18 clamp at 0
-    } else if (code === 'ArrowDown' || code === 'KeyS') {
-      this.cursor = Math.min(MENU_OPTIONS.length - 1, this.cursor + 1); // CS:0x2D28 clamp at [0x386]
-    } else if (code === 'Space' || code === 'Enter') {
-      return ['begin', 'password', 'exit'][this.cursor];               // CS:0x2D50 dispatch
-    }
+  /**
+   * One tick. @param {{up:boolean,down:boolean,fire:boolean}} input
+   * @returns {null|{sfx:number, action?:'begin'|'password'|'exit'}}
+   */
+  step(input) {
+    const upEdge = !!input.up && !this.dirPrev.up;
+    const downEdge = !!input.down && !this.dirPrev.down;
+    this.dirPrev.up = !!input.up;
+    this.dirPrev.down = !!input.down;
+    if (upEdge) { this.cursor = Math.max(0, this.cursor - 1); return { sfx: MENU_CLICK_SFX }; }        // CS:0x2D18 clamp at 0
+    if (downEdge) { this.cursor = Math.min(MENU_OPTIONS.length - 1, this.cursor + 1); return { sfx: MENU_CLICK_SFX }; } // CS:0x2D28 clamp
+
+    const fireEdge = !!input.fire && !this.firePrev;
+    this.firePrev = !!input.fire;
+    if (fireEdge) return { sfx: MENU_CONFIRM_SFX, action: ['begin', 'password', 'exit'][this.cursor] }; // CS:0x2D50
     return null;
   }
 
-  /** @param {object} glyphs PSMLFNT — used ONLY for the port-only control-hint
+  /** @param glyphs PSMLFNT — used ONLY for the port-only control-hint
    *    caption below, which has no original-game string to match (not found
    *    anywhere in this project's own string-table dump or live captures).
-   *  @param {object} menuGlyphs the MENU font (PGODFONT, main.js's own
+   *  @param menuGlyphs the MENU font (PGODFONT, main.js's own
    *    `menuGlyphs`) — see MENU_ADVANCE's own citation above. Real strings
    *    (MENU_OPTIONS) draw through this one, not PSMLFNT.
    *  @param {?object} arrowLeft `hero.frames[MENU_ARROW_LEFT_DESC]` (a
@@ -272,16 +328,15 @@ export class TitleMenu {
  * not a mystery "two small dots" icon as an earlier pass of this project's
  * documentation had it. Records 38/39 (this grid's own erase/confirm cells)
  * are main.js's `gridEraseIcon`/`gridConfirmIcon` (`loadSprites()`'s own
- * `GRID_ERASE_DESC`/`GRID_CONFIRM_DESC`, descriptors 166/167). */
+ * `GRID_ERASE_DESC`/`GRID_CONFIRM_DESC`, descriptors 166/167).
+ *
+ * `GRID_CELLS` is `formats/hiscores.js`'s own `ALPHABET_CHARS` (the 38-cell
+ * alphabet HISCORES.BIN's name field already uses) plus the two icon
+ * sentinels — one array, not two independently-typed literals that could
+ * silently drift apart. */
 const GRID_COLS = 8, GRID_ROWS = 5;
-const GRID_CELLS = [
-  'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H',
-  'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P',
-  'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X',
-  'Y', 'Z', '.', ' ', '0', '1', '2', '3',
-  '4', '5', '6', '7', '8', '9', '<', '=',
-];
 const CELL_DEL = '<', CELL_OK = '=';   // internal sentinels only — never drawn as text, see draw()
+const GRID_CELLS = [...ALPHABET_CHARS, CELL_DEL, CELL_OK];
 const GRID_X0 = 40, GRID_Y0 = 40, GRID_COL_W = 32, GRID_ROW_H = 24;   // CS:0x30D4, exact
 
 /* CS:0x3097 — the cursor is a small 4-frame animated icon (descriptor
@@ -300,7 +355,8 @@ const GRID_X0 = 40, GRID_Y0 = 40, GRID_COL_W = 32, GRID_ROW_H = 24;   // CS:0x30
  * X=32, Y=168, 16px/cell, reading `DS:0x3004` (the SAME scratch buffer the
  * grid input loop fills) byte-for-byte — so for a 3-letter password only
  * the first 3 cells ever show real content, the other 13 are permanently
- * the empty-slot placeholder (Space, see the header note above). */
+ * the empty-slot placeholder (Space, see the header note above). For
+ * `NameEntry` (`maxLength` 16), all 16 cells can hold real content. */
 const BUFFER_ROW_X0 = 32, BUFFER_ROW_Y = 168, BUFFER_ROW_ADVANCE = 16, BUFFER_ROW_LEN = 16;
 
 /* CS:0x32FE, shared with the "TOP TEN GODS" hiscore table (FUN_1000_32c0)
@@ -318,39 +374,168 @@ const BUFFER_ROW_X0 = 32, BUFFER_ROW_Y = 168, BUFFER_ROW_ADVANCE = 16, BUFFER_RO
 const HINT_ROW_Y = 190, HINT_ROW_X = [10, 110, 210], HINT_ADVANCE = 8;
 
 /**
- * CS:0x2e2f/0x2e6c-0x2ea8 — the letter-grid password entry. `onKeyDown`
- * returns `{submit: string}` (exactly PASSWORD_LENGTH letters, to be checked
- * against zones.js's `passwordSlots` by the caller — this module owns no
- * game state) or `{cancel: true}` (ESC — a port-only convenience; the
- * original grid has no "back", only the wrong-guess bounce CS:0x2e8a already
- * reproduces via the caller's own dispatch).
+ * `FUN_1000_2eb0` — the shared interactive letter-grid loop behind BOTH the
+ * password screen (`PasswordEntry`) and the hiscore name-entry screen
+ * (`NameEntry`). Grid navigation, the erase/confirm cells, and the typed-
+ * buffer readout are identical between the two; only the title text, the
+ * max buffer length, and whether a "PASS n :xxx" hint row is drawn differ
+ * (each subclass's own `draw()` / `title`/`maxLength` fields).
  */
-export class PasswordEntry {
-  constructor() {
-    this.row = 0;
-    this.col = 0;
+class LetterGrid {
+  constructor(maxLength) {
+    /* DS:0x385 — a single FLAT 0..39 row-major index, not independent row/
+     * col fields. `row`/`col` below are read-only views onto it, kept for
+     * every existing caller (drawGrid, #fire, checks.js) that already
+     * addresses cells that way — see `step()`'s own header for why the
+     * underlying representation had to change. */
+    this.cursor = 0;
     this.buffer = [];
+    this.maxLength = maxLength;
+    this.firePrev = false;
   }
 
-  /** @returns {{submit:string}|{cancel:true}|null} */
-  onKeyDown(code) {
-    if (code === 'Escape') return { cancel: true };
-    if (code === 'Backspace') { this.buffer.pop(); return null; }
-    if (code === 'ArrowUp' || code === 'KeyW') this.row = Math.max(0, this.row - 1);
-    else if (code === 'ArrowDown' || code === 'KeyS') this.row = Math.min(GRID_ROWS - 1, this.row + 1);
-    else if (code === 'ArrowLeft' || code === 'KeyA') this.col = Math.max(0, this.col - 1);
-    else if (code === 'ArrowRight' || code === 'KeyD') this.col = Math.min(GRID_COLS - 1, this.col + 1);
-    else if (code === 'Space' || code === 'Enter') {
-      const cell = GRID_CELLS[this.row * GRID_COLS + this.col];
-      if (cell === CELL_DEL) this.buffer.pop();
-      else if (cell === CELL_OK) {
-        if (this.buffer.length === PASSWORD_LENGTH) return { submit: this.buffer.join('') };
-      } else if (this.buffer.length < PASSWORD_LENGTH) {
-        this.buffer.push(cell);
+  get row() { return (this.cursor / GRID_COLS) | 0; }
+  get col() { return this.cursor % GRID_COLS; }
+
+  /** Real-keyboard-only convenience, never driven by a recording (the
+   *  original per-tick joystick byte, `DS:0x382`, has no ESC bit at all —
+   *  see this file's own header). Port-only; the original grid has no
+   *  "back", only the wrong-guess bounce `PasswordEntry`'s own caller
+   *  already reproduces (`CS:0x2e8a`). @returns {{cancel:true}} */
+  cancel() { return { cancel: true }; }
+
+  /** Real-keyboard-only convenience for the SAME reason as `cancel()` — the
+   *  grid's own erase CELL (`CELL_DEL`, reachable through `step()` and so
+   *  replayable) does the identical thing; this is purely a keyboard
+   *  shortcut for a human player, not a second mechanism. */
+  eraseKey() { this.buffer.pop(); }
+
+  /**
+   * One tick. @param {{up:boolean,down:boolean,left:boolean,right:boolean,fire:boolean}} input
+   * @returns {null|{sfx:number}|{sfx:number, submit:string}}
+   *
+   * ⚠️ FIXED — a full rewrite from fresh disassembly of `FUN_1000_2eb0`'s own
+   * per-tick dispatch, `CS:0x2F26`-`0x2FD7`. The previous revision modelled
+   * this as an edge-triggered 2D (row,col) pad — plausible-looking, but wrong
+   * on every axis:
+   *
+   *   2F26  TEST [0x382],0x80 (FIRE) / JNZ 2F41
+   *   2F2D    [0x380]:=0                          ; FIRE not held: clear the latch
+   *   2F32    CMP [0x382],0 / JNZ 2F72             ; any OTHER bit -> directions
+   *   2F39    (nothing pressed at all -> idle/redraw)
+   *   2F41  [0x380]!=0 ? -> 2F39 (idle)            ; FIRE held, already latched: NO-OP —
+   *                                                 ;   directions are UNREACHABLE this tick
+   *   2F48  [0x380]:=1 ; click(0x233) ; dispatch    ; FIRE held, fresh press: fire only
+   *
+   *   2F72  RIGHT: ADD [0x385],1  ; ALWAYS clicks when held, no boundary test
+   *   2F81  LEFT:  SUB [0x385],1  ; ALWAYS clicks when held, no boundary test
+   *   2F90  UP:    cursor>=8  ? SUB 8, click : nothing
+   *   2FA6  DOWN:  cursor<0x20 ? ADD 8, click : nothing
+   *   2FBC  clamp cursor to [0, 0x27] (39)          ; runs every tick regardless
+   *
+   * Three genuine divergences from the old model, all load-bearing for a
+   * long recorded input stream (this is what made `PJOYL2.DAT`'s own grid
+   * navigation drift forever without ever reaching the confirm cell):
+   *   1. `DS:0x385` is ONE FLAT 0..39 index, not independent row/col — RIGHT/
+   *      LEFT are a bare `+-1` that FREELY CROSSES ROW BOUNDARIES (col 7 of
+   *      one row is adjacent to col 0 of the next), not clamped within the
+   *      current row the way a 2D pad would clamp it.
+   *   2. There is NO debounce latch on any of the four directions (unlike
+   *      FIRE's own `DS:0x380`) — holding a direction moves EVERY tick it's
+   *      held, not once per press-release cycle.
+   *   3. Directions are only ever reached when FIRE is NOT held this tick —
+   *      a held FIRE suspends navigation entirely (see `[0x380]` above), it
+   *      doesn't merely fail to also move the cursor.
+   * RIGHT/LEFT click unconditionally (even a tick that will be clamped back
+   * to the SAME cursor, e.g. holding RIGHT at the confirm cell); UP/DOWN
+   * click only on a tick that actually moves — a real, disassembly-confirmed
+   * asymmetry, not smoothed over. Multiple directions held in one tick all
+   * apply, in this exact order (CS:0x2F72 falls through to 0x2F81 to 0x2F90
+   * to 0x2FA6 unconditionally) — collapsed here to a single `{sfx}` per
+   * tick regardless of how many of the four independently clicked, since
+   * nothing downstream plays more than one sfx per tick anyway.
+   */
+  step(input) {
+    if (input.fire) {
+      if (this.firePrev) return null;               // CS:0x2F41/0x2F39 — repeat hold, no-op
+      this.firePrev = true;                          // CS:0x2F48
+      return { sfx: MENU_CONFIRM_SFX, ...this.#fire() };
+    }
+    this.firePrev = false;                           // CS:0x2F2D
+    let clicked = false;
+    if (input.right) { this.cursor += 1; clicked = true; }                              // CS:0x2F72-0x2F7E
+    if (input.left)  { this.cursor -= 1; clicked = true; }                              // CS:0x2F81-0x2F8D
+    if (input.up && this.cursor >= GRID_COLS) { this.cursor -= GRID_COLS; clicked = true; }              // CS:0x2F90-0x2FA3
+    if (input.down && this.cursor < GRID_COLS * (GRID_ROWS - 1)) { this.cursor += GRID_COLS; clicked = true; } // CS:0x2FA6-0x2FB9
+    if (this.cursor > GRID_CELLS.length - 1) this.cursor = GRID_CELLS.length - 1;        // CS:0x2FBC-0x2FC3
+    if (this.cursor < 0) this.cursor = 0;                                                // CS:0x2FC8-0x2FD2
+    return clicked ? { sfx: MENU_CLICK_SFX } : null;
+  }
+
+  /**
+   * ⚠️ FIXED — CS:0x3030 is the confirm-cell's own dispatch, and it submits
+   * WHATEVER is in the buffer unconditionally: `RET`s straight out of
+   * `FUN_1000_2eb0` (see the header's "hiscore name-entry screen" citation:
+   * a live capture completed a 16-character name through this exact path).
+   * An earlier revision of this widget only allowed confirming at EXACTLY
+   * `maxLength` characters — harmless for a human typing a 3-letter
+   * password, but it silently ate the attract-mode demo's own "L"+digit
+   * password bypass (`docs/passwords.md`'s own citation), a real 2-
+   * character submission this gate would have discarded.
+   */
+  #fire() {
+    const cell = GRID_CELLS[this.cursor];
+    if (cell === CELL_DEL) { this.buffer.pop(); return {}; }
+    if (cell === CELL_OK) return { submit: this.buffer.join('') };
+    if (this.buffer.length < this.maxLength) this.buffer.push(cell);
+    return {};
+  }
+
+  /** Shared grid + typed-buffer rendering, `FUN_1000_30d4`/`0x3065`/`0x3097`.
+   * @param eraseIcon `hero.gridEraseIcon` (grid record 38).
+   * @param confirmIcon `hero.gridConfirmIcon` (grid record 39).
+   * @param cursorFrames `hero.cursorFrames`, 4 entries (descriptors 87-90).
+   * @param tick `clock.tick` — selects the cursor's own phase. */
+  drawGrid(renderer, menuGlyphs, eraseIcon, confirmIcon, cursorFrames, tick) {
+    for (let r = 0; r < GRID_ROWS; r++) {
+      for (let c = 0; c < GRID_COLS; c++) {
+        const cell = GRID_CELLS[r * GRID_COLS + c];
+        const x = GRID_X0 + c * GRID_COL_W, y = GRID_Y0 + r * GRID_ROW_H;
+        if (cell === CELL_DEL) { if (eraseIcon) renderer.blitSprite(eraseIcon, x, y); }
+        else if (cell === CELL_OK) { if (confirmIcon) renderer.blitSprite(confirmIcon, x, y); }
+        else if (menuGlyphs) {
+          const f = menuGlyphs[cell.charCodeAt(0)];
+          if (f) renderer.blitSprite(f, x, y);
+        }
+        if (r === this.row && c === this.col && cursorFrames && cursorFrames.length) {
+          const f = cursorFrames[(tick | 0) % cursorFrames.length];
+          if (f) renderer.blitSprite(f, x, y);
+        }
       }
     }
-    return null;
   }
+
+  drawBufferRow(renderer, menuGlyphs) {
+    for (let i = 0; i < BUFFER_ROW_LEN; i++) {
+      const ch = this.buffer[i] || ' ';
+      const f = menuGlyphs && menuGlyphs[ch.charCodeAt(0)];
+      if (f) renderer.blitSprite(f, BUFFER_ROW_X0 + i * BUFFER_ROW_ADVANCE, BUFFER_ROW_Y);
+    }
+  }
+}
+
+/**
+ * CS:0x2e2f/0x2e6c-0x2ea8 — the letter-grid password entry. `step` returns
+ * `{sfx, submit:string}` (exactly PASSWORD_LENGTH letters expected by
+ * convention — the confirm cell will submit fewer if pressed early, see
+ * `LetterGrid#fire`'s own citation — to be checked against zones.js's
+ * `passwordSlots` by the caller, or matched against the attract-mode "L"+
+ * digit bypass, `docs/passwords.md`'s own citation) or `{cancel: true}`
+ * (ESC, via `cancel()` — a port-only convenience). This module owns no game
+ * state.
+ */
+export class PasswordEntry extends LetterGrid {
+  constructor() { super(PASSWORD_LENGTH); }
 
   /**
    * @param glyphs PSMLFNT — used only for the small hint-line text below.
@@ -376,38 +561,144 @@ export class PasswordEntry {
      * "ENTER PASSWORD". Drawn via PGODFONT (CS:0x30D4 calls FUN_1000_224e,
      * the SAME routine the title menu's own options use), not PSMLFNT. */
     drawCentered(renderer, menuGlyphs, 'ENTER A PASSWORD', 8, MENU_ADVANCE);
-
-    /* The grid itself — bare glyphs, no per-cell marker prefix (the real
-     * screen draws only the letter/digit/icon, nothing else). */
-    for (let r = 0; r < GRID_ROWS; r++) {
-      for (let c = 0; c < GRID_COLS; c++) {
-        const cell = GRID_CELLS[r * GRID_COLS + c];
-        const x = GRID_X0 + c * GRID_COL_W, y = GRID_Y0 + r * GRID_ROW_H;
-        if (cell === CELL_DEL) { if (eraseIcon) renderer.blitSprite(eraseIcon, x, y); }
-        else if (cell === CELL_OK) { if (confirmIcon) renderer.blitSprite(confirmIcon, x, y); }
-        else if (menuGlyphs) {
-          const f = menuGlyphs[cell.charCodeAt(0)];
-          if (f) renderer.blitSprite(f, x, y);
-        }
-        if (r === this.row && c === this.col && cursorFrames && cursorFrames.length) {
-          const f = cursorFrames[(tick | 0) % cursorFrames.length];
-          if (f) renderer.blitSprite(f, x, y);
-        }
-      }
-    }
-
-    /* The typed-buffer readout — see BUFFER_ROW_* header note above. */
-    for (let i = 0; i < BUFFER_ROW_LEN; i++) {
-      const ch = this.buffer[i] || ' ';
-      const f = menuGlyphs && menuGlyphs[ch.charCodeAt(0)];
-      if (f) renderer.blitSprite(f, BUFFER_ROW_X0 + i * BUFFER_ROW_ADVANCE, BUFFER_ROW_Y);
-    }
+    this.drawGrid(renderer, menuGlyphs, eraseIcon, confirmIcon, cursorFrames, tick);
+    this.drawBufferRow(renderer, menuGlyphs);
 
     /* The hint line(s) — see HINT_ROW_* header note above. */
     if (passwordSlots) {
       for (let i = 0; i < passwordSlots.length; i++) {
         const chars = passwordSlots[i];
         if (!chars) continue;   // CS:0x32FE's own `if (*pcVar3 != 0)` guard — empty slot draws nothing
+        const text = `PASS ${i + 2} :${passwordToString(chars)}`;
+        drawText(renderer, glyphs, text, HINT_ROW_X[i], HINT_ROW_Y, HINT_ADVANCE);
+      }
+    }
+  }
+}
+
+/**
+ * `"ENTER YOUR NAME HERO"` (`1ffd:eba7`) — `FUN_1000_2eb0` again, this time
+ * called from `FUN_1000_318f` (the game-over/hiscore-insertion sequence).
+ * Same grid, same confirm-submits-whatever-length-is-typed behaviour
+ * (`LetterGrid#fire`), `maxLength` = `NAME_BYTES` (16, `formats/
+ * hiscores.js`) rather than `PasswordEntry`'s 3. No hint row — the shared
+ * `FUN_1000_32FE` line is drawn on the password screen and the hiscore
+ * TABLE (`HiscoreTable` below), not this entry screen.
+ */
+export class NameEntry extends LetterGrid {
+  constructor() { super(NAME_BYTES); }
+
+  draw(renderer, menuGlyphs, eraseIcon, confirmIcon, background, cursorFrames, tick) {
+    if (background) renderer.blitBackground(background);
+    else renderer.clear(0);
+    drawCentered(renderer, menuGlyphs, 'ENTER YOUR NAME HERO', 8, MENU_ADVANCE);
+    this.drawGrid(renderer, menuGlyphs, eraseIcon, confirmIcon, cursorFrames, tick);
+    this.drawBufferRow(renderer, menuGlyphs);
+  }
+}
+
+/* ── The hiscore table, "TOP TEN GODS" (`FUN_1000_32c0`) ──────────────────
+ *
+ * `[PROVEN]` — a later pass closed the geometry gap an earlier revision of
+ * this header disclosed as unrecovered, by raw-disassembling (not just
+ * decompiling) `FUN_1000_32c0`'s own draw chain instead of stopping at the
+ * decompiler's mangled register-passed-parameter output:
+ *
+ *   32C6  si = 0xeb89 ("TOP TEN GODS") ; ax = 0x40 ; bx = 8
+ *   32CF  call 0x224e                    ; title, raw (X,Y) — NOT the
+ *                                         ;   FUN_1000_646f centering wrapper
+ *                                         ;   PasswordEntry's own title uses,
+ *                                         ;   but 0x40 IS the centred X for a
+ *                                         ;   12-char string at 16px/glyph
+ *                                         ;   anyway, so the two are pixel-
+ *                                         ;   identical here
+ *
+ *   337C  bx = 0x28(40)                  ; row 0's Y
+ *         si = 0x45e                     ; the live table base
+ *         cx = 0xa (10 rows)
+ *   3385  ax = 0x14(20)                  ; NAME column X
+ *   3388  call 0x33ea(ax=X, bx=Y, si)    ; draws 16 chars (0x10-iteration
+ *                                         ;   LODSB loop — the SAME 16-byte
+ *                                         ;   name-field correction formats/
+ *                                         ;   hiscores.js derived from the
+ *                                         ;   file's own bytes, now confirmed
+ *                                         ;   from the OTHER side: the code
+ *                                         ;   that reads them), advancing SI
+ *                                         ;   by 16 (name -> score)
+ *   338B  ax += 0x28(40) -> 0x3c(60)     ; SCORE column X
+ *   338E  call 0x3397(ax=X, bx=Y, si)    ; draws 8 raw BCD digit glyphs (high
+ *                                         ;   nibble then low, 4 bytes in
+ *                                         ;   on-disk/big-endian order — see
+ *                                         ;   hiscores.js's own bcdDigitString),
+ *                                         ;   then nets SI += 4 (score field,
+ *                                         ;   -> the NEXT record's own name)
+ *   3391  bx += 0xd(13)                  ; next row's Y
+ *   3394  loop 3385                      ; 10 rows total
+ *
+ * Every character (name letters AND score digits alike) advances by 0xa(10)
+ * px, inside the shared low-level blit `FUN_1000_33c1` itself (`ADD DX,0xa`)
+ * — the SAME PSMLFNT `ADVANCE` this module's own `drawText` already
+ * defaults to. So: NAME column X=20 (spanning 20-180, all 16 cells always
+ * drawn — a pad byte draws PSMLFNT's own space glyph, not nothing), SCORE
+ * column X=60 (spanning 60-140, all 8 digits always drawn, genuine leading
+ * zeros). ⚠️ These two spans OVERLAP for any name past 4 characters (60
+ * is column 4 of the name field) — checked, not smoothed over: the shipped
+ * defaults reach up to 8 characters (HERACLES/POSEIDON/DIONYSUS), so on
+ * real hardware the score digits are drawn ON TOP of (after) the tail of
+ * a long name. That is what `FUN_1000_337c`'s own call order does
+ * (name first, score second), not a port bug to route around.
+ *
+ * PSMLFNT's own `DS:0x138`-based ascii-vs-raw-digit dispatch quirk inside
+ * `FUN_1000_33c1` (the name path passes an ASCII code, the score/digit path
+ * a raw 0-9 value, to the SAME call) needs no separate handling here: this
+ * module's own `drawText`/`glyphs[charCode]` convention already normalises
+ * everything to plain characters before drawing, the same as every other
+ * screen in this file.
+ *
+ * The ~500-tick wait-for-fire-or-timeout (`FUN_1000_255d`, `HISCORE_TABLE_
+ * TICKS` below) and the shared `FUN_1000_32FE` "PASS n :xxx" hint row
+ * (drawn on this screen too, per that function's own header citation) are
+ * both wired below.
+ */
+export const HISCORE_TABLE_TICKS = 500;   // ~33.3s at 15Hz — docs' own "~500 ticks"
+const HISCORE_TITLE_Y = 8;                // CS:0x32C9 `bx=8`
+const HISCORE_ROW_Y0 = 40, HISCORE_ROW_H = 13;   // CS:0x337C `bx=0x28`; CS:0x3391 `bx+=0xd`
+const HISCORE_NAME_X = 20, HISCORE_SCORE_X = 60; // CS:0x3385 `ax=0x14`; CS:0x338B `ax+=0x28`
+
+export class HiscoreTable {
+  /** @param {Array<{name:string, scoreBytes:Uint8Array}>} entries `decodeHiscores`'s own 10 rows */
+  constructor(entries) {
+    this.entries = entries;
+    this.ticks = 0;
+    this.firePrev = false;
+  }
+
+  /** One tick. @returns {boolean} true once this screen is ready to dismiss
+   *  (a FIRE press, or the ~500-tick timeout — `FUN_1000_255d`'s own two
+   *  exit conditions; the BIOS-keyboard-any-key exit is the proven-dead
+   *  path elsewhere in this same shared loop family, not ported). */
+  step(input) {
+    this.ticks++;
+    const fireEdge = !!input.fire && !this.firePrev;
+    this.firePrev = !!input.fire;
+    return fireEdge || this.ticks >= HISCORE_TABLE_TICKS;
+  }
+
+  draw(renderer, glyphs, menuGlyphs, background, passwordSlots) {
+    if (background) renderer.blitBackground(background);
+    else renderer.clear(0);
+    drawCentered(renderer, menuGlyphs, 'TOP TEN GODS', HISCORE_TITLE_Y, MENU_ADVANCE);
+    for (let i = 0; i < this.entries.length; i++) {
+      const y = HISCORE_ROW_Y0 + i * HISCORE_ROW_H;
+      drawText(renderer, glyphs, this.entries[i].name, HISCORE_NAME_X, y, ADVANCE);
+      /* CS:0x33A2-0x33B7 — all 8 raw BCD digits, genuine leading zeros, not
+       * a right-justified decimal (bcdDigitString's own citation). */
+      drawText(renderer, glyphs, bcdDigitString(this.entries[i].scoreBytes), HISCORE_SCORE_X, y, ADVANCE);
+    }
+    if (passwordSlots) {
+      for (let i = 0; i < passwordSlots.length; i++) {
+        const chars = passwordSlots[i];
+        if (!chars) continue;
         const text = `PASS ${i + 2} :${passwordToString(chars)}`;
         drawText(renderer, glyphs, text, HINT_ROW_X[i], HINT_ROW_Y, HINT_ADVANCE);
       }

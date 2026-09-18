@@ -19,13 +19,13 @@ import { runAllChecks, checkDescriptorAnchors, checkHeroSprites,
          checkSelectorsAndObjects, checkSpawn, checkEntityB, checkEntityA, checkSpawnA,
          checkWeaponsProjectiles, checkTriggerActions,
          checkZones, checkPopup, checkLevers, checkSpikes,
-         checkMessages, checkLineBarriers, checkTitleMenu, checkTally,
+         checkMessages, checkLineBarriers, checkTitleMenu, checkHiscoresFile, checkTally,
          checkShop, checkMusic } from './verify/checks.js';
 import { EventRunner, parsePalfils, palfilsNameFor } from './game/events.js';
 import { LineBarriers, parseLineBarrierRecords } from './game/line-barriers.js';
 import { makeActionContext, makeGates, DOOR_TILES,
          ACTION_NAMES } from './game/trigger-actions.js';
-import { cameraForSpawn } from './game/camera.js';
+import { cameraForSpawn, Camera } from './game/camera.js';
 import { spriteFor, STATE_INFO, UNMODELLED_PHASE_STATES } from './game/states.js';
 import { buildDescriptorMap, GROUP_STEMS, HERO_DESCRIPTOR_MAX,
          LEVEL_LOAD_ORDER } from './formats/descriptors.js';
@@ -86,9 +86,12 @@ import { scanZones, unpackTeleportDest, resolveExitDestination,
          ZONE_TELEPORT, ZONE_EXIT, exitEffects, advanceWorld,
          clearNonPotionInventory, generatePassword, passwordSlotForWorld,
          passwordWorldForSlot, passwordToString, PASSWORD_SLOTS } from './game/zones.js';
-import { DeathBurst, findRespawnPosition, loseLife,
-         gameOverPlaceholder, DEATH_SFX } from './game/death.js';
-import { TitleMenu, PasswordEntry, MENU_CLICK_SFX, MENU_CONFIRM_SFX, drawCentered, MENU_ADVANCE, MENU_ARROW_LEFT_DESC, MENU_ARROW_RIGHT_DESC } from './game/title-menu.js';
+import { DeathBurst, findRespawnPosition, loseLife, DEATH_SFX } from './game/death.js';
+import { TitleMenu, PasswordEntry, NameEntry, HiscoreTable, HISCORE_TABLE_TICKS,
+         drawCentered, MENU_ADVANCE, MENU_ARROW_LEFT_DESC, MENU_ARROW_RIGHT_DESC } from './game/title-menu.js';
+import { DEFAULT_TABLE, encodeScoreBytes, rankOf, insertAt, bcdToNumber } from './formats/hiscores.js';
+import { decodeJoyRecording } from './formats/joy.js';
+import { CYCLE, JOYG_SHOWCASE_SPAWN, JOYG_SHOWCASE_LOADOUT, fileNameFor, nextState } from './game/attract.js';
 import { ShopScreen, BUY_CONFIRM_SFX } from './game/shop.js';
 import { TallyScreen, CHA_CHING_SFX } from './game/tally.js';
 import { WebAudioBus } from './audio/audio-bus.js';
@@ -543,6 +546,7 @@ async function main() {
     Promise.resolve(checkPopup()), Promise.resolve(checkLevers()),
     Promise.resolve(checkSpikes()), checkMessages(fetchRaw),
     checkLineBarriers(fetchRaw), Promise.resolve(checkTitleMenu()),
+    Promise.resolve(checkHiscoresFile()),
     Promise.resolve(checkTally()), Promise.resolve(checkShop()),
     checkMusic(fetchRaw),
     ]) results.push(...await g);
@@ -591,6 +595,15 @@ async function main() {
   try {
     titleBackground = await loadTitleBackground();
   } catch (e) { console.error('title background failed to load', e); }
+
+  /* The true shipped "TOP TEN GODS" defaults (game/formats/hiscores.js's
+   * own `DEFAULT_TABLE`, hardcoded rather than fetched — see that export's
+   * own citation for why HISCORES.BIN itself is not a fetchable asset here)
+   * — overridden below (see the `hiscoreEntries` declaration further down,
+   * hoisted-`function` helpers) by whatever this browser's own localStorage
+   * already holds, matching a real player's progress the same way
+   * `loadPersistedPasswordSlots()` does. */
+  const initialHiscores = DEFAULT_TABLE.map((e) => ({ ...e, scoreBytes: e.scoreBytes.slice() }));
 
   let spawn = levelSpawn(level.world);
   let player = new Player(spawn.x, spawn.y);
@@ -721,10 +734,14 @@ async function main() {
    * leverToggle/spikeClock/passwordSlots, not inside switchLevel's reset. */
   let healthBarShimmer = { phase: 0, tick: 0 };
   /* CS:0x01BD's own `jmp 0x9bb` (health.dead, combat.js) — game/death.js.
-   * `deathSeq` is non-null for the ~1.2s burst; `gameOverState` is non-null
-   * once the THIRD life is lost (CS:0x093E `js`) and freezes the tick loop
-   * entirely (see the guard at the top of the Clock's update callback). */
-  let deathSeq = null, gameOverState = null, lastDeathBurstFx = [];
+   * `deathSeq` is non-null for the ~1.2s burst; once the THIRD life is lost
+   * (CS:0x093E `js`) `uiState` itself leaves 'game' for 'name-entry' or
+   * 'hiscore-table' (the real CS:0x0943 cascade, below) — which already
+   * freezes the tick loop via the ordinary `uiState !== 'game'` gate, so
+   * there is no separate "game over, but still uiState 'game'" freeze flag
+   * to track here any more (an earlier pass's own `gameOverState`,
+   * superseded now that the screens it stood in for are real). */
+  let deathSeq = null, lastDeathBurstFx = [];
   /* CS:0xA461 — the starburst potion's 80-slot particle array. It is a real
    * damage source (tag 0xFC), so it lives beside the projectiles rather than
    * with the cosmetics. */
@@ -930,7 +947,10 @@ async function main() {
    * is now CLOSED — as a real target for the title screen's own "ENTER A
    * PASSWORD" grid (game/title-menu.js's `PasswordEntry`, dispatched from
    * `handleTitleKey` below). */
-  let passwordSlots = new Array(PASSWORD_SLOTS).fill(null);
+  /* `loadPersistedPasswordSlots` is declared further below (hoisted — a
+   * plain `function`, not `const`), reading this port's own hard-disk-
+   * install localStorage round-trip — see that declaration's own header. */
+  let passwordSlots = loadPersistedPasswordSlots() || new Array(PASSWORD_SLOTS).fill(null);
   /* The inter-level bonus-tally + password-reveal sequence, game/tally.js.
    * Non-null while active — see the tick/render callbacks below for how it
    * gates the normal per-tick simulation, and `finishTallyScreen` for the
@@ -1188,7 +1208,7 @@ async function main() {
        * exit" in the shipped game — the death test and a level-exit trigger
        * are mutually exclusive events), but defensive: a level switch while
        * a death/game-over is in flight should not leave a stale one behind. */
-      deathSeq = null; gameOverState = null; lastDeathBurstFx = [];
+      deathSeq = null; lastDeathBurstFx = []; gameOverFade = null;
       resetWeaponArc();
       wireSpawn();
       cam = camInit(spawn);
@@ -1227,7 +1247,7 @@ async function main() {
      * level change (see its own comment), so a full restart has to clear
      * it explicitly here instead, the same asymmetry as arsenal above. */
     health.familiarEnergy = -1; health.familiarPower = 0; health.familiarWings = 0;
-    deathSeq = null; gameOverState = null; lastDeathBurstFx = []; paused = false;
+    deathSeq = null; lastDeathBurstFx = []; paused = false; gameOverFade = null;
     await switchLevel(key);             // CS:0x914c's own two callers both fall into world 1
   }
 
@@ -1295,7 +1315,7 @@ async function main() {
     uiState = 'shop';
     purse = new Purse(); score = new Score();
     inventory = [INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY];
-    deathSeq = null; gameOverState = null; lastDeathBurstFx = [];
+    deathSeq = null; lastDeathBurstFx = []; gameOverFade = null;
     await switchLevel(levelKeyFor(matchWorld, 0));
     purse.add(SHOP_STARTING_MONEY);
     shopScreen = new ShopScreen({
@@ -1309,18 +1329,198 @@ async function main() {
 
   sel.addEventListener('change', () => { switchLevel(sel.value); });
 
+  /* ── Attract mode (game/attract.js) ───────────────────────────────────
+   * `attract` is null, or `{state, tape:{ticks, cursor}}` while the 6-state
+   * `joyl`/`joyg` cycler is driving either the menu or real gameplay off a
+   * decoded recording instead of the keyboard — see attract.js's own header
+   * for the full CS:0x2DA6-0x2DEE trace this ports.
+   *
+   * `attractLoading` guards against re-entering `enterAttractState` while
+   * its own `await`s are in flight (the SAME shape `transitioning` already
+   * gives `switchLevel` — a joyg segment's own `enterAttractState` calls
+   * `switchLevel` itself, so the two guards compose rather than duplicate). */
+  let attractLoading = false;
+
+  /**
+   * Load `attract.js`'s `CYCLE[state]` and put the port into whatever state
+   * that entry needs — CS:0x2DC7/0x2DCC (joyl: reset into the menu's own
+   * redraw-poll head, `CS:0x2cc4`) or CS:0x2DE6/0x2DE9 (joyg: NOT a
+   * fullRestart-bypassing jump as an earlier pass here assumed — CS:0x8C34
+   * (`FUN_1000_8c34`, this whole function) turns out to BE one of
+   * `fullRestart`'s own two real callers, confirmed by cross-referencing
+   * its own comments' CS:0x8DD9/0x8DDF citations against this function's
+   * body. So a joyg showcase entry is a full restart in every field
+   * (lives/money/score/inventory/familiar/health, mirrored below in the
+   * SAME order this function's own disassembly runs them) that happens to
+   * land on a scripted position (`JOYG_SHOWCASE_SPAWN`) and weapon grant
+   * (`JOYG_SHOWCASE_LOADOUT`, CS:0x8F3B) instead of world 1's own default
+   * spawn and an unarmed hero — not a different, bespoke mechanism. */
+  async function enterAttractState(state) {
+    attractLoading = true;
+    try {
+      const entry = CYCLE[state];
+      const bytes = dclDecompress(await fetchRaw(`game/${fileNameFor(entry)}`)).data;
+      const { ticks } = decodeJoyRecording(bytes);
+      if (entry.kind === 'joyl') {
+        titleMenu.cursor = 0;                 // CS:0x2cc4 [0x385]:=0
+        passwordEntry = null; nameEntry = null; hiscoreTable = null;
+        uiState = 'menu';
+        idleTicks = 0;                        // CS:0x2cc4's own idle-timer reset
+      } else {
+        /* CS:0x8C34 IS `fullRestart`'s own other real caller — confirmed
+         * this pass, not assumed: `fullRestart`'s own comments already cite
+         * CS:0x8DD9 (arsenal clear) and CS:0x8DDF (dismiss familiar) as one
+         * of its "exact same two full restarts," and both addresses sit
+         * inside THIS function, in its common prologue, before the
+         * DS:0x3e7-gated showcase branch ever runs. So the showcase entry
+         * is not "gameplay with some extra setup" — it is a full restart
+         * that happens to land on a scripted position/loadout instead of
+         * world 1's own default one. Mirrored here field-for-field:
+         * lives=2 (CS:0x8DE2), money/score zeroed (CS:0x8DED/0x8D91),
+         * inventory cleared (CS:0x8D80), familiar dismissed (CS:0x8DDF) —
+         * all BEFORE switchLevel, exactly like fullRestart's own ordering,
+         * since switchLevel deliberately carries money/score/inventory
+         * forward and only clears familiar/health if this code already has. */
+        fx.lives = 2;
+        purse = new Purse(); score = new Score();
+        inventory = [INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY];
+        health.familiarEnergy = -1; health.familiarPower = 0; health.familiarWings = 0;
+        deathSeq = null; lastDeathBurstFx = []; paused = false; gameOverFade = null;
+        await switchLevel(levelKeyFor(entry.world, 1));   // sublevel B — JOYG_SUBLEVEL
+        /* switchLevel's own `health = new Health()` already lands on
+         * bar=START_BAR(1)/target=START_TARGET(24) — CS:0x8E16's own
+         * `mov word[0x19a],1`, the SAME instruction `Health#respawn()` cites
+         * (CS:0x0851) — so the showcase hero visibly climbs from 1 HP up to
+         * full over the first ~23 ticks, matching a real respawn/restart's
+         * own bar-chase animation exactly. Not a stand-in; confirmed by
+         * cross-referencing the two call sites' identical opcode bytes. */
+        const s = JOYG_SHOWCASE_SPAWN[entry.n];
+        player = new Player(s.heroX, s.heroY);
+        player.spawnAtLevelStart(s.heroX, s.heroY);       // CS:0x8C34
+        cam = new Camera(s.camX, s.camY);
+        /* CS:0x8F3B-0x8FC3 — a real, disassembly-derived per-world weapon
+         * grant, not a fresh unarmed hero (game/attract.js's own
+         * `JOYG_SHOWCASE_LOADOUT` citation). Each `count` is that many
+         * separate `pickUpWeapon` calls, matching CS:0x8FE5's own `LOOP`.
+         * CS:0x914c (the arsenal clear) already ran inside switchLevel's
+         * OWN `arsenal.reloadWorld` this tick, but that preserves whatever
+         * was armed rather than clearing it, so a fresh Arsenal is built
+         * here too, matching fullRestart's own CS:0x914c/`new Arsenal`. */
+        arsenal = new Arsenal(level.weapons);
+        for (const { weapon, count } of JOYG_SHOWCASE_LOADOUT[entry.n]) {
+          for (let i = 0; i < count; i++) pickUpWeapon(arsenal, weapon);
+        }
+        uiState = 'game';
+      }
+      attract = { state, tape: { ticks, cursor: 0 } };
+    } finally {
+      attractLoading = false;
+    }
+  }
+
+  /* CS:0x2CB3-0x2CC1 — reached only from the idle-timer path below, never
+   * re-checked once inside the cycler (docs/dynamic-trace-and-runtime-
+   * data.md's "Idle timeout has two layers" section: 3 hiscore-table shows
+   * in a row with no real input). `DS:0x384 >= 2` (hard-disk install) is
+   * what the original ALSO gates this on — always true for this port, see
+   * `hiscoreEntries`' own header. */
+  function startAttract() {
+    idleCycles = 0;
+    enterAttractState(0);   // fire-and-forget — same convention switchLevel's other callers use
+  }
+
+  /** Any real keypress during playback wins — see the keydown handler's
+   *  own citation for why this isn't modelled from a specific address. */
+  function stopAttract() {
+    if (!attract) return;
+    attract = null;
+    uiState = 'menu';
+    passwordEntry = null; nameEntry = null; hiscoreTable = null;
+    idleTicks = 0; idleCycles = 0;
+  }
+
   /* ── The title screen ─────────────────────────────────────────────────
-   * `uiState` gates BOTH the tick and render callbacks below: only 'game'
-   * runs the original's own per-tick simulation. 'menu'/'password' are
-   * purely keydown-driven (see handleTitleKey) — there is no equivalent
-   * poll-every-15Hz-frame loop for them here, unlike the original's own
-   * menu (CS:0x2CAF), since nothing about a static menu needs the logic
-   * clock. 'exit' is this port's stand-in for QUIT's `INT 21h AH=4Ch` —
-   * see Renderer.presentBlack(). */
-  let uiState = 'menu';   // 'menu' | 'password' | 'shop' | 'game' | 'exit'
+   * `uiState` gates BOTH the tick and render callbacks below. Every non-
+   * 'game' state EXCEPT 'quitting'/'exit' is now TICK-POLLED (`step(input)`
+   * on whichever widget is active), not keydown-driven — see title-menu.js's
+   * own header for why this conversion was load-bearing, not cosmetic: the
+   * attract-mode cycler (game/attract.js) needs a per-tick `input` object to
+   * feed a `joyl`/`joyg` recording into, the exact same one real keyboard
+   * input already fills every tick via the `input` object below. 'exit' is
+   * this port's stand-in for QUIT's `INT 21h AH=4Ch` — see
+   * Renderer.presentBlack(). */
+  let uiState = 'menu';   // 'menu'|'password'|'name-entry'|'hiscore-table'|'game-over-fade'|'shop'|'game'|'exit'|'quitting'
   const titleMenu = new TitleMenu();
   let passwordEntry = null;
+  let nameEntry = null;
+  let hiscoreTable = null;
+  /* Set when a GAME OVER's score beats the table's own last-place entry
+   * (`hiscores.js`'s `rankOf`) — consumed the moment `nameEntry` submits,
+   * see the death/game-over block below. */
+  let pendingHiscoreRank = -1, pendingHiscoreScoreBytes = null;
   let shopScreen = null;
+  /* CS:0x46E-onward — the live "TOP TEN GODS" table (Gods/docs/dynamic-
+   * trace-and-runtime-data.md's own corrected HISCORES.BIN layout: 10 x
+   * {name: 16 bytes, score: 4-byte packed BCD}). Loaded once below from the
+   * shipped file, then overridden by whatever this browser's own localStorage
+   * already holds — `DS:0x384 >= 2` (hard-disk install) is what makes this
+   * round-trip to disk at all in the original (`docs/passwords.md`'s own
+   * citation, cross-checked this session against `CS:0x229A`'s `INT 21h
+   * AH=19h` "get default drive" source — see Gods/docs/dynamic-trace-and-
+   * runtime-data.md's own correction); this port always models a hard-disk
+   * install (the alternative makes the very feature the user asked to port
+   * unreachable), so persisting via localStorage is the FAITHFUL behaviour
+   * for that install type, not an arbitrary port addition — same reasoning
+   * for `passwordSlots`' own persistence below, which gets it for the first
+   * time in this same pass. */
+  const HISCORES_STORAGE_KEY = 'gods-web:hiscores:v1';
+  const PASSWORDS_STORAGE_KEY = 'gods-web:passwordSlots:v1';
+  function persistHiscores() {
+    try {
+      localStorage.setItem(HISCORES_STORAGE_KEY, JSON.stringify(
+        hiscoreEntries.map((e) => ({ name: e.name, scoreBytes: Array.from(e.scoreBytes) }))));
+    } catch { /* private browsing / storage disabled — silently stays in-memory only */ }
+  }
+  function loadPersistedHiscores() {
+    try {
+      const raw = localStorage.getItem(HISCORES_STORAGE_KEY);
+      if (!raw) return null;
+      return JSON.parse(raw).map((e) => {
+        const scoreBytes = Uint8Array.from(e.scoreBytes);
+        return { name: e.name, scoreBytes, score: bcdToNumber(scoreBytes) };
+      });
+    } catch { return null; }
+  }
+  let hiscoreEntries = loadPersistedHiscores() || initialHiscores;
+  function persistPasswordSlots() {
+    try { localStorage.setItem(PASSWORDS_STORAGE_KEY, JSON.stringify(passwordSlots)); }
+    catch { /* see persistHiscores() */ }
+  }
+  function loadPersistedPasswordSlots() {
+    try {
+      const raw = localStorage.getItem(PASSWORDS_STORAGE_KEY);
+      return raw ? JSON.parse(raw) : null;
+    } catch { return null; }
+  }
+  /* CS:0x11e/0x120 (idle timer, reused level-timer pair) and CS:0x3d7 (idle-
+   * cycle count) — `docs/dynamic-trace-and-runtime-data.md`'s own "Idle
+   * timeout has two layers" section. Both apply to uiState 'menu' only (the
+   * original's own gate is inside the MENU's poll loop specifically, not a
+   * global idle timer — entering 'password'/'name-entry'/'hiscore-table'
+   * leaves them untouched, exactly as CS:0x2CC4 only resets them on
+   * re-entering the menu). ⚠️ DISCLOSED: this port resets `idleTicks` on
+   * ANY recognized step() edge while the menu is up (movement or fire),
+   * which is the natural, expected behaviour but was not independently
+   * re-verified against a live capture of the exact reset condition this
+   * session — the citation covers the 100-tick THRESHOLD and the "three
+   * cycles" gate, not proof of what resets the counter mid-count. */
+  let idleTicks = 0, idleCycles = 0;
+  const IDLE_TICKS_THRESHOLD = 100;     // CS:0x2CF7 `cmp [0x11e],100`
+  const IDLE_CYCLES_THRESHOLD = 3;      // CS:0x2CB3 `cmp [0x3d7],3`
+  /* CS:0x2CBA `cmp [0x384],2 / jl` — hard-disk install only; this port
+   * always models one (see hiscoreEntries' own header above), so the
+   * attract cycler is always reachable, matching a real installed copy. */
+  let attract = null;   // null, or {state, kind:'menu'|'game', ticks, cursor, world}
   /* ESC-to-quit and P-to-pause, live-confirmed in DOSBox (breakpoints at
    * CS:0x033E and CS:0x0357, GAME.EXE's per-tick FUN_1000_031a):
    *   CS:0x0335 CALL FUN_1000_2503 (INT 16h AH=1 peek / AH=0 read) ->
@@ -1358,71 +1558,112 @@ async function main() {
 const QUIT_FADE_MS = 600;
 let quitFade = null;   // null | { snapshot: Uint8Array, palette: Uint8Array|number[], start: number }
 
+/* CS:0x0943-0x098D — the game-over sequence's own "150-iteration palette
+ * fade," full disassembly this pass: stop the music (export 10), play the
+ * GAME OVER fanfare (`sfx 0x6413`, already identified — see the SFX-port
+ * pass earlier this project), then `CX=0x96(150): { CALL 0x357f; CALL
+ * 0x358d }` — 150 iterations of a driver-export pair (`0x357f`/`0x358d`
+ * are themselves trampolines into the graphics driver's own export table,
+ * `docs/drivers-and-memory.md`'s "Palette blank/fade-out/fade-in" family)
+ * — before `CALL 0x318f` (name entry) and, once that returns, `AX=1; CALL
+ * 0x359d` (fade back in, the SAME driver call `quitFade` above already
+ * reproduces the shape of) ahead of `CALL 0x32c0` (the hiscore table).
+ * `QUIT_FADE_MS`'s own header already disclosed why an exact duration
+ * isn't recoverable (a tight software loop timed against the display
+ * driver, not a byte-cited wall-clock figure) — this fade is the SAME kind
+ * of call, so it gets the SAME treatment: a port-level duration, reusing
+ * `quitFade`'s own snapshot-and-ramp mechanism rather than a second,
+ * divergent implementation. Not modelled: the exact intermediate driver
+ * calls between the fade-out and name-entry (CS:0x096E-0x0982, clearing
+ * `DS:0x38d`/`0x33` and two more driver-export calls) — this port simply
+ * shows the name-entry/hiscore-table screen once faded out, on its own
+ * already-rendered background, rather than reproducing a specific
+ * intermediate DAC state no player-visible difference hangs on. */
+const GAME_OVER_FADE_MS = 600;
+let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-entry'|'hiscore-table' }
+
   /* Gods/docs/dynamic-trace-and-runtime-data.md: UP/DOWN plays click sfx
    * 0x119, FIRE plays confirm sfx 0x233 — see title-menu.js's own citation
-   * for the LEFT/RIGHT generalisation. Both `TitleMenu` and `PasswordEntry`
-   * are keydown-driven through this one function, so it is the one place
-   * that plays for either widget. */
-  const MENU_MOVE_KEYS = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'KeyW', 'KeyA', 'KeyS', 'KeyD'];
-  const MENU_CONFIRM_KEYS = ['Space', 'Enter'];
-  function handleTitleKey(code) {
-    /* Only `TitleMenu`/`PasswordEntry` own this sound — `handleTitleKey` is
-     * also called (and does nothing) for 'shop'/'exit', both `!== 'game'`
-     * too. Playing unconditionally would layer a spurious menu click under
-     * every shop cursor move and a confirm blip under every buy press,
-     * doubled up with `BUY_CONFIRM_SFX` from the shop's own tick loop. */
-    if (uiState === 'menu' || uiState === 'password') {
-      if (MENU_MOVE_KEYS.includes(code)) audio.play(MENU_CLICK_SFX);
-      else if (MENU_CONFIRM_KEYS.includes(code)) audio.play(MENU_CONFIRM_SFX);
+   * for the LEFT/RIGHT generalisation. Every widget below plays these from
+   * its OWN `step()` return value now (title-menu.js's own header explains
+   * why), not from a raw key event — this file just does `audio.play(r.sfx)`
+   * wherever a `step()` result carries one. */
+
+  /**
+   * CS:0x2e6c-0x2e93 (byte-for-byte against each stored password; an empty,
+   * never-generated slot never matches — zones.js's own `passwordSlots[i]`
+   * is `null` until that world is first completed) PLUS CS:0x2e51-0x2e6a
+   * (the attract-mode demo's own hardcoded "L"+digit bypass, `docs/
+   * passwords.md`'s own citation — the demo can't feasibly script a real
+   * password through recorded input, so while `attract` playback is live,
+   * typing 'L' then a digit 2-4 sets the world directly, skipping the real
+   * match loop). Both read the SAME submitted buffer regardless of whether
+   * it came from a real player or a `joyl` recording driving this exact
+   * widget — see game/attract.js's own header.
+   * @returns {number} the world to jump to, or -1 (CS:0x2e8a, no match)
+   */
+  function matchPassword(submit) {
+    for (let i = 0; i < passwordSlots.length; i++) {
+      const pw = passwordSlots[i];
+      if (pw && passwordToString(pw) === submit) return passwordWorldForSlot(i);
     }
-    if (uiState === 'menu') {
-      const action = titleMenu.onKeyDown(code);
-      if (action === 'begin') { uiState = 'game'; fullRestart('1A'); }
-      else if (action === 'password') { uiState = 'password'; passwordEntry = new PasswordEntry(); }
-      else if (action === 'exit') { uiState = 'exit'; }
-      return;
+    if (attract && submit.length === 2 && submit[0] === 'L' && submit[1] >= '2' && submit[1] <= '4') {
+      return submit.charCodeAt(1) - '0'.charCodeAt(0);
     }
-    if (uiState === 'password') {
-      const result = passwordEntry.onKeyDown(code);
-      if (!result) return;
-      passwordEntry = null;
-      if (result.cancel) { uiState = 'menu'; return; }   // port-only convenience, ESC
-      /* CS:0x2e6c-0x2e93: byte-for-byte against each stored password; an
-       * empty (never-generated) slot never matches — zones.js's own
-       * `passwordSlots[i]` is `null` until that world is first completed. */
-      let matchWorld = -1;
-      for (let i = 0; i < passwordSlots.length; i++) {
-        const pw = passwordSlots[i];
-        if (pw && passwordToString(pw) === result.submit) { matchWorld = passwordWorldForSlot(i); break; }
-      }
-      /* CS:0x2e8a — wrong guess bounces back to the MENU, not a re-prompt. */
-      uiState = 'menu';
-      if (matchWorld > 0) enterViaPassword(matchWorld);
-    }
+    return -1;
   }
 
   const input = { left: false, right: false, up: false, down: false, fire: false };
   const KEYMAP = {
     ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'up', ArrowDown: 'down',
     KeyA: 'left', KeyD: 'right', KeyW: 'up', KeyS: 'down', Space: 'fire',
+    /* Enter used to be a MENU-only confirm alias (the old keydown-driven
+     * `handleTitleKey`'s own `MENU_CONFIRM_KEYS`). Now that every widget
+     * reads the one shared `input` object, it maps to 'fire' everywhere,
+     * including real gameplay — a harmless generalisation, not a citation. */
+    Enter: 'fire',
   };
   addEventListener('keydown', (e) => {
+    /* A real keypress during attract-mode playback always wins — port-only
+     * (see game/attract.js's own header: the original has no clean way to
+     * distinguish a real key from the recording's own writes to the SAME
+     * per-tick byte, and this is the sensible behaviour for a browser port
+     * regardless). Checked before every other branch below, including
+     * 'shop', since the cycler's own joyl segments can drive that far. */
+    if (attract) { stopAttract(); }
     if (uiState === 'shop') {
       /* The shop (game/shop.js) reads this SAME `{left,right,up,down,fire}`
        * object every tick via the Clock's own `shopScreen.step(input)` call
-       * above — it needs no dedicated key handler, just a way into `input`.
-       * Routing it through `handleTitleKey` instead (as every other non-
-       * 'game' state does) silently dropped every shop keypress: that
-       * function has branches for 'menu'/'password' only, so a shop cursor
-       * move or FIRE press reached neither `input` nor any shop-aware code —
-       * a real, pre-existing bug found while wiring #11's audio SFX. */
+       * above — it needs no dedicated key handler, just a way into `input`. */
       const k = KEYMAP[e.code]; if (k) { input[k] = true; e.preventDefault(); }
       return;
     }
+    if (uiState === 'password' || uiState === 'name-entry') {
+      /* ESC/Backspace are port-only conveniences with no `input` bit of
+       * their own (the original's per-tick joystick byte has neither) —
+       * see title-menu.js's `LetterGrid#cancel`/`#eraseKey`. Everything
+       * else (arrows/space) flows into `input` below like any other state,
+       * consumed by the widget's own `step()` in the tick callback. */
+      const widget = uiState === 'password' ? passwordEntry : nameEntry;
+      if (e.code === 'Escape') {
+        e.preventDefault();
+        if (uiState === 'password') { passwordEntry = null; uiState = 'menu'; }
+        else {
+          /* CS:0x318f's own scope: cancelling name entry (port-only — the
+           * original has no "back" here either) skips the insertion, not
+           * the table — the table is always shown after a game over. */
+          nameEntry = null;
+          uiState = 'hiscore-table';
+          hiscoreTable = new HiscoreTable(hiscoreEntries);
+        }
+        return;
+      }
+      if (e.code === 'Backspace') { e.preventDefault(); widget.eraseKey(); return; }
+    }
     if (uiState !== 'game') {
-      if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space', 'Enter', 'Escape', 'Backspace']
+      if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space', 'Enter']
         .includes(e.code)) e.preventDefault();
-      handleTitleKey(e.code);
+      const k = KEYMAP[e.code]; if (k) input[k] = true;
       return;
     }
     /* Paused (CS:0x0357's own busy-wait) resumes on ANY key, ESC included —
@@ -1439,10 +1680,13 @@ let quitFade = null;   // null | { snapshot: Uint8Array, palette: Uint8Array|num
     if (e.code === 'KeyP') { paused = true; e.preventDefault(); return; }
     const k = KEYMAP[e.code]; if (k) { input[k] = true; e.preventDefault(); }
     /* CS:0x0943's own game-over sequence exits into the title/attract-mode
-     * system — this port has no attract-mode/hiscore cascade, but it does
-     * now have the title menu that system itself falls into, so R returns
-     * there rather than instant-restarting past it. */
-    if (e.code === 'KeyR' && gameOverState) { e.preventDefault(); uiState = 'menu'; gameOverState = null; }
+     * system — now REAL (see the death/game-over block below and game/
+     * attract.js), not a placeholder: `uiState` itself leaves 'game' for
+     * 'name-entry' or 'hiscore-table' the instant the third life is lost,
+     * so there is no separate "press R" shortcut needed here any more —
+     * those screens dismiss through their own FIRE/confirm handling
+     * (title-menu.js's `LetterGrid`/`HiscoreTable`), reached via the
+     * `uiState !== 'game'` branch above, not this one. */
   });
   addEventListener('keyup', (e) => {
     const k = KEYMAP[e.code]; if (k) { input[k] = false; e.preventDefault(); }
@@ -1479,6 +1723,53 @@ let quitFade = null;   // null | { snapshot: Uint8Array, palette: Uint8Array|num
 
   const clock = new Clock(
     () => {
+      /* Attract-mode playback (game/attract.js) overrides `input` from the
+       * decoded recording, BEFORE anything below reads it — a `joyl` tick
+       * feeds the menu/password widgets exactly like a real keypress would
+       * (docs/passwords.md's "the recorded demo navigating this same title
+       * menu with fake joystick input"); a `joyg` tick feeds real gameplay
+       * the SAME way once `uiState` is 'game' (below). This is the whole
+       * mechanism — no attract-specific branching anywhere else in this
+       * callback, by construction (see title-menu.js's own header for why
+       * the tick-poll conversion was what made this possible at all). */
+      /* ⚠️ FIXED — reported live: "in attract mode the hero jumps off the
+       * very first ladder and clips into a platform, at which point the
+       * port begins to diverge from the DOS version." Root cause: this
+       * block used to run — and advance `t.cursor` — UNCONDITIONALLY, even
+       * while `transitioning`/`attractLoading` was true (a level load in
+       * flight, e.g. the exact tick after a `joyl` recording's own BEGIN
+       * QUEST selection fires `fullRestart('1A')` a few lines below, or the
+       * attract-mode "L"+digit password bypass). `switchLevel`'s `await
+       * loadLevel`/`await loadSprites` genuinely span multiple real
+       * animation frames (a fetch + DCL decompress), during which the
+       * 'game' branch below correctly holds the frame (`if (transitioning)
+       * return;`) — but this block, running BEFORE that gate, kept
+       * consuming (and discarding, since nothing downstream read `input`
+       * that tick) recorded ticks the whole time. In the original, level
+       * loads are synchronous DOS I/O — zero simulated ticks ever elapse
+       * during one — so this port's own async load was silently eating a
+       * few ticks' worth of the recording, permanently shifting every
+       * later tick's input one frame-offset off. The desync is invisible on
+       * an easy stretch of flat walking but produces exactly the reported
+       * symptom the first time the recording's timing-sensitive moves (a
+       * ladder mid-air grab, then a jump-off) land a frame or two away from
+       * where the original's own synchronous timing puts them. Gating this
+       * block the same way the 'game' branch already gates itself keeps the
+       * tape's cursor and the actual number of simulated ticks in lockstep,
+       * exactly like the original's blocking load. */
+      if (attract && !transitioning && !attractLoading) {
+        const t = attract.tape;
+        const frame = t.cursor < t.ticks.length ? t.ticks[t.cursor] : null;
+        input.up = !!frame?.up; input.down = !!frame?.down;
+        input.left = !!frame?.left; input.right = !!frame?.right; input.fire = !!frame?.fire;
+        t.cursor++;
+        /* CS:0xFF terminator exhausted (formats/joy.js strips it, so "ran
+         * past the decoded ticks" IS "hit the terminator") — advance the
+         * cycler. Disclosed: the original's own low-level "recording ended,
+         * jump back to the dispatch head" mechanism was not traced this
+         * pass — see attract.js's own header. */
+        if (t.cursor >= t.ticks.length) enterAttractState(nextState(attract.state));
+      }
       /* The inter-level tally/password sequence (game/tally.js) suspends
        * the normal per-tick simulation entirely, matching the original's
        * own state-machine-frozen tally screen (CS:0x6553's caller never
@@ -1511,10 +1802,88 @@ let quitFade = null;   // null | { snapshot: Uint8Array, palette: Uint8Array|num
         if (purchase && !purchase.refused) audio.play(BUY_CONFIRM_SFX);
         return;
       }
-      /* The title menu / password screen freeze the whole simulation, same
-       * as the original's own menu loop never runs FUN_1000_4993 (the
-       * per-frame player update) while it has control — see the 'uiState'
-       * header comment above. */
+      /* The title menu / password / name-entry / hiscore-table screens
+       * freeze the whole simulation, same as the original's own menu loop
+       * never runs FUN_1000_4993 (the per-frame player update) while it has
+       * control — see the 'uiState' header comment above. Each widget plays
+       * its own sfx from its `step()` return now (title-menu.js's header). */
+      if (uiState === 'menu') {
+        /* CS:0x2CF7 `cmp [0x11e],100` / CS:0x2CB3 `cmp [0x3d7],3` — the idle
+         * timer only advances (and the whole cycler is only reachable) from
+         * THIS state; see the `idleTicks`/`idleCycles` declaration above for
+         * the reset-on-activity disclosure. */
+        if (!attract) {
+          idleTicks++;
+          if (idleTicks >= IDLE_TICKS_THRESHOLD) {
+            idleTicks = 0;
+            idleCycles++;
+            if (idleCycles >= IDLE_CYCLES_THRESHOLD) { startAttract(); return; }
+            hiscoreTable = new HiscoreTable(hiscoreEntries);
+            uiState = 'hiscore-table';
+            return;
+          }
+        }
+        const r = titleMenu.step(input);
+        if (r) {
+          // any recognized edge resets BOTH counters — breaks the "N idle cycles IN A ROW" chain, see the disclosure above
+          idleTicks = 0; idleCycles = 0;
+          if (r.sfx) audio.play(r.sfx);
+          if (r.action === 'begin') { uiState = 'game'; fullRestart('1A'); }
+          else if (r.action === 'password') { uiState = 'password'; passwordEntry = new PasswordEntry(); }
+          else if (r.action === 'exit') { uiState = 'exit'; }
+        }
+        return;
+      }
+      if (uiState === 'password') {
+        const r = passwordEntry.step(input);
+        if (r) {
+          if (r.sfx) audio.play(r.sfx);
+          if ('submit' in r) {
+            /* CS:0x2e51-0x2e6a — the attract-mode "L"+digit bypass fires
+             * ONLY during playback, and lands on the SAME continuation as
+             * BEGIN QUEST (CS:0x2ea0/0x2d9e -> JMP 0x1000:2a37), not the
+             * real-password match's own shop entry — see matchPassword()'s
+             * own citation and docs/shop.md's "a correct password takes the
+             * player straight into that world's shop" (that is true only
+             * for a REAL match, below). */
+            const bypass = !!attract && r.submit.length === 2 && r.submit[0] === 'L'
+              && r.submit[1] >= '2' && r.submit[1] <= '4';
+            const world = bypass ? r.submit.charCodeAt(1) - 0x30 : matchPassword(r.submit);
+            passwordEntry = null;
+            uiState = 'menu';                 // CS:0x2e8a default; overridden below on a match
+            if (bypass) { uiState = 'game'; fullRestart(levelKeyFor(world, 0)); }
+            else if (world > 0) enterViaPassword(world);
+          }
+        }
+        return;
+      }
+      if (uiState === 'name-entry') {
+        const r = nameEntry.step(input);
+        if (r) {
+          if (r.sfx) audio.play(r.sfx);
+          if ('submit' in r) {
+            /* CS:0x329A-0x32B6's own insert-and-shift-down — `hiscores.js`'s
+             * `insertAt`. `pendingHiscoreRank`/`ScoreBytes` were captured at
+             * the moment the third life was lost (the death/game-over block
+             * below), before this screen ever opened. */
+            insertAt(hiscoreEntries, pendingHiscoreRank,
+              { name: r.submit, scoreBytes: pendingHiscoreScoreBytes, score: score.value });
+            persistHiscores();
+            nameEntry = null;
+            uiState = 'hiscore-table';
+            hiscoreTable = new HiscoreTable(hiscoreEntries);
+          }
+        }
+        return;
+      }
+      if (uiState === 'hiscore-table') {
+        if (hiscoreTable.step(input)) {
+          hiscoreTable = null;
+          if (attract) { enterAttractState(nextState(attract.state)); return; }   // CS:0x2D07 `jmp 0x2caf`
+          uiState = 'menu';
+        }
+        return;
+      }
       if (uiState !== 'game') return;
       if (transitioning) return;    // a level load is in flight — hold the frame
       /* CS:0x0357's own busy-wait: pressing P freezes ticking until any key
@@ -1523,14 +1892,6 @@ let quitFade = null;   // null | { snapshot: Uint8Array, palette: Uint8Array|num
        * nothing left ticking, it just keeps redrawing the same frozen state,
        * matching the original's own silent freeze (no "PAUSED" overlay). */
       if (paused) return;
-      /* Not modelled from a specific address: the original's own game-over
-       * path (CS:0x0943-0x0993) exits into the title/attract-mode system
-       * this port's own title menu now stands in for (see the 'KeyR'
-       * handler above). Freezing the tick loop here, between the death test
-       * below setting `gameOverState` and the player pressing R, is this
-       * port's own substitute for "nothing the player does matters until
-       * they restart" — see fullRestart() and game/death.js's header. */
-      if (gameOverState) return;
       /* Per-tick order is the original's: snapshot the scroll origin, run the
        * state machine, probe plane B, then update the camera (CS:0x023f ->
        * 0x4993 -> 0x5ea0 -> 0x5ea4). Everything drawn this frame uses the
@@ -1884,7 +2245,7 @@ let quitFade = null;   // null | { snapshot: Uint8Array, palette: Uint8Array|num
             const passwordSlot = passwordSlotForWorld(completedWorld);
             const wasEmpty = passwordSlot >= 0 && passwordSlot < passwordSlots.length &&
               !passwordSlots[passwordSlot];
-            if (wasEmpty) passwordSlots[passwordSlot] = generatePassword(rng);
+            if (wasEmpty) { passwordSlots[passwordSlot] = generatePassword(rng); persistPasswordSlots(); }
             if (wasEmpty) {
               passwordReveal = {
                 worldNumber: completedWorld + 1,             // CS:0x69f7 `inc cl` — see tally.js header
@@ -2478,7 +2839,7 @@ let quitFade = null;   // null | { snapshot: Uint8Array, palette: Uint8Array|num
        * even runs; this port's `stepHeroFrame` gate above only takes effect
        * from the NEXT frame on). See game/death.js's own header for the
        * full CS:0x09BB/0x0930/0x0845 chain this block ports. */
-      if (!deathSeq && !gameOverState && health.dead) {
+      if (!deathSeq && health.dead) {
         deathSeq = new DeathBurst(player.x - cam.snapX, player.y - cam.snapY);
         audio.play(DEATH_SFX);   // once, right as the burst begins — this gate only ever fires once per death
         /* `fr` (stepHeroFrame's own per-tick return) is gated off for the
@@ -2499,8 +2860,29 @@ let quitFade = null;   // null | { snapshot: Uint8Array, palette: Uint8Array|num
           const { lives, gameOver } = loseLife(fx.lives);   // CS:0x093A/0x093E
           fx.lives = lives;
           if (gameOver) {
-            gameOverState = gameOverPlaceholder();
-            $('event').textContent = 'GAME OVER — press R to restart';
+            /* CS:0x0943 onward — the real game-over cascade (Gods/docs/
+             * dynamic-trace-and-runtime-data.md's "hiscore name-entry
+             * screen" + "TOP TEN GODS" sections), superseding the earlier
+             * `gameOverPlaceholder()`/"press R" stand-in death.js's own
+             * header still documents (that function stays exported and
+             * tested — see checks.js — it is just no longer what real play
+             * reaches). `FUN_1000_318f`'s own `[0x38d]` gate (skip the
+             * whole mechanism under some condition this project has not
+             * traced) is not modelled — every game over here attempts the
+             * real cascade. */
+            pendingHiscoreRank = rankOf(hiscoreEntries, score.value);
+            pendingHiscoreScoreBytes = encodeScoreBytes(score.bytes);
+            /* CS:0x095D-0x0966's own 150-iteration fade — see
+             * `gameOverFade`'s own header. The render callback below owns
+             * the actual ramp and the transition into 'name-entry'/
+             * 'hiscore-table' once it completes, the same split `quitFade`
+             * already uses. */
+            gameOverFade = {
+              snapshot: renderer.buf.slice(), palette: level.palette, start: performance.now(),
+              next: pendingHiscoreRank >= 0 ? 'name-entry' : 'hiscore-table',
+            };
+            uiState = 'game-over-fade';
+            $('event').textContent = 'GAME OVER';
           } else {
             health.respawn();                                       // CS:0x084B/0x0851
             const pos = findRespawnPosition(spawn.x, spawn.y, level.map.planeB); // CS:0x0873-0x08BD
@@ -2532,6 +2914,25 @@ let quitFade = null;   // null | { snapshot: Uint8Array, palette: Uint8Array|num
         if (elapsed >= QUIT_FADE_MS) { uiState = 'menu'; quitFade = null; }
         return;
       }
+      /* uiState === 'game-over-fade' — CS:0x095D's own 150-iteration fade,
+       * see `gameOverFade`'s own header above. Same snapshot-and-ramp shape
+       * as `quitFade` just above (frozen last frame, fading to black), then
+       * hands off to whichever screen the death/game-over block already
+       * decided on (`gameOverFade.next`). */
+      if (uiState === 'game-over-fade' && gameOverFade) {
+        renderer.buf.set(gameOverFade.snapshot);
+        const elapsed = performance.now() - gameOverFade.start;
+        const fadeT = Math.max(0, 1 - elapsed / GAME_OVER_FADE_MS);
+        const menuGlyphs = hero && hero.menuGlyphs;
+        drawCentered(renderer, menuGlyphs, 'GAME OVER', 92, MENU_ADVANCE);
+        renderer.present(gameOverFade.palette, fadeT);
+        if (elapsed >= GAME_OVER_FADE_MS) {
+          if (gameOverFade.next === 'name-entry') { uiState = 'name-entry'; nameEntry = new NameEntry(); }
+          else { uiState = 'hiscore-table'; hiscoreTable = new HiscoreTable(hiscoreEntries); }
+          gameOverFade = null;
+        }
+        return;
+      }
       /* uiState !== 'game': draw the title screen instead of the world.
        * `hero.frames[169]` is the 208x46 GODS title logo — descriptor #169
        * in the "always" atlas group (PALWAYS1+2+3+PGODFONT), loaded by
@@ -2547,6 +2948,13 @@ let quitFade = null;   // null | { snapshot: Uint8Array, palette: Uint8Array|num
           passwordEntry.draw(renderer, glyphs, menuGlyphs, hero && hero.gridEraseIcon,
             hero && hero.gridConfirmIcon, titleBackground, passwordSlots,
             hero && hero.cursorFrames, clock.tick);
+        }
+        else if (uiState === 'name-entry') {
+          nameEntry.draw(renderer, menuGlyphs, hero && hero.gridEraseIcon,
+            hero && hero.gridConfirmIcon, titleBackground, hero && hero.cursorFrames, clock.tick);
+        }
+        else if (uiState === 'hiscore-table' && hiscoreTable) {
+          hiscoreTable.draw(renderer, glyphs, menuGlyphs, titleBackground, passwordSlots);
         }
         else if (uiState === 'shop' && shopScreen) shopScreen.draw(renderer, glyphs);
         if (uiState === 'exit') renderer.presentBlack();   // QUIT's stand-in — see Renderer's own header
@@ -2951,7 +3359,6 @@ let quitFade = null;   // null | { snapshot: Uint8Array, palette: Uint8Array|num
         ` · money ${purse.total} · score ${score.value}` +
         ` · lives ${fx.lives}` +
         (deathSeq ? ` · death burst ${deathSeq.counter}/${0x12}` : '') +
-        (gameOverState ? ' · GAME OVER (press R)' : '') +
         (fx.invuln ? ` · INVULN ${fx.invuln}` : '') +
         (fx.freeze ? ` · FROZEN ${fx.freeze}` : '') +
         (fx.giantJump ? ` · giant jump ${fx.giantJump}` : '') +
