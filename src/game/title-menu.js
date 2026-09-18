@@ -639,15 +639,27 @@ export class NameEntry extends LetterGrid {
  * Every character (name letters AND score digits alike) advances by 0xa(10)
  * px, inside the shared low-level blit `FUN_1000_33c1` itself (`ADD DX,0xa`)
  * — the SAME PSMLFNT `ADVANCE` this module's own `drawText` already
- * defaults to. So: NAME column X=20 (spanning 20-180, all 16 cells always
- * drawn — a pad byte draws PSMLFNT's own space glyph, not nothing), SCORE
- * column X=60 (spanning 60-140, all 8 digits always drawn, genuine leading
- * zeros). ⚠️ These two spans OVERLAP for any name past 4 characters (60
- * is column 4 of the name field) — checked, not smoothed over: the shipped
- * defaults reach up to 8 characters (HERACLES/POSEIDON/DIONYSUS), so on
- * real hardware the score digits are drawn ON TOP of (after) the tail of
- * a long name. That is what `FUN_1000_337c`'s own call order does
- * (name first, score second), not a port bug to route around.
+ * defaults to. So on REAL hardware: NAME column X=20 (spanning 20-180, all
+ * 16 cells always drawn — a pad byte draws PSMLFNT's own space glyph, not
+ * nothing), SCORE column X=60 (spanning 60-140, all 8 digits always drawn,
+ * genuine leading zeros). ⚠️ These two spans OVERLAP for any name past 4
+ * characters (60 is column 4 of the name field) — checked, not smoothed
+ * over: the shipped defaults reach up to 8 characters (HERACLES/POSEIDON/
+ * DIONYSUS), so on real hardware the score digits are drawn ON TOP of
+ * (after) the tail of a long name. That is what `FUN_1000_337c`'s own call
+ * order does (name first, score second) — `[PROVEN]` original behaviour,
+ * not a port bug.
+ *
+ * ⚠️ DELIBERATE PORT DEVIATION, user-requested: `HISCORE_SCORE_X` below is
+ * moved past the name field's own full 16-character span (20-180) so the
+ * two columns never overlap, and is picked so the (always-8-digit) score
+ * block's right edge lands at a fixed on-screen X — i.e. the name column
+ * reads left-aligned and the score column reads right-aligned, like an
+ * ordinary two-column table. This does NOT change the 8-digit
+ * genuine-leading-zeros format itself (still exactly `bcdDigitString`,
+ * still `[PROVEN]` against `FUN_1000_3397`) — only the X the block is
+ * drawn at, which was never claimed to be evidence-load-bearing beyond
+ * "CS:0x338B: ax += 0x28".
  *
  * PSMLFNT's own `DS:0x138`-based ascii-vs-raw-digit dispatch quirk inside
  * `FUN_1000_33c1` (the name path passes an ASCII code, the score/digit path
@@ -664,7 +676,13 @@ export class NameEntry extends LetterGrid {
 export const HISCORE_TABLE_TICKS = 500;   // ~33.3s at 15Hz — docs' own "~500 ticks"
 const HISCORE_TITLE_Y = 8;                // CS:0x32C9 `bx=8`
 const HISCORE_ROW_Y0 = 40, HISCORE_ROW_H = 13;   // CS:0x337C `bx=0x28`; CS:0x3391 `bx+=0xd`
-const HISCORE_NAME_X = 20, HISCORE_SCORE_X = 60; // CS:0x3385 `ax=0x14`; CS:0x338B `ax+=0x28`
+const HISCORE_NAME_X = 20;                // CS:0x3385 `ax=0x14` — left edge, left-aligned
+/* Right-aligned: 8 digits * ADVANCE(10px), right edge fixed at X=300 (20px
+ * margin from the 320px screen's right edge) — see the header's "DELIBERATE
+ * PORT DEVIATION" note for why this differs from CS:0x338B's raw X=60. */
+const HISCORE_SCORE_DIGITS = 8;
+const HISCORE_SCORE_RIGHT_X = 300;
+const HISCORE_SCORE_X = HISCORE_SCORE_RIGHT_X - HISCORE_SCORE_DIGITS * ADVANCE;
 
 export class HiscoreTable {
   /** @param {Array<{name:string, scoreBytes:Uint8Array}>} entries `decodeHiscores`'s own 10 rows */
