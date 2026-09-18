@@ -67,6 +67,42 @@ shared input loop, the same dead branch almost certainly applies — the letter 
 via `FIRE`, not a physical keyboard, is very likely the only way to actually submit
 a password too. Not independently confirmed for this screen specifically.
 
+### The exact rendering — `FUN_1000_30d4`/`FUN_1000_3065`/`FUN_1000_3097` `[PROVEN]`
+
+Full decompile of the three per-tick draw helpers `FUN_1000_2eb0` calls (in this
+order, every tick this screen is open):
+
+- **`FUN_1000_30d4` — title + grid.** Calls `FUN_1000_224e` for the title text
+  (the PGODFONT/status-panel convention — the SAME routine the title menu's own
+  options, the tally screen, and the "QUIT GAME" fade-out all use, not PSMLFNT),
+  then blits the grid: 8 columns of 32px starting at `X=40`, 5 rows of 24px
+  starting at `Y=40`, each cell's descriptor `0x80 + (row*8+col)` — i.e. PGODFONT
+  records 0-39 in row-major order, DIRECT indexing (not the title menu's own
+  left/right-swapped inward-pointing arrows).
+- **`FUN_1000_3065` — the typed-buffer readout.** *Correction to this project's
+  own earlier live-trace note* ("a row of diamond glyphs below the real grid that
+  does NOT change as cells are fired — a fixed decorative border, not a buffer
+  readout"): that reading was wrong. The function reads `DS:0x3004` (the same
+  scratch buffer the grid input loop fills) byte-for-byte, 16 cells, left-aligned
+  at `X=32, Y=168`, 16px/cell — a real typed-feedback row, not decoration. An
+  empty (never-yet-typed) buffer byte is `0`, substituted with alphabet code
+  `0x1C` (Space); descriptor is `code + 0x7F`, so an empty cell draws PGODFONT
+  record `0x1C + 0x7F - 0x80 = 27`. **This closes a second previously-open
+  ambiguity**: record 27 (this grid's own row-4 "space" cell, per the earlier
+  live-read grid layout) was never confirmed as a real space rather than some
+  other unidentified mark — it now is, independently, by this second mechanism
+  converging on the identical record for the identical alphabet code.
+- **`FUN_1000_3097` — the cursor.** A small animated icon (4-frame cycle,
+  descriptor `0x57 + phase`, an "always"-group sprite not chased down further)
+  blitted directly at the selected cell's own position (`X=(cursor&7)*32+40,
+  Y=(cursor>>3)*24+40`) — the SAME grid geometry `FUN_1000_30d4` uses, confirming
+  both functions share one coordinate scheme.
+
+Live-confirmed visually in a `gods-web` port session this pass: matching a
+user-supplied screenshot of the real screen pixel-for-pixel in layout (title font,
+grid font/geometry, the row-4 "space" cell's own faint mark, the erase/confirm
+icons, and the `"PASS n :xxx"` hint line below).
+
 ## The entry/match algorithm — `FUN_1000_2e2f` `[PROVEN]`
 
 ```
@@ -398,15 +434,35 @@ one. It does — see *The generator*, above. `zones.js`'s own `generatePassword(
 is a reasonable simplification of `FUN_1000_6a6b` (three `random/2521+1` draws)
 but does **not** reproduce that function's own up-to-100-retry uniqueness check
 against the other two stored passwords — a known, minor, not-yet-chased
-divergence.
+divergence. `zones.js`'s own `passwordSlotForWorld`/`passwordWorldForSlot` already
+implemented the correct `completedWorld - 1` / `slot + 2` mapping independently of
+this document's own now-fixed `FUN_1000_69d7` transcript error — the port was never
+affected by that bug.
+
+`game/title-menu.js`'s `PasswordEntry` originally used PSMLFNT throughout, wrong
+grid geometry, a per-cell text marker not present on the real screen, and had no
+`"PASS n :xxx"` hint line or real typed-buffer readout at all (its own header
+comment disclosed both the font and the buffer-row reading as open gaps). Fixed
+this pass to match *The exact rendering*, above, end to end: PGODFONT for the
+title/grid/buffer-row, the real pixel geometry, the erase/confirm icons via
+`main.js`'s new `gridEraseIcon`/`gridConfirmIcon` (descriptors 166/167), and the
+`"PASS n :xxx"` hint line reading `passwordSlots` directly. Live-verified against
+a real screenshot of the DOS screen and functionally (menu navigation, typing,
+the wrong-guess bounce back to the menu) in a running `gods-web` session.
 
 ## Residual open ends
 
-- The password/hiscore grid's own erase and confirm icon sprites were never
-  matched to a specific glyph-atlas source.
+- The password/hiscore grid's own erase and confirm icon sprites are now
+  identified as PGODFONT records 38/39 (descriptors 166/167, a left-pointing
+  arrow and a small circular icon respectively) — CLOSED, see *The exact
+  rendering*, above.
+- The password/hiscore grid's own row-4 "space" cell (record 27) is now
+  confirmed real — CLOSED, see *The exact rendering*, above.
 - The password screen's raw-keyboard input path was not independently live-traced
   for the same dead-gate defect already proven on the hiscore name-entry screen —
   very likely shares it (identical shared input loop), but not confirmed.
 - `FUN_1000_6a6b`'s up-to-100-retry uniqueness check (mentioned in passing above)
   was not itself fully disassembled — its exact retry/collision behavior against
   the other two already-stored passwords is unread.
+- `FUN_1000_3097`'s own cursor sprite (descriptor `0x57+phase`, a 4-frame
+  animation) was not chased down to a named asset.
