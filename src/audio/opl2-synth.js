@@ -14,10 +14,22 @@
  *   - Feedback (op1 self-modulation) is approximated as extra modulation
  *     depth from op1 into op2, not true self-feedback (Web Audio has no
  *     cheap same-tick feedback loop without an AudioWorklet).
- *   - Pitch is NOT decoded from any file — the real per-note F-Number/
- *     octave/key-on registers are runtime state GAME.EXE supplies per
- *     event, not stored instrument data, so callers must supply a
- *     frequency themselves (a reasonable default is provided).
+ *   - Total level is NOT scaled the way the real driver scales it — see
+ *     below, not a gap: it's proven runtime per-channel mixing state
+ *     (two sequential lookup tables, both read all-zero in the static
+ *     image, populated only at runtime), not instrument data, so no
+ *     static decode could ever recover the real value. This module uses
+ *     the stored, un-scaled base level, the correct-in-spirit neutral
+ *     substitute.
+ *   - Pitch is NOT decoded from any file, and this is confirmed correct,
+ *     not merely undecoded: both DOSBox captures this project made of a
+ *     real SFX trigger logged EVERY register write end to end, and
+ *     neither ever touched OPL2's frequency registers (0xA0-0xA8/0xB0-
+ *     0xB8) — this whole class of sound effect genuinely has no pitch of
+ *     its own; it plays at whatever frequency its OPL2 channel already
+ *     happens to be set to. Callers must supply a frequency (a reasonable
+ *     default is provided) precisely because the original has none to
+ *     decode.
  * Every other field (multiplier, attack/decay/sustain/release *rates*,
  * connection, base waveform id) comes directly from the decoded register
  * values, so this is far closer to the original instrument's TIMBRE than
