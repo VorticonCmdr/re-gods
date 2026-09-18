@@ -194,14 +194,40 @@ export class Renderer {
   }
 
   /**
-   * Solid black, bypassing the palette entirely. The original's "QUIT" is a
-   * plain `INT 21h AH=4Ch` DOS terminate (docs/dynamic-trace-and-runtime-
-   * data.md's title-screen section) — a browser tab cannot exit, so this is
-   * the port's own stand-in: not modelling any original mechanism, same as
-   * this file's own header already discloses for the tilemap renderer.
+   * The original's "QUIT" is a plain `INT 21h AH=4Ch` DOS terminate
+   * (docs/dynamic-trace-and-runtime-data.md's title-screen section) —
+   * `GODS.EXE`'s own exit-code dispatch prints `"Thank you for playing
+   * GODS."` for any code other than 0 or 5 (docs/execution-and-boot.md),
+   * then DOS drops back to a bare command-line prompt. A browser tab can't
+   * actually exit, so this reproduces that VISIBLE end state — a text-mode
+   * DOS screen, not the indexed 320x200 EGA framebuffer this class otherwise
+   * draws through — as the port's own stand-in, bypassing the palette
+   * entirely, same as this file's own header already discloses for the
+   * tilemap renderer's own port-level choices.
+   * @param {boolean} [cursorOn] the prompt's own blinking block cursor —
+   *   driven by wall-clock time in main.js, same pattern as the QUIT GAME/
+   *   GAME OVER fades' own `performance.now()`-based timing.
    */
-  presentBlack() {
-    this.ctx.fillStyle = '#000';
-    this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+  presentDosExit(cursorOn = true) {
+    const { width: cw, height: ch } = this.canvas;
+    const ctx = this.ctx;
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, cw, ch);
+    ctx.fillStyle = '#aaa';   // classic DOS text-mode light-gray (colour 7)
+    ctx.textBaseline = 'top';
+    const fontPx = Math.max(12, Math.round(ch / 22));
+    ctx.font = `${fontPx}px ui-monospace, "Courier New", monospace`;
+    const lineH = Math.round(fontPx * 1.35);
+    const marginX = Math.round(cw * 0.02);
+    const marginY = Math.round(ch * 0.03);
+    const lines = ['Thank you for playing GODS.', '', 'See ya soon!', '', ''];
+    lines.forEach((line, i) => ctx.fillText(line, marginX, marginY + i * lineH));
+    const promptY = marginY + lines.length * lineH;
+    const prompt = 'C:\\GODS>';
+    ctx.fillText(prompt, marginX, promptY);
+    if (cursorOn) {
+      const cursorX = marginX + ctx.measureText(prompt).width;
+      ctx.fillRect(cursorX, promptY, Math.round(fontPx * 0.6), fontPx);
+    }
   }
 }

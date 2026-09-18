@@ -1448,7 +1448,7 @@ async function main() {
    * feed a `joyl`/`joyg` recording into, the exact same one real keyboard
    * input already fills every tick via the `input` object below. 'exit' is
    * this port's stand-in for QUIT's `INT 21h AH=4Ch` — see
-   * Renderer.presentBlack(). */
+   * Renderer.presentDosExit(). */
   let uiState = 'menu';   // 'menu'|'password'|'name-entry'|'hiscore-table'|'game-over-fade'|'shop'|'game'|'exit'|'quitting'
   const titleMenu = new TitleMenu();
   let passwordEntry = null;
@@ -2957,7 +2957,12 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
           hiscoreTable.draw(renderer, glyphs, menuGlyphs, titleBackground, passwordSlots);
         }
         else if (uiState === 'shop' && shopScreen) shopScreen.draw(renderer, glyphs);
-        if (uiState === 'exit') renderer.presentBlack();   // QUIT's stand-in — see Renderer's own header
+        /* QUIT's stand-in — see Renderer.presentDosExit()'s own header. The
+         * cursor blinks at a plain 2Hz (500ms on/off), matching a real DOS
+         * prompt's own blink rate closely enough for this port's purposes —
+         * not itself a byte-cited timing, since there's nothing in GAME.EXE
+         * to cite: the blink is COMMAND.COM's/the BIOS's own, not the game's. */
+        if (uiState === 'exit') renderer.presentDosExit(Math.floor(performance.now() / 500) % 2 === 0);
         /* PBACKSCR's OWN palette, not level.palette — like PSTATUS/PSTAT3
          * (status-panel.js's own PALETTE note), nothing in GAME.EXE installs
          * a fresh DAC for this screen; whatever palette is already active

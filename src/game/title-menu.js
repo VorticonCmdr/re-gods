@@ -40,7 +40,8 @@
  *     cursor 2 -> QUIT            (INT 21h AH=4Ch — DOS terminate)
  *   UP/DOWN CLAMP (not wrap) against the option count; FIRE confirms.
  *   "QUIT" cannot terminate a browser tab, so per this port's own brief it is
- *   reproduced as a permanent blackout instead — see Renderer.presentBlack().
+ *   reproduced as a pseudo-DOS command-line screen instead — see
+ *   Renderer.presentDosExit().
  *
  *   The menu's VISUAL APPEARANCE is also [PROVEN] — confirmed live in a
  *   DOSBox session this pass (`GODS.EXE`->`INTROV.EXE`->`GAME.EXE`, no
