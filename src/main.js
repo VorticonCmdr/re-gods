@@ -1755,7 +1755,13 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
       /* The intro (game/intro.js) freezes everything else exactly like the
        * title menu/password/shop screens already do — it owns its own
        * clock and never reads `input` (skipping is keydown-driven, above). */
-      if (uiState === 'intro') { intro.step(); return; }
+      if (uiState === 'intro') {
+        intro.step();
+        /* The real sequence does not loop (game/intro.js's own DOES NOT
+         * LOOP header note) — it runs once and hands off, same as a skip. */
+        if (intro.done) { uiState = 'menu'; }
+        return;
+      }
       /* Attract-mode playback (game/attract.js) overrides `input` from the
        * decoded recording, BEFORE anything below reads it — a `joyl` tick
        * feeds the menu/password widgets exactly like a real keypress would
