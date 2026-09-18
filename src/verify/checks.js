@@ -52,7 +52,7 @@ import { InventoryPanel, drawInventoryPanel, panelIconSprite,
          SLOT_FRAME_SPRITE, SLOT_FRAME_HIGHLIGHT_SPRITE, PANEL_SLOT_SPACING,
          PANEL_FRAME_X0, PANEL_FRAME_Y, PANEL_ICON_X0,
          PANEL_ICON_Y } from '../game/inventory-panel.js';
-import { BULK_SIZE, parseMap } from '../formats/map.js';
+import { BULK_SIZE, parseMap, MSG_OFF, TRIG_OFF } from '../formats/map.js';
 import { parseAllTriggers, isLive, verbOf, TRIG_COUNT } from '../game/trigger.js';
 import { parseAtlas, cutAll, atlasStats } from '../formats/atlas.js';
 import { buildDescriptorMap, GROUP_STEMS, PLAYER_ANIM_BASE, HERO_DESCRIPTOR_MAX } from '../formats/descriptors.js';
@@ -16437,6 +16437,69 @@ export async function checkMusic(fetchRaw) {
       + 'drivers-and-memory.md only ever checked PGODSRLA\'s own shape.',
     note: true, pass: true, detail: '',
   });
+
+  return results;
+}
+
+/**
+ * Level-editor round-trip: `map-writer.js`'s `serializeMap` must be a true
+ * inverse of `map.js`'s `parseMap` (planes/objects/triggers byte-identical,
+ * messages field-identical — the message pool has a real many-to-one
+ * encoding, see map-writer.js's own header, so its bytes legitimately
+ * differ while still decoding to the same strings), and the new
+ * `dcl-encode.js` compressor's output must decompress back to exactly what
+ * was serialized. Run over all 8 shipped levels, not a synthetic fixture.
+ */
+export async function checkMapWriter(fetchRaw) {
+  const { results, check } = makeChecker();
+  const keys = ['1A','1B','2A','2B','3A','3B','4A','4B'];
+  const { serializeMap, blankMap } = await import('../formats/map-writer.js');
+  const { dclCompressStore } = await import('../formats/dcl-encode.js');
+
+  for (const k of keys) {
+    const rawMap = await fetchRaw(`game/PLEV${k}.MAP`);
+    const { data } = dclDecompress(rawMap);
+    const map = parseMap(data);
+    const triggers = parseAllTriggers(map.bulk);
+    const model = { count: map.count, headerWord: map.headerWord, headerTable: map.headerTable,
+      planeA: map.planeA, planeB: map.planeB, objects: map.objects, messages: map.messages, triggers };
+    const out = serializeMap(model);
+
+    const bulkStart = 4 + map.count * 2;
+    const msgStart = bulkStart + MSG_OFF, msgEnd = bulkStart + TRIG_OFF;
+    let diffOutsideMsg = 0;
+    for (let i = 0; i < data.length; i++) {
+      if (out[i] !== data[i] && !(i >= msgStart && i < msgEnd)) diffOutsideMsg++;
+    }
+    check(`PLEV${k}: serializeMap is byte-identical to the original OUTSIDE the message pool`,
+      out.length === data.length && diffOutsideMsg === 0,
+      `len ${out.length} vs ${data.length}, ${diffOutsideMsg} diffs outside the message section`);
+
+    const reparsed = parseMap(out);
+    const reTriggers = parseAllTriggers(reparsed.bulk);
+    const fieldsOk = JSON.stringify(reparsed.messages) === JSON.stringify(map.messages)
+      && JSON.stringify(reparsed.objects) === JSON.stringify(map.objects)
+      && reparsed.planeA.every((v, i) => v === map.planeA[i])
+      && reparsed.planeB.every((v, i) => v === map.planeB[i])
+      && JSON.stringify(reTriggers) === JSON.stringify(triggers);
+    check(`PLEV${k}: parse -> serialize -> re-parse is FIELD-identical (planes/objects/messages/triggers)`,
+      fieldsOk);
+
+    const compressed = dclCompressStore(out);
+    const redecoded = dclDecompress(compressed);
+    const compressOk = redecoded.data.length === out.length && redecoded.data.every((b, i) => b === out[i]);
+    check(`PLEV${k}: dclCompressStore(serializeMap(...)) decompresses back byte-identical`,
+      compressOk, `consumed ${redecoded.consumed}/${compressed.length}`);
+  }
+
+  const bm = blankMap();
+  const bmOut = serializeMap(bm);
+  const bmReparsed = parseMap(bmOut);
+  check('blankMap(): serializes and re-parses to a structurally valid, empty level',
+    bmReparsed.bulk.length === BULK_SIZE
+      && bmReparsed.objects.every((o) => o.type === 0xFFFF)
+      && bmReparsed.messages.every((m) => m === null)
+      && parseAllTriggers(bmReparsed.bulk).every((t) => !isLive(t)));
 
   return results;
 }

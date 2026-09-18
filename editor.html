@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>GODS — level editor</title>
+<style>
+  :root {
+    --bg:#0e0d12; --panel:#17161d; --line:#2a2833;
+    --ink:#e8e6ef; --dim:#9b97ac; --ok:#5ad48c; --bad:#ff6b6b; --accent:#e0a33e;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); display:flex; min-height:100vh; font-size:12px; }
+  h1 { font-size:14px; margin:0 0 .25rem; letter-spacing:.08em; text-transform:uppercase; }
+  h2 { font-size:11px; text-transform:uppercase; letter-spacing:.08em; color:var(--accent); margin:1rem 0 .4rem; }
+  select, button, input[type=text], input[type=number] {
+    background:#221f2b; color:var(--ink); border:1px solid var(--line);
+    padding:.3rem .4rem; font:inherit; font-size:12px; border-radius:4px;
+  }
+  button { cursor:pointer; } button:hover { border-color:var(--accent); }
+  button.active { border-color:var(--accent); color:var(--accent); }
+  label { display:flex; align-items:center; gap:.35rem; }
+
+  #toolbar { display:flex; gap:.5rem; align-items:center; padding:.5rem .75rem;
+    border-bottom:1px solid var(--line); background:var(--panel); flex-wrap:wrap; }
+  #toolbar .spacer { flex:1; }
+  #dirty { color:var(--accent); display:none; }
+  #dirty.on { display:inline; }
+
+  #body { display:flex; flex:1; min-height:0; }
+  #stage { flex:1; position:relative; overflow:hidden; background:#000; min-width:0; }
+  #view { display:block; image-rendering:pixelated; cursor:crosshair; }
+  #hint { position:absolute; left:.5rem; bottom:.5rem; color:var(--dim); background:rgba(14,13,18,.8);
+    padding:.25rem .5rem; border-radius:4px; pointer-events:none; }
+
+  aside { width:340px; flex:none; background:var(--panel); border-left:1px solid var(--line);
+    padding:.75rem; overflow-y:auto; display:flex; flex-direction:column; gap:.25rem; }
+  .row { display:flex; gap:.4rem; align-items:center; flex-wrap:wrap; margin:.15rem 0; }
+  .row label { flex:none; color:var(--dim); min-width:5.5rem; }
+  .grow { flex:1; min-width:3rem; }
+
+  #tilePalette { display:grid; grid-template-columns: repeat(8, 1fr); gap:2px;
+    max-height:220px; overflow-y:auto; background:#000; padding:2px; border-radius:4px; }
+  #tilePalette canvas { width:100%; image-rendering:pixelated; cursor:pointer; border:1px solid transparent; }
+  #tilePalette canvas.sel { border-color:var(--accent); }
+
+  #objectList, #triggerList, #messageList { max-height:180px; overflow-y:auto;
+    border:1px solid var(--line); border-radius:4px; }
+  .listItem { padding:.25rem .4rem; border-bottom:1px solid #201f28; cursor:pointer; display:flex; justify-content:space-between; }
+  .listItem:hover { background:#201f28; }
+  .listItem.sel { background:#2a2440; color:var(--accent); }
+  .listItem.dead { color:var(--dim); }
+
+  #validation .chk { display:flex; gap:.4rem; padding:.15rem 0; border-bottom:1px solid #201f28; }
+  #validation .chk.bad { color:var(--bad); }
+  #validation .chk .m { flex:none; width:1rem; }
+  textarea { width:100%; min-height:3rem; background:#221f2b; color:var(--ink); border:1px solid var(--line);
+    border-radius:4px; font:inherit; padding:.35rem; }
+</style>
+</head>
+<body>
+  <div id="body" style="flex-direction:column; width:100%;">
+    <div id="toolbar">
+      <label>level <select id="levelSelect">
+        <option value="">— new level —</option>
+        <option value="1A">1A</option><option value="1B">1B</option>
+        <option value="2A">2A</option><option value="2B">2B</option>
+        <option value="3A">3A</option><option value="3B">3B</option>
+        <option value="4A">4A</option><option value="4B">4B</option>
+      </select></label>
+      <button id="loadBtn">Load</button>
+      <button id="newBtn">New (blank, world 1 tiles)</button>
+      <span class="spacer"></span>
+      <span id="dirty">● unsaved changes</span>
+      <button id="saveBtn">Save .MAP</button>
+    </div>
+    <div id="body2" style="display:flex; flex:1; min-height:0;">
+      <div id="stage">
+        <canvas id="view" width="960" height="600"></canvas>
+        <div id="hint">no level loaded</div>
+      </div>
+      <aside>
+        <h1>GODS level editor</h1>
+
+        <h2>Paint</h2>
+        <div class="row">
+          <button id="modePlaneA" class="active">plane A (tiles)</button>
+          <button id="modePlaneB">plane B (attr)</button>
+          <button id="modeObjects">objects</button>
+          <button id="modeTriggers">triggers</button>
+        </div>
+        <div id="tilesPanel">
+          <div class="row"><label>tile</label><span id="tileSel" class="grow">1</span></div>
+          <div id="tilePalette"></div>
+        </div>
+        <div id="planeBPanel" style="display:none">
+          <div class="row"><label>value</label>
+            <select id="planeBValue">
+              <option value="0">0 — empty</option>
+              <option value="1">1 — solid</option>
+              <option value="2">2 — climbable</option>
+              <option value="custom">event id ≥3 (numeric)</option>
+            </select>
+          </div>
+          <div class="row" id="planeBCustomRow" style="display:none">
+            <label>event id</label><input id="planeBCustom" type="number" min="3" max="255" value="3" class="grow">
+          </div>
+        </div>
+
+        <h2>Objects (<span id="objectCount">0</span>/200 live)</h2>
+        <div id="objectList"></div>
+        <div class="row"><button id="objectAddBtn">+ add object (then click canvas)</button></div>
+        <div id="objectForm"></div>
+
+        <h2>Triggers (<span id="triggerCount">0</span>/100 live)</h2>
+        <div id="triggerList"></div>
+        <div id="triggerForm"></div>
+
+        <h2>Messages (<span id="messageCount">0</span>/40 used)</h2>
+        <div id="messageList"></div>
+        <div id="messageForm"></div>
+
+        <h2>Validation</h2>
+        <div id="validation"></div>
+      </aside>
+    </div>
+  </div>
+  <script type="module" src="/src/editor/main.js"></script>
+</body>
+</html>

@@ -277,6 +277,13 @@ for (const r of checkHiscoresFile()) {
   console.log(line(r));
 }
 
+console.log('\n  level-editor round trip (map-writer.js / dcl-encode.js vs. all 8 shipped levels):');
+const { checkMapWriter } = await import('../src/verify/checks.js');
+for (const r of await checkMapWriter(fetchRaw)) {
+  if (!r.pass && !r.note) bad++;
+  console.log(line(r));
+}
+
 console.log('\n  the retracting spike hazard (CS:0x1B72/0x1AF6, types 50/117/130):');
 const { checkSpikes } = await import('../src/verify/checks.js');
 for (const r of checkSpikes()) {

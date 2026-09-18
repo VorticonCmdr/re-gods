@@ -20,6 +20,7 @@ import { runAllChecks, checkDescriptorAnchors, checkHeroSprites,
          checkWeaponsProjectiles, checkTriggerActions,
          checkZones, checkPopup, checkLevers, checkSpikes,
          checkMessages, checkLineBarriers, checkTitleMenu, checkHiscoresFile, checkTally,
+         checkMapWriter,
          checkShop, checkMusic } from './verify/checks.js';
 import { EventRunner, parsePalfils, palfilsNameFor } from './game/events.js';
 import { LineBarriers, parseLineBarrierRecords } from './game/line-barriers.js';
@@ -548,7 +549,7 @@ async function main() {
     checkLineBarriers(fetchRaw), Promise.resolve(checkTitleMenu()),
     Promise.resolve(checkHiscoresFile()),
     Promise.resolve(checkTally()), Promise.resolve(checkShop()),
-    checkMusic(fetchRaw),
+    checkMusic(fetchRaw), checkMapWriter(fetchRaw),
     ]) results.push(...await g);
     renderChecks(results);
     const mh = $('messages');
