@@ -369,8 +369,32 @@ async function loadSprites(world) {
     menuGlyphs = [];
     for (let c = 0; c < 26; c++) menuGlyphs[0x41 + c] = frames[menuFontBase.base + c];
     for (let d = 0; d < 10; d++) menuGlyphs[0x30 + d] = frames[menuFontBase.base + 28 + d];
+    /* Records 26 ('.') and 27 (space) — CS:0x30D4's own password/hiscore grid
+     * blits PGODFONT records 0-39 directly by cell index (0x80+n), and
+     * CS:0x3065's typed-buffer readout maps an empty slot's own alphabet
+     * code (Space = 0x1C, see message.js's established a-z/digit/./space
+     * encoding) to record (0x1C+0x7F)-0x80 = 27 — closing this project's own
+     * long-standing "records 26-28 unidentified" ambiguity for record 27
+     * specifically: it IS the space glyph, not a mystery icon. Keyed here by
+     * real ASCII '.'/' ' so PasswordEntry's own GRID_CELLS (which already
+     * uses literal '.'and ' ' characters) can look them up the same way it
+     * looks up letters/digits. */
+    menuGlyphs[0x2e] = frames[menuFontBase.base + 26];  // '.'
+    menuGlyphs[0x20] = frames[menuFontBase.base + 27];  // ' ' (space)
   }
+  /* PGODFONT records 38/39 — CS:0x30D4's own grid cells 38 (erase) and 39
+   * (confirm), descriptors 0x80+38=166 and 0x80+39=167 respectively (DIRECT
+   * indexing, unlike the title menu's own swapped-for-inward-pointing
+   * MENU_ARROW_LEFT/RIGHT_DESC below — grid cell 38 really is drawn with
+   * record 38, not record 40). Record 38 is the same LEFT-pointing arrow
+   * MENU_ARROW_RIGHT_DESC already names (168+38=166, arithmetic coincidence
+   * of the two independent numbering schemes landing on the same value, not
+   * a shared meaning) — kept as its own named constant for clarity at the
+   * password grid's own call site. */
+  const GRID_ERASE_DESC = 166;   // 0x80+38 — LEFT-pointing arrow
+  const GRID_CONFIRM_DESC = 167; // 0x80+39 — the small circular icon
   return { frames, ranges, glyphs, glyphBase: fontBase ? fontBase.base : -1, menuGlyphs,
+           gridEraseIcon: frames[GRID_ERASE_DESC], gridConfirmIcon: frames[GRID_CONFIRM_DESC],
            palette: images.PALWAYS1.palette, total: map.length };
 }
 
@@ -2508,7 +2532,10 @@ let quitFade = null;   // null | { snapshot: Uint8Array, palette: Uint8Array|num
         const glyphs = hero && hero.glyphs, menuGlyphs = hero && hero.menuGlyphs, logo = hero && hero.frames[169];
         const arrowLeft = hero && hero.frames[MENU_ARROW_LEFT_DESC], arrowRight = hero && hero.frames[MENU_ARROW_RIGHT_DESC];
         if (uiState === 'menu') titleMenu.draw(renderer, glyphs, menuGlyphs, arrowLeft, arrowRight, logo, titleBackground);
-        else if (uiState === 'password') passwordEntry.draw(renderer, glyphs, titleBackground);
+        else if (uiState === 'password') {
+          passwordEntry.draw(renderer, glyphs, menuGlyphs, hero && hero.gridEraseIcon,
+            hero && hero.gridConfirmIcon, titleBackground, passwordSlots);
+        }
         else if (uiState === 'shop' && shopScreen) shopScreen.draw(renderer, glyphs);
         if (uiState === 'exit') renderer.presentBlack();   // QUIT's stand-in — see Renderer's own header
         /* PBACKSCR's OWN palette, not level.palette — like PSTATUS/PSTAT3

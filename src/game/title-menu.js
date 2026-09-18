@@ -70,7 +70,7 @@
  */
 
 import { SCREEN_W } from '../formats/pi1.js';
-import { PASSWORD_LENGTH } from './zones.js';
+import { PASSWORD_LENGTH, passwordToString } from './zones.js';
 
 export const ADVANCE = 0x0a;    // 10 — the same per-glyph step message.js uses
 export const DIAMOND = '\x11';  // CS:0x4443's own separator glyph, reused as a cursor
@@ -242,33 +242,28 @@ export class TitleMenu {
 }
 
 /* `UNKNOWN_password_grid_layout` is CLOSED — 8 columns x 5 rows = 40 cells,
- * confirmed live in a DOSBox session this pass (A-X across 3 full rows,
- * then Y/Z/./space/0/1/2/3, then 4-9/erase/confirm), and CROSS-VALIDATED
- * against Gods/docs/dynamic-trace-and-runtime-data.md's own earlier
- * finding: that session moved the cursor "from index 34 to 39" via
- * "5x KBD_right" — row-major index 34 is column 2 of this grid's row 4
- * (the '6' cell) and index 39 is column 7 of row 4 (confirm), exactly 5
- * columns apart. Two cells are a port-level substitution, not a claim of
- * pixel fidelity: the real erase/confirm cells are a left-arrow icon and a
- * distinct circular icon (not a PSMLFNT glyph — reading it precisely would
- * need locating its own sprite asset, not attempted this pass), reproduced
- * here as '<'/'=' for the same glyph-safety reasons the header explains.
- * ⚠️ LEAD, not yet closed: a later pass (see MENU_ADVANCE's own citation
- * above) found the grid's OWN drawer, CS:0x30D4 — `FUN_1000_356e` blitting
- * descriptor `0x80 + n` for cell `n`, i.e. PGODFONT's own records 0-39 in
- * row-major order, the SAME atlas MENU_ADVANCE identifies (`0x80` = 128 =
- * PGODFONT's base). Records 0-25 line up exactly with this grid's own
- * `A`-`Z` (cells 0-25), and PGODFONT's last two records (39/40, past this
- * grid's own 0-39 range by one) ARE a left-arrow and a circular icon
- * on inspection (`tools/atlas-render.mjs PGODFONT`) — a strong lead for the
- * erase/confirm sprites this note has been calling unlocated. But records
- * 26-28 render as three short, unidentified marks, not `.`/space/space as
- * this grid's own `GRID_CELLS` below assumes, so the exact cell<->record
- * correspondence for row 4 onward is NOT re-derived here, and `PasswordEntry`
- * still draws through PSMLFNT, unchanged — swapping it needs that mapping
- * pinned down first (ideally cross-checked against a live capture the way
- * the grid's own geometry was), not assumed from the sequential-index
- * pattern alone. */
+ * confirmed live in a DOSBox session (A-X across 3 full rows, then
+ * Y/Z/./space/0/1/2/3, then 4-9/erase/confirm), and CROSS-VALIDATED against
+ * Gods/docs/dynamic-trace-and-runtime-data.md's own earlier finding: that
+ * session moved the cursor "from index 34 to 39" via "5x KBD_right" — row-
+ * major index 34 is column 2 of this grid's row 4 (the '6' cell) and index
+ * 39 is column 7 of row 4 (confirm), exactly 5 columns apart.
+ *
+ * The exact PIXEL GEOMETRY and FONT are now `[PROVEN]` too, by decompiling
+ * `FUN_1000_30d4` directly (Gods/docs/passwords.md's own UI section): 8
+ * columns of 32px starting at X=40, 5 rows of 24px starting at Y=40, each
+ * cell blitting PGODFONT descriptor `0x80 + (row*8+col)` — i.e. PGODFONT's
+ * own records 0-39 in row-major order, DIRECTLY (not the title menu's own
+ * left/right-swapped arrow placement). This also closes a genuinely
+ * previously-unidentified glyph: record 27 (this grid's own 'space' cell,
+ * index 27) is the space glyph itself — `FUN_1000_3065`'s typed-buffer
+ * readout (below) substitutes alphabet code `0x1C` (Space, this project's
+ * own established a-z/digit/./space encoding) for an empty buffer slot, and
+ * `0x1C + 0x7F - 0x80 = 27` — the same record this grid's own row 4 uses,
+ * not a mystery "two small dots" icon as an earlier pass of this project's
+ * documentation had it. Records 38/39 (this grid's own erase/confirm cells)
+ * are main.js's `gridEraseIcon`/`gridConfirmIcon` (`loadSprites()`'s own
+ * `GRID_ERASE_DESC`/`GRID_CONFIRM_DESC`, descriptors 166/167). */
 const GRID_COLS = 8, GRID_ROWS = 5;
 const GRID_CELLS = [
   'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H',
@@ -277,8 +272,41 @@ const GRID_CELLS = [
   'Y', 'Z', '.', ' ', '0', '1', '2', '3',
   '4', '5', '6', '7', '8', '9', '<', '=',
 ];
-const CELL_DEL = '<', CELL_OK = '=';
-const GRID_X0 = 16, GRID_Y0 = 40, GRID_COL_W = 36, GRID_ROW_H = 18;
+const CELL_DEL = '<', CELL_OK = '=';   // internal sentinels only — never drawn as text, see draw()
+const GRID_X0 = 40, GRID_Y0 = 40, GRID_COL_W = 32, GRID_ROW_H = 24;   // CS:0x30D4, exact
+
+/* CS:0x3097 — the cursor is a small animated icon (4-frame cycle,
+ * descriptor 0x57+phase, an "always"-group sprite this pass did not chase
+ * down) blitted AT the selected cell's own position, on top of its letter.
+ * Reproduced here as the small-font DIAMOND glyph instead, offset above the
+ * cell rather than overlapping it — a disclosed simplification, not a
+ * fidelity claim for the icon itself; the POSITION formula this constant
+ * feeds is exact (same X0/Y0/COL_W/ROW_H as the grid above). */
+const CURSOR_Y_OFFSET = -10;
+
+/* CS:0x3065 — the typed-buffer readout: NOT a decorative border (an
+ * earlier pass of this project's own documentation, and this module's own
+ * prior revision, both read it that way from a live capture that happened
+ * not to catch it changing). It is a real 16-cell row, left-aligned at
+ * X=32, Y=168, 16px/cell, reading `DS:0x3004` (the SAME scratch buffer the
+ * grid input loop fills) byte-for-byte — so for a 3-letter password only
+ * the first 3 cells ever show real content, the other 13 are permanently
+ * the empty-slot placeholder (Space, see the header note above). */
+const BUFFER_ROW_X0 = 32, BUFFER_ROW_Y = 168, BUFFER_ROW_ADVANCE = 16, BUFFER_ROW_LEN = 16;
+
+/* CS:0x32FE, shared with the "TOP TEN GODS" hiscore table (FUN_1000_32c0)
+ * AND this grid-entry loop itself (FUN_1000_2eb0) — drawn on BOTH screens,
+ * not hiscore-table-only as an earlier pass of this project's own
+ * documentation had it. One line per already-generated password (a slot
+ * that has never been filled this session draws nothing at all, not even a
+ * blank template), at FIXED positions regardless of which slots are
+ * actually filled: X = 10/110/210, Y = 190, small font (PSMLFNT-style, an
+ * 8px stride — narrower than this module's own default ADVANCE). Format is
+ * the literal on-disk template `"pass N : "` with the digit and 3 letters
+ * patched in — `"PASS 2 :PME"` for a real world-2 password, exactly. See
+ * Gods/docs/passwords.md's own "Disk persistence" and "The generator"
+ * sections. */
+const HINT_ROW_Y = 190, HINT_ROW_X = [10, 110, 210], HINT_ADVANCE = 8;
 
 /**
  * CS:0x2e2f/0x2e6c-0x2ea8 — the letter-grid password entry. `onKeyDown`
@@ -315,37 +343,60 @@ export class PasswordEntry {
     return null;
   }
 
-  draw(renderer, glyphs, background) {
+  /**
+   * @param glyphs PSMLFNT — used only for the small hint-line text below.
+   * @param menuGlyphs PGODFONT — the title and every grid cell's own letter/
+   *   digit/'.'/space now draw through this (CS:0x30D4/0x3065), not PSMLFNT.
+   * @param {?object} eraseIcon `hero.gridEraseIcon` (grid record 38).
+   * @param {?object} confirmIcon `hero.gridConfirmIcon` (grid record 39).
+   * @param {?object} background `titleBackground` — CS:0x2e2f draws no
+   *   background of its own, so whatever PBACKSCR the title menu already
+   *   put up stays behind this screen too.
+   * @param {Array<number[]|null>} passwordSlots main.js's own 3-slot array
+   *   (index 0..2 -> world 2..4) — read-only here, for the hint line only.
+   */
+  draw(renderer, glyphs, menuGlyphs, eraseIcon, confirmIcon, background, passwordSlots) {
     if (background) renderer.blitBackground(background);
     else renderer.clear(0);
-    /* `"ENTER A PASSWORD"`, 1ffd:eb96 (CS:0x2e2f's own message pointer —
-     * see the header and zones.js's own citation of this exact string) —
+    /* `"ENTER A PASSWORD"`, 1ffd:eb96 (CS:0x2e2f's own message pointer) —
      * this screen's own title, DISTINCT from the menu option's own label
-     * "ENTER PASSWORD" (MENU_OPTIONS' own header note above). */
-    drawCentered(renderer, glyphs, 'ENTER A PASSWORD', 8);
+     * "ENTER PASSWORD". Drawn via PGODFONT (CS:0x30D4 calls FUN_1000_224e,
+     * the SAME routine the title menu's own options use), not PSMLFNT. */
+    drawCentered(renderer, menuGlyphs, 'ENTER A PASSWORD', 8, MENU_ADVANCE);
 
-    /* The typed buffer. NOT confirmed live: a DOSBox session this pass
-     * found a row of diamond glyphs below the real grid that does NOT
-     * change as cells are fired (screenshotted before/after) — a fixed
-     * decorative border, not a buffer readout, so the real screen's own
-     * typed-feedback mechanism (if any) is still unlocated. This line is a
-     * port-only UX affordance, not a fidelity claim: shown so a player can
-     * see what they have typed. Blank slots use the diamond placeholder —
-     * see the header's glyph-safety note for why not '_' or '-'. */
-    const slots = [];
-    for (let i = 0; i < PASSWORD_LENGTH; i++) slots.push(this.buffer[i] || DIAMOND);
-    drawCentered(renderer, glyphs, slots.join(' '), 24);
-
+    /* The grid itself — bare glyphs, no per-cell marker prefix (the real
+     * screen draws only the letter/digit/icon, nothing else). */
     for (let r = 0; r < GRID_ROWS; r++) {
       for (let c = 0; c < GRID_COLS; c++) {
         const cell = GRID_CELLS[r * GRID_COLS + c];
-        const marker = r === this.row && c === this.col ? DIAMOND + ' ' : '  ';
-        drawText(renderer, glyphs, marker + cell, GRID_X0 + c * GRID_COL_W, GRID_Y0 + r * GRID_ROW_H);
+        const x = GRID_X0 + c * GRID_COL_W, y = GRID_Y0 + r * GRID_ROW_H;
+        if (cell === CELL_DEL) { if (eraseIcon) renderer.blitSprite(eraseIcon, x, y); }
+        else if (cell === CELL_OK) { if (confirmIcon) renderer.blitSprite(confirmIcon, x, y); }
+        else if (menuGlyphs) {
+          const f = menuGlyphs[cell.charCodeAt(0)];
+          if (f) renderer.blitSprite(f, x, y);
+        }
+        if (r === this.row && c === this.col) {
+          drawText(renderer, glyphs, DIAMOND, x, y + CURSOR_Y_OFFSET);
+        }
       }
     }
 
-    drawCentered(renderer, glyphs, '<  DELETE     =  CONFIRM', 140);
-    drawCentered(renderer, glyphs, 'ARROWS MOVE  SPACE SELECT', 158);
-    drawCentered(renderer, glyphs, 'ESC BACK TO MENU', 176);
+    /* The typed-buffer readout — see BUFFER_ROW_* header note above. */
+    for (let i = 0; i < BUFFER_ROW_LEN; i++) {
+      const ch = this.buffer[i] || ' ';
+      const f = menuGlyphs && menuGlyphs[ch.charCodeAt(0)];
+      if (f) renderer.blitSprite(f, BUFFER_ROW_X0 + i * BUFFER_ROW_ADVANCE, BUFFER_ROW_Y);
+    }
+
+    /* The hint line(s) — see HINT_ROW_* header note above. */
+    if (passwordSlots) {
+      for (let i = 0; i < passwordSlots.length; i++) {
+        const chars = passwordSlots[i];
+        if (!chars) continue;   // CS:0x32FE's own `if (*pcVar3 != 0)` guard — empty slot draws nothing
+        const text = `PASS ${i + 2} :${passwordToString(chars)}`;
+        drawText(renderer, glyphs, text, HINT_ROW_X[i], HINT_ROW_Y, HINT_ADVANCE);
+      }
+    }
   }
 }
