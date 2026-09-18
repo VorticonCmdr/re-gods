@@ -526,6 +526,11 @@ async function main() {
   const musicSel = $('musicTrack');
   fetchRaw('game/PGODS.MUS').then((raw) => {
     const blobs = parseMusContainer(dclDecompress(raw).data);
+    /* Also feeds audio.setPgodsBlobs() below — the SAME blobs this dev
+     * music picker already parses double as the real per-id SFX instrument
+     * source (formats/sfx-instrument.js's own header has the full
+     * disassembly/live-capture citation trail for why). */
+    audio.setPgodsBlobs(blobs);
     musicSel.innerHTML = '<option value="-1">(none)</option>';
     blobs.forEach((blob, i) => {
       if (!isSmf(blob)) return;   // the 3 mus_type2 blobs (19/20/40) — undecoded, see smf-parser.js

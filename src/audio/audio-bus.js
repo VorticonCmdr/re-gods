@@ -124,6 +124,9 @@
  * the bounce/land thud `0x0609` (`CS:0xA165`/`0xA1D7`), is wired too.
  */
 
+import { lookupSfxInstrument } from '../formats/sfx-instrument.js';
+import { playOpl2Note } from './opl2-synth.js';
+
 function scheduleTone(ctx, dest, t0, { freq, dur, type = 'square', gain = 0.2, slideTo, delay = 0 }) {
   const osc = ctx.createOscillator();
   const g = ctx.createGain();
@@ -258,6 +261,7 @@ export class RecordingAudioBus {
 /** Browser-only: real Web Audio playback, lazy-started on the first play(). */
 export class WebAudioBus {
   #ctx = null;
+  #pgodsBlobs = null;
 
   #ensureContext() {
     if (!this.#ctx) {
@@ -268,10 +272,27 @@ export class WebAudioBus {
     return this.#ctx;
   }
 
+  /**
+   * Supplies PGODS.MUS's own parsed container blobs (mus-container.js's
+   * `parseMusContainer` output) so `play()` can synthesize the id's real
+   * decoded OPL2 instrument (formats/sfx-instrument.js) instead of the
+   * stylized `SFX_VOICES` fallback. Optional — without it, every id plays
+   * its stylized voice exactly as before. See opl2-synth.js's own header
+   * for what "real" means here (register-accurate, not chip-accurate).
+   */
+  setPgodsBlobs(blobs) { this.#pgodsBlobs = blobs; }
+
   play(id) {
+    const ctx = this.#ensureContext();
+    if (this.#pgodsBlobs) {
+      const registers = lookupSfxInstrument(id, this.#pgodsBlobs);
+      if (registers) {
+        playOpl2Note(ctx, ctx.destination, ctx.currentTime, registers);
+        return;
+      }
+    }
     const voice = SFX_VOICES[id];
     if (!voice) return;
-    const ctx = this.#ensureContext();
     voice(ctx, ctx.destination, ctx.currentTime);
   }
 }
