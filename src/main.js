@@ -613,6 +613,18 @@ async function main() {
     introAssets = await loadIntroAssets();
   } catch (e) { console.error('intro assets failed to load', e); }
 
+  /* INTROV.EXE's own music — PMUSIC.MUS, a single SMF blob (see copy-
+   * assets.mjs's own citation for why this file and not PDEMOSB4.SB, the
+   * one GODS.INI here actually selects). Reuses `musicPlayer` (declared
+   * above for the level-music dev picker) rather than a second player —
+   * only one track is ever audible at a time regardless. */
+  let introMusicBlob = null;
+  try {
+    const raw = dclDecompress(await fetchRaw('game/PMUSIC.MUS')).data;
+    const blobs = parseMusContainer(raw);
+    if (blobs[0] && isSmf(blobs[0])) introMusicBlob = blobs[0];
+  } catch (e) { console.error('intro music failed to load', e); }
+
   /* The true shipped "TOP TEN GODS" defaults (game/formats/hiscores.js's
    * own `DEFAULT_TABLE`, hardcoded rather than fetched — see that export's
    * own citation for why HISCORES.BIN itself is not a fetchable asset here)
@@ -1473,6 +1485,23 @@ async function main() {
    * below), matching a live-confirmed DOSBox test. */
   let uiState = 'intro';   // 'intro'|'menu'|'password'|'name-entry'|'hiscore-table'|'game-over-fade'|'shop'|'game'|'exit'|'quitting'
   const intro = new Intro();
+  /* Browsers refuse to start an AudioContext before a user gesture
+   * (audio-bus.js's own header has the full citation for this port's
+   * established convention: the FIRST sound always fires from inside a
+   * real keydown handler). The intro plays automatically at boot, before
+   * any gesture has happened, so `musicPlayer.play()` here creates the
+   * context in a 'suspended' state and schedules silently — the SAME
+   * keydown that skips the intro (above) is real user input and unlocks
+   * it, but by then the intro is already over, so a plain 'pointerdown'
+   * (a click, not a key — doesn't trigger the skip handler) is offered as
+   * a way to hear it without cutting it short. Either path is a real user
+   * gesture; a synthetic/automated one (Chrome-automation dispatch) is
+   * NOT one and will not unlock it, matching the browser's own policy. */
+  if (introMusicBlob) musicPlayer.play(introMusicBlob);
+  const unlockIntroAudio = () => {
+    if (uiState === 'intro' && introMusicBlob) musicPlayer.play(introMusicBlob);
+  };
+  addEventListener('pointerdown', unlockIntroAudio, { once: true });
   const titleMenu = new TitleMenu();
   let passwordEntry = null;
   let nameEntry = null;
@@ -1652,7 +1681,7 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
      * intermediate screen). Checked before every other branch, including
      * attract, since attract mode is only ever reachable once 'menu' has
      * already been entered. */
-    if (uiState === 'intro') { uiState = 'menu'; e.preventDefault(); return; }
+    if (uiState === 'intro') { uiState = 'menu'; musicPlayer.stop(); e.preventDefault(); return; }
     /* A real keypress during attract-mode playback always wins — port-only
      * (see game/attract.js's own header: the original has no clean way to
      * distinguish a real key from the recording's own writes to the SAME
@@ -1759,7 +1788,7 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
         intro.step();
         /* The real sequence does not loop (game/intro.js's own DOES NOT
          * LOOP header note) — it runs once and hands off, same as a skip. */
-        if (intro.done) { uiState = 'menu'; }
+        if (intro.done) { uiState = 'menu'; musicPlayer.stop(); }
         return;
       }
       /* Attract-mode playback (game/attract.js) overrides `input` from the

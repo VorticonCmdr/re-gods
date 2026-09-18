@@ -74,6 +74,17 @@ const WANTED = [
   // atlas.js). All three confirmed live in DOSBox and by direct decode —
   // see intro.js's own header.
   'PSTBACK.PI1','PONE.PI1','PINTROFT.PI1','PINTROFT.DAT',
+  // INTROV.EXE's own intro music (game/intro.js) — PMUSIC.MUS, a plain
+  // single-blob SMF (mus-container.js's own header), NOT part of the same
+  // 5-name sound-config dispatch table PSTBACK/PONE/PINTROFT's neighbours
+  // are — it sits in INTROV.EXE's general always-loaded asset cluster
+  // instead (execution-and-boot.md's own citation). The real shipped
+  // GODS.INI here selects Sound Blaster, whose own intro track is
+  // PDEMOSB4.SB (raw digitized PCM, format/rate not decoded this pass) —
+  // PMUSIC.MUS is a disclosed substitute using this port's own already-
+  // working SMF player, not a claim that it's what GODS.INI's actual
+  // config would play.
+  'PMUSIC.MUS',
   // #11 audio, music half. GAME.EXE's own only music-related string literals
   // are `pgods.mus`/`gods.mus` (Table 2/Table 1) — a raw byte scan of both
   // GAME.EXE and TGAME.EXE found no reference at all to any of the other

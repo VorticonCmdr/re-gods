@@ -121,19 +121,29 @@
  * decompilation alone). UNKNOWN_intro_page_timing narrows to just these
  * two residuals; UNKNOWN_intro_credits_timing is otherwise closed.
  *
- * PALETTE — still open. `FUN_1000_1635` is confirmed as the DAC-install
- * routine (16-entry table -> `INT 10h AX=1012h`), fed from a table at
- * `DS:0x73` that `FUN_1000_0db5`/`FUN_1000_0d9c` rotate between card
- * transitions (a genuine per-card colour-cycle/dissolve effect, not a
- * static palette) — but this pass could not pin down where DS:0x73's OWN
- * source values come from (a direct memory read at the address this file's
- * first draft guessed, `DS:0x2`, turned out to be unrelated ASCII filename
- * data, not a palette — a wrong guess, corrected here rather than left
- * silently). This port still presents the LOGO/STORY sections under the
- * BACKDROP's own embedded palette and the CREDITS section under
- * PINTROFT's own embedded palette, same as the first draft, and still
- * accepts the resulting story-page text hue mismatch (salmon/pink instead
- * of gold, live-checked). UNKNOWN_intro_glyph_palette remains open — next
+ * PALETTE — LOGO now fixed, STORY still open. `FUN_1000_1635` is confirmed
+ * as the DAC-install routine (16-entry table -> `INT 10h AX=1012h`), fed
+ * from a table at `DS:0x73` that `FUN_1000_0db5`/`FUN_1000_0d9c` rotate
+ * between card transitions (a genuine per-card colour-cycle/dissolve
+ * effect, not a static palette) — but this pass could not pin down where
+ * `DS:0x73`'s OWN source values come from (a direct memory read at the
+ * address this file's first draft guessed, `DS:0x2`, turned out to be
+ * unrelated ASCII filename data, not a palette — a wrong guess, corrected
+ * here rather than left silently). **User-reported: the "GODS" wordmark
+ * rendered solid red instead of gold on the logo card.** Root cause: this
+ * port was presenting the logo card under `PSTBACK.PI1`'s OWN embedded
+ * palette, whose index 2 is a pure-red entry the wordmark's own pixels
+ * legitimately hit. Checked directly (not assumed): `PSTBACK.PI1` and
+ * `PINTROFT.PI1` turn out to share ONE real palette — decoding `PSTBACK`'s
+ * indices under `PINTROFT`'s embedded palette reproduces `PSTBACK`'s own
+ * native stone-wall colors exactly. So the logo card now presents under
+ * `PINTROFT`'s palette throughout (`Intro#palette()`), fixing both the
+ * backdrop AND the wordmark at once — a real fix, not a tradeoff. The SAME
+ * check against `PONE.PI1` (the story backdrop) came out wrong — garish
+ * green/orange bands, not its own gradient — so `PONE.PI1` genuinely does
+ * NOT share `PINTROFT`'s palette, and the story page's own gold-vs-salmon
+ * text hue mismatch is still open. UNKNOWN_intro_glyph_palette narrows to
+ * the STORY section only. Next
  * step is a live DAC port read (0x3C7/0x3C9) during an actual DOSBox
  * run, the technique already validated for UNKNOWN_level_palette_source,
  * not more static reading.
@@ -375,9 +385,19 @@ export class Intro {
   }
 
   /** The palette to present with — see this file's own PALETTE header for
-   * the open gap. */
+   * the open gap (still real for the STORY section only — see below). */
   palette(assets) {
-    if (this.section === 'opener' || this.section === 'credits' || this.section === 'loading') {
+    /* 'logo': PSTBACK.PI1 and PINTROFT.PI1 turn out to share ONE palette —
+     * rendering PSTBACK's own indices under PINTROFT's embedded palette
+     * reproduces PSTBACK's own native colors exactly (checked directly,
+     * not assumed), so this is a real fix, not the same tradeoff STORY
+     * still has: user-reported, the wordmark rendered solid RED under
+     * PSTBACK's own palette (index 2 there is a pure-red entry the
+     * wordmark's pixels legitimately hit) instead of gold. PONE.PI1 does
+     * NOT share PINTROFT's palette (checked the same way — comes out as
+     * wrong garish bands), so STORY is unaffected by this fix. */
+    if (this.section === 'opener' || this.section === 'credits' ||
+        this.section === 'loading' || this.section === 'logo') {
       return assets.fontPalette;
     }
     if (this.section === 'story' && assets.portraitBg) return assets.portraitBg.palette;
