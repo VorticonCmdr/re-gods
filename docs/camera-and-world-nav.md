@@ -275,7 +275,8 @@ All three feed one shared 32-bit accumulator, `DS:0x234:0x236`. The screenshot (
 **The password reveal is real, and it is a separate, input-gated overlay — not part of `6553`'s own body.** `6553`'s tail (`67b0`–`67b7`) hands off through the already-documented bit-dispatch (`FUN_1000_694d`) into `FUN_1000_6b00` (world-advance) and — earlier in dispatch order, since bit 10 is iteration 2 of the 32-iteration walk while bit 1 is iteration 11, so `DS:0x42` still holds the just-completed world when this runs — `FUN_1000_69d7` (bit 10, password-gen). Read in full (`1000:69d7`–`0x6a5a`, 45 instructions):
 
 ```
-69d7  SI := word[0x42a + (world-1)*2]         ; this world's own password-slot pointer
+69d7  SI := word[0x42a + world*2]              ; this world's own password-slot pointer --
+                                                ;   NOT world-1, see the live-verified correction below
 69e3  CMP byte[SI],0 / JNZ 0x6a48 (RET)        ; slot already filled -> nothing to do
 69e8  CALL 0x6a6b                              ; generate: AX/BX carry the 3 raw 1-26 codes
 69eb  word[SI]  := BX                          ; chars 1-2
@@ -311,7 +312,41 @@ Live-confirmed by the same forced sequence: after the tally screen's countdown f
 
 **`UNKNOWN_ds_43e_palette` — CLOSED.** This document previously found a sixth palette-fade call site with `si=0x43e` (instead of the five other sites' `si=0x86`) and left its own source table untraced. It is exactly this password-reveal fade (`6a35`/`6a3a` above) — closed by this same live trace, not a separate pass.
 
-**Aside, `[STATIC]`, not pursued further per this pass's own scope:** `FUN_1000_3211`/`FUN_1000_27e5` (reached only when `DS:0x384 > 1`) XOR-obfuscate the 3 password slots into a second 16-byte block (`DS:0x526`–`0x534`) and write it out; on failure (`JC` back in `69d7`), a template at `1ffd:0xed48` — `"\x11\x11 disk error - password not saved..."` — posts through the already-documented `CS:0x434e` priority mailbox. `DS:0x384` is almost certainly the already-known "installed to hard disk" mode this project's own top-level `CLAUDE.md` already cites from `READ.ME` ("high-score/password saving work only when installed to hard disk, not from the low-density 3.5\" floppy"). None of this has a port-side equivalent — a browser port has no disk write to fail — so it is recorded here for completeness and not carried into `zones.js`.
+⚠️ **Correction, a later session: the `69d7` transcript's own `SI := word[0x42a + (world-1)*2]` line was wrong — it's `word*2`, not `(world-1)*2` — and the error was invisible to every prior live check because it only manifests for `world ≥ 2` `[PROVEN]`.** A fresh disassembly of `1000:69d7`–`69e1` shows only `MOV AL,[0x42] / MOV SI,0x42a / SHL AX,1 / ADD SI,AX / MOV SI,[SI]` — no subtraction anywhere. The earlier "`(world-1)`" reading happened to be unfalsifiable from the one case this document had actually tested (`world=1`): since table slots 0 and 1 both hold `0x432`, `world*2` (offset 2, slot 1) and `(world-1)*2` (offset 0, slot 0) land on the *same* address for `world=1`, so the "PME" capture below could never have distinguished the two formulas. Forcing a `world=2` completion live this session (breakpointed at `69f1`, right after the write) reads back `ESI=0x436` — table **slot 2**, exactly `word*2`'s prediction and *not* slot 1 (`0x432`, `(world-1)*2`'s prediction, which was already full and would have skipped the write entirely under the wrong formula). Forcing `world=3` the same way reads back `ESI=0x43a` — slot 3, again matching `word*2`.
+
+**This also retires a plausible-looking but wrong hypothesis this same live session almost published: that the password table has a real, shipped bug where finishing world 2 silently generates nothing (slot-1 aliases slot-0, already filled by world 1) and finishing world 3 generates a password mislabelled "LEVEL 4" that actually only re-enters world 3.** That reasoning was built entirely on the erroneous `(world-1)` formula above and is refuted by the same live test: with the correct `word*2` indexing, **every** real level completion (world 1, 2, or 3) writes into its own fresh, never-before-used slot (`0x432` for world 1, `0x436` for world 2, `0x43a` for world 3), and the entry-screen's own already-`[PROVEN]` match loop (`docs/dynamic-trace-and-runtime-data.md`, *The password / level-select screen*) sends slot 0/1 → world 2, slot 2 → world 3, slot 3 → world 4 — exactly the world each password's own on-screen "LEVEL n" label claims. The mechanism has no bug: it is fully wired, end to end, for all three worlds that can generate a password, with the displayed digit (`[0x42]+1`) always matching the slot the entry screen will actually honor. (Slot 0 itself, `table[0]=0x432`, is never the *target* of a write — the generator's minimum offset is `world*2` with `world≥1`, i.e. offset ≥2 — it exists purely so the entry screen's 4-slot compare loop has something to check at index 0, aliased to slot 1's real data via the `dl==1→2` special-case already documented above.)
+
+**Three real, currently-valid passwords were captured live this session** (this exact machine's live `GAME.EXE` process, not a fixed/shipped constant — see the randomness caveat below):
+
+| completed world | password slot | password | live evidence |
+|---|---|---|---|
+| 1 | `0x432` | `PME` | already present in this machine's own save (see the `HISCORES.BIN` decode below); re-displayed on screen this session as `"PASS 2 : PME"` on the `TOP TEN GODS` hiscore hint line (`FUN_1000_32fe`) |
+| 2 | `0x436` | `JEZ` | forced live: `DS:0x42:=2`, `DS:0x178:=0xe796` (`LEVEL TWO`'s own record), `DS:0x36a:=1`, continued; breakpointed at `69f1` and read `[0x436..0x439] = 0A 05 1A 00` (`J,E,Z`) directly from guest memory |
+| 3 | `0x43a` | `BXI` | forced live the same way with `DS:0x42:=3`, `DS:0x178:=0xe7fe` (`LEVEL THREE`'s own record); read `[0x43a..0x43d] = 02 18 09 00` (`B,X,I`) from memory, then let execution run to the actual `"FIRE TO CONTINUE"` gate and screenshotted it: the game itself renders `"LEVEL 4 PASSWORD" / "BXI" / "FIRE TO CONTINUE"`, confirming the memory read against the real on-screen text, not just against itself |
+
+**These three are not reusable outside this one live process.** `FUN_1000_6a6b`'s three `random/2521+1` draws consume whatever state the shared mixer (`FUN_1000_2375`) is in at that instant, and that state has been advanced by every table regen and every prior password draw since this process's own wall-clock boot seed (`docs/camera-and-world-nav.md`'s own *Randomness* section, below) — a different boot, or the same boot completing the worlds in a different order or after different play, produces different passwords. There is no fixed, enumerable "the level passwords" for GODS; each is generated once, the first time a world is finished in a given process's lifetime, and persists only in that process's own memory (and, on a hard-disk install, in that install's own `HISCORES.BIN`).
+
+**`FUN_1000_3211`/`FUN_1000_27e5`'s own XOR-obfuscated disk save is now `[PROVEN]`, decoded against this machine's real save file, not just disassembled.** Full decompile of `1000:3211`:
+
+```
+if (byte[0x384] > 1) {                       ; hard-disk-install gate, already established
+  (w0,w1) := word[0x432],word[0x434]          ; world-2 slot (note: read TWICE, see below)
+  if (w0|w1 != 0) { w0^=0x616f; w1^=0x4368 }   ; XOR only if the password is non-empty
+  word[0x526],word[0x528] := w0,w1
+  (w0,w1) := word[0x432],word[0x434]           ; SAME source, a SECOND time
+  if (w0|w1 != 0) { w0^=0x6e67; w1^=0x7345 }
+  word[0x52a],word[0x52c] := w0,w1
+  (w0,w1) := word[0x436],word[0x438]           ; world-3 slot
+  if (w0|w1 != 0) { w0^=0x654d; w1^=0x696e }
+  word[0x52e],word[0x530] := w0,w1
+  (w0,w1) := word[0x43a],word[0x43c]           ; world-4 slot
+  if (w0|w1 != 0) { w0^=0x6f6e; w1^=0x656c }
+  word[0x532],word[0x534] := w0,w1
+  FUN_1000_27e5()                              ; the actual file write
+}
+```
+
+The duplicated first block (source `0x432` XORed twice, with two *different* key pairs, into two different destinations) is simply the generator's own 4-slot table walked straight through — slots 0 and 1 both being `0x432` (same aliasing as the generator/entry-screen tables above) means the save routine, too, encodes the world-2 password twice, once under each key pair, rather than skipping the duplicate. This machine's own `HISCORES.BIN` (216 bytes; `git status` shows it locally modified, not the pristine shipped file) has its trailing 16 bytes (file offset `0xc8`–`0xd7` = live `0x526`–`0x535`) as `7F 6C 6D 43 77 63 40 73 00 00 00 00 00 00 00 00`. XOR-inverting both `0x432`-slot copies against their own keys (`0x6c7f^0x616f=0x0d10`, `0x436d^0x4368=0x0005`; and independently `0x6377^0x6e67=0x0d10`, `0x7340^0x7345=0x0005`) gives the identical plaintext both times — codes `16,13,5` = `P,M,E` — an exact match for the live-displayed `"PME"` above, and a clean self-consistency check (two independently-keyed encodings of the same plaintext, decoding to the same answer) that this XOR scheme is understood correctly, not just plausible. The trailing 8 bytes (world-3/world-4 slots) are all zero, matching this file's own save having predated this session's `JEZ`/`BXI` captures (world 2 and 3 hadn't been completed yet when this file was last written to disk). On failure (`JC` back in `69d7`), a template at `1ffd:0xed48` — `"\x11\x11 disk error - password not saved..."` — posts through the already-documented `CS:0x434e` priority mailbox. None of this has a port-side equivalent — a browser port has no disk write to fail — so it is recorded here for completeness and not carried into `zones.js`.
 
 ## The plane-B event probe rounds X but floors Y `[PROVEN]`
 
