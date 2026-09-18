@@ -25,26 +25,33 @@ relative offset 52, for blob indices 4 and (separately) 49 — see
 Gods/docs/drivers-and-memory.md's `UNKNOWN_sfx_instrument_source` entry for
 the full trace and citations.
 
-NOT yet closed by this script: the 8 functions (FUN_0000_1e9a/1e86/1640/
-1848/1807/17c6/176f/172f) that turn these 13-byte-per-operator PARAMETER
-blocks into actual 0x388/0x389 OPL2 REGISTER bytes via runtime volume-
-scaling lookup tables — this script extracts the game's own stored
-instrument data, not a chip-accurate register dump.
+The 8 functions that turn these 13-byte-per-operator PARAMETER blocks into
+actual 0x388/0x389 OPL2 REGISTER bytes (FUN_0000_1e9a/1e86/1640/1848/1807/
+17c6/176f/172f) are now ALSO fully disassembled — see
+`docs/drivers-and-memory.md`'s own register-formula table and
+`gods-web/src/formats/sfx-instrument.js`'s `instrumentToRegisters` for the
+JS port that computes real register values from this script's own output.
+The one register that can't be recovered from any file is total output
+level (0x40/0x43) — proven to be per-CHANNEL runtime mixing state (two
+lookup tables, both confirmed all-zero/BSS in the static image), not
+instrument data at all.
 
 Blobs 19/20/40 are the three non-SMF "type 2" blobs (first byte 'C'/'c',
-voice-count 9 in ADL.EXE's own SFX table) and use a GENUINELY DIFFERENT
-shape, not the op1/op2/wave one above: PPLAYER.BIN reads their event stream
-through an INDEXED byte accessor (FUN_0000_12d0/12e8's "flag clear" mode)
-that maps a cursor position to table1[cursor>>1] on even cursor values and
-a forced 0 on odd ones — table1 being the already-`[PROVEN]` 22-byte
-mini-header + 9×19-byte per-channel table at blob offset 0x201 (513), one
-19-byte record per OPL2 channel (this doc's own `UNKNOWN_mus_type2`
-section). This script extracts that raw 9×19 table verbatim for these
-three blobs, labeled distinctly (`type2_channel_table`) — it does NOT
-attempt to walk the indexed event stream to find where inside it a TAG=1
-instrument event would land relative to table1, so it makes no claim these
-9 channel records line up with the op1/op2/wave shape the same way the 70
-SMF blobs do. That mapping is still open (see this doc's own disclosure).
+voice-count 9 in ADL.EXE's own SFX table) and are NOT single static
+instruments in the first place — tracing PPLAYER.BIN's own event-driven
+per-channel sequencer (FUN_0000_0cc6/0ce0/0d21, the SAME 50 Hz-ticked
+running-status-aware MIDI walker PGODS.MUS's own real MUSIC playback
+uses) shows these three ids play back as short, self-contained
+multi-event MUSICAL SEQUENCES across all 9 OPL2 channels simultaneously —
+not a chord of ordinary 2-operator instruments, and not reducible to a
+single fixed-offset instrument read the way the other 70 are. This script
+extracts their already-`[PROVEN]` raw 9×19 per-channel table (blob offset
+0x201) verbatim, labeled distinctly (`type2_channel_table`), WITHOUT
+simulating the full tick-by-tick event stream (VLQ deltas via the indexed
+byte accessor, running status, the channel-voice data-byte-skip table) —
+a materially bigger job than the other 70 blobs needed, and out of scope
+here. See docs/drivers-and-memory.md's own closing section for the full
+disassembly trail.
 
 Usage:
     BLAST_OUT=/tmp/sfxwork python3 blast.py PGODS.MUS
