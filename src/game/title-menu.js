@@ -73,7 +73,6 @@ import { SCREEN_W } from '../formats/pi1.js';
 import { PASSWORD_LENGTH, passwordToString } from './zones.js';
 
 export const ADVANCE = 0x0a;    // 10 — the same per-glyph step message.js uses
-export const DIAMOND = '\x11';  // CS:0x4443's own separator glyph, reused as a cursor
 
 /* MENU_ADVANCE/MENU_FONT — CS:0x224E, the routine the menu's own redraw
  * (CS:0x311C, called from FUN_1000_2c82) and the "QUIT GAME" screen
@@ -163,13 +162,23 @@ export const MENU_OPTIONS = ['BEGIN QUEST', 'ENTER PASSWORD', 'EXIT TO DOS'];
 
 function textWidth(text, advance) { return text.length * advance; }
 
-/** Draw `text` left-to-right from (x, y), one glyph sprite per character. */
+/** Draw `text` left-to-right from (x, y), one glyph sprite per character.
+ * CS:0x224E's own byte loop: 0x20 (space) advances the cursor but blits
+ * NOTHING — not even a blank/transparent sprite — so two words separated by
+ * a real space render with a true gap, not a visible placeholder glyph in
+ * between (an earlier revision of this port blitted `glyphs[0x20]` like any
+ * other character, which is correct ONLY for the password grid's own direct
+ * per-cell blits — see GRID_CELLS' own space cell and BUFFER_ROW_* below,
+ * neither of which goes through this function — and produced a stray dot
+ * between every word of flowed text like "ENTER A PASSWORD" instead). */
 export function drawText(renderer, glyphs, text, x, y, advance = ADVANCE) {
   if (!glyphs) return;
   let cx = x;
   for (let i = 0; i < text.length; i++) {
-    const f = glyphs[text.charCodeAt(i)];
-    if (f) renderer.blitSprite(f, cx, y);
+    if (text[i] !== ' ') {
+      const f = glyphs[text.charCodeAt(i)];
+      if (f) renderer.blitSprite(f, cx, y);
+    }
     cx += advance;
   }
 }
@@ -275,14 +284,14 @@ const GRID_CELLS = [
 const CELL_DEL = '<', CELL_OK = '=';   // internal sentinels only — never drawn as text, see draw()
 const GRID_X0 = 40, GRID_Y0 = 40, GRID_COL_W = 32, GRID_ROW_H = 24;   // CS:0x30D4, exact
 
-/* CS:0x3097 — the cursor is a small animated icon (4-frame cycle,
- * descriptor 0x57+phase, an "always"-group sprite this pass did not chase
- * down) blitted AT the selected cell's own position, on top of its letter.
- * Reproduced here as the small-font DIAMOND glyph instead, offset above the
- * cell rather than overlapping it — a disclosed simplification, not a
- * fidelity claim for the icon itself; the POSITION formula this constant
- * feeds is exact (same X0/Y0/COL_W/ROW_H as the grid above). */
-const CURSOR_Y_OFFSET = -10;
+/* CS:0x3097 — the cursor is a small 4-frame animated icon (descriptor
+ * 0x57+phase, i.e. global descriptors 87-90, one "always"-group PALWAYS2
+ * record per phase — `tools/atlas-render.mjs PALWAYS2` shows records 48-51,
+ * global 87-90, are a 4-frame twinkling/sparkle star, white-gold, rotating
+ * through its points) blitted AT the selected cell's own position — the
+ * SAME (X,Y) the grid's own letter/digit uses, not an offset marker — one
+ * phase advance per logic tick (`FUN_1000_3097` runs once per iteration of
+ * the 15 Hz grid-loop, `FUN_1000_2eb0`, matching `clock.tick` directly). */
 
 /* CS:0x3065 — the typed-buffer readout: NOT a decorative border (an
  * earlier pass of this project's own documentation, and this module's own
@@ -354,8 +363,12 @@ export class PasswordEntry {
    *   put up stays behind this screen too.
    * @param {Array<number[]|null>} passwordSlots main.js's own 3-slot array
    *   (index 0..2 -> world 2..4) — read-only here, for the hint line only.
+   * @param {?Array<object>} cursorFrames `hero.cursorFrames`, 4 entries
+   *   (descriptors 87-90) — see CURSOR_* header note above.
+   * @param {number} tick `clock.tick` — selects the cursor's own phase.
    */
-  draw(renderer, glyphs, menuGlyphs, eraseIcon, confirmIcon, background, passwordSlots) {
+  draw(renderer, glyphs, menuGlyphs, eraseIcon, confirmIcon, background, passwordSlots,
+    cursorFrames, tick) {
     if (background) renderer.blitBackground(background);
     else renderer.clear(0);
     /* `"ENTER A PASSWORD"`, 1ffd:eb96 (CS:0x2e2f's own message pointer) —
@@ -376,8 +389,9 @@ export class PasswordEntry {
           const f = menuGlyphs[cell.charCodeAt(0)];
           if (f) renderer.blitSprite(f, x, y);
         }
-        if (r === this.row && c === this.col) {
-          drawText(renderer, glyphs, DIAMOND, x, y + CURSOR_Y_OFFSET);
+        if (r === this.row && c === this.col && cursorFrames && cursorFrames.length) {
+          const f = cursorFrames[(tick | 0) % cursorFrames.length];
+          if (f) renderer.blitSprite(f, x, y);
         }
       }
     }

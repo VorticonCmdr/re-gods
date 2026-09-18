@@ -393,8 +393,15 @@ async function loadSprites(world) {
    * password grid's own call site. */
   const GRID_ERASE_DESC = 166;   // 0x80+38 — LEFT-pointing arrow
   const GRID_CONFIRM_DESC = 167; // 0x80+39 — the small circular icon
+  /* CS:0x3097's own cursor icon — descriptor 0x57+phase = 87..90, an
+   * "always"-group PALWAYS2 sprite (`tools/atlas-render.mjs PALWAYS2`,
+   * records 48-51): a 4-frame twinkling/sparkle star. See title-menu.js's
+   * own CS:0x3097 citation for the animation-rate/position details. */
+  const CURSOR_DESC_BASE = 87;
+  const cursorFrames = [0, 1, 2, 3].map((i) => frames[CURSOR_DESC_BASE + i]);
   return { frames, ranges, glyphs, glyphBase: fontBase ? fontBase.base : -1, menuGlyphs,
            gridEraseIcon: frames[GRID_ERASE_DESC], gridConfirmIcon: frames[GRID_CONFIRM_DESC],
+           cursorFrames,
            palette: images.PALWAYS1.palette, total: map.length };
 }
 
@@ -2534,7 +2541,8 @@ let quitFade = null;   // null | { snapshot: Uint8Array, palette: Uint8Array|num
         if (uiState === 'menu') titleMenu.draw(renderer, glyphs, menuGlyphs, arrowLeft, arrowRight, logo, titleBackground);
         else if (uiState === 'password') {
           passwordEntry.draw(renderer, glyphs, menuGlyphs, hero && hero.gridEraseIcon,
-            hero && hero.gridConfirmIcon, titleBackground, passwordSlots);
+            hero && hero.gridConfirmIcon, titleBackground, passwordSlots,
+            hero && hero.cursorFrames, clock.tick);
         }
         else if (uiState === 'shop' && shopScreen) shopScreen.draw(renderer, glyphs);
         if (uiState === 'exit') renderer.presentBlack();   // QUIT's stand-in — see Renderer's own header
