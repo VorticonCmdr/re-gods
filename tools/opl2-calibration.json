@@ -1,0 +1,27 @@
+{
+  "_source": "DOSBox's own OPL2, driven directly via ports 0x388/0x389 from a bare DOS prompt with no program running, so nothing else could touch the chip. One test per key-on: channel 0, FM mode, feedback 0, modulator (slot 0) silenced with TL=63 so the carrier (slot 3) is heard alone as a clean sine. fnum=0x244, block=4 => 440 Hz, which the capture confirms (measured 435-448 Hz across the six tests). Audio captured with DOSBox's own ZMBV video capture (bridge config mute=false, headless=false), audio track extracted with ffmpeg, envelope measured in 2 ms RMS frames.",
+  "_carrier_registers": {
+    "0x23": "0x01  (mult=1, EG-type=0 percussive, KSR=0)",
+    "0x43": "0x00  (TL=0, KSL=0)",
+    "0xE3": "0x00  (waveform 0, full sine)",
+    "0xC0": "0x00  (FM, feedback 0)",
+    "0xA0": "0x44",
+    "0xB0": "0x32  (key-on, block 4, fnum high 2)"
+  },
+  "_measurement": "attack_ms is the 10%->90% rise of the RMS envelope; decay_ms is peak->10%. Resolution is 2 ms, so the fastest rates are at the floor and are recorded but not used for fitting.",
+  "attack": [
+    { "ar": 4, "dr": 0, "internal_rate": 16, "attack_ms": 130.0 },
+    { "ar": 8, "dr": 0, "internal_rate": 32, "attack_ms": 8.0 },
+    { "ar": 12, "dr": 0, "internal_rate": 48, "attack_ms": 0.0, "at_resolution_floor": true }
+  ],
+  "decay": [
+    { "ar": 15, "dr": 4, "sl": 15, "internal_rate": 16, "decay_ms": 648.0 },
+    { "ar": 15, "dr": 8, "sl": 15, "internal_rate": 32, "decay_ms": 48.0 },
+    { "ar": 15, "dr": 12, "sl": 15, "internal_rate": 48, "decay_ms": 6.0, "at_resolution_floor": true }
+  ],
+  "_derived": {
+    "rate_law": "time scales by 2^(-internal_rate/4); measured attack ratio rate16:rate32 = 130/8 = 16.25 against a predicted 16",
+    "attack_10_to_90_at_rate0_s": 2.05,
+    "decay_peak_to_10pct_at_rate0_s": 11.0
+  }
+}

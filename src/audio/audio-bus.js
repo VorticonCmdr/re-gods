@@ -124,8 +124,8 @@
  * the bounce/land thud `0x0609` (`CS:0xA165`/`0xA1D7`), is wired too.
  */
 
-import { playOpl2Note } from './opl2-synth.js';
-import { buildSfxSequence, noteToHz } from './sfx-sequence.js';
+import { buildSfxSequence } from './sfx-sequence.js';
+import { renderSequence, OPL_RATE } from './opl2-core.js';
 
 function scheduleTone(ctx, dest, t0, { freq, dur, type = 'square', gain = 0.2, slideTo, delay = 0 }) {
   const osc = ctx.createOscillator();
@@ -168,6 +168,11 @@ function scheduleNoise(ctx, dest, t0, { dur, gain = 0.2, filterFreq, delay = 0 }
  * its own call site in main.js (or the game-logic module that already named
  * it); the comment here just says which game moment it is, for readability.
  */
+/* Master level for the rendered OPL2 sounds. The chip's own output is
+ * full-scale and these are rendered at the instrument's own stored level, so
+ * this only keeps a stack of simultaneous effects clear of clipping. */
+const SFX_GAIN = 0.35;
+
 export const SFX_VOICES = {
   0x119: (ctx, dest, t0) => scheduleTone(ctx, dest, t0, { freq: 880, dur: 0.035, type: 'square', gain: 0.12 }),
   0x233: (ctx, dest, t0) => {
@@ -262,7 +267,7 @@ export class RecordingAudioBus {
 export class WebAudioBus {
   #ctx = null;
   #pgodsBlobs = null;
-  #sequences = new Map();
+  #buffers = new Map();
 
   #ensureContext() {
     if (!this.#ctx) {
@@ -279,35 +284,43 @@ export class WebAudioBus {
    * sequence — its own notes, durations, velocities and per-channel OPL2
    * instruments (audio/sfx-sequence.js) — instead of the stylized
    * `SFX_VOICES` fallback. Optional — without it, every id plays its
-   * stylized voice exactly as before. See opl2-synth.js's own header for
-   * what "real" means here (register-accurate, not chip-accurate).
+   * stylized voice exactly as before. See opl2-core.js's own header for
+   * exactly what "real" means here, and which parts of it are measured
+   * against the actual chip rather than modelled from documentation.
    */
   setPgodsBlobs(blobs) { this.#pgodsBlobs = blobs; }
 
-  /* Sequences are pure functions of the blob, so decode each one once. */
-  #sequenceFor(id) {
+  /* Each sound is rendered through the OPL2 core ONCE, the first time it
+   * plays, and kept as an AudioBuffer — so a footstep firing twice per walk
+   * cycle costs a buffer playback, not a resynthesis. The buffer is created
+   * at the chip's own 49716 Hz; Web Audio resamples it to the context rate
+   * on playback. */
+  #bufferFor(ctx, id) {
     const blobIndex = id & 0x7f;
     if (!this.#pgodsBlobs || blobIndex >= this.#pgodsBlobs.length) return null;
-    if (!this.#sequences.has(blobIndex)) {
-      this.#sequences.set(blobIndex, buildSfxSequence(this.#pgodsBlobs[blobIndex]));
+    if (!this.#buffers.has(blobIndex)) {
+      const seq = buildSfxSequence(this.#pgodsBlobs[blobIndex]);
+      let buffer = null;
+      if (seq && seq.notes.length) {
+        const samples = renderSequence(seq);
+        buffer = ctx.createBuffer(1, samples.length, OPL_RATE);
+        buffer.getChannelData(0).set(samples);
+      }
+      this.#buffers.set(blobIndex, buffer);
     }
-    return this.#sequences.get(blobIndex);
+    return this.#buffers.get(blobIndex);
   }
 
   play(id) {
     const ctx = this.#ensureContext();
-    const seq = this.#sequenceFor(id);
-    if (seq && seq.notes.length) {
-      const t0 = ctx.currentTime;
-      /* Scheduled up front against the AudioContext clock, never driven from
-       * the 15 Hz game Clock — the same rule music-player.js already
-       * follows, and for the same reason (an automated/throttled tab stalls
-       * the render loop but not the audio clock). */
-      for (const n of seq.notes) {
-        if (!n.registers) continue;   // a note before its channel's own first instrument meta
-        playOpl2Note(ctx, ctx.destination, t0 + n.timeSec, n.registers,
-          noteToHz(n.note), n.durSec * 1000, n.velocity / 127);
-      }
+    const buffer = this.#bufferFor(ctx, id);
+    if (buffer) {
+      const src = ctx.createBufferSource();
+      src.buffer = buffer;
+      const g = ctx.createGain();
+      g.gain.value = SFX_GAIN;
+      src.connect(g).connect(ctx.destination);
+      src.start(ctx.currentTime);
       return;
     }
     const voice = SFX_VOICES[id];
