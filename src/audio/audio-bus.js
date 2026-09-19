@@ -124,8 +124,8 @@
  * the bounce/land thud `0x0609` (`CS:0xA165`/`0xA1D7`), is wired too.
  */
 
-import { lookupSfxInstrument } from '../formats/sfx-instrument.js';
 import { playOpl2Note } from './opl2-synth.js';
+import { buildSfxSequence, noteToHz } from './sfx-sequence.js';
 
 function scheduleTone(ctx, dest, t0, { freq, dur, type = 'square', gain = 0.2, slideTo, delay = 0 }) {
   const osc = ctx.createOscillator();
@@ -262,6 +262,7 @@ export class RecordingAudioBus {
 export class WebAudioBus {
   #ctx = null;
   #pgodsBlobs = null;
+  #sequences = new Map();
 
   #ensureContext() {
     if (!this.#ctx) {
@@ -274,22 +275,40 @@ export class WebAudioBus {
 
   /**
    * Supplies PGODS.MUS's own parsed container blobs (mus-container.js's
-   * `parseMusContainer` output) so `play()` can synthesize the id's real
-   * decoded OPL2 instrument (formats/sfx-instrument.js) instead of the
-   * stylized `SFX_VOICES` fallback. Optional — without it, every id plays
-   * its stylized voice exactly as before. See opl2-synth.js's own header
-   * for what "real" means here (register-accurate, not chip-accurate).
+   * `parseMusContainer` output) so `play()` can render the id's real decoded
+   * sequence — its own notes, durations, velocities and per-channel OPL2
+   * instruments (audio/sfx-sequence.js) — instead of the stylized
+   * `SFX_VOICES` fallback. Optional — without it, every id plays its
+   * stylized voice exactly as before. See opl2-synth.js's own header for
+   * what "real" means here (register-accurate, not chip-accurate).
    */
   setPgodsBlobs(blobs) { this.#pgodsBlobs = blobs; }
 
+  /* Sequences are pure functions of the blob, so decode each one once. */
+  #sequenceFor(id) {
+    const blobIndex = id & 0x7f;
+    if (!this.#pgodsBlobs || blobIndex >= this.#pgodsBlobs.length) return null;
+    if (!this.#sequences.has(blobIndex)) {
+      this.#sequences.set(blobIndex, buildSfxSequence(this.#pgodsBlobs[blobIndex]));
+    }
+    return this.#sequences.get(blobIndex);
+  }
+
   play(id) {
     const ctx = this.#ensureContext();
-    if (this.#pgodsBlobs) {
-      const registers = lookupSfxInstrument(id, this.#pgodsBlobs);
-      if (registers) {
-        playOpl2Note(ctx, ctx.destination, ctx.currentTime, registers);
-        return;
+    const seq = this.#sequenceFor(id);
+    if (seq && seq.notes.length) {
+      const t0 = ctx.currentTime;
+      /* Scheduled up front against the AudioContext clock, never driven from
+       * the 15 Hz game Clock — the same rule music-player.js already
+       * follows, and for the same reason (an automated/throttled tab stalls
+       * the render loop but not the audio clock). */
+      for (const n of seq.notes) {
+        if (!n.registers) continue;   // a note before its channel's own first instrument meta
+        playOpl2Note(ctx, ctx.destination, t0 + n.timeSec, n.registers,
+          noteToHz(n.note), n.durSec * 1000, n.velocity / 127);
       }
+      return;
     }
     const voice = SFX_VOICES[id];
     if (!voice) return;

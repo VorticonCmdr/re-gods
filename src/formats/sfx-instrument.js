@@ -45,7 +45,19 @@ export function extractInstrument(blob) {
   if (blob.length < 4 || blob[0] !== 0x4d || blob[1] !== 0x54 || blob[2] !== 0x68 || blob[3] !== 0x64) return null; // 'MThd'
   if (blob.length < PAYLOAD_OFFSET + 28) return null;
   if (blob[MICRO_RECORD_OFFSET + 2] !== 0x3f) return null;
-  const payload = blob.subarray(PAYLOAD_OFFSET, PAYLOAD_OFFSET + 28);
+  return splitInstrumentPayload(blob.subarray(PAYLOAD_OFFSET, PAYLOAD_OFFSET + 28));
+}
+
+/**
+ * Splits one TAG=1 meta's own 28-byte payload into its two operator records
+ * and wave bytes. `extractInstrument` above reads the FIRST such record by
+ * fixed offset; a blob that uses several OPL2 channels carries one per
+ * channel (and may change a channel's instrument mid-sequence), which
+ * `smf-parser.js`'s tick-positioned `sfxMeta` events surface instead.
+ * @param {Uint8Array} payload  exactly 28 bytes
+ */
+export function splitInstrumentPayload(payload) {
+  if (!payload || payload.length < 28) return null;
   return {
     op1: payload.subarray(0, 13),
     op2: payload.subarray(13, 26),

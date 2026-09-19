@@ -66,6 +66,17 @@ function parseTrack(d, start, declaredEnd, bufferEnd) {
       if (mtype === 0x51) {
         const usPerQuarter = (d[i] << 16) | (d[i + 1] << 8) | d[i + 2];
         events.push({ tick, type: 'tempo', usPerQuarter });
+      } else if (mtype === 0x7f && length >= 6 && d[i + 2] === 0x3f) {
+        /* The sequencer-specific meta `PPLAYER.BIN` reads. Body layout, from
+         * `Gods/docs/drivers-and-memory.md`'s own decode: `00 00 3F 00 TAG
+         * CH` then TAG's payload. TAG=1 carries a 28-byte OPL2 instrument
+         * (op1 13 + op2 13 + 2 wave bytes) BOUND TO CHANNEL `CH` — and,
+         * critically, it is TICK-POSITIONED like any other event, so a blob
+         * can change a channel's instrument mid-sequence (blobs 60/66 both
+         * do). TAG=2/3 are the two 6-byte micro-records with no payload.
+         * Surfacing these is what lets a player pair each note with the
+         * instrument its own channel actually held at that moment. */
+        events.push({ tick, type: 'sfxMeta', tag: d[i + 4], channel: d[i + 5], payload: d.subarray(i + 6, i + length) });
       } else if (mtype === 0x2f) {
         events.push({ tick, type: 'end' });
         i += length;

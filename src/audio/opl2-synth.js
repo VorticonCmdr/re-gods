@@ -84,12 +84,12 @@ function makeWaveShaper(ctx, waveId) {
   return shaper;
 }
 
-function scheduleOperatorEnvelope(gainNode, t0, { reg60, reg80, reg40 }) {
+function scheduleOperatorEnvelope(gainNode, t0, { reg60, reg80, reg40 }, levelScale = 1) {
   const ar = (reg60 >> 4) & 0xf;
   const dr = reg60 & 0xf;
   const sl = (reg80 >> 4) & 0xf;
   const rr = reg80 & 0xf;
-  const peak = levelToGain(reg40);
+  const peak = levelToGain(reg40) * levelScale;
   const sustain = Math.min(peak, peak * sustainGain(sl));
   const atk = attackSeconds(ar);
   const dec = decaySeconds(dr);
@@ -118,12 +118,16 @@ function releaseOperatorEnvelope(gainNode, atTime, rr) {
  * @param {AudioNode} dest
  * @param {number} t0  ctx.currentTime-relative start time.
  * @param {{op1, op2, regC0}} registers  `instrumentToRegisters`'s own output.
- * @param {number} [freqHz]  Carrier base frequency — NOT decoded from any
- *   file (see module header); defaults to a mid-range tone.
+ * @param {number} [freqHz]  Carrier base frequency. This IS decoded — it is
+ *   the blob's own MIDI note (see audio/sfx-sequence.js's header for the
+ *   correction that established this); the 440 default is only for a caller
+ *   that has no sequence, e.g. a bare instrument with no note events.
  * @param {number} [sustainMs]  How long to hold before release; SFX are
  *   short, so this defaults small.
+ * @param {number} [levelScale]  Extra gain multiplier, used for MIDI
+ *   velocity. An approximation, not a decode — see sfx-sequence.js.
  */
-export function playOpl2Note(ctx, dest, t0, registers, freqHz = 440, sustainMs = 60) {
+export function playOpl2Note(ctx, dest, t0, registers, freqHz = 440, sustainMs = 60, levelScale = 1) {
   const { op1, op2, regC0 } = registers;
   const feedback = (regC0 >> 1) & 7;
   const connection = regC0 & 1; // 0 = FM (serial), 1 = additive (both audible)
@@ -167,8 +171,11 @@ export function playOpl2Note(ctx, dest, t0, registers, freqHz = 440, sustainMs =
   }
   carGain.connect(dest);
 
-  const { rr: rr1, sustainEnd: sEnd1 } = scheduleOperatorEnvelope(modGain, t0, op1);
-  const { rr: rr2, sustainEnd: sEnd2 } = scheduleOperatorEnvelope(carGain, t0, op2);
+  /* The modulator is a phase source, not an audible voice, in FM mode — its
+   * own level sets timbre brightness, so velocity scales only what is
+   * actually heard (the carrier, plus the modulator too in additive mode). */
+  const { rr: rr1, sustainEnd: sEnd1 } = scheduleOperatorEnvelope(modGain, t0, op1, connection === 1 ? levelScale : 1);
+  const { rr: rr2, sustainEnd: sEnd2 } = scheduleOperatorEnvelope(carGain, t0, op2, levelScale);
 
   const releaseAt = t0 + sustainMs / 1000;
   const stopAt1 = Math.max(releaseAt, sEnd1) + releaseSeconds(rr1) + 0.02;
