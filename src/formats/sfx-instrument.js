@@ -20,8 +20,13 @@
  * bit-packed copy of the stored bytes. Total level needs a runtime
  * volume/velocity-scaling multiply (`DAT_0000_1491`/`DAT_0000_1634`) this
  * project has not decoded — `instrumentToRegisters` substitutes the
- * stored base level UN-scaled, audibly louder/quieter than the original
- * for that one field only.
+ * stored base level UN-scaled (`rec[+8]` copied directly into the low 6
+ * bits, no inversion), audibly louder/quieter than the original for that
+ * one field only. This was live-verified exact for op1 of blob 25 (id
+ * 0x19), the one operator that skips runtime scaling entirely (see
+ * `operatorRegisters`'s own comment) — a real fixed regression here once
+ * had `0x3f - rec[8]` instead, which silently inverted every instrument's
+ * volume (loud instruments near-silent, quiet ones blaring).
  *
  * The three non-SMF "type 2" blobs (19/20/40, `ADL.EXE`'s own voice-
  * count-9 records) are NOT covered — they read through `PPLAYER.BIN`'s
@@ -51,7 +56,15 @@ export function extractInstrument(blob) {
 function operatorRegisters(rec, waveByte) {
   return {
     reg20: ((rec[9] ? 0x80 : 0) | (rec[10] ? 0x40 : 0) | (rec[5] ? 0x20 : 0) | (rec[11] ? 0x10 : 0) | (rec[1] & 0xf)),
-    reg40: ((rec[0] << 6) | (rec[8] <= 0x3f ? 0x3f - rec[8] : 0)), // level UNSCALED, see module header
+    // level UNSCALED (see module header): real formula is rec[0]<<6 | (0x3F -
+    // scaled), scaled = 0x3F - rawVol, rawVol = 0x3F - rec[8] — substituting
+    // scaled=rawVol (no runtime multiply) collapses the double inversion to
+    // a plain copy of rec[8]. Live-verified exact against blob 25 (id 0x19's
+    // op1, the operator that skips runtime scaling entirely): computed
+    // 0x40 = 0x55, matching the real DOSBox capture byte-for-byte. The
+    // previous `0x3f - rec[8]` formula inverted this, so quiet stored
+    // instruments played loud and loud ones played near-silent.
+    reg40: ((rec[0] << 6) | (rec[8] & 0x3f)),
     reg60: ((rec[3] << 4) | (rec[6] & 0xf)),
     reg80: ((rec[4] << 4) | (rec[7] & 0xf)),
     regE0: (waveByte & 3),

@@ -52,14 +52,16 @@ function levelToGain(reg40) {
   return Math.pow(10, -(attenuation * 0.75) / 20);
 }
 
-let sharedWaveShapers = null;
-function getWaveShaper(ctx, waveId) {
-  if (!sharedWaveShapers) sharedWaveShapers = new Map();
-  const key = ctx;
-  if (!sharedWaveShapers.has(key)) sharedWaveShapers.set(key, new Map());
-  const perCtx = sharedWaveShapers.get(key);
-  if (perCtx.has(waveId)) return perCtx.get(waveId);
-  if (waveId === 0) { perCtx.set(waveId, null); return null; } // plain sine, no shaping needed
+// Curves are cacheable (pure data), but the WaveShaperNode itself is NOT:
+// a node can only sit in one place in the graph. Sharing one node across
+// concurrent notes made every simultaneous note's oscillator sum into the
+// same shaper and modulate every other note's carrier, and left it fanned
+// out to every gain node ever connected (never disconnected, so never GC'd).
+let sharedCurves = null;
+function getWaveShaperCurve(waveId) {
+  if (!sharedCurves) sharedCurves = new Map();
+  if (sharedCurves.has(waveId)) return sharedCurves.get(waveId);
+  if (waveId === 0) { sharedCurves.set(waveId, null); return null; } // plain sine, no shaping needed
   const curve = new Float32Array(1024);
   for (let i = 0; i < 1024; i++) {
     const x = (i / 1023) * 2 - 1; // -1..1, represents sin(theta) already
@@ -69,9 +71,16 @@ function getWaveShaper(ctx, waveId) {
     else y = (x > 0 && i < 512) ? x : 0;                // waveId 3: crude "quarter" approximation
     curve[i] = y;
   }
+  sharedCurves.set(waveId, curve);
+  return curve;
+}
+
+// One fresh WaveShaperNode per note, reusing only the (immutable) curve data.
+function makeWaveShaper(ctx, waveId) {
+  const curve = getWaveShaperCurve(waveId);
+  if (!curve) return null;
   const shaper = ctx.createWaveShaper();
   shaper.curve = curve;
-  perCtx.set(waveId, shaper);
   return shaper;
 }
 
@@ -122,7 +131,7 @@ export function playOpl2Note(ctx, dest, t0, registers, freqHz = 440, sustainMs =
   const modOsc = ctx.createOscillator();
   modOsc.type = 'sine';
   modOsc.frequency.value = freqHz * MULT_TABLE[op1.reg20 & 0xf];
-  const modShaper = getWaveShaper(ctx, op1.regE0);
+  const modShaper = makeWaveShaper(ctx, op1.regE0);
   const modGain = ctx.createGain();
   modGain.gain.value = 0;
   if (modShaper) { modOsc.connect(modShaper); modShaper.connect(modGain); }
@@ -131,7 +140,7 @@ export function playOpl2Note(ctx, dest, t0, registers, freqHz = 440, sustainMs =
   const carOsc = ctx.createOscillator();
   carOsc.type = 'sine';
   carOsc.frequency.value = freqHz * MULT_TABLE[op2.reg20 & 0xf];
-  const carShaper = getWaveShaper(ctx, op2.regE0);
+  const carShaper = makeWaveShaper(ctx, op2.regE0);
   const carGain = ctx.createGain();
   carGain.gain.value = 0;
   if (carShaper) { carOsc.connect(carShaper); carShaper.connect(carGain); }
@@ -139,8 +148,13 @@ export function playOpl2Note(ctx, dest, t0, registers, freqHz = 440, sustainMs =
 
   // Modulation depth: feedback (0-7) approximates op1's own self-feedback
   // as extra FM depth into op2 instead (see module header's own caveat).
+  // Real OPL2 feedback is a small self-modulation term (index roughly
+  // 0-4 at feedback=7), not a multiple of the carrier frequency — the old
+  // `0.3 + feedback/3` scale gave a modulation index up to ~2.6x the
+  // carrier, which is deep into harsh buzz/aliasing territory rather than
+  // a recognizable FM voice. Bound it to a musically sane index instead.
   const modDepth = ctx.createGain();
-  modDepth.gain.value = (freqHz * MULT_TABLE[op1.reg20 & 0xf]) * (0.3 + feedback / 3);
+  modDepth.gain.value = (freqHz * MULT_TABLE[op1.reg20 & 0xf]) * (0.15 + feedback * 0.35);
   modGain.connect(modDepth);
   if (connection === 0) {
     // FM: op1 modulates op2's frequency; only op2 is audible.
