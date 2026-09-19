@@ -16438,6 +16438,55 @@ export async function checkMusic(fetchRaw) {
     note: true, pass: true, detail: '',
   });
 
+  /* ── the SFX dispatch guard, moved onto the path that actually runs ──
+   * There used to be a check that every wired id had a `SFX_VOICES` entry.
+   * It caught three real regressions (0x1c->0x041c, 0x1d->0x21d,
+   * 0x09->0x209: ids exported as a bare low byte, matching no voice key and
+   * so silently playing nothing). That check is now DEAD as a guard:
+   * `WebAudioBus.play` resolves the id against PGODS.MUS and returns before
+   * `SFX_VOICES` is ever consulted, so a bare-low-byte id would still mask
+   * to a valid blob index, still resolve to a sequence, and still play —
+   * the WRONG sound, silently, with the old check passing. Same bug class,
+   * newly invisible. So assert against the real path instead.
+   *
+   * Two properties, because they fail differently. (1) Every wired id must
+   * resolve through `buildSfxSequence` to a real sequence with at least one
+   * playable note — catches an id pointing at one of the 3 non-SMF blobs,
+   * or past the end of the container. (2) Every wired id must be a FULL
+   * WORD, not a bare low byte — the discriminator the blob lookup itself
+   * cannot provide, since `id & 0x7f` throws the high byte away and so maps
+   * a truncated id onto a perfectly valid-looking blob. Every real id this
+   * project has recovered from a `MOV AX,imm` is >= 0x0209. */
+  const { buildSfxSequence } = await import('../audio/sfx-sequence.js');
+  const wiredSfxIds = [
+    MENU_CLICK_SFX, MENU_CONFIRM_SFX, BUY_CONFIRM_SFX, PICKUP_SFX, TREASURE_SFX,
+    CHEST_SFX, SFX_LEVER_TOGGLE, SPAWN_SFX, DEATH_SFX, CHA_CHING_SFX,
+    SFX.ACT0_SPAWN, SFX.ACT2_DOOR_OPEN, SFX.ACT3_TELEPORT, SFX.ACT6_KILL,
+    SFX.ACT7_GATE_OPEN, SFX.ACT8_GATE_SHUT, SFX.ACT9_DOOR_SHUT,
+    KILL_SFX, HURT_SFX, FIRE_SFX,
+    0x020e /* FOOTSTEP */, 0x0240 /* CLIMB_STEP */, 0x021d /* TERRAIN */,
+    0x0209 /* AXE_BOUNCE */, 0x0609 /* BOMB_THUD */, 0x1022 /* BOMB_DETONATE */,
+  ];
+  const unplayable = wiredSfxIds.filter((id) => {
+    const blob = blobs[id & 0x7f];
+    if (!blob || !isSmf(blob)) return true;
+    const seq = buildSfxSequence(blob);
+    return !seq || seq.notes.length === 0 || seq.notes.every((n) => !n.registers);
+  });
+  check('every SFX id main.js plays resolves, through the REAL play() path, to a '
+    + 'PGODS.MUS sequence with at least one playable note (the SFX_VOICES check this '
+    + 'replaces no longer guards anything — play() returns before consulting it)',
+    unplayable.length === 0,
+    `unplayable ids: [${unplayable.map((i) => '0x' + i.toString(16))}]`);
+
+  const bareLowByte = wiredSfxIds.filter((id) => id <= 0xff);
+  check('every wired SFX id is the FULL word from its own MOV AX,imm, not a bare low '
+    + 'byte — the blob lookup masks the high byte away, so a truncated id resolves to '
+    + 'a valid-looking blob and plays the wrong sound silently (three shipped bugs of '
+    + 'exactly this shape: 0x1c, 0x1d, 0x09)',
+    bareLowByte.length === 0,
+    `bare low bytes: [${bareLowByte.map((i) => '0x' + i.toString(16))}]`);
+
   return results;
 }
 
