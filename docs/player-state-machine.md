@@ -224,6 +224,13 @@ The rest of state 13's input dispatch decodes just as cleanly:
 
 Note the dismount needs `inc byte [0x353] / cmp byte [0x353],2 / jng` — a **two-tick hold** before it fires, so a tap of RIGHT+DOWN does not throw the hero off a ladder.
 
+⚠️ **Corrected, `[PROVEN]` against `PJOYL3` 852–976.**
+- **The phase advances before the step.** Past 3 or down to 0, it sounds the step and bounces straight back, so from rest the cycle runs 1, 2, 3, 2\*, 1, 2\*, 3, 2\*, … with a sound every *second* step.
+- **Moving needs an exact input byte.** State 13 moves only on exactly DOWN (`CS:0x54CD cmp [0x382],2`) and state 14 only on exactly UP (`CS:0x571F`). Otherwise the fallback (`CS:0x562B` / `0x5885`) hands off to the other state and flips `[0x347]`, with no step that tick.
+- **The ladder-continues tests** read the new position's rows +2/+3 when descending (`CS:0x569B`) and ±1 when ascending (`CS:0x58E7`).
+- **Descending off the foot** keeps the step and enters state 10 (`CS:0x56AF`). That fall has no fire test and lands by the ladder facing `[0x378]` (`CS:0x4C5D`). Its landing does not clear the hold flag `[0x357]`, a process-lifetime byte.
+- **Ladder fire.** `[0x378]` persists, so FIRE alone re-fires on the ladder.
+
 **The animation ping-pongs 0↔3** (`0x565C inc cl / cmp cl,3 / jg`, `0x5688 dec cl / jz`) with a climb-step sound fired **only at the two turn-arounds**, not per tick, from the call site at `0x5931`. Leaving the ladder at the bottom exits to state 26 with `xor cl,cl` and `and word [0x17c],0xfff0` — a Y snap to the tile row, which *is* what `0x5679` does.
 
 ⚠️ **CORRECTED, a later session (surfaced while wiring `gods-web`'s footstep/climb audio).** This line used to read "the climb-step sound `0x5931`" — but `0x5931` is not a sound id, it is the CS: address of `FUN_1000_5931`, a 9-byte thunk (`push ax / mov ax,0x240 / call 0x22ca / pop ax / ret`). `get_function_xrefs` on that address finds exactly four callers: `CS:0x5681`/`0x5690` (state 13, descend) and `CS:0x58cd`/`0x58dc` (state 14, ascend) — the same four turn-around sites this section already names. The real sound id — the word actually passed to the sound-effect export at `0x22ca` — is **`0x240`**. `[STATIC]`: read as a `MOV` immediate in the disassembly, not cross-checked against a second binary the way the spike-crop closure was.

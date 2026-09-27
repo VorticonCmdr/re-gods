@@ -766,6 +766,11 @@ So the brood record is `{ i16 worldX, i16 worldY, i16 frame(also the free/lifeti
 8a65  [si+4] = 0xffff                          ; done -> FREE the slot (this document's own already-documented sentinel)
 ```
 
+⚠️ **Corrected, `[PROVEN]` against a live `DS:0x8014` peek (`PJOYL2` 1898–1909).**
+- **Ground bounce** probes at `y+4` and reverses on a wall at the probe *or on a missing floor* one row below (a ledge). It does not reverse on a floor, as the bullet below reads it.
+- **Landing** adds one pixel to the floored row (`and 0xfff0 / inc`), not a full tile row, and forces `vx` to ±2 by its sign (`CS:0x8AF8`–`0x8B06`).
+- **Order.** The brood runs before the nests in the main loop (`CS:0x027F` before `0x0282`), so children spawned this tick first move next tick.
+
 `CS:0x8A6C` and `CS:0x8AB1` are the two **movement** variants selected by `+0xc`, both sharing the plane-B pointer helper `CS:0x8A93` (the already-established floored `0x5004 + (x&~0x1f)>>5 + (y&~0xf)<<3` formula):
 
 - **`+0xc == 0` — ground bounce, `CS:0x8A6C`**: `world X += [si+8]` (a bare linear X-velocity, no accel/cap), then probes the plane-B cell at the new position (mirrored, `+0x18`/none depending on the velocity's sign — the muzzle-style facing offset this document sees everywhere). If either the probed cell or the one 128 bytes below it (`[di+0x80]`, one tile row down) reads solid, `NEG word[si+8]` — a plain **wall bounce**, reflecting the velocity rather than stopping it.

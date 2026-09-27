@@ -38,7 +38,7 @@ This project has accumulated thousands of lines of disassembly-level findings �
 | [`docs/message-line.md`](docs/message-line.md) | The status-panel message line: the `CS:0x434e` priority mailbox, its two-page layout, the `PSMLFNT` glyph blit, the object/hint composers and the `DS:0x1fc6` string arena |
 | [`docs/shop.md`](docs/shop.md) | The shop screen: the 18-slot grid and cursor clamping, the roster filter/sort pipeline (`SS:0x51aa` source vs. the `SS:0x408c` filtered working copy — both corrected from an earlier `DS:` mis-citation), the two-press buy confirm, and the weapon purchase/swap dispatch — all four items now closed (`UNKNOWN_shop_prices`, `UNKNOWN_shop_roster_source`, `UNKNOWN_shop_eligibility_gates`, `UNKNOWN_shop_tradein_value` — the last of these was never a "sell" mechanic at all, but a weapon-buy-and-swap with a partial refund for whatever it displaces) |
 | [`docs/passwords.md`](docs/passwords.md) | The level-select password system end to end: the letter-grid UI, the entry/match algorithm (`FUN_1000_2e2f`), the generator (`FUN_1000_69d7`/`FUN_1000_6a6b`, with a caught-and-fixed transcription error in its own index formula), the `HISCORES.BIN` XOR disk-save encoding, and three real passwords captured live |
-| [`docs/guardians.md`](docs/guardians.md) | Trigger selector 11's per-world guardians and the `DS:0x34` main-loop gates; world 1's driver, script and spit pool (ported, capture-exact) |
+| [`docs/guardians.md`](docs/guardians.md) | Trigger selector 11's per-world guardians and the `DS:0x34` main-loop gates. Worlds 1–3 are ported (drivers, scripts, shot pools, world 2's Bézier arm and scripted camera); world 4 and the guardian deaths are not |
 | [`docs/open-questions-history.md`](docs/open-questions-history.md) | The full ranked open-questions list and the resolved-items index — historical record of what's been closed and how |
 
 ## Open questions
@@ -99,10 +99,12 @@ A sixth, `UNKNOWN_level_palette_source` (ranked item 24), CLOSED — and, like i
 
 **`UNKNOWN_timebomb_refire` is CLOSED (ranked item 39), `[PROVEN]` live.** A time-bomb pickup can be thrown repeatedly. After each explosion, `CS:0xA41C` frees the record once the smoke (and any fragments) are gone, 9 ticks for a plain pickup, and the next throw goes into the same record. See `docs/combat-and-projectiles.md`.
 
-**The `joyl` menu choices are CLOSED (ranked item 40), live.** `joyl1` picks BEGIN QUEST. `joyl2` picks ENTER PASSWORD and types the attract shortcut `"L2"` (world 2). `joyl3` picks ENTER PASSWORD with an empty entry and falls back to the menu. The password grid's icons, cell mapping and space cell were already closed in `docs/passwords.md`.
+**The `joyl` menu choices are CLOSED (ranked item 40), live.** `joyl1` picks BEGIN QUEST. `joyl2` picks ENTER PASSWORD and types the attract shortcut `"L2"` (world 2). `joyl3` picks ENTER PASSWORD, and ⚠️ does **not** fall back to the menu as first written: it plays world 3 (corrected by ranked item 47). The password grid's icons, cell mapping and space cell were already closed in `docs/passwords.md`.
 
 **Selector 6 is the progress checkpoint (ranked item 43), now `[PROVEN]` live end to end and ported.** It moves the respawn point to the hero on every hit. New positions count toward per-world progress records (`DS:0xE674` chains), and the records' tallies include the real sublevel A→B switch (`FUN_1000_4828`, bits 0/3/11). Live in world 1A, `4828` fired from the bit-0 slot and `FUN_1000_484e` carried the hero, respawn point, chain pointer, counters, ring and camera into 1B without a reset. `484E` then returns into the bit walk, so the lower bits still run. It corrects two earlier claims: "`DS:0x16E` has one writer" and "`4828` is unreachable". `gods-web` implements it (`src/game/progress.js`). See `docs/camera-and-world-nav.md`.
 
 ## Tooling
 
 Moved to the `gods-re-tooling` skill (`.claude/skills/gods-re-tooling/SKILL.md`) — Ghidra MCP, DOSBox MCP, `blast.py`, and the `gods-web` port's verification tooling, with the same gotchas as before. Load it when actually running any of those tools.
+
+**Attract-demo parity (ranked item 47): the hero path matches DOSBox tick for tick in all six demos.** `PJOYL1`, `PJOYG1`, `PJOYL2` and `PJOYG3` are exact including the random stream. `PJOYL3` has real world-3 gameplay, correcting item 40. It and `PJOYG2` match every live run checked, and differ from older captures only through state DOS carries across attract cycles: `[0x2F0]`, `[0x1D4]`, `[0x357]` and `UNKNOWN_w2_attract_carryover`.

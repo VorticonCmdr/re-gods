@@ -199,7 +199,7 @@ What's still inferred, not directly observed, is *which menu selection* got the 
 |---|---|---|
 | `joyl1` | **BEGIN QUEST** (`0`) | ordinary world-1 gameplay, driven by the recording |
 | `joyl2` | **ENTER PASSWORD** (`1`) | types codes `12, 31` = **`"L2"`**, the attract-only shortcut at `CS:0x2E4A`–`0x2E6A` (`dl = 0x1F − 0x1D = 2`), which loads **world 2** |
-| `joyl3` | **ENTER PASSWORD** (`1`) | reaches the check with an **empty** buffer (`DS:0x3004` all zero, live). The real match loop (`CS:0x2E6C`) skips empty stored slots, so by the code nothing can match and it returns to the menu (`CS:0x2E90` → `0x2CAF`, `[STATIC]`). The cycler then moves on to its world-3 `joyg` state |
+| `joyl3` | **ENTER PASSWORD** (`1`) | ⚠️ **corrected:** it does *not* fall back to the menu. The live capture shows world-3 (`DS:0x42` = 3) gameplay from about cursor 704 to the end of the recording, via the password screen and the world-3 shop, and `gods-web` reproduces that hero path tick for tick. An earlier revision inferred "returns to the menu" from the match loop's code (`[STATIC]`), which was never observed. How the entry reaches world 3 was not traced. |
 
 The menu choices and `joyl3`'s **empty** buffer at `CS:0x2E4A` were read live. "Returns to the menu" for `joyl3` is inferred from the match loop's code (`[STATIC]`), not observed. `gods-web` already implements the `L` + digit shortcut (`main.js`'s `matchPassword`).
 

@@ -89,7 +89,7 @@
 
 39. `UNKNOWN_timebomb_refire` — **CLOSED `[PROVEN]` live in DOSBox.** One pickup throws repeatedly, one bomb at a time, and the weapon is not consumed. The despawn is `CS:0xA41C mov [di],0`, on the bomb's own record, not a fragment's as previously written. It runs once no fragment or smoke puff is live, which for a plain pickup is 9 ticks after detonation (`2(n−1)+7`, `n = extra+2` puffs). Measured live with the weapon armed via the real pickup routine: detonation → clear at `A41C` with `BP=0` and puff counters advanced exactly 10 times → second and third throws spawned into the same record. `gods-web` now holds the record for that time.
 
-40. Which menu choice the `joyl` recordings make — **CLOSED `[PROVEN]` live in DOSBox.** `joyl1` picks BEGIN QUEST. `joyl2` picks ENTER PASSWORD and types `"L2"`, the attract-only shortcut to world 2. `joyl3` picks ENTER PASSWORD and submits an empty entry (live). By the match loop's code it can never match and returns to the menu (`[STATIC]`). The other password-grid leftovers (erase/confirm icon sprites, cell-to-record mapping beyond A–Z, the row-4 space cell) were already closed in `docs/passwords.md`; only stale sentences there and in `CLAUDE.md` still called them open.
+40. Which menu choice the `joyl` recordings make — **CLOSED `[PROVEN]` live in DOSBox.** `joyl1` picks BEGIN QUEST. `joyl2` picks ENTER PASSWORD and types `"L2"`, the attract-only shortcut to world 2. `joyl3` picks ENTER PASSWORD (live). ⚠️ The follow-on claim that it "can never match and returns to the menu" (`[STATIC]`) was **wrong**. The capture plays world 3 from about cursor 704 on, which `gods-web` reproduces; see item 47. The other password-grid leftovers (erase/confirm icon sprites, cell-to-record mapping beyond A–Z, the row-4 space cell) were already closed in `docs/passwords.md`; only stale sentences there and in `CLAUDE.md` still called them open.
 
 41. `UNKNOWN_unpack_entry_ax_semantics` — **CLOSED `[PROVEN]`.** `UNPACK.EXE` is the stock PKWARE DCL v1.02. `GAME.EXE`'s `AX` is the segment of `explode`'s work buffer (`ES:SI = AX:0000` at image `0x0DA2`). It is a *relocated* segment: an MZ fixup sits at `0x259F`, and the raw word is `0x79F3`, not the `0x89F3` Ghidra shows. That corrects the earlier "bare constant, not an address" claim. Live `AX = 0x7D60` = load segment `0x36D` + `0x79F3`. The `CX` passed alongside it is the DOS file handle from `FUN_1000_25bb`'s `AH=3Dh` open, which `UNPACK`'s read callback streams from, not a compressed byte count as first written.
 
@@ -103,7 +103,25 @@
 
 46. The object-activation gate `CS:0x1187` — **ported, `[PROVEN]` by capture parity.** The recompute-every-32-px rule was already documented `[STATIC]` (`docs/consumables-and-treasure.md`), but `gods-web` recomputed every tick. Porting the exact gate (the `DS:0x379` column latch, plus the five direct `0x1196` call sites) moved `PJOYG2`'s first random draw onto the same cursor as the DOSBox capture.
 
-47. Attract-demo parity (the `/goal` of 2026-09-27) — **in progress; `PJOYL1` and `PJOYG1` exact.** Both now match DOSBox on every tick in hero position, camera and the random stream. The tooling (all in `gods-web/tools/attract-capture/`):
+47. Attract-demo parity (the `/goal` of 2026-09-27) — **hero paths exact in all six demos (`PJOYL3` included; it has real world-3 gameplay).**
+    - **Fully exact, random stream included:** `PJOYL1`, `PJOYG1`, `PJOYL2`, `PJOYG3`.
+    - **`PJOYG2` and `PJOYL3`:** the port matches every *live* run checked, and differs from the older captures only through state that DOS carries across attract cycles. That state is the world-2 jaw `[0x2F0]`, the starburst gravity phase `[0x1D4]`, the landing hold flag `[0x357]`, and one unidentified value (`UNKNOWN_w2_attract_carryover`).
+
+    Session fixes, each `[PROVEN]` against a live peek, trace or capture:
+    - the death-burst respawn one tick later
+    - the world-2 guardian and its scripted camera `[0x32]`
+    - a wall-blocked walk tick that neither steps its phase nor sounds
+    - brood landing, ledge turns and tick order
+    - System-B landing turns (`CS:0xF4C4`)
+    - the marker list rebuilt every tick (`CS:0x1432`), with weapons included (`CS:0x1DA0`)
+    - the pathfinder draw coming after its cull and override
+    - ladder states 13/14, their exact-input moves, the phase cycle, the end rows and the state-10 fall
+    - the `DS:0xCF40` dormant flier (object types 97/130; `gods-web/src/game/cf40.js`)
+    - consumable effects that frame.js had been dropping
+    - pickup sounds
+    - the starburst cooldown and its tag-`0xFC` chain bursts
+
+    Earlier findings for `PJOYL1`/`PJOYG1`: Both now match DOSBox on every tick in hero position, camera and the random stream. The tooling (all in `gods-web/tools/attract-capture/`):
     - The captured random table is injected live at a chosen tape cursor.
     - `sweep.py` logs every sound play (`CS:0x22CA`: id, caller) and random draw (`CS:0x3836`: caller).
     - `peek.py` dumps DS ranges at chosen cursors.

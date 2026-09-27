@@ -26,10 +26,14 @@ Three rays right, three left, two vertical, and only three distinct `vy` values 
 A463  cmp byte [0x34d],0 / jz spawn       ; INACTIVE -> always spawn
 A46A  cmp word [0x1d6],0xbe / jl spawn    ; active and age < 190 -> spawn
 A472  ret                                 ; active and age >= 190 -> REFUSE
-A568  cmp byte [0x374],0 / js  ...        ; only in the 10 frames after a burst
+A568  cmp byte [0x374],0 / js  ...        ; SKIPPED while negative: a 10-frame COOLDOWN
 A574  dx = 0xbe - [0x1d6] / shl dx,1      ; threshold = (190 - age) * 2
 A57D  cmp ax,dx / ja skip                 ; vs the FULL 16-bit random word
 ```
+
+⚠️ **Correction, `[PROVEN]` live (2026-09-27, `PJOYL3`): `[0x374]` is a cooldown, not a window.** The `js` at `CS:0xA568` *skips* the particle's chain draw while the byte is negative. So after a burst sets it to −10 the particles neither draw nor re-burst for ten frames, then do. `inc byte` wraps 127 → −128, which shuts the chain again for 128 frames. Live, the potion burst at cursor 1031 made its first `CS:0xA572` draws at 1040. Two more facts from the same session:
+- **Gravity phase.** `DS:0x1D4`, the 8-frame gravity counter, is written only by `CS:0xA4E2/0xA4E6` and never reset. Its phase therefore counts starburst frames since boot.
+- **Chain bursts on hits.** A particle hit on something (tag `0xFC`, outside guardian mode) sets off a new burst at the struck grid cell (`CS:0x93DD`–`0x9417`). This was observed live returning into `CS:0x941A`.
 
 ⚠️ **A chain re-burst does NOT reset the age.** `CS:0xA493`'s `js` skips the whole init block — age, active flag *and* chain window — when `DS:0x34d` is already negative, and `CS:0xA581` then reopens the ten-frame window on its own. So the window keeps resetting while the age climbs at +2/frame, and it is the **age** that ends the cascade. Reset it on a chain and the effect runs forever.
 
