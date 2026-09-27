@@ -166,3 +166,40 @@ export async function loadGd(name) {
   }
   return out;
 }
+
+/* Compare the port against a LIVE per-tick peek (peek.py NAME inject lo-hi
+ * 160:2 — DS:0x160 plus the hero), rather than the older capture. DOS keeps
+ * some state across attract cycles (the world-2 jaw DS:0x2F0, the starburst
+ * gravity phase DS:0x1D4, the landing flag DS:0x357 ...), so a capture from
+ * one cycle and a peek from another can legitimately disagree; `seed` sets
+ * the port's copies to the peeked cycle's values. Returns the first cursor
+ * at which the random cursor / hero position differ (null = none). */
+export async function compareLive(name, peekFile, seed = {}) {
+  const g = window.__gods;
+  const dos = await loadCapture(name);
+  const pk = await (await fetch(`/tools/attract-capture/${peekFile}?${Date.now()}`)).json();
+  g.resetProcessJaw(); g.setLandFlag357(seed.land ?? 1);
+  g.setStarburstGravityPhase(seed.gravity ?? 0);
+  await g.startAttractAt(STATE_OF[name]);
+  const pend = dos.rnd.slice();
+  const inject = (c) => { while (pend.length && pend[0].cursor <= c) { const e = pend.shift(); g.setRandom(e.hex, e.r); } };
+  inject(0);
+  const port = new Map();
+  let jawSet = seed.jaw === undefined;
+  for (let i = 0; i < 4000; i++) {
+    const [s] = await g.stepTicks(1);
+    if (!s.attract || s.attract.state !== STATE_OF[name]) break;
+    if (!jawSet && g.guardianRaw()) { g.guardianRaw().jaw = seed.jaw; jawSet = true; }
+    inject(s.attract.cursor);
+    port.set(s.attract.cursor, s);
+  }
+  let r = null, hero = null, n = 0;
+  for (const e of pk) {
+    const p = port.get(e.c);
+    if (!p || p.ui !== 'game') continue;
+    n++;
+    if (r === null && p.r !== e.r) r = e.c;
+    if (hero === null && (p.x !== e.hero[0] || p.y !== e.hero[1])) hero = e.c;
+  }
+  return { name, peekFile, compared: n, from: pk[0].c, to: pk[pk.length - 1].c, firstBad: { r, hero } };
+}

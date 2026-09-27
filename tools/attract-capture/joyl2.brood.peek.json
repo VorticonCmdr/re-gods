@@ -1,0 +1,146 @@
+[
+{
+"c": 1898,
+"r": 282,
+"hero": [
+3424,
+368
+],
+"ranges": {
+"8014": "e60c850102002b00000003000100ffffe00c850102002b00ffff03000100ffffda0c7f0102002b00feff02000100ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+"160": "1a01"
+}
+},
+{
+"c": 1899,
+"r": 282,
+"hero": [
+3424,
+368
+],
+"ranges": {
+"8014": "e60c880103002b00000004000100ffffdf0c880103002b00ffff04000100ffffd80c810103002b00feff03000100ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+"160": "1a01"
+}
+},
+{
+"c": 1900,
+"r": 282,
+"hero": [
+3424,
+368
+],
+"ranges": {
+"8014": "e60c8c0100002b00000005000100ffffde0c8c0100002b00ffff05000100ffffd60c840100002b00feff04000100ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+"160": "1a01"
+}
+},
+{
+"c": 1901,
+"r": 282,
+"hero": [
+3424,
+368
+],
+"ranges": {
+"8014": "e60c910101002b00020000000000ffffdd0c910101002b00feff00000000ffffd40c880101002b00feff05000100ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+"160": "1a01"
+}
+},
+{
+"c": 1902,
+"r": 282,
+"hero": [
+3424,
+368
+],
+"ranges": {
+"8014": "e80c910102002b00020000000000ffffdb0c910102002b00feff00000000ffffd20c8d0102002b00feff06000100ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+"160": "1a01"
+}
+},
+{
+"c": 1903,
+"r": 286,
+"hero": [
+3424,
+368
+],
+"ranges": {
+"8014": "ea0c910103002500020000000000ffffd90c910103002b00feff00000000ffffd00c910103002b00feff00000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+"160": "1e01"
+}
+},
+{
+"c": 1904,
+"r": 290,
+"hero": [
+3424,
+368
+],
+"ranges": {
+"8014": "ec0c910100001e00020000000000ffffd70c910100002b00feff00000000ffffce0c910100002b00feff00000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+"160": "2201"
+}
+},
+{
+"c": 1905,
+"r": 290,
+"hero": [
+3424,
+368
+],
+"ranges": {
+"8014": "ee0c910101001e00020000000000ffffd50c910101002b00feff00000000ffffcc0c910101002b00feff00000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+"160": "2201"
+}
+},
+{
+"c": 1906,
+"r": 290,
+"hero": [
+3424,
+368
+],
+"ranges": {
+"8014": "f00c910102001e00020000000000ffffd30c910102002b00feff00000000ffffca0c910102002b00feff00000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+"160": "2201"
+}
+},
+{
+"c": 1907,
+"r": 290,
+"hero": [
+3424,
+368
+],
+"ranges": {
+"8014": "f20c910103001e00020000000000ffffd10c910103002b00feff00000000ffffc80c910103002b00feff00000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+"160": "2201"
+}
+},
+{
+"c": 1908,
+"r": 302,
+"hero": [
+3424,
+368
+],
+"ranges": {
+"8014": "f40c910100001700020000000000ffffcf0c910100002400feff00000000ffffc60c910100002400feff00000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+"160": "2e01"
+}
+},
+{
+"c": 1909,
+"r": 302,
+"hero": [
+3424,
+368
+],
+"ranges": {
+"8014": "f60c910101001700020000000000ffffcd0c910101002400feff00000000ffffc40c910101002400feff00000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+"160": "2e01"
+}
+}
+]

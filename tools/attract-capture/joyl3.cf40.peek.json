@@ -1,0 +1,254 @@
+[
+{
+"c": 925,
+"r": 142,
+"hero": [
+288,
+180
+],
+"ranges": {
+"cf40": "8b01a0001900ffff0000000000005601ef00190003000000fdfffeffbf018000ffffffff000000000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+"192": "1800"
+}
+},
+{
+"c": 926,
+"r": 142,
+"hero": [
+288,
+174
+],
+"ranges": {
+"cf40": "8b01a0001900ffff0000000000005301ed00190000000000fdfffeffbf018000ffffffff000000000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+"192": "1800"
+}
+},
+{
+"c": 927,
+"r": 142,
+"hero": [
+288,
+174
+],
+"ranges": {
+"cf40": "8b01a0001900ffff0000000000005001eb00190001000000fdfffeffbf018000ffffffff000000000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+"192": "1800"
+}
+},
+{
+"c": 928,
+"r": 142,
+"hero": [
+288,
+168
+],
+"ranges": {
+"cf40": "8b01a0001900ffff0000000000004d01e900190002000000fdfffeffbf018000ffffffff000000000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+"192": "1800"
+}
+},
+{
+"c": 929,
+"r": 142,
+"hero": [
+288,
+168
+],
+"ranges": {
+"cf40": "8b01a0001900ffff0000000000004a01e700190003000000fdfffeffbf018000ffffffff000000000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+"192": "1800"
+}
+},
+{
+"c": 930,
+"r": 142,
+"hero": [
+288,
+164
+],
+"ranges": {
+"cf40": "8b01a0001900ffff0000000000004701e500190000000000fdfffeffbf018000ffffffff000000000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+"192": "1800"
+}
+},
+{
+"c": 931,
+"r": 142,
+"hero": [
+288,
+164
+],
+"ranges": {
+"cf40": "8b01a0001900ffff0000000000004401e300190001000000fdfffeffbf018000ffffffff000000000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+"192": "1800"
+}
+},
+{
+"c": 932,
+"r": 142,
+"hero": [
+288,
+164
+],
+"ranges": {
+"cf40": "8b01a0001900ffff0000000000004101e100190002000000fdfffeffbf018000ffffffff000000000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+"192": "1800"
+}
+},
+{
+"c": 933,
+"r": 142,
+"hero": [
+288,
+168
+],
+"ranges": {
+"cf40": "8b01a0001900ffff0000000000003e01df00190003000000fdfffeffbf018000ffffffff000000000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+"192": "1800"
+}
+},
+{
+"c": 934,
+"r": 142,
+"hero": [
+288,
+164
+],
+"ranges": {
+"cf40": "8b01a0001900ffff0000000000003b01dd00190000000000fdfffeffbf018000ffffffff000000000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+"192": "1800"
+}
+},
+{
+"c": 935,
+"r": 142,
+"hero": [
+288,
+164
+],
+"ranges": {
+"cf40": "8b01a0001900ffff0000000000003801db00190001000000fdfffeffbf018000ffffffff000000000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+"192": "1800"
+}
+},
+{
+"c": 936,
+"r": 142,
+"hero": [
+288,
+164
+],
+"ranges": {
+"cf40": "8b01a0001900ffff0000000000003501d900190002000000fdfffeffbf018000ffffffff000000000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+"192": "1800"
+}
+},
+{
+"c": 937,
+"r": 142,
+"hero": [
+288,
+168
+],
+"ranges": {
+"cf40": "8b01a0001900ffff0000000000003201d700190003000000fdfffeffbf018000ffffffff000000000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+"192": "1800"
+}
+},
+{
+"c": 938,
+"r": 142,
+"hero": [
+288,
+168
+],
+"ranges": {
+"cf40": "8b01a0001900ffff0000000000002f01d500190000000000fdfffeffbf018000ffffffff000000000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+"192": "1800"
+}
+},
+{
+"c": 939,
+"r": 146,
+"hero": [
+288,
+168
+],
+"ranges": {
+"cf40": "8b01a0001300ffff0000000000002c01d300190001000000fdfffeffbf018000ffffffff000000000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+"192": "1800"
+}
+},
+{
+"c": 940,
+"r": 150,
+"hero": [
+288,
+164
+],
+"ranges": {
+"cf40": "8b01a0000d00ffff0000000000002901d100190002000000fdfffeffbf018000ffffffff000000000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+"192": "1800"
+}
+},
+{
+"c": 941,
+"r": 150,
+"hero": [
+288,
+164
+],
+"ranges": {
+"cf40": "8b01a0000d00ffff0000000000002601cf00190003000000fdfffeffbf018000ffffffff000000000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+"192": "1800"
+}
+},
+{
+"c": 942,
+"r": 150,
+"hero": [
+288,
+164
+],
+"ranges": {
+"cf40": "8b01a0000d00ffff0000000000002301cd00190000000000fdfffeffbf018000ffffffff000000000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+"192": "1800"
+}
+},
+{
+"c": 943,
+"r": 160,
+"hero": [
+288,
+168
+],
+"ranges": {
+"cf40": "8b01a0000700ffff0000000000002001cb00000034120100fdfffeffbf018000ffffffff000000000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+"192": "1300"
+}
+},
+{
+"c": 944,
+"r": 164,
+"hero": [
+288,
+168
+],
+"ranges": {
+"cf40": "8b01a0000100ffff0000000000001d01c900000034120200fdfffeffbf018000ffffffff000000000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+"192": "1300"
+}
+},
+{
+"c": 945,
+"r": 164,
+"hero": [
+288,
+168
+],
+"ranges": {
+"cf40": "8b01a0000100ffff0000000000001a01c700000034120300fdfffeffbf018000ffffffff000000000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+"192": "1300"
+}
+}
+]
