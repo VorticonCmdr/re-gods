@@ -392,6 +392,7 @@ export class EntityB {
    *   fireB's own header for the shape.
    */
   tick(planeB, verdict = VERDICT_NONE, desc = null) {
+    this.justAlive = false;
     /* CS:0xff20 — the pre-life states run before any locomotion or fire.
      *   waiting (-2): count the stagger down, then materialise
      *   materialising (-3): 5 ticks, then become alive with the descriptor HP
@@ -409,6 +410,10 @@ export class EntityB {
          * still (and, on a tile crossing, re-runs the pathfinder) before its
          * first step. [PROVEN] against PJOYL2 cursors 1589/1590. */
         this.delay = 10 - this.speed;
+        /* CS:0xFF48 `jmp 0xed72` — the tick that brings it alive skips the
+         * contact test and grid scan (CS:0xFF93) too. [PROVEN] against PJOYL3
+         * 1233: the port scored a hit on that tick, DOS did not. */
+        this.justAlive = true;
       }
       return null;
     }

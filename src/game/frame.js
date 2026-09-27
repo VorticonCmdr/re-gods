@@ -223,7 +223,7 @@ export function stepCreatureDamage(enemies, { grid, cam, hero, health,
   const targets = wantTargets ? [] : null;
   let touched = 0, killed = 0;
   for (const e of enemies) {
-    if (!e.alive) continue;
+    if (!e.alive || e.justAlive) continue;               // CS:0xFF48 — see entity.js
     const c = creatureTouchesHero(e, hero, health, { sfx });
     if (c.strengthOut < 0) { touched++; continue; }     // CS:0xa9ec — contact won
     const s = creatureScansGrid(e, grid, cam, decodeTag, difficulty,
