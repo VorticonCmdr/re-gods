@@ -635,6 +635,7 @@ export class Player {
     this.tock36d = tock36d;
     this.footstep = false;
     this.climbStep = false;
+    this.ladderLand = false;     // CS:0x4CC5 -> 0x4C54: sfx 0x318 on a state-10 landing
     this.emitted = null;
     this.keyCollected = null;
     this.leverToggled = null;
@@ -1641,6 +1642,7 @@ export class Player {
        * and the state dispatcher runs CS:0x5020 / 0x5042 on later ticks,
        * which hold one tick and then drain DS:0x176 by 4 per tick before
        * handing back to walk (see `_land`). Live-confirmed by PJOYG3. */
+      if (ladderFall) this.ladderLand = true;    // CS:0x4CC5 `call 0x4c54` (sfx 0x318) [PROVEN] PJOYL3 1164
       this._enterLand(ladderFall ? this.ladderFacing >= 0 : this.stateIndex === S.FALL_R, ladderFall);
       return;
     }

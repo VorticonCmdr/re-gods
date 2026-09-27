@@ -2541,6 +2541,7 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
       /* The FUN_1000_5931 thunk's four callers — the climb ping-pong's two
        * turn-arounds, already gated behind _climb's own tock===0 return. */
       if (fr.climbStep) audio.play(CLIMB_STEP_SFX);
+      if (fr.ladderLand) audio.play(0x318);           // CS:0x4C54, the state-10 landing
       /* CS:0xA7F6 — one play per projectile the terrain stops this tick,
        * not one per tick: `fr.projectiles.hits` already carries one entry
        * per stop (Arsenal.step collects it from every slot's own

@@ -193,7 +193,7 @@ export function stepHeroFrame({ input, arsenal, grid, player, map, cam,
             * WALK_FOOTSTEP_PHASES, climbStep only at the ping-pong
             * turn-arounds behind the tock===0 early return) — surfacing them
             * here is not a "per tick" trigger, it is the tuned one. */
-           footstep: player.footstep, climbStep: player.climbStep };
+           footstep: player.footstep, climbStep: player.climbStep, ladderLand: player.ladderLand };
 }
 
 /**
