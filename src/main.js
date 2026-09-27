@@ -37,7 +37,7 @@ import { spriteForType, parseObjectCategories, sortForDraw, isDeadType,
          isUnstamped, OBJECT_SLOTS, activationBox, buildDrawSequence,
          activateObjects, insertSpawned, newActivationGate, activationDue,
          stepObjectFall, isFallEligible, dropCarriedItem,
-         ObjectAnimClock, animatedObjectSprite } from './game/objects.js';
+         ObjectAnimClock, animatedObjectSprite, allocObject } from './game/objects.js';
 import { parseObjectRecords, Score, Purse, TreasureBurst,
          INVENTORY_EMPTY } from './game/treasure.js';
 import { CONSUMABLES, WEAPON_ARCS, INVULN_TICKS_SPAWN } from './game/consumables.js';
@@ -75,6 +75,7 @@ import { Ce64Creatures, Ce64Spits, OBJECT_TYPE as CE64_OBJECT_TYPE } from './gam
 import { EnemyShots } from './game/enemy-shots.js';
 import { LineHazards } from './game/line-hazard.js';
 import { SelectorTwoSpawns, parseClasses as parseSelectorTwoClasses } from './game/selector2.js';
+import { Cf40 } from './game/cf40.js';
 import { PatGroups, parsePatDirectory, parsePatSpawnDescriptor } from './game/pat-objects.js';
 import { MarkerList, stepMarkers } from './game/markers.js';
 import { Debris } from './game/debris.js';
@@ -205,6 +206,10 @@ async function loadLevel(key) {
    * record straight into the 10-byte runtime descriptor, so +6 — the VALUE —
    * is what the treasure award at CS:0x18A8 pays out. */
   const objValues = parseObjectRecords(objRaw).map((r) => r.value);
+  /* Record +0 (big-endian) is the runtime descriptor's SPRITE, the key the
+   * object walk's category-4 arm dispatches on (CS:0x1B5B / 0x1C77). */
+  const objSprites = Array.from({ length: objRaw.length / 48 | 0 },
+    (_, t) => (objRaw[t * 48] << 8) | objRaw[t * 48 + 1]);
   /* The SAME file read a third way: its 132 name/description pairs are the
    * front of the `DS:0x1fc6` string arena every in-level message reads its
    * words out of (game/text-arena.js). The 40 PALFILS hint strings are
@@ -283,7 +288,7 @@ async function loadLevel(key) {
     dclDecompress(await fetchRaw(`game/PWEAPONS.00${key[0]}`)).data);
 
   return { map, sheet, palette, tiles, tileCount: count, palfils, palfilsRaw: palfilsData, cats, drawObjects,
-           objValues, groupsB, groupsA, groupsSel2, lineBarrierRecords, patDescriptors, patDirectory, patBlobBytes,
+           objValues, objSprites, groupsB, groupsA, groupsSel2, lineBarrierRecords, patDescriptors, patDirectory, patBlobBytes,
            weapons, textPool, hints, world: +key[0] };
 }
 
@@ -967,6 +972,9 @@ const guardianTables = {
    * into `nests.step()` below in place of the `null` this file previously
    * used, which is what silently made every nest death spawn nothing. */
   let brood = new Brood();
+  /* DS:0xCF40 — the dormant flier (game/cf40.js), spawned from category-4
+   * objects the CS:0x1C77 arm doesn't route elsewhere (types 97 / 130). */
+  let cf40 = new Cf40(), lastCf40Fx = [];
   /* CS:0x7CBD/0x7B68/0x7C4B/0x7C7C — the world-1-sublevel-B awakened statue
    * (game/statue.js). Populated from the CURRENT level's own plane A once
    * `levelInfo` exists, below, and again on every level switch. */
@@ -1264,6 +1272,7 @@ const guardianTables = {
       lineHazards = new LineHazards();
       markerList = new MarkerList();                    // CS:0x1437
       brood = new Brood();
+      cf40 = new Cf40(); lastCf40Fx = [];
       ce64Creatures = new Ce64Creatures(rng); ce64Spits = new Ce64Spits(rng);
       selectorTwo = new SelectorTwoSpawns();
       lineBarriers = new LineBarriers(level.map, level.lineBarrierRecords);
@@ -2340,6 +2349,16 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
           if (o.dead || o.type !== CE64_OBJECT_TYPE || !(o.flag6 & 1)) continue;
           if (ce64Creatures.spawn(o.x - cam.snapX, o.y, cam.snapX)) o.dead = true;
         }
+        /* CS:0x1CCC `call 0x8306` — every OTHER category-4 sprite (not 0x11F/
+         * 0x12C/0xDC at CS:0x1B5B, nor 0x10A/0x11D at CS:0x1C77) spawns the
+         * DS:0xCF40 flier; the object is freed only on success. */
+        for (const o of level.drawObjects) {
+          if (o.dead || !(o.flag6 & 1) || o.type < 0 || o.type >= 0xC0) continue;
+          if (level.cats[o.type] !== 4) continue;
+          const spr = level.objSprites[o.type];
+          if (spr === 0x11f || spr === 0x12c || spr === 0xdc || spr === 0x10a || spr === 0x11d) continue;
+          if (cf40.spawn(o.x - cam.snapX, o.y, cam.snapX)) o.dead = true;
+        }
       }
       /* CS:0x01F2 — the line-barrier rescan (game/line-barriers.js's own
        * `tick()`), advancing every CYCLING selector-7-10 barrier one
@@ -2714,6 +2733,15 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
          * brood led DOS by exactly one step.
          * Ground-bounce honours "freezes aliens"; ballistic fall ignores it —
          * see Brood#step's own header for why that asymmetry is real. */
+        /* CS:0x0279 `call 0x835c` — the DS:0xCF40 flier, FIRST in the suite. */
+        lastCf40Fx = cf40.step({ cam: camNow, hero: { x: player.x, y: player.y, state: player.stateIndex },
+          health, grid, decodeTag, difficulty, rng: () => rng.next(), debris, score,
+          sfx: (id) => audio.play(id), invuln: fx.invuln > 0, freeze: fx.freeze, tock,
+          respawnObject: (x, y, type) => {                     // CS:0x8565 -> 0x38D7
+            const slot = allocObject(level.drawObjects);
+            if (!slot) return;
+            slot.x = x; slot.y = y; slot.type = type; slot.flag6 = 0;
+          } });
         lastBroodFx = brood.step(camNow, fx.freeze, nestContactScan, level.map.planeB).drawn;
         const nestResult = nests.step(
           camNow, { x: player.x }, fx.freeze,
@@ -3596,6 +3624,11 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
        * placeholder table — see nest.js's own UNKNOWN_brood_sprite_table)
        * plus the 0x6c(108)-base death burst every creature in this game
        * shares. */
+      for (const d of lastCf40Fx) {                     // game/cf40.js, CS:0x3569
+        const cf = hero && hero.frames[d.sprite];
+        if (cf) renderer.blitSprite(cf, d.x, d.y);
+        else { outOfRange++; renderer.strokeRect(d.x, d.y, 24, 24, 13); }
+      }
       for (const d of lastBroodFx) {
         const bf = hero && hero.frames[d.sprite];
         if (bf) renderer.blitSprite(bf, d.x, d.y);
