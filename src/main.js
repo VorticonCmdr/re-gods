@@ -2584,12 +2584,17 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
        * 0x0285 (below) and after the CS:0x027F brood gate (game/nest.js's
        * `Brood`, now wired below instead of the `null` this file used to
        * pass, which is what silently made every nest death spawn nothing). */
+      /* CS:0x0272 tests DS:0x34 AFTER the player, whose epilogue fires the
+       * plane-B events — so a guardian installed this tick already replaces
+       * the enemy suite this tick. The CS:0x01FC/0x0223/0x0226 gates above
+       * ran before the player and used the tick-start value. */
+      const gmLate = guardian !== null;
       const camNow = { x: cam.snapX, y: cam.snapY };
       const nestContact = (box) => attackHero(
         { x: box.x, y: box.y, w: box.w, h: box.h, strength: box.hp },
         { x: player.x, y: player.y, state: player.stateIndex }, health,
         { invuln: fx.invuln > 0, sfx: (id) => audio.play(id) }).strengthOut;
-      if (!gm) {
+      if (!gmLate) {
         const nestResult = nests.step(
           camNow, { x: player.x }, fx.freeze,
           nestContact, brood, tock);
@@ -2699,7 +2704,7 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
       if (objPass) popup.step(dropCarriedIntoWorld);            // CS:0x0209
 
       let statueResult = { popups: [], score: 0, drawn: [] };
-      if (!gm) {
+      if (!gmLate) {
         statues.checkTrigger(camNow, level.map.planeA, levelInfo.world, health,
                               statueTriggerProbe, rng);
         statueResult = statues.step(
@@ -2716,7 +2721,7 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
        * module needs injected callbacks (see ce64.js's own header for why it
        * calls combat.js directly, unlike nest.js/statue.js), so this just
        * hands them the real objects. */
-      if (!gm) {
+      if (!gmLate) {
         const ce64Opts = { invuln: fx.invuln > 0, difficulty, debris, score,
                             sfx: (id) => audio.play(id) };
         lastCe64Fx = ce64Creatures.step(
@@ -2774,7 +2779,7 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
        * ce64Creatures.step() call already use), so a PAT object can now be
        * killed by the hero's touch or by a weapon hit, and awards score on
        * death via pat-objects.js's own `scoreForKey`. */
-      if (!gm) {
+      if (!gmLate) {
         lastPatFx = patGroups.step(
           camNow, fx.freeze, shots, lineHazards,
           { x: player.x, y: player.y, state: player.stateIndex }, () => rng.next(), tock, null,
@@ -2783,7 +2788,7 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
             sfx: (id) => audio.play(id) });
       }
 
-      if (!gm) {
+      if (!gmLate) {
         runSpawns();
         /* THE HUNT. CS:0xf11f/0xf1e5 run the pathfinder only from the two walk
          * modes, only on a tile crossing, and only when standing on ground —
