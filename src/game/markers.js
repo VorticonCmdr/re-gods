@@ -113,7 +113,7 @@ export class MarkerList {
     this.override = false;  // DS:0x399 — force every System-B enemy onto strategy 2
   }
 
-  /** CS:0x1437 — cleared on level load. */
+  /** CS:0x1432-0x1441 — cleared at the head of every object walk. */
   reset() {
     this.entries = [];
     this.count = 0;
@@ -160,6 +160,12 @@ export class MarkerList {
  * @param {{x:number,y:number}} cam  the SNAPPED camera (DS:0xa / DS:0xc)
  */
 export function stepMarkers(objects, cats, markerList, cam) {
+  /* CS:0x1432-0x1441 — the object walk's own head clears DS:0x398/0x399/
+   * 0x39a and rewinds the write pointer DS:0x208 to 0xb5dc on EVERY tick, so
+   * the list holds only this tick's on-screen objects. [PROVEN] live against
+   * PJOYL2 2092 (DS:0x398 = 1, one marker). The port used to clear it only
+   * on level load, and the pathfinder chased 20 stale copies of one object. */
+  markerList.reset();
   if (!cats) return;
   for (const o of objects) {
     if (o.dead || !(o.flag6 & 1)) continue;             // CS:0x1554-ish gate
@@ -168,4 +174,7 @@ export function stepMarkers(objects, cats, markerList, cam) {
     if (cat === undefined || cat >= 3) continue;        // 160D `jl`
     markerList.append(o.x - cam.x, o.y - cam.y, o.type); // 15F1/162E/1632
   }
+  /* CS:0x14B8-0x14BF — after the walk an "attracts monsters" override
+   * leaves the count at 1: only the potion itself (marker 0) is read. */
+  if (markerList.override) markerList.count = 1;
 }
