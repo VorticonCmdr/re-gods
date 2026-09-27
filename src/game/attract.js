@@ -70,8 +70,9 @@ export const CYCLE = [
 
 /** CS:0x8FBE-0x8FC3 (`tools/replay-diff.mjs`'s own citation) — the joyg
  *  entry's fixed showcase hero/camera position, keyed by world. Sublevel is
- *  always 'B' (`formats/joy.js`'s `JOYG_SUBLEVEL`). Only world 1's is
- *  live-confirmed; 2/3 are disassembly-derived. */
+ *  always 'B' (`formats/joy.js`'s `JOYG_SUBLEVEL`). All three are
+ *  live-confirmed: tick 0 of tools/attract-capture/joyg{1,2,3}.raw.json
+ *  reads exactly these hero/camera values. */
 export const JOYG_SHOWCASE_SPAWN = {
   1: { heroX: 0xd60, heroY: 0x260, camX: 0xce0, camY: 0x200 }, // (3424,608)/(3296,512)
   2: { heroX: 0xa0, heroY: 0x3c0, camX: 0xa0, camY: 0x340 },   // (160,960)/(160,832)

@@ -186,7 +186,7 @@ export const CLIMB_STEP_SFX = 0x0240;
 export const DISMOUNT_HOLD_TICKS = 3;
 
 export const ST = { GROUND: 'ground', JUMP: 'jump', FALL: 'fall', CLIMB: 'climb',
-                     CROUCH: 'crouch' };
+                     CROUCH: 'crouch', LAND: 'land' };
 
 /* Original state indices this port emits. See states.js for the proofs. */
 export const S = {
@@ -197,6 +197,7 @@ export const S = {
   CLIMB: 14,
   ARRIVAL: 4,   // CS:0x1022 — one of state 4's three named entrants
   CROUCH_R: 18, CROUCH_L: 19,
+  LAND_R: 16, LAND_L: 17,   // the landing pose — CS:0x5042 / 0x5020
   IDLE: 26,
 };
 
@@ -608,13 +609,14 @@ export class Player {
     this.emitted = null;
     this.keyCollected = null;
     this.leverToggled = null;
-    if (this.fireState >= 0) { this._fireTick(map, input, fire, health); return; }
+    if (this.fireState >= 0) { this._fireTick(map, input, fire, health, pickup, tock); return; }
     switch (this.state) {
       case ST.GROUND: this._ground(map, input, fire, pickup); break;
       case ST.JUMP:   this._jump(map, input, fire);   break;
-      case ST.FALL:   this._fall(map, input, fire, health); break;
+      case ST.FALL:   this._fall(map, input, fire, health, tock); break;
       case ST.CLIMB:  this._climb(map, input, fire, tock); break;
       case ST.CROUCH: this._crouch(input, pickup);    break;
+      case ST.LAND:   this._land();                   break;
     }
     if (this.fireState < 0) this.renderPhase = this.phase;
   }
@@ -656,7 +658,7 @@ export class Player {
   /** One tick inside a firing state.
    * @param {?{invulnerable:boolean, hurt:Function}} health  see `tick`'s own
    *        doc — threaded only into the fall+fire family's landing branch. */
-  _fireTick(map, input, fire, health = null) {
+  _fireTick(map, input, fire, health = null, pickup = null, tock = 1) {
     const id = this.fireState;
     const st = FIRE_STATES[id];
     const flag = this.flag356;
@@ -710,12 +712,11 @@ export class Player {
       /* CS:0x4DD5 — +4, then gravity, then the velocity, then fall-damage.
        * No steering: states 22/23 never test the direction bits. */
       this.y += FALL_BASE;
-      if (this.fallV < FALL_VMAX) this.fallV += GRAVITY_STEP;
+      this._gravity(tock);                               // CS:0x48B0
       this.y += this.fallV;
       this.fallDamage = (this.fallDamage || 0) + 1;      // DS:0x176
       if (solidThreeBelow(map, this.x, this.y)) {        // CS:0x4DF1
         this.y &= 0xfff0;
-        this.state = ST.GROUND;
         this.fallV = 0; this.airSteps = 0;
         this.fireState = -1; this.pendingAlloc = null;
         /* CS:0x4D3E-0x4D4F — the fall+fire tick's OWN copy of the byte-
@@ -725,7 +726,10 @@ export class Player {
           const dmg = fallDamageFor(this.fallDamage);
           if (dmg > 0 && !health.invulnerable) health.hurt(dmg);
         }
-        this.stateIndex = S.IDLE; this.phase = 0; this.renderPhase = 0;
+        /* CS:0x4DF8/0x4E0D -> 0x4D2A (right) and the left mirror -> 0x4C28:
+         * the SAME landing the plain fall uses, into the landing pose. */
+        this._enterLand(st.right);
+        this.renderPhase = 0;
         return;
       }
     }
@@ -737,7 +741,24 @@ export class Player {
       this._leaveFire(override.next, override.cl);
       return;
     }
-    if (r.next !== id) { this._leaveFire(r.next, r.nextCl); return; }
+    if (r.next !== id) {
+      this._leaveFire(r.next, r.nextCl);
+      /* CS:0x5D7A-0x5D81 (`mov cl,2 / mov [0x377],1 / jmp 0x5B83`) and
+       * CS:0x5DB1-0x5DB8 (`... [0x377],0 / jmp 0x593B`): the walk pair does
+       * not end the tick on exit — it JUMPS INTO the destination walk
+       * handler's own entry (states.js: 0x5B83 is state 1's handler, 0x593B
+       * state 0's), which then runs its whole body this same tick with
+       * CL=2. So a direction still held when the cycle ends steps +/-4
+       * immediately. The jump/fall/ladder exits all end at the common tail
+       * CS:0x5E9B instead and do not fall through. [PROVEN] live: PJOYG1
+       * cursor 146, right held as state 5 ends — DOSBox steps 3680->3684 on
+       * that tick. */
+      if (st.family === 'walk') {
+        this._ground(map, input, fire, pickup);
+        if (this.fireState < 0) this.renderPhase = this.phase;
+      }
+      return;
+    }
 
     this.firePhase = r.phase;
     this.stateIndex = id;
@@ -777,6 +798,11 @@ export class Player {
     this.state = ST.FALL;
     this.fallV = 0;        // [0x1b2] = 0
     this.airSteps = 0;     // [0x345] = 0
+    /* [0x176] = 0 — every original fall entry writes it: ledge walk-off
+     * (CS:0x5967 / 0x5BAF), jump end (CS:0x53D3 / 0x541A) and ladder bottom
+     * (CS:0x56C1). It matters now that the landing pose (`_land`) drains
+     * this accumulator: a stale value would lengthen the next landing. */
+    this.fallDamage = 0;
     /* CS:4BE9 / 4CEB `xor cl,cl` sits on the fall handlers' main path. */
     this.stateIndex = this.facing < 0 ? S.FALL_L : S.FALL_R;
     this.phase = 0;
@@ -876,6 +902,17 @@ export class Player {
       this._turn(input);
       return;
     }
+    /* CS:0x593B (state 0) / CS:0x5B83 (state 1): the walk handlers test the
+     * ground under the hero FIRST, at the position he is already at —
+     *     call 0x496a ; cmp [si+0x180],1 / jz ok ; (x straddle) [si+0x181]
+     *     mov [0x377],0x0b / 0x0c ; [0x1b2]:=0 ; [0x345]:=0 ; [0x176]:=0 ; cl:=0
+     *     jmp 0x5e9b
+     * so the step that carries him over a ledge completes, and the fall
+     * starts on the NEXT tick, without moving. [PROVEN] live: PJOYG3 walks
+     * to x=160 on cursor 41 (still state 1) and enters state 12 on 42.
+     * (The port used to test ground after the step and fall the same tick.) */
+    const walkAtEntry = this.stateIndex === S.WALK_L || this.stateIndex === S.WALK_R;
+    if (walkAtEntry && !solidThreeBelow(map, this.x, this.y)) { this._enterFall(); return; }
     const moving = input.left || input.right;
     /* ⚠️ EVERY GROUND STATE HAS ITS OWN FIRE TEST, and each one means
      * something different — see hero-fire.js's own header. State 0/1's own
@@ -1169,7 +1206,9 @@ export class Player {
       /* not climbable: UP goes unconsumed, exactly as the original leaves
        * it — fall through to the normal ground continuation below. */
     }
-    if (!solidThreeBelow(map, this.x, this.y)) this._enterFall();
+    /* The walk states tested ground at entry, above; the others still do it
+     * here, as before. */
+    if (!walkAtEntry && !solidThreeBelow(map, this.x, this.y)) this._enterFall();
   }
 
   _jump(map, input, fire) {
@@ -1322,7 +1361,55 @@ export class Player {
     if (this.jumpCursor >= JUMP_ARC_END) this._enterFall();
   }
 
-  _fall(map, input, fire, health = null) {
+  /**
+   * CS:0x48B0, called by every fall step BEFORE it adds the velocity:
+   *     48B0  ax = [0x1b2] >> 2 ; add [0x176],ax    ; damage grows with speed
+   *     48BB  cmp byte [0x36d],0 / jnz ret           ; gravity every OTHER tick
+   *     48C2  inc [0x1b2] ; clamp at 10
+   * DS:0x36D is zeroed with DS:0x36C at level entry (CS:0x8CAC-0x8CB2) and
+   * both flip at the top of every tick (CS:0x0172/0x0176), so it is 0
+   * exactly when `tock` (DS:0x36C) is 0. [PROVEN] live: PJOYG3 falls
+   * 80->85->90 from spawn, not 80->85->91. */
+  _gravity(tock) {
+    this.fallDamage = (this.fallDamage || 0) + (this.fallV >> 2);
+    if (tock === 0) {
+      this.fallV += GRAVITY_STEP;
+      if (this.fallV > FALL_VMAX) this.fallV = FALL_VMAX;
+    }
+  }
+
+  /**
+   * CS:0x4C28 (state 11) / CS:0x4D2A (state 12): landing enters the landing
+   * pose, state 17 (left) / 16 (right), with [0x357] := 0 and CL := 0. The
+   * fall-damage accumulator DS:0x176 is NOT cleared — the pose drains it.
+   */
+  _enterLand(right) {
+    this.state = ST.LAND;
+    this.stateIndex = right ? S.LAND_R : S.LAND_L;
+    this.facing = right ? +1 : -1;
+    this.landHeld = false;                 // DS:0x357
+    this.phase = 0;
+  }
+
+  /**
+   * CS:0x5042 (state 16) / CS:0x5020 (state 17) — the whole handler:
+   *     cmp [0x357],0 / jnz ; inc [0x357] ; done          ; hold one tick
+   *     sub [0x176],4 / js -> cl:=2, state:=1 (16) / 0 (17) ; else done
+   * No input is read, so a hard landing costs 1 + (damage/4 + 1) ticks.
+   * [PROVEN] live: PJOYG3 lands at cursor 4 in state 16, holds through 5,
+   * and is walking (state 1) at 6.
+   */
+  _land() {
+    if (!this.landHeld) { this.landHeld = true; return; }
+    this.fallDamage = (this.fallDamage || 0) - 4;
+    if (this.fallDamage >= 0) return;
+    const right = this.stateIndex === S.LAND_R;
+    this.state = ST.GROUND;
+    this.stateIndex = right ? S.WALK_R : S.WALK_L;
+    this.phase = 2;
+  }
+
+  _fall(map, input, fire, health = null, tock = 1) {
     /* CS:0x4DD5 (state 11) / CS:0x4D6B (state 12) — the fall step moves Y
      * FIRST: dY = 4 + fallV (gravity already applied), THEN air-steering may
      * move X (CS:0x48D4, budget of 3 steps of 4 px), and ONLY THEN is
@@ -1342,8 +1429,9 @@ export class Player {
      * pixel, and landed again: the reported idle/fall flicker. Snapping Y on
      * landing, as CS:0x4C34/0x4D39 do, makes the landing check and every
      * later ground check agree by construction. */
-    if (this.fallV < FALL_VMAX) this.fallV += GRAVITY_STEP;
-    this.y += FALL_BASE + this.fallV;        // 5..14 px/tick, one lump sum
+    this.y += FALL_BASE;                     // CS:0x4CCC `add [0x17c],4`
+    this._gravity(tock);                     // CS:0x4CD1 `call 0x48b0`
+    this.y += this.fallV;                    // CS:0x4CD7
     this.fallDamage = (this.fallDamage || 0) + 1;      // DS:0x176
     if (this.airSteps < AIR_STEPS_MAX) {
       if (input.left)  { this._walk(map, -1); this.airSteps++; }
@@ -1353,7 +1441,6 @@ export class Player {
     this.phase = 0;
     if (solidThreeBelow(map, this.x, this.y)) {   // CS:0x4BEB / 0x4CED
       this.y &= 0xfff0;                            // CS:0x4C34 / 0x4D39
-      this.state = ST.GROUND;
       this.fallV = 0;
       this.airSteps = 0;
       /* CS:0x4C39-0x4C4A / 0x4CB0-0x4CC1 — fallDamageFor, above. */
@@ -1361,20 +1448,13 @@ export class Player {
         const dmg = fallDamageFor(this.fallDamage);
         if (dmg > 0 && !health.invulnerable) health.hurt(dmg);
       }
-      /* ⚠️ CORRECTION: an earlier revision of this comment claimed landing is
-       * "its own state pair (16 right / 17 left) which bleed the fall-damage
-       * accumulator off at 4 per tick" — unverified speculation, and this
-       * pass's own fresh disassembly of the landing sites found no such
-       * per-tick bleed; the damage above is a single, one-shot subtraction.
-       * What genuinely remains open: states 16/17 do exist in the original
-       * (their bodies snap Y and play the landing sound the same way this
-       * branch does), but whether they persist as a distinct one-tick pose
-       * reached via the state dispatcher, or whether that snap+sound code is
-       * only ever run inline from a landing branch like this one, was not
-       * conclusively traced this pass. This port goes straight to idle
-       * rather than asserting a landing-pose mechanism it hasn't verified. */
-      this.stateIndex = S.IDLE;
-      this.phase = 0;
+      /* ⚠️ CORRECTED AGAIN: an earlier revision of this comment called the
+       * 16/17 landing pose "unverified speculation" and went straight to
+       * idle. It is real: CS:0x4C28 / 0x4D2A write [0x377] := 0x11 / 0x10
+       * and the state dispatcher runs CS:0x5020 / 0x5042 on later ticks,
+       * which hold one tick and then drain DS:0x176 by 4 per tick before
+       * handing back to walk (see `_land`). Live-confirmed by PJOYG3. */
+      this._enterLand(this.stateIndex === S.FALL_R);
       return;
     }
     /* CS:0x4D06 (state 12) / CS:0x4C04 (state 11) — the fire test sits AFTER

@@ -5779,6 +5779,12 @@ export async function checkWeaponsProjectiles(fetchRaw) {
 
   {
     const { a, p, m } = armed();
+    /* A landing now ends in the WALK state (CS:0x5042 hands back state 1,
+     * CL=2 — PJOYG3 cursor 6), whose own fire test (CS:0x5CA8) DOES fire
+     * while stopped. "Stationary" here means true idle, state 26, which is
+     * reached by releasing a walk with UP held (CS:0x5B0F). */
+    p.tick(m, IN({ right: true }), a);
+    p.tick(m, IN({ up: true }), a);
     for (let i = 0; i < 10; i++) p.tick(m, IN({ fire: true }), a);
     check(`a stationary hero with fire held never shoots`,
       a.fired === 0 && p.fireState < 0,
@@ -5876,10 +5882,14 @@ export async function checkWeaponsProjectiles(fetchRaw) {
       return { planeA: new Uint8Array(n), planeB, widthPx: 4096, heightPx: 1024,
                floorRow };
     })();
+    /* Runs until the landing tick. A landing enters the 16/17 pose
+     * (ST.LAND), which then drains DS:0x176 — so the damage is compared
+     * at the landing tick itself. `tock` alternates 1,0,1,... as DS:0x36C
+     * does from a level entry (gravity only steps on 0 — CS:0x48BB). */
     const runToGround = (health) => {
       const p = new Player(2 * 32, 0);
-      for (let i = 0; i < 200 && p.state !== ST.GROUND; i++) {
-        p.tick(deepMap, IN(), null, 1, null, health);
+      for (let i = 0; i < 200 && p.state !== ST.LAND; i++) {
+        p.tick(deepMap, IN(), null, (i & 1) ? 0 : 1, null, health);
       }
       return p;
     };
@@ -5888,17 +5898,17 @@ export async function checkWeaponsProjectiles(fetchRaw) {
     const health = { invulnerable: false, hurt: (n) => { dealt += n; } };
     const p1 = runToGround(health);
     check(`a deep fall damages health on landing, matching fallDamageFor(fallDamage at landing)`,
-      p1.state === ST.GROUND && dealt > 0 && dealt === fallDamageFor(p1.fallDamage),
+      p1.state === ST.LAND && dealt > 0 && dealt === fallDamageFor(p1.fallDamage),
       `dealt=${dealt}, fallDamage=${p1.fallDamage}`);
 
     let invulnDealt = 0;
     const invulnHealth = { invulnerable: true, hurt: (n) => { invulnDealt += n; } };
     const p2 = runToGround(invulnHealth);
     check(`invulnerability (CS:0x172) skips fall-landing damage entirely, same gate as every other source`,
-      p2.state === ST.GROUND && invulnDealt === 0);
+      p2.state === ST.LAND && invulnDealt === 0);
 
     check(`a null health argument is a valid caller — no crash, no damage`,
-      (() => { const p = runToGround(null); return p.state === ST.GROUND; })());
+      (() => { const p = runToGround(null); return p.state === ST.LAND; })());
 
     /* The fall+fire family (states 22/23) runs the byte-identical formula at
      * its own address (CS:0x4D3E-0x4D4F) — confirmed via fresh disassembly,
@@ -5908,11 +5918,11 @@ export async function checkWeaponsProjectiles(fetchRaw) {
     const fireHealth = { invulnerable: false, hurt: (n) => { fireDealt += n; } };
     const p3 = new Player(2 * 32, 0);
     p3.tick(deepMap, IN(), a3, 1, null, fireHealth);        // -> ST.FALL first
-    for (let i = 0; i < 200 && p3.state !== ST.GROUND; i++) {
-      p3.tick(deepMap, IN({ fire: true }), a3, 1, null, fireHealth);
+    for (let i = 0; i < 200 && p3.state !== ST.LAND; i++) {
+      p3.tick(deepMap, IN({ fire: true }), a3, (i & 1) ? 0 : 1, null, fireHealth);
     }
     check(`the fall+fire tick applies the SAME fall-damage formula on landing`,
-      p3.state === ST.GROUND && fireDealt > 0,
+      p3.state === ST.LAND && fireDealt > 0,
       `fireDealt=${fireDealt}`);
   }
 
@@ -6222,7 +6232,13 @@ export async function checkWeaponsProjectiles(fetchRaw) {
 
     const p2 = new Player(2 * 32, 9 * 16);
     for (let i = 0; i < 4; i++) p2.tick(m, IN());
-    for (let i = 0; i < 3; i++) p2.tick(m, IN({ left: true }));
+    /* The settled hero is in WALK_R (the landing pose hands back state 1),
+     * so LEFT first runs the 1->3 turn pivot; walk long enough to be
+     * walking left before releasing. */
+    for (let i = 0; i < 12; i++) {
+      p2.tick(m, IN({ left: true }));
+      if (p2.stateIndex === PS.WALK_L && p2.phase !== 0) break;
+    }
     p2.tick(m, IN());
     check(`releasing LEFT with UP not held stays in WALK_L, not IDLE`,
       p2.stateIndex === PS.WALK_L && p2.phase === 0x39,
@@ -8784,8 +8800,18 @@ export async function checkWeaponsProjectiles(fetchRaw) {
          * reaches via the col+1 branch from a starting x of 64. */
         const ladderMap = { planeA: new Uint8Array(N), planeB: new Uint8Array(N), widthPx: 4096, heightPx: 1024 };
         for (let r = 4; r < 16; r++) ladderMap.planeB[r * MAP_COLS + 2] = 2;   // CELL_CLIMBABLE
+        /* The walk handlers test ground FIRST (CS:0x593B / 0x5B83 —
+         * PJOYG3 cursor 41/42), so a WALK stance needs a solid cell three
+         * rows below or it falls before any other test runs. Standing
+         * exactly over the ladder column (x=64, as this test used to) is
+         * therefore unreachable: the original falls. The hero now starts at
+         * x=56 — column 1, straddling (sub 24 >= 8), on the solid floor of
+         * column 1 — and its -4 step to x=52 (sub 20 >= 0x10) reaches the
+         * ladder through the SAME col+1 branch this test is about. */
+        ladderMap.planeB[12 * MAP_COLS + 1] = 1;
+        ladderMap.planeB[12 * MAP_COLS + 0] = 1;
         const forceGround = () => {
-          const q = new Player(2 * 32, 9 * 16);
+          const q = new Player(56, 9 * 16);
           q.state = ST.GROUND; q.stateIndex = PS.WALK_L; q.facing = -1;
           return q;
         };
@@ -8795,7 +8821,7 @@ export async function checkWeaponsProjectiles(fetchRaw) {
           sanity.state === ST.CLIMB);
 
         const p = forceGround();
-        const hot = keyHotPoint({ x: 2 * 32 - WALK_STEP, y: 9 * 16 });   // post-`_walk` position
+        const hot = keyHotPoint({ x: 56 - WALK_STEP, y: 9 * 16 });   // post-`_walk` position
         const nearby = { x: hot.x, y: hot.y, type: 0, dead: false, flag6: 1 };
         p.tick(ladderMap, I({ left: true, down: true }), null, 1, { objects: [nearby], cats, inventory: [] });
         check('...but an object near the hot point sends the hero to CROUCH instead',
@@ -8875,6 +8901,7 @@ export async function checkWeaponsProjectiles(fetchRaw) {
          * exactly what the ungated code already does. */
         const ladderMap2 = { planeA: new Uint8Array(N), planeB: new Uint8Array(N), widthPx: 4096, heightPx: 1024 };
         for (let r = 4; r < 16; r++) ladderMap2.planeB[r * MAP_COLS + 3] = CELL_CLIMBABLE;
+        ladderMap2.planeB[12 * MAP_COLS + 2] = 1;   // ground for the walk-entry test, see above
         /* x = 80: sub = 80 & 0x1f = 0x10 (>= 0x0c, the col+1 branch's own
          * gate — see climbableThreeBelowCol); (80 & 0xFFE0) >> 5 = 2, so
          * `si+1` lands on column 3, the one just marked climbable above. */
@@ -10503,6 +10530,51 @@ export async function checkZones(fetchRaw) {
       '0x1015 is the already-ported per-tick object-activation-box pass. ' +
       'UNKNOWN_zone_scan_caller still stands.',
   });
+
+  /* --- hero mechanics pinned by the DOSBox attract captures --------------
+   * (tools/attract-capture/*.raw.json; each case names its cursor). */
+  {
+    const MCOLS = 128, NN = MCOLS * 64;
+    const IN0 = { left: false, right: false, up: false, down: false, fire: false };
+    const flat = () => {
+      const planeB = new Uint8Array(NN);
+      for (let c = 0; c < MCOLS; c++) planeB[13 * MCOLS + c] = 1;   // floor under y=160
+      return { planeA: new Uint8Array(NN), planeB, widthPx: 4096, heightPx: 1024 };
+    };
+    const empty = { planeA: new Uint8Array(NN), planeB: new Uint8Array(NN), widthPx: 4096, heightPx: 1024 };
+
+    /* Gravity every other tick (CS:0x48BB `cmp [0x36d],0`): from a
+     * standstill in the air, tock 1,0,1,0 gives dY 4,5,5,6 (PJOYG3 cursors
+     * 2-3: 80 -> 85 -> 90, the entry tick not moving). */
+    const pf = new Player(96, 0);
+    pf.state = ST.FALL; pf.stateIndex = PS.FALL_R; pf.fallV = 0;
+    const ys = [];
+    for (let i = 0; i < 4; i++) { pf.tick(empty, IN0, null, (i & 1) ? 0 : 1); ys.push(pf.y); }
+    check('fall: gravity steps only on even-parity ticks — dY 4,5,5,6 (PJOYG3 cursors 2-3)',
+      ys.join() === '4,9,14,20', ys.join());
+
+    /* Landing pose (CS:0x4D2A -> state 16, CS:0x5042): hold one tick, drain
+     * DS:0x176 by 4, hand back WALK_R with CL=2 (PJOYG3 cursors 4, 5, 6). */
+    const pl = new Player(96, 156);
+    pl.state = ST.FALL; pl.stateIndex = PS.FALL_R; pl.fallV = 0; pl.fallDamage = 0;
+    const seq = [];
+    for (let i = 0; i < 4; i++) { pl.tick(flat(), IN0, null, 1); seq.push(`${pl.stateIndex}@${pl.y}`); }
+    check('fall: landing enters state 16, holds, then returns to WALK_R (PJOYG3 cursors 4-6)',
+      seq.join() === '16@160,16@160,1@160,1@160', seq.join());
+
+    /* Walk handlers test ground at ENTRY (CS:0x5B83): the step over a ledge
+     * edge completes, the fall starts next tick without moving (PJOYG3 41-42). */
+    const ledge = flat();
+    for (let c = 6; c < MCOLS; c++) ledge.planeB[13 * MCOLS + c] = 0;   // floor ends at x=192
+    const pw = new Player(188, 160);
+    pw.state = ST.GROUND; pw.stateIndex = PS.WALK_R; pw.facing = 1; pw.phase = 1;
+    pw.tick(ledge, { ...IN0, right: true }, null, 1);
+    const afterStep = `${pw.x},${pw.stateIndex}`;
+    pw.tick(ledge, { ...IN0, right: true }, null, 1);
+    check('walk: the ledge step completes, the fall starts the NEXT tick without moving (PJOYG3 41-42)',
+      afterStep === '192,1' && pw.x === 192 && pw.stateIndex === PS.FALL_R,
+      `${afterStep} then ${pw.x},${pw.stateIndex}`);
+  }
 
   /* --- selector 6 and the progress chains (game/progress.js) ------------ */
   const chainOf = (w) => {

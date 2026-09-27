@@ -64,7 +64,9 @@ const emptyMap = {
 const p = new Player(64, 0);
 const noInput = { left: false, right: false, up: false, down: false, fire: false };
 let maxStep = 0, prevY = p.y;
-for (let i = 0; i < 40; i++) { p.tick(emptyMap, noInput); maxStep = Math.max(maxStep, p.y - prevY); prevY = p.y; }
+/* `tock` alternates as DS:0x36C does (gravity only steps when it is 0,
+ * CS:0x48BB), so v reaches its clamp after ~20 ticks, not 10. */
+for (let i = 0; i < 40; i++) { p.tick(emptyMap, noInput, null, (i & 1) ? 0 : 1); maxStep = Math.max(maxStep, p.y - prevY); prevY = p.y; }
 const termOk = maxStep === 14;
 tally(false);
 console.log(`  ${termOk ? 'ok  ' : 'FAIL'}  terminal fall speed == 14 px/tick (got ${maxStep})`);

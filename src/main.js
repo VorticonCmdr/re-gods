@@ -2116,6 +2116,15 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
        * nothing left ticking, it just keeps redrawing the same frozen state,
        * matching the original's own silent freeze (no "PAUSED" overlay). */
       if (paused) return;
+      /* CS:0x0172 `not [0x36c]` (and CS:0x0176's DS:0x36D alternator, which
+       * stays equal to it) — at the TOP of the tick, before everything that
+       * reads it: the player (CS:0x0254 — the climb gate, and gravity via
+       * CS:0x48B0), the nest walker (CS:0x0282) and the rest. Both are zeroed
+       * at level entry (CS:0x8CAC-0x8CB2), so the first tick after a load
+       * sees 0xFF. ⚠️ An earlier revision flipped it near the END of the
+       * tick, so every consumer ran on the opposite parity; PJOYG3's opening
+       * fall (80->85->90 in DOSBox) is what exposed it. */
+      tock ^= 1;
       /* Per-tick order is the original's: snapshot the scroll origin, run the
        * state machine, probe plane B, then update the camera (CS:0x023f ->
        * 0x4993 -> 0x5ea0 -> 0x5ea4). Everything drawn this frame uses the
@@ -2472,7 +2481,6 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
        * Ground-bounce honours "freezes aliens"; ballistic fall ignores it —
        * see Brood#step's own header for why that asymmetry is real. */
       lastBroodFx = brood.step(camNow, fx.freeze, nestContact, level.map.planeB).drawn;
-      tock ^= 1;                                      // CS:0x0172 `not`
 
       /* CS:0x7CBD/0x7B68 — the world-1-sublevel-B awakened statue. `statues`
        * is empty (zero records) outside world 1 sublevel B, so this is a
@@ -3581,6 +3589,40 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
     },
   );
   clock.start();
+
+  /* ?debug — a deterministic stepping handle for tools that compare the
+   * port against a DOSBox capture. Automated browser tabs throttle rAF, so
+   * `stepTicks` stops the real-time clock and calls the SAME tick callback
+   * directly. An await-ed level load (`transitioning`/`attractLoading`) is
+   * let finish before the next tick, as in the original, whose loads are
+   * synchronous and consume no ticks. */
+  if (new URLSearchParams(location.search).has('debug')) {
+    const settle = async () => {
+      while (transitioning || attractLoading) await new Promise((r) => setTimeout(r, 5));
+    };
+    const snap = () => ({
+      ui: uiState, attract: attract && { state: attract.state, cursor: attract.tape.cursor,
+        length: attract.tape.ticks.length },
+      x: player.x, y: player.y, st: player.stateIndex, camX: cam.x, camY: cam.y,
+      world: levelInfo.world, sub: levelInfo.sublevel, tick: clock.tick,
+    });
+    window.__gods = {
+      snap,
+      async startAttractAt(state) { clock.stop(); await enterAttractState(state); await settle(); return snap(); },
+      /* Step until `n` ticks ran, recording a snapshot after each. */
+      async stepTicks(n, record = true) {
+        clock.stop();
+        const out = [];
+        for (let i = 0; i < n; i++) {
+          await settle();
+          clock.onTick(clock.tick++);
+          await settle();
+          if (record) out.push(snap());
+        }
+        return out;
+      },
+    };
+  }
 }
 
 main().catch((e) => {
