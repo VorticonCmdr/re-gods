@@ -70,7 +70,12 @@ export const CHAIN_WINDOW = -10;      // 0xf6
 /** CS:0xA574 — `dx = 190 - age`, `shl dx,1`, compared `ja` against the FULL
  *  16-bit random word. So the re-burst chance falls linearly from 380/65536
  *  at age 0 to zero at the ceiling. */
-export const chainThreshold = (age) => (AGE_MAX - age) * 2;
+export const chainThreshold = (age) => ((AGE_MAX - age) * 2) & 0xffff;
+/* ⚠️ 16-bit and UNSIGNED (`ja`): past the ceiling (age > 190) the threshold
+ * wraps to ~0xFFFC, so nearly every draw "passes" — the spawner then refuses
+ * (CS:0xA46A), but CS:0xA581 has already reset DS:0x374 to -10, silencing the
+ * remaining particles' draws. [PROVEN] live against PJOYL3 1126 (a DS:0x8CFA
+ * peek: DS:0x374 -> -10 at age 192 with no new particles). */
 
 /* ── Animation and physics ────────────────────────────────────────────────
  * sprite = 77 + DS:0x349, a three-frame cycle stepped once per frame
