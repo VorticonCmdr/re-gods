@@ -232,5 +232,5 @@ export function jumpPhase(state, cl, cursor) {
  * decrements the cycle — cosmetic, since both ends of the 0..3 range are
  * reachable either way; the port doesn't attempt to pick a side. */
 export const PHASE_ZERO_STATES = [11, 12, 26];   // `xor cl,cl` on the main path
-export const UNMODELLED_PHASE_STATES = [13];     // 14 (CLIMB) is now animated
+export const UNMODELLED_PHASE_STATES = [];       // 13 and 14 are both animated now
 export const LADDER_PHASE_MAX = 3;               // CS:0x565E `cmp cl,0x3`

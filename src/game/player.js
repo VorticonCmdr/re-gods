@@ -195,6 +195,7 @@ export const S = {
   JUMP_L: 8, JUMP_R: 9,
   FALL_L: 11, FALL_R: 12,
   CLIMB: 14,
+  CLIMB_DOWN: 13,
   ARRIVAL: 4,   // CS:0x1022 — one of state 4's three named entrants
   CROUCH_R: 18, CROUCH_L: 19,
   LAND_R: 16, LAND_L: 17,   // the landing pose — CS:0x5042 / 0x5020
@@ -839,7 +840,7 @@ export class Player {
 
     if (stateIndex === S.WALK_L || stateIndex === S.WALK_R) this.state = ST.GROUND;
     else if (stateIndex === S.JUMP_L || stateIndex === S.JUMP_R) this.state = ST.JUMP;
-    else if (stateIndex === S.CLIMB) this.state = ST.CLIMB;
+    else if (stateIndex === S.CLIMB || stateIndex === S.CLIMB_DOWN) this.state = ST.CLIMB;
     else if (stateIndex === S.FALL_L || stateIndex === S.FALL_R) {
       /* CS:0x540F / 0x5441 clear the fall triple on the way out of a jump. */
       this.state = ST.FALL;
@@ -1122,8 +1123,12 @@ export class Player {
          * snap are reproduced. */
         this.x = ladderSnapX(this.x, descendCol);
         this.state = ST.CLIMB;
-        this.stateIndex = S.CLIMB;
+        this.stateIndex = S.CLIMB_DOWN;            // CS:0x59BA `mov [0x377],0xd`
         this.phase = 0;
+        /* CS:0x59BF `mov cl,0x1a`: state 13's `cmp cl,0x14 / jl` (CS:0x54C3)
+         * then clears the phase and moves down on the next open tick,
+         * whatever is held. */
+        this.climbForce = true;
         this.ladderPingPong = false;
         this.dismountHold = 0;
         this.fromLadder = false;
@@ -1366,7 +1371,7 @@ export class Player {
         this.y &= 0xfff8;
         this.ladderFacing = 0;
         this.state = ST.CLIMB;
-        this.stateIndex = S.CLIMB;
+        this.stateIndex = S.CLIMB_DOWN;
         this.phase = 2;
         this.ladderPingPong = false;
         this.dismountHold = 0;
@@ -1701,16 +1706,31 @@ export class Player {
       }
     }
 
-    if (!input.up && !input.down) {
-      /* Neither direction held: the original's own final fallback (CS:0x562b
-       * / 0x5885) is "test the OTHER direction to hand off between the two
-       * climb states; otherwise `jmp 0x5e9b`" — a plain no-op. Standing still
-       * on a ladder does not animate and does not move. */
-      this.stateIndex = S.CLIMB;
+    /* States 14 (ascending, CS:0x5707) and 13 (descending, CS:0x54B9) are
+     * separate. Each MOVES only on an input byte of exactly its own
+     * direction (CS:0x571F `cmp [0x382],1` / CS:0x54CD `cmp [0x382],2`),
+     * or when the phase is out of range (`cmp cl,0x14`, the descend-mount's
+     * cl=0x1A). Otherwise, after the direction/fire branches above, its final
+     * fallback (CS:0x5885 / 0x562B) hands off to the OTHER state when the
+     * other direction's bit is held — flipping the ping-pong flag DS:0x347,
+     * with no step that tick. [PROVEN] against PJOYL3 852-875: DOWN on a
+     * ladder in state 14 costs a tick in state 13 before the hero moves.
+     * An earlier revision collapsed both into state 14 and stepped at once. */
+    const desc = this.stateIndex === S.CLIMB_DOWN;
+    const exactly = (k) => ['up', 'down', 'left', 'right', 'fire']
+      .every((n) => !!input[n] === (n === k));
+    const forced = !!this.climbForce;
+    this.climbForce = false;
+    if (!forced && !(desc ? exactly('down') : exactly('up'))) {
+      if (desc ? input.up : input.down) {
+        this.ladderPingPong = !this.ladderPingPong;          // `not byte [0x347]`
+        this.stateIndex = desc ? S.CLIMB : S.CLIMB_DOWN;      // 0xE / 0xD
+      }
       return;
     }
+    if (forced) this.phase = 0;                               // `xor cl,cl`
 
-    if (input.up) {
+    if (!desc) {
       /* CS:0x58c3 `sub word [0x17c],0x6` — see CLIMB_STEP's own note: this
        * used to be 4 px, taken from the wrong (ladder-FIRE) sites. */
       const newY = this.y - CLIMB_STEP;
@@ -1767,7 +1787,6 @@ export class Player {
       this.phase++;
       if (this.phase >= LADDER_PHASE_MAX) { this.phase = LADDER_PHASE_MAX; this.ladderPingPong = true; this.climbStep = true; }
     }
-    this.stateIndex = S.CLIMB;
   }
 
   /**

@@ -6142,8 +6142,8 @@ export async function checkWeaponsProjectiles(fetchRaw) {
     pDown.tick(oneBelowMap, IN({ down: true }), null);
     check(`mid-air DOWN accepts that SAME one-row-below cell — the ` +
           `asymmetry is real, not a copy-paste of the UP test`,
-      pDown.state === ST.CLIMB && pDown.stateIndex === PS.CLIMB,
-      `state=${pDown.state}`);
+      pDown.state === ST.CLIMB && pDown.stateIndex === PS.CLIMB_DOWN,
+      `state=${pDown.state} stateIndex=${pDown.stateIndex} (CS:0x4F30 / 0x512F: 0xD, descending)`);
   }
   {
     /* The jumpTakeoffX latch (DS:0x1b4): taking off from a ladder's own
