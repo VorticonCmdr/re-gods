@@ -10474,8 +10474,9 @@ export async function checkZones(fetchRaw) {
     detail: 'A teleport zone moves the hero to the packed destination and ' +
       're-enters state 4, matching CS:0x0FDF-0x1042 at the byte level. A ' +
       'level-exit zone with arg 2..5 resolves a real destination record ' +
-      '(CS:0x0FB8-0x0FD4), decodes its own +0x1e bit field (CS:0x694d, ' +
-      'game/zones.js\'s exitEffects), and now performs the REAL mechanism, ' +
+      '(CS:0x0FB8-0x0FD4) and, like a selector-6 checkpoint, hands it to the ' +
+      'shared tally and its +0x1e bit walk (CS:0x6553/0x694d, game/progress.js; ' +
+      'exitEffects is now only the exit records\' own decoder), and performs the REAL mechanism, ' +
       'not the "cycle the 8 shipped levels" placeholder an earlier revision ' +
       'of this port used (Gods/CLAUDE.md\'s own UNKNOWN_level_exit_destination ' +
       'is CLOSED): world++ wrapped 5->1 with sublevel forced to A ' +

@@ -62,7 +62,10 @@ import { SpikeClock, stepSpikes, spikeSprites, spike130Sprite,
          SPIKE_TYPE, SPIKE117_TYPE, SPIKE130_TYPE } from './game/spikes.js';
 /* Contact and the grid scan are reached through game/frame.js, which owns the
  * order they must run in — see the note there. */
-import { Health, HEALTH_MAX, attackHero, HURT_SFX } from './game/combat.js';
+/* creatureScansGrid is imported for the world-1B statue's own scan only (it
+ * was used there without an import — a ReferenceError the first time an
+ * awake statue ran, found by a no-undef lint). */
+import { Health, HEALTH_MAX, attackHero, HURT_SFX, creatureScansGrid } from './game/combat.js';
 import { Nests, Brood } from './game/nest.js';
 import { Statues } from './game/statue.js';
 import { Ce64Creatures, Ce64Spits, OBJECT_TYPE as CE64_OBJECT_TYPE } from './game/ce64.js';
@@ -1970,7 +1973,15 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
        * block the same way the 'game' branch already gates itself keeps the
        * tape's cursor and the actual number of simulated ticks in lockstep,
        * exactly like the original's blocking load. */
-      if (attract && !transitioning && !attractLoading) {
+      /* The tally screen is gated the same way: CS:0x6553 is one blocking
+       * call inside the main loop, so by the same reasoning no recorded tick
+       * elapses while it runs. (Selector-6 checkpoints make mid-world tallies
+       * reachable inside a demo; whether the original's own tape read sits in
+       * the main loop rather than an interrupt was not traced — this follows
+       * the load gate's assumption above.) */
+      if (attract && tallyScreen) {
+        input.up = input.down = input.left = input.right = input.fire = false;
+      } else if (attract && !transitioning && !attractLoading) {
         const t = attract.tape;
         const frame = t.cursor < t.ticks.length ? t.ticks[t.cursor] : null;
         input.up = !!frame?.up; input.down = !!frame?.down;

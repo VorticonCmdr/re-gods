@@ -489,7 +489,8 @@ for (const r of await checkMusic(fetchRaw)) {
    * prove the bindings the reordering actually carried. */
   const { checkScope, checkCallOrder } = await import('./scope-check.mjs');
   popupOrder.push(...await checkScope(join(here, '..', 'src', 'main.js'),
-    ['statueResult', 'camNow', 'dropCarriedIntoWorld', 'patGroups', 'selectorTwo']));
+    ['statueResult', 'camNow', 'dropCarriedIntoWorld', 'patGroups', 'selectorTwo',
+     'progress']));
 
   console.log('\n  the single popup slot — who wins it, and when it lands '
     + '(FUN_1000_006f call order):');

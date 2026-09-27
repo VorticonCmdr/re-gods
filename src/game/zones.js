@@ -283,8 +283,8 @@ export function exitEffects(bits) {
  * `INC AL` wrapped 5->1 — never a jump to a specific world, so reaching
  * world 4 from LEVEL THREE's own record is coincidental to the wrap, not an
  * explicit target — and `[0x43] := 0` UNCONDITIONALLY: every real level
- * exit forces sublevel A. Sublevel B is reached some other way, not this
- * one (`UNKNOWN_sublevel_b_entry_point` remains open).
+ * exit forces sublevel A. Sublevel B is reached through a mid-world
+ * progress record's bit 0/3/11 (FUN_1000_4828) — see game/progress.js.
  * @param {number} world current 1-based world, DS:0x42
  * @returns {{world:number, sublevel:0}}
  */

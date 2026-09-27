@@ -118,11 +118,14 @@ export class EventRunner {
     this.triggers = parseAllTriggers(map.bulk);
     /* Consumed trigger slots: the original writes 0xFFFF into the EVENT
      * record when a trigger fires, so it cannot fire twice.
-     * NOT MODELLED (no death in the port yet): the original keeps a pristine
-     * packed master at DS:0x8114 and re-runs the unpack CS:0x3880 from the
-     * RESPAWN path (CS:0x485E) as well as from level load (CS:0x0095) — so
-     * DYING RE-ARMS EVERY CONSUMED EVENT. When death lands, clear this set
-     * there. UNKNOWN_event_rearm_scope: whether anything else calls it. */
+     * The original keeps a pristine packed master at DS:0x8114 and re-runs
+     * the unpack CS:0x3880 from exactly two places (an operand search over
+     * the whole image): level load (CS:0x0095) and CS:0x485E. ⚠️ CORRECTED:
+     * CS:0x485E is inside FUN_1000_484e, the sublevel-B switch's
+     * continuation (game/progress.js), NOT the death/respawn path
+     * (FUN_1000_0845), as an earlier revision of this comment said. So dying
+     * does NOT re-arm consumed events; entering a level or sublevel does,
+     * and this port gets that by building a fresh EventRunner on both. */
     this.consumed = new Set();         // trigger indices, for reporting only
     this.consumedEvents = new Set();   // DS:0x932c record ids — the real key
     this.onSpawnB = null;              // set by the host to receive activations
