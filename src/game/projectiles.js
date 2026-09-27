@@ -1071,6 +1071,27 @@ export function bombGroundAt(x, y, planeB) {
 }
 
 /**
+ * `UNKNOWN_timebomb_refire` — CLOSED, live in DOSBox. After detonation the
+ * record stays allocated (so the weapon cannot re-fire) until the tick on
+ * which neither a fragment (DS:0x8EDA, 10) nor a smoke puff (DS:0x8F3E, 7)
+ * is still live; then `CS:0xA41C mov word [di],0` frees it. `CS:0xA289`
+ * kills all 10 fragments at detonation (only the far call at `CS:0xA2A8`,
+ * taken when the weapon has extra pickups, can revive them — not modelled).
+ * `CS:0xA2DC`-`0xA2FA` keeps the last n = extra+2 puffs (max 7) and
+ * disables the rest; their counters start at 0, -2, -4 ... so the last kept
+ * puff is live on detonation-relative ticks 2(n-1)..2(n-1)+6. The record is
+ * therefore freed on tick 2(n-1)+7 after the detonation tick — 9 for a
+ * plain pickup, measured live (every disabled puff's counter had advanced
+ * exactly 10 times, detonation tick included, when the tag cleared).
+ * @param {number} extra `st.count - st.base` ([si+8]-[si+6] at CS:0xA2E1)
+ * @returns {number} ticks after the detonation tick until the record frees
+ */
+export function timeBombHoldTicks(extra) {
+  const n = Math.min(7, Math.max(0, extra + 2));
+  return n === 0 ? 0 : 2 * (n - 1) + 7;
+}
+
+/**
  * CS:0xa058 — one tick. `state` carries the three globals for this slot
  * ({phase, vx, vy}); safe as one object per slot (not per record) because
  * the time bomb's max-shots is 1. `wallAt`/`groundAt` should be

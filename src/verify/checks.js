@@ -223,7 +223,7 @@ import { SLOT_STRIDE, PROJECTILE_SIZE, GROUP_STRIDE, GROUP_ENTRIES,
          spawnHunterVolley, stepHunterCoast, HUNTER_COAST_SENTINEL,
          HUNTER_COAST_TICK, HUNTER_COAST_REAIM_AT,
          FUSE_START, FUSE_EXPLODE, BOMB_FRAGMENTS, BOMB_SPRITE_BASE,
-         BOMB_BOUNCE, BOMB_GRAVITY_CAP, BOMB_LANDED, stepTimeBomb,
+         BOMB_BOUNCE, BOMB_GRAVITY_CAP, BOMB_LANDED, stepTimeBomb, timeBombHoldTicks,
          BOMB_DETONATE_SFX, BOMB_THUD_SFX, bombWallAt, bombGroundAt,
          spawnTimeBombVolley,
          PROJECTILE_VELOCITY, setWeaponArc, resetWeaponArc,
@@ -5676,13 +5676,28 @@ export async function checkWeaponsProjectiles(fetchRaw) {
     }
     check(`END TO END: the mover is dispatched (not routed through the ` +
           `common mover's outOfRange fallback), and it detonates on schedule`,
-      sawExplode && outOfRangeSeen === 0 && ar.slots[0].area[0].tag === 0,
+      sawExplode && outOfRangeSeen === 0 && ar.slots[0].area[0].tag !== 0,
       `sawExplode=${sawExplode}, outOfRange=${outOfRangeSeen}, ` +
-      `final tag=${ar.slots[0].area[0].tag} — BOMB_DETONATE_SFX ` +
-      `(0x${BOMB_DETONATE_SFX.toString(16)}) reached Arsenal.step()'s own ` +
-      'bombSfx array, and the record despawns itself so the same explosion ' +
-      "can't refire every tick forever (see stepTimeBomb's own disclosed " +
-      'despawn-site caveat)');
+      `tag after the detonation tick=${ar.slots[0].area[0].tag} — ` +
+      'BOMB_DETONATE_SFX reached Arsenal.step()\'s own bombSfx array, and the ' +
+      'record is still HELD (CS:0xA41C frees it only after the smoke)');
+
+    /* UNKNOWN_timebomb_refire — CLOSED live in DOSBox: a plain pickup's
+     * record frees 9 ticks after the detonation tick, and the SAME pickup
+     * then throws again (live: a second spawn at CS:0x9A6E into the same
+     * record, weapon still held). */
+    ar.latchTick(false);
+    const refusedDuringHold = ar.allocate() === null;
+    let held = 0;
+    while (ar.slots[0].area[0].tag !== 0 && held < 50) {
+      ar.step(cam0, new DamageGrid(), null, 1); held++;
+    }
+    ar.latchTick(false);
+    const again = ar.allocate();
+    check('END TO END: the record frees 9 ticks after detonation (timeBombHoldTicks(0), '
+      + 'measured live), a re-fire is refused until then, and the same pickup throws again',
+      refusedDuringHold && held === timeBombHoldTicks(0) && held === 9 && again !== null,
+      `refusedDuringHold=${refusedDuringHold} held=${held} secondAllocation=${again !== null}`);
   }
 
   check(`the time bomb's own SFX ids have synthesized voices`,

@@ -61,7 +61,7 @@
 import { WEAPON_SLOTS, MAX_SUBSLOTS, tagFor, allocateShots, armWeapon,
          reloadWorld } from './weapons.js';
 import { spawnVolley, spawnAxeVolley, spawnHunterVolley, spawnTimeBombVolley,
-         stepProjectiles, stepHunterArray, stepMagicAxe, stepTimeBomb,
+         stepProjectiles, stepHunterArray, stepMagicAxe, stepTimeBomb, timeBombHoldTicks,
          axeWallAt, bombWallAt, bombGroundAt, newAxeState,
          DECODED_HANDLERS, NULL_HANDLERS, AREA_ENTRIES, ENTRIES_REACHABLE, GROUP_ENTRIES,
          MOVER_WALK,
@@ -337,23 +337,19 @@ export class Arsenal {
         for (let i = 0; i < MOVER_WALK; i++) {
           const p = s.area[i];
           if (!p || p.tag === 0) continue;
+          /* Post-detonation hold — CS:0xA41C frees the record only once the
+           * blast's smoke (and fragments, see timeBombHoldTicks) are gone. */
+          if (p.hold !== undefined) {
+            if (--p.hold <= 0) { p.tag = 0; delete p.hold; }
+            moved++;
+            continue;
+          }
           const r = stepTimeBomb(p, s.bombState, cam, wallAt, groundAt);
           if (r.sfx) bombSfx.push(r.sfx);
           if (r.status === 'explode') {
             this.bombFragments = (this.bombFragments || 0) + r.fragments;
-            /* ⚠️ DISCLOSED, not a faithful reproduction: the real despawn
-             * site for this record's tag is still unlocated (the far call
-             * at CS:0xA2A8 — see Gods/docs/combat-and-projectiles.md's
-             * `UNKNOWN_timebomb_refire`). Left uncleared, `status==='explode'`
-             * would refire BOMB_DETONATE_SFX and re-count BOMB_FRAGMENTS
-             * every tick forever, which is strictly worse than a one-shot
-             * clear here — so this port despawns the record itself the
-             * instant it's processed. Whether the ORIGINAL then lets the
-             * same weapon be re-armed is the open question above; this port
-             * currently cannot either way (no path resets `s.bombState`
-             * except a fresh throw, and `weapons.js`'s allocator needs the
-             * sub-slot's records to read empty to free it). */
-            p.tag = 0;
+            p.hold = timeBombHoldTicks(s.st ? s.st.count - s.st.base : 0);
+            if (p.hold <= 0) { p.tag = 0; delete p.hold; }
           }
           moved++;
           continue;
