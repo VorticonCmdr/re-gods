@@ -355,7 +355,7 @@ export async function runAllChecks(fetchRaw) {
     /* `UNKNOWN_level_palette_source` — CLOSED `[PROVEN]` live in DOSBox: the
      * file's own slots 0/1 are NOT what GAME.EXE installs. Intercepting the
      * real INT 10h AX=1012h DAC-set call for a clean world-1 load (main.js's
-     * own `PALETTE_SLOT01_OVERRIDE`) found slot 0 = ST 0x0000 (black) and
+     * own `PALETTE_SLOT01`) found slot 0 = ST 0x0000 (black) and
      * slot 1 = ST 0x0247 (a blue), not the file's own 0x0333/0x0400 (gray,
      * then red) — identical for 1A and 1B. This is the user-reported bug:
      * world 1's background rendered red in the port, blue in the original.
@@ -363,7 +363,7 @@ export async function runAllChecks(fetchRaw) {
      * edit can't silently change what this override is correcting for. */
     if (k[0] === '1') {
       check(`PLEVEL${k}.PI1's own slot 0/1 are the SUPERSEDED words (0x0333/`
-        + '0x0400) main.js\'s PALETTE_SLOT01_OVERRIDE replaces, not the real '
+        + '0x0400) main.js\'s PALETTE_SLOT01 replaces, not the real '
         + 'live DAC values (0x0000/0x0247)',
         palImg.paletteRaw[0] === 0x0333 && palImg.paletteRaw[1] === 0x0400,
         `got 0x${palImg.paletteRaw[0].toString(16)}/0x${palImg.paletteRaw[1].toString(16)}`);
@@ -374,11 +374,28 @@ export async function runAllChecks(fetchRaw) {
    * same conversion decodePI1 itself uses for every other slot. */
   {
     const stToRgb = (n) => Math.round((n * 255) / 7);
-    check('PALETTE_SLOT01_OVERRIDE\'s world-1 slot 1 (73,146,255) is exactly '
+    check('PALETTE_SLOT01\'s slot 1 (73,146,255) is exactly '
       + 'ST 0x0247 (R=2,G=4,B=7) converted the same way decodePI1 converts '
       + 'every other palette word',
       stToRgb(2) === 73 && stToRgb(4) === 146 && stToRgb(7) === 255,
       `${stToRgb(2)},${stToRgb(4)},${stToRgb(7)}`);
+  }
+
+  /* The level palette comes from the `level<N>` export-22 group's LAST file,
+   * PLEVEL<N>B, for both sublevels (VGA:0x2188 group table, VGA:0x0B1C
+   * per-file palette copy). World 4 is the only world where the A/B files
+   * differ, so it is the one that discriminates. The expected words are the
+   * live DOSBox DAC read in world 4 SUBLEVEL A (slots 2-15, 6-bit /9), NOT
+   * values taken from either file. */
+  {
+    const w4a = decodePI1(dclDecompress(await fetchRaw('game/PLEVEL4A.PI1')).data).paletteRaw;
+    const w4b = decodePI1(dclDecompress(await fetchRaw('game/PLEVEL4B.PI1')).data).paletteRaw;
+    const liveW4A = [0x011, 0x122, 0x233, 0x443, 0x455, 0x777, 0x300, 0x420, 0x531, 0x642, 0x753, 0x331, 0x770, 0x000];
+    const matchesB = liveW4A.every((v, i) => w4b[i + 2] === v);
+    const matchesA = liveW4A.every((v, i) => w4a[i + 2] === v);
+    check('world 4 sublevel A\'s live DAC (slots 2-15) is PLEVEL4B\'s palette, not PLEVEL4A\'s '
+      + '— the level<N> group loads A then B into one buffer, last wins',
+      matchesB && !matchesA, `B=${matchesB} A=${matchesA}`);
   }
 
   check(`DCL consumes input exactly on all 8 maps`, dclExact === 8, `${dclExact}/8`);
@@ -1786,8 +1803,8 @@ export async function checkHeroSprites(fetchRaw) {
    * the two palettes disagree; if every index he touches is one of the
    * agreeing entries the render would look right under either, and proves
    * nothing. So measure the overlap instead of assuming it.
-   * Reported as a NOTE, never a green check: UNKNOWN_level_palette_source is
-   * still open and a passing tick beside it would read as resolved. */
+   * Reported as a NOTE: UNKNOWN_level_palette_source is closed by live DAC
+   * reads, not by this overlap measure, which stays informational. */
   const heroPal = images.PALWAYS1.paletteRaw;
   const lvlPal = decodePI1(dclDecompress(await fetchRaw('game/PLEVEL1A.PI1')).data).paletteRaw;
   const disagree = new Set();

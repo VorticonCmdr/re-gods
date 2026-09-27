@@ -121,18 +121,13 @@ function levelSpawn(world) {
   return SPAWN_TABLE[world] || { x: 64, y: 64 };
 }
 
-/* Palette slots 0/1 GAME.EXE installs at runtime, overriding whatever
- * `PLEVEL<key>.PI1`'s own embedded palette holds there — `[PROVEN]` live
- * this session by intercepting INT 10h AX=1012h ("set block of DAC color
- * registers") for a clean world-1 load: slot 0 = ST `0x0000` (black, not
- * the file's own `0x0333` gray), slot 1 = ST `0x0247` (a blue, not the
- * file's own `0x0400` red). Identical for both 1A and 1B. See `loadLevel`'s
- * own comment for the full closure writeup and the disclosed gap: worlds
- * 2-4 are NOT verified, so they are deliberately absent here rather than
- * guessed from the file's own (possibly also wrong) values. */
-const PALETTE_SLOT01_OVERRIDE = {
-  1: [[0, 0, 0], [73, 146, 255]],   // ST 0x0000, 0x0247 (round(n*255/7))
-};
+/* Palette slots 0/1 GAME.EXE installs at runtime over the level palette —
+ * ST `0x0000` (black) and `0x0247` (blue), in EVERY world. The writer is now
+ * found: `FUN_1000_006f`'s level-entry prologue (`CS:0x0101`/`0x0107`) and
+ * `FUN_1000_21c2` (`CS:0x21EE`/`0x21F4`) store them straight into the
+ * `DS:0x43E` palette buffer before the export-9 fade-in (`CS:0x010E`) —
+ * live-confirmed, once per level entry, not per tick. See loadLevel. */
+const PALETTE_SLOT01 = [[0, 0, 0], [73, 146, 255]];   // ST 0x0000, 0x0247 (round(n*255/7))
 
 /* Read out of the PWEAPONS records' own text at the 80-byte stride. Taking
  * this order from memory instead put fireball and lightning bolt in each
@@ -159,54 +154,23 @@ async function loadLevel(key) {
   const map   = parseMap(dclDecompress(mapRaw).data);
   const sheet = decodePI1(dclDecompress(bitsRaw).data);
 
-  /* PALETTE SOURCE — deliberately NOT the tile sheet.
-   * Measured across all 44 shipped .PI1 files: 32 have proper ST 3-bit
-   * palette words (all nibbles <= 7) and 12 do NOT — exactly the PBITS* and
-   * PXTRA* tile sheets, every one with the high nibble set. So a tile
-   * sheet's palette region is not a usable palette.
-   * We take the per-level palette from PLEVEL<N><X>.PI1, which is 3-bit
-   * clean and is the source the project's earlier VALIDATED extraction used
-   * when it rendered all 8 levels as coherent geometry.
-   *
-   * `UNKNOWN_level_palette_source` is CLOSED, `[PROVEN]` live in DOSBox this
-   * session -- and the closure is a correction, not a confirmation:
-   * `PLEVEL<key>.PI1`'s own embedded palette is only PARTIALLY right.
-   * Intercepting the real INT 10h AX=1012h "set DAC block" call GAME.EXE
-   * issues for a clean world-1 load (both 1A and 1B, byte-identical) shows
-   * slots 2-15 match the file's own words EXACTLY, but slots 0/1 do not:
-   * the file has `0x0333`/`0x0400` (a gray, then RED) at those two slots;
-   * the live DAC has `0x0000`/`0x0247` (BLACK, then a BLUE) instead. This
-   * is the user-reported bug ("the background of the second part of the
-   * city isn't red but blue in dosbox") -- and it is NOT a 1A-vs-1B
-   * difference (both sublevels are identical, live and in the file); the
-   * port was rendering red for BOTH halves of world 1, not just failing to
-   * distinguish them.
-   * An exhaustive search of every shipped file's decompressed bytes (every
-   * PLEVEL*.PI1, PLEVEL*.DAT, PBITS*.PI1, PLEV*.MAP, PALFILS.0*, PALWAYS*)
-   * found the live value `0x0247` NOWHERE -- these two slots are not read
-   * from a file at all; GAME.EXE overwrites them at runtime from a source
-   * this pass could not pin down (a driver-internal staging buffer at
-   * `12576:0x66` receives them already-written; the write side was not
-   * caught live). Matches this project's own `drivers-and-memory.md`
-   * finding for `PSTATUS.PI1`/`PLEVEL1A.PI1` sharing words 2-15 with "two
-   * low, level-specific accent slots" varying independently -- that note
-   * had the mechanism right (an override exists) but assumed the FILE's
-   * own low slots were what got used, which this session's live capture
-   * disproves for world 1.
-   * SCOPE: only world 1 (both sublevels) has been live-verified. Worlds
-   * 2-4 have NOT been checked against a live DAC capture -- this override
-   * table intentionally leaves them at the file's own (possibly also
-   * wrong) values rather than guessing. See the doc closure for exactly
-   * what a follow-up pass needs to do (repeat the INT10h/1012h capture for
-   * each world) before extending this table. */
-  const palRaw = await fetchRaw(`game/PLEVEL${key}.PI1`);
+  /* PALETTE SOURCE — `UNKNOWN_level_palette_source`, fully CLOSED live in
+   * DOSBox (Gods/docs/asset-formats.md). The level palette is the
+   * `DS:0x43E` buffer that graphics export 22 fills while loading the
+   * `level<N>` sprite-atlas group — VGA.EXE's own group table
+   * (`VGA:0x2188`) makes that group {PLEVEL<N>A, PLEVEL<N>B}, and export 22
+   * copies EACH file's embedded palette into the same output buffer
+   * (`VGA:0x0B1C`), so the last one — PLEVEL<N>B — always wins, whichever
+   * sublevel is being played. Live: world 4 sublevel A installs PLEVEL4B's
+   * palette, word for word (the only world whose A/B files differ). The
+   * level-entry code then overwrites slots 0/1 with black/blue
+   * (PALETTE_SLOT01) and fades in to it. Tile sheets (PBITS/PXTRA) never
+   * contribute: their palette regions aren't valid ST words at all. */
+  const palRaw = await fetchRaw(`game/PLEVEL${key[0]}B.PI1`);
   const palette = decodePI1(dclDecompress(palRaw).data).palette;
-  const slot01Override = PALETTE_SLOT01_OVERRIDE[key[0]];
-  if (slot01Override) {
-    palette[0] = slot01Override[0][0]; palette[1] = slot01Override[0][1];
-    palette[2] = slot01Override[0][2]; palette[3] = 255;
-    palette[4] = slot01Override[1][0]; palette[5] = slot01Override[1][1];
-    palette[6] = slot01Override[1][2]; palette[7] = 255;
+  for (let i = 0; i < 2; i++) {
+    palette[4 * i] = PALETTE_SLOT01[i][0]; palette[4 * i + 1] = PALETTE_SLOT01[i][1];
+    palette[4 * i + 2] = PALETTE_SLOT01[i][2]; palette[4 * i + 3] = 255;
   }
 
   /* TILE LIST — two sheets, truncated to the level's own count.
