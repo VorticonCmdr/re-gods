@@ -523,6 +523,20 @@ for (const r of await checkMusic(fetchRaw)) {
   }
 }
 
+/* The enemy suite's head, CS:0x0279 -> 0x027F -> 0x0282: the DS:0xCF40
+ * flier, then the brood, then the nests. [PROVEN] live: running the nests
+ * first moved freshly spawned brood a tick early (PJOYL2 1898-1909). */
+{
+  const { checkCallOrder } = await import('./scope-check.mjs');
+  console.log('\n  the enemy suite head order (CS:0x0279 / 0x027F / 0x0282):');
+  for (const [a, b] of [['cf40.step', 'brood.step'], ['brood.step', 'nests.step']]) {
+    for (const r of await checkCallOrder(join(here, '..', 'src', 'main.js'), { calleeSrc: a, beforeSrc: b })) {
+      if (!r.pass && !r.note) bad++;
+      console.log(line(r));
+    }
+  }
+}
+
 console.log(`\n${asserts} assertions + ${notes} notes = ${asserts + notes} rows`);
 console.log(`${bad ? `FAILURES: ${bad}` : 'ALL CHECKS PASS'}`);
 process.exit(bad ? 1 : 0);
