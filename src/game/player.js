@@ -1244,13 +1244,18 @@ export class Player {
        * phase rarely straddle 2/6, but is wrong on principle — only a
        * direct assertion against this pre-clamp value can catch it. */
       const preClampPhase = this.phase;
-      if (stepDelta !== 0 && this.phase > 7) { this.x -= stepDelta; this.phase = 7; }
-      /* CS:5AD8 `inc cl` / 5ADA `and cl,7` — an 8-frame cycle. */
-      this.phase = (this.phase + 1) & (WALK_CYCLE - 1);
+      /* A wall-blocked tick (CS:0x5A92/0x5A9B/0x5AA5 `jmp 0x5e9b`) skips the
+       * step, the footstep AND the `inc cl`: the phase holds. [PROVEN]
+       * against PJOYG2 cursor 144 — the hero stops at x=160 with LEFT held
+       * and DOS plays no 0x20e (whose ADL draws the port used to make). */
+      if (stepDelta !== 0) {
+        if (this.phase > 7) { this.x -= stepDelta; this.phase = 7; }
+        /* CS:5AD8 `inc cl` / 5ADA `and cl,7` — an 8-frame cycle. */
+        this.phase = (this.phase + 1) & (WALK_CYCLE - 1);
+      }
       /* CS:5AAD and 5ABA both `mov ax,0x20e / call 0x22ca` — the footstep
-       * sound, twice per cycle at opposite phases. No audio yet; the flag is
-       * exposed so the hook exists and is dated by evidence, not invented. */
-      this.footstep = WALK_FOOTSTEP_PHASES.includes(preClampPhase);
+       * sound, twice per cycle at opposite phases. */
+      this.footstep = stepDelta !== 0 && WALK_FOOTSTEP_PHASES.includes(preClampPhase);
     } else {
       /* ⚠️ CORRECTED — an earlier revision of this port had EVERY release enter
        * state 26 (idle), rendering the single direction-neutral sprite 25
