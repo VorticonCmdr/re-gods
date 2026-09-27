@@ -605,6 +605,19 @@ export class EntityB {
       this.y &= 0xfff0;                          // `and word [di+0x2],0xfff0`
       this.mode = (this.mode & 1) ? MODE.WALK_R : MODE.WALK_L;
       this.vel = 0;
+      /* CS:0xF4C4-0xF4DF (fall left) / 0xF522-0xF53E (fall right): landing
+       * exactly on a tile boundary against a wall on the facing side (either
+       * body row) turns the entity round on the landing tick itself.
+       * [PROVEN] live against PJOYL2 2034-2036 (CS:0xF586 trace): the
+       * entity lands at x=3520 facing right into a wall and is already in
+       * mode 0 on the next tick; the port used to spend that tick turning. */
+      if ((this.x & 0x1f) === 0) {
+        const di = cellIndex(this.x, this.y);
+        const side = this.mode === MODE.WALK_R ? 1 : -1;
+        if (planeB[di + side] === 1 || planeB[di + 0x80 + side] === 1) {
+          this.mode = this.mode === MODE.WALK_R ? MODE.WALK_L : MODE.WALK_R;
+        }
+      }
     }
   }
 }
