@@ -14,6 +14,7 @@ import { parseAtlas, cutAll } from './formats/atlas.js';
 import { Clock, LOGIC_HZ } from './engine/clock.js';
 import { Renderer } from './render/renderer.js';
 import { Player, ST, FOOTSTEP_SFX, CLIMB_STEP_SFX } from './game/player.js';
+import { sfxDrawsRandom } from './audio/adl-random.js';
 import { InventoryPanel, drawInventoryPanel } from './game/inventory-panel.js';
 import { runAllChecks, checkDescriptorAnchors, checkHeroSprites,
          checkSelectorsAndObjects, checkSpawn, checkEntityB, checkEntityA, checkSpawnA,
@@ -691,6 +692,16 @@ async function main() {
    * constant here so a session is reproducible; the original uses the BIOS
    * tick count and is not. See game/random.js. */
   let rng = new GodsRandom(1);
+  /* The sound driver draws from the game's ONE random table for some sfx
+   * (audio/adl-random.js) — so playing one must advance `rng` too, or every
+   * later draw (enemy AI, spawns) reads a different number than DOS. */
+  {
+    const rawPlay = audio.play.bind(audio);
+    audio.play = (id, ...rest) => {
+      if (sfxDrawsRandom(id)) rng.next();
+      return rawPlay(id, ...rest);
+    };
+  }
   /* CS:0x084B/0x0851 — target full, bar 1, so it animates up over 23 frames. */
   let health = new Health();
 
@@ -3637,6 +3648,7 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
       world: levelInfo.world, sub: levelInfo.sublevel, tick: clock.tick,
       r: rng.cursor,
       slots: arsenal.slots.map((sl) => `${sl.weapon}:${sl.live}`).join(' '),
+      hp: health.target, ph: player.phase, pst: player.state, freeze: fx.freeze,
     });
     window.__gods = {
       snap,
