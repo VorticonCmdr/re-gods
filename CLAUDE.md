@@ -94,6 +94,8 @@ A sixth, `UNKNOWN_level_palette_source` (ranked item 24), CLOSED — and, like i
 
 **The intro's three open items are CLOSED (ranked item 36), `[PROVEN]` live in DOSBox.** `INTROV.EXE`'s `DS:0x93` is a 50 Hz PIT-driven counter, and story pages hold a fixed 7.68 s. The story crawl plays *before* the production credits, not after as previously documented. The story palette is `PONE.PI1`'s own embedded one. `PDEMOSB4.SB` is not a voice clip: it is an 11-clip, 64-note sample-music sequence that `PPLAYER.BIN` plays alongside the FM track `PGODMUS2.MUS`. See `docs/dynamic-trace-and-runtime-data.md` and `docs/execution-and-boot.md`.
 
+**`UNKNOWN_level_palette_source` has no residuals left (ranked item 37), `[PROVEN]` live in DOSBox.** The level palette comes from graphics export 22 loading the `level<N>` atlas group, which is {`PLEVEL<N>A`, `PLEVEL<N>B`}; the last file loaded wins, which explains world 4's "sublevel B palette" anomaly. The black/blue slot-0/1 override is written into the same buffer once per level entry at `CS:0x00FE`. World 3's "drift" didn't reproduce in any of four live paths. See `docs/asset-formats.md`.
+
 ## Tooling
 
 Moved to the `gods-re-tooling` skill (`.claude/skills/gods-re-tooling/SKILL.md`) — Ghidra MCP, DOSBox MCP, `blast.py`, and the `gods-web` port's verification tooling, with the same gotchas as before. Load it when actually running any of those tools.
