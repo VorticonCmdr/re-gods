@@ -79,6 +79,7 @@ export const SELECTOR_TABLE = [
   { sel: 10, handler: 0x760a, name: 'line barrier (cx=3) — game/line-barriers.js' },
   { sel: 11, handler: 0xc49c, name: 'install per-world scripted routine' },
 ];
+export const SELECTOR_CHECKPOINT = 6;   // CS:0x38F5 — game/progress.js
 export const SELECTOR_TRIGGER = 3;   // CS:0x603A `dec ax` — see the header
 export const selectorName = (sel) =>
   (SELECTOR_TABLE[sel - 1] && SELECTOR_TABLE[sel - 1].name) || `out of range (${sel})`;
@@ -127,6 +128,7 @@ export class EventRunner {
     this.onSpawnB = null;              // set by the host to receive activations
     this.onSpawnA = null;              // set by the host to receive System-A activations
     this.onPathJob = null;             // set by the host to arm a line-barriers.js record
+    this.onCheckpoint = null;          // selector 6, game/progress.js
     this.actionCtx = null;             // set by the host to EXECUTE the verbs
     this.lastCell = -1;
     this.log = [];
@@ -308,6 +310,16 @@ export class EventRunner {
     if (ev.selector >= SELECTOR_PATH_MIN && ev.selector <= SELECTOR_PATH_MAX) {
       this.consumedEvents.add(id);
       if (this.onPathJob) this.onPathJob(ev.param, ev.selector);
+      return null;
+    }
+
+    /* Selector 6 — the progress checkpoint (CS:0x38F5, game/progress.js).
+     * The ONLY selector that never consumes its event: CS:0x38F5 has no
+     * `mov word [si],0xffff`, so it re-runs on every tick the hero stands on
+     * a marker cell and relies on its own position ring to count a spot
+     * once. */
+    if (ev.selector === SELECTOR_CHECKPOINT) {
+      if (this.onCheckpoint) this.onCheckpoint();
       return null;
     }
 

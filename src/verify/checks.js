@@ -20,6 +20,8 @@ import { scanZones, unpackTeleportDest, resolveExitDestination,
          clearNonPotionInventory, generatePassword, passwordSlotForWorld,
          passwordWorldForSlot, passwordToString, PASSWORD_LENGTH,
          PASSWORD_SLOTS } from '../game/zones.js';
+import { Progress, progressActions, reshutDoors, recordAt, WORLD_CHAIN_START,
+         EXIT_RECORD_ADDR, RECORD_STRIDE } from '../game/progress.js';
 import { TitleMenu, PasswordEntry, NameEntry, HiscoreTable, HISCORE_TABLE_TICKS,
          MENU_OPTIONS, MENU_CLICK_SFX, MENU_CONFIRM_SFX } from '../game/title-menu.js';
 import { ALPHABET_CHARS, charToCode, codeToChar, encodeName, decodeName,
@@ -10500,6 +10502,138 @@ export async function checkZones(fetchRaw) {
       '0x1015 is the already-ported per-tick object-activation-box pass. ' +
       'UNKNOWN_zone_scan_caller still stands.',
   });
+
+  /* --- selector 6 and the progress chains (game/progress.js) ------------ */
+  const chainOf = (w) => {
+    const out = [];
+    for (let a = WORLD_CHAIN_START[w - 1]; ; a += RECORD_STRIDE) {
+      const r = recordAt(a);
+      out.push(r);
+      if (!r || EXIT_RECORD_ADDR.includes(a) || out.length > 8) break;
+    }
+    return out;
+  };
+  const chains = [1, 2, 3, 4].map(chainOf);
+  check('progress: every world\'s chain, walked at +0x22 from DS:0xE674, lands on its own DS:0xE67C exit record',
+    chains.every((c, i) => c.length <= 8 && c[c.length - 1] && c[c.length - 1].addr === EXIT_RECORD_ADDR[i]),
+    chains.map((c) => c.map((r) => r && r.addr.toString(16)).join('>')).join(' | '));
+  check('progress: chain targets 3,6,8,12 / 6,10,11,15,16 / 100,6,100 / 5,6,9,12,20',
+    JSON.stringify(chains.map((c) => c.map((r) => r && r.target))) ===
+      '[[3,6,8,12],[6,10,11,15,16],[100,6,100],[5,6,9,12,20]]');
+  check('progress: the exit records decode to exactly EXIT_DESTINATIONS (two transcriptions agree)',
+    EXIT_RECORD_ADDR.every((a, i) => {
+      const r = recordAt(a), d = EXIT_DESTINATIONS[i];
+      return r.target === d.param && r.bonus === d.param2 && r.bits === d.bits &&
+        r.word2 === d.word2 && r.text.trim() === d.text.trim();
+    }));
+  check('progress: +4 is 0 on exactly five mid-world records (no tally screen, CS:0x6565)',
+    chains.flat().filter((r) => r && r.bonus === 0).map((r) => r.addr.toString(16)).join() ===
+      'e6c8,e752,e774,e842,e864');
+  check('progress: no shipped record sets bit 4 (shop) or bits 12-15',
+    chains.flat().every((r) => r && (r.bits & 0xf010) === 0));
+  check('progress: the bit walk runs 11 down to 0 — world 3\'s first record switches to B, then pool/keys/doors, then B again',
+    progressActions(recordAt(WORLD_CHAIN_START[2]).bits).join() ===
+      'sublevelB,poolReset,clearKeys,reshutDoors,sublevelB',
+    progressActions(recordAt(WORLD_CHAIN_START[2]).bits).join());
+
+  {
+    const p = new Progress();
+    p.reset(1, 1234, 900);
+    check('progress: CS:0x8C34 seeds all 6 ring slots with spawn & 0xFF80, respawn = spawn, chain = DS:0xE674[0]',
+      p.ring.every((r) => r.x === (1234 & 0xff80) && r.y === (900 & 0xff80)) &&
+      p.respawn.x === 1234 && p.respawn.y === 900 && p.addr === 0xe684 && !p.pending);
+    const seed = p.ring[0];
+    const counted = p.checkpoint(seed.x + 0x40, seed.y - 0x40, 1, 0);
+    check('progress: a marker within +/-0x40 of a ring entry (inclusive) moves the respawn point but counts nothing',
+      !counted && p.count369 === 0 && p.respawn.x === seed.x + 0x40 && p.respawn.y === seed.y - 0x40);
+    const counted2 = p.checkpoint(seed.x + 0x41, seed.y, 1, 0);
+    check('progress: 0x41 away counts, bumps both counters and pushes the ring',
+      counted2 && p.count368 === 1 && p.count369 === 1 &&
+      p.ring[0].x === seed.x + 0x41 && p.ring[5].x === seed.x);
+    for (let i = 2; i <= 7; i++) p.checkpoint(seed.x + i * 0x100, seed.y, 1, 0);
+    check('progress: the ring holds the 6 newest points; the oldest drops off the end',
+      p.ring.map((r) => r.x - seed.x).join() === '1792,1536,1280,1024,768,512');
+    check('progress: world 1\'s first record (target 3) went pending once three new spots were counted',
+      p.pending);
+  }
+  {
+    /* The live A->B trace (Gods/docs/camera-and-world-nav.md): world 1A with
+     * DS:0x178 = 0xE6A6 and both counters 5, hero onto the (1440,944) marker. */
+    const p = new Progress();
+    p.reset(1, 0, 896);
+    p.addr = 0xe6a6; p.count368 = 5; p.count369 = 5;
+    p.checkpoint(1444, 944, 1, 0);
+    const pendingThen = p.pending;
+    const rec = p.take();
+    p.setTeleportCursor(1);
+    check('progress: the live trace — counters 6/6, pending, respawn (1444,944), DS:0x178 advanced to 0xE6C8',
+      pendingThen && p.count368 === 6 && p.count369 === 6 && p.respawn.x === 1444 &&
+      p.respawn.y === 944 && p.addr === 0xe6c8 && rec.addr === 0xe6a6);
+    check('progress: that record (bits 0x361) ends its walk in the sublevel-B switch (bit 0)',
+      progressActions(rec.bits).join() === 'poolReset,clearKeys,teleportCursor,timerReset,sublevelB',
+      progressActions(rec.bits).join());
+    check('progress: bit 6 sets DS:0x19E = word[0xE62E] + record[+0x20] = 0xE636 + 4',
+      p.teleportCursor === 0xe63a, p.teleportCursor.toString(16));
+  }
+  {
+    const p = new Progress();
+    p.reset(3, 0, 0);
+    p.checkpoint(0x450, 0x305, 3, 1);
+    const inB = p.pending;
+    p.checkpoint(0x450, 0x305 + 0x100, 3, 0);   // counted, but Y outside the band
+    const outside = p.pending;
+    p.checkpoint(0x450 + 0x100, 0x300, 3, 0);
+    check('progress: world 3 sublevel A only — X >= 0x450 and 0x300 <= Y <= 0x310 forces the tally and zeroes DS:0x369',
+      !inB && !outside && p.pending && p.count369 === 0);
+  }
+  {
+    const p = new Progress();
+    check('progress: ACT4 exit args 2..5 point DS:0x178 at DS:0xE67C and flag it; arg 6 is inert',
+      p.setExit(3) && p.addr === 0xe796 && p.pending && !new Progress().setExit(6));
+  }
+  {
+    /* CS:0x41BC on a synthetic plane: one open door, one shut door, a decoy. */
+    const A = new Uint8Array(0x2000), B = new Uint8Array(0x2000);
+    const t = DOOR_TILES[0];
+    A[0x205] = t.open2; A[0x505] = t.close9; A[0x705] = t.open2 + 1;
+    const zones = Array.from({ length: 20 }, (_, i) => ({ x: i, y: i, kind: 3, arg: 7 }));
+    const n = reshutDoors(A, B, t, zones);
+    check('progress: bit 7 shuts every door whose top-left tile is open2 or close9, and only those',
+      n === 2 && A[0x205] === t.close9 && A[0x285] === t.close9 + 10 && A[0x305] === t.close9 + 20 &&
+      A[0x505] === t.close9 && A[0x206] === t.close9Right && A[0x606] === t.close9Right &&
+      B[0x205] === 1 && B[0x605] === 1 && A[0x705] === t.open2 + 1 && B[0x705] === 0, `shut ${n}`);
+    check('progress: bit 7 frees zone slots 0-9 (x/y/kind), leaves arg and slots 10-19',
+      zones.slice(0, 10).every((z) => z.kind === -1 && z.x === -1 && z.arg === 7) &&
+      zones.slice(10).every((z) => z.kind === 3));
+  }
+  {
+    /* Selector 6 on real data: where it lives and how the runner treats it. */
+    const keys = ['1A', '1B', '2A', '2B', '3A', '3B', '4A', '4B'];
+    const where = [];
+    for (const k of keys) {
+      const pf = parsePalfils(dclDecompress(await fetchRaw(`game/${palfilsNameFor(k)}`)).data);
+      pf.events.forEach((ev, i) => { if (ev.selector === 6) where.push(`${k}:${i}`); });
+    }
+    check('progress: every level has exactly one selector-6 event, id 252 — plane-B value 0xFF, the respawn search\'s arrival marker',
+      where.join() === keys.map((k) => `${k}:252`).join(), where.join());
+    const map = parseMap(dclDecompress(await fetchRaw('game/PLEV1A.MAP')).data);
+    const pf = parsePalfils(dclDecompress(await fetchRaw(`game/${palfilsNameFor('1A')}`)).data);
+    const cells = [];
+    for (let i = 0; i < map.planeB.length; i++) {
+      if (map.planeB[i] === 0xff) cells.push(`${(i % map.cols) * 32},${Math.floor(i / map.cols) * 16}`);
+    }
+    check('progress: PLEV1A has the 11 checkpoint cells the doc lists',
+      cells.slice().sort().join(' ') === ['3168,96', '2688,176', '3712,384', '320,416', '768,448',
+        '2272,464', '96,608', '3456,608', '1056,624', '160,784', '1440,944'].sort().join(' '),
+      cells.join(' '));
+    const runner = new EventRunner(map, pf);
+    let calls = 0;
+    runner.onCheckpoint = () => { calls++; };
+    runner.step(1440, 944, runner.makeState());
+    runner.step(1440, 944, runner.makeState());
+    check('progress: the runner hands selector 6 to onCheckpoint every tick and never consumes it',
+      calls >= 2 && !runner.consumedEvents.has(252) && !runner.unhandled.has(6), `calls=${calls}`);
+  }
 
   return results;
 }

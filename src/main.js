@@ -83,11 +83,12 @@ import { stepHeroFrame, stepCreatureDamage } from './game/frame.js';
 import { DamageGrid, damageForTag, despawnConsumedHit } from './game/collision.js';
 import { parseWeapons } from './game/weapons.js';
 import { pickUpWeapon } from './game/pickup.js';
-import { scanZones, unpackTeleportDest, resolveExitDestination,
-         ZONE_TELEPORT, ZONE_EXIT, exitEffects, advanceWorld,
+import { scanZones, unpackTeleportDest,
+         ZONE_TELEPORT, ZONE_EXIT, advanceWorld,
          clearNonPotionInventory, generatePassword, passwordSlotForWorld,
          passwordWorldForSlot, passwordToString, PASSWORD_SLOTS } from './game/zones.js';
 import { DeathBurst, findRespawnPosition, loseLife, DEATH_SFX } from './game/death.js';
+import { Progress, progressActions, reshutDoors } from './game/progress.js';
 import { TitleMenu, PasswordEntry, NameEntry, HiscoreTable, HISCORE_TABLE_TICKS,
          drawCentered, MENU_ADVANCE, MENU_ARROW_LEFT_DESC, MENU_ARROW_RIGHT_DESC } from './game/title-menu.js';
 import { DEFAULT_TABLE, encodeScoreBytes, rankOf, insertAt, bcdToNumber } from './formats/hiscores.js';
@@ -618,6 +619,11 @@ async function main() {
   let spawn = levelSpawn(level.world);
   let player = new Player(spawn.x, spawn.y);
   player.spawnAtLevelStart(spawn.x, spawn.y);   // CS:0x8C34 — the level-load seed
+  /* DS:0x178/0x368-0x36A, the DS:0x8B34 ring and the DS:0x16E respawn point —
+   * selector 6's progress state (game/progress.js). CS:0x8C34 re-seeds it on
+   * every level entry; the sublevel-B switch (CS:0x4828) does not. */
+  const progress = new Progress();
+  progress.reset(level.world, spawn.x, spawn.y);
   /* DS:0x8c3c — ACT6's four-slot smoke puff (game/kill-smoke.js). Held here,
    * outside the per-level action context, because the walker at CS:0x0239
    * runs from the main loop rather than from the verb: a puff seeded by the
@@ -1036,6 +1042,10 @@ async function main() {
      * target points/types applies (game/line-barriers.js's own
      * SELECTOR_TO_SLOT). */
     events.onPathJob = (param, selector) => { lineBarriers.arm(param, selector); };
+    /* Selector 6 — CS:0x38F5 reads the hero's own DS:0x17A/0x17C. */
+    events.onCheckpoint = () => {
+      progress.checkpoint(player.x, player.y, levelInfo.world, levelInfo.sublevel);
+    };
   };
   wireSpawn();
   /* CS:0xec60, run for every slot in state 2. Deliberately reproduced quirks:
@@ -1145,6 +1155,7 @@ async function main() {
       spawn = levelSpawn(level.world);
       player = new Player(spawn.x, spawn.y);
       player.spawnAtLevelStart(spawn.x, spawn.y);   // CS:0x8C34 — the level-load seed
+      progress.reset(level.world, spawn.x, spawn.y); // CS:0x8C34 — chain, counters, ring, respawn
       events = new EventRunner(level.map, level.palfils);
       slots = new GroupSlots(); enemies = []; clamped = 0; firedByB = 0;
       slotsA = new GroupSlots(); enemiesA = []; clampedA = 0; firedByA = 0;
@@ -1229,6 +1240,151 @@ async function main() {
     } finally {
       transitioning = false;
     }
+  }
+
+  /**
+   * CS:0x4828 — progress bits 0, 3 and 11: switch the current world to
+   * sublevel B WITHOUT a level entry. It sets [0x43]:=1 and jumps into the
+   * loader (CS:0x2A4A), whose tail sees [0x38B] and goes to CS:0x484E
+   * instead of the main loop's CS:0x006F — so CS:0x8C34 never runs. What
+   * 484E does run: the object tables (CS:0x2234/0x8FEF/0x110A/0x1196), the
+   * event re-arm (CS:0x3880), the scroll pages (CS:0x4602); the loader
+   * itself re-reads the map, PALFILS, gates (CS:0x40C0), line barriers
+   * (CS:0x75A9/0x75E1/0x75EF), the PAT file and statues (CS:0x7E9B).
+   *
+   * Carried, [PROVEN] live (world 1A -> 1B, see the doc): hero position,
+   * camera, respawn point, DS:0x178, both counters and the ring. Carried
+   * [STATIC] because no code on this path writes them: health, lives,
+   * money, inventory, weapons, the fx timers, the zone array DS:0x8F68 (only
+   * CS:0x41BC ever clears it) and the enemy runtime pools (their clears,
+   * CS:0xDE6F/0xDBFB, live in CS:0x8C34). The level timer is pushed at
+   * CS:0x4828 and popped at CS:0x488E around the load.
+   *
+   * Port simplifications, disclosed: the destructible-block queue restarts
+   * empty (the original's DS:0xD0C6 queue is not cleared either, but its
+   * cells belong to the map that was just replaced), the random table is not
+   * regenerated (CS:0x37F6 is wall-clock seeded anyway), and the hero sprite
+   * sheet is not reloaded (same world, same sheet).
+   */
+  async function enterSublevelB() {
+    transitioning = true;
+    try {
+      const key = levelKeyFor(levelInfo.world, 1);
+      const timer = events.actionCtx.timer;
+      const zones = events.actionCtx.zones;
+      sel.value = key;
+      level = await loadLevel(key);
+      events = new EventRunner(level.map, level.palfils);
+      events.actionCtx = buildActionCtx(level, inventory, arsenal);
+      events.actionCtx.timer = timer;
+      events.actionCtx.zones = zones;
+      lineBarriers = new LineBarriers(level.map, level.lineBarrierRecords);
+      patGroups = new PatGroups(level.patDirectory || []);
+      patGroups.blobBytes = level.patBlobBytes || null;
+      blocks = new Destructibles(level.world);
+      wireSpawn();
+      levelInfo = { world: levelInfo.world, sublevel: 1 };
+      statues.clear().populate(level.map.planeA, levelInfo.world, sublevelLetter(levelInfo));
+      outOfRange = 0; unstamped = 0;
+      $('event').textContent = `sublevel B (CS:0x4828) — hero kept at (${player.x}, ${player.y})`;
+    } finally {
+      transitioning = false;
+    }
+  }
+
+  /* CS:0x6553 — the tally, for whichever record DS:0x178 points at. Both an
+   * exit zone (ACT4 via progress.setExit) and a selector-6 checkpoint whose
+   * count reached the record's target land here. */
+  function startProgressTally() {
+    /* The original clears [0x36A] at the END of the bit walk (CS:0x696D);
+     * nothing runs in between that could set it again (the tally screen and
+     * the bit handlers both suspend the main loop), so clearing it first is
+     * the same thing without a re-entry guard. */
+    progress.pending = false;
+    const rec = progress.take();
+    if (!rec) return;
+    const completedWorld = levelInfo.world;
+    /* FUN_1000_69d7 (bit 10) — generate-if-empty, keyed to the world being
+     * LEFT. Generated here rather than in the bit walk (a disclosed
+     * simplification: this port's own `rng` draws no other randomness
+     * during the tally sequence, so the exact tick the draw happens on
+     * doesn't change the result) but only SHOWN if this call is what
+     * freshly filled the slot — CS:0x69e3's own `cmp byte[SI],0/jnz` bails
+     * silently on a slot that already had one, which this mirrors via
+     * `wasEmpty`. */
+    let passwordReveal = null;
+    if (progressActions(rec.bits).includes('genPassword')) {
+      const passwordSlot = passwordSlotForWorld(completedWorld);
+      const wasEmpty = passwordSlot >= 0 && passwordSlot < passwordSlots.length &&
+        !passwordSlots[passwordSlot];
+      if (wasEmpty) {
+        passwordSlots[passwordSlot] = generatePassword(rng); persistPasswordSlots();
+        passwordReveal = {
+          worldNumber: completedWorld + 1,             // CS:0x69f7 `inc cl` — see tally.js header
+          code: passwordToString(passwordSlots[passwordSlot]),
+        };
+      }
+    }
+    /* CS:0x6565 — a record whose +4 word is 0 skips the screen entirely
+     * (`jmp 0x694d`): world 1's third record, world 2's third and fourth,
+     * world 4's second and third. */
+    if (rec.bonus === 0) { runProgressBits(rec); return; }
+    tallyScreen = new TallyScreen({
+      title: rec.text.trim().replace(/\s+/g, ' '),
+      lives: fx.lives,
+      health: health.target,          // DS:0x192, not the chasing bar (DS:0x19a) — see combat.js's Health
+      moneyTotal: purse.total,
+      password: passwordReveal,
+    });
+    audio.play(tallyFanfareSfx(rec.word2));    // CS:0x657B -> FUN_1000_67f5, once on entry
+    tallyScreen.onDone = () => { tallyScreen = null; runProgressBits(rec); };
+  }
+
+  /* CS:0x694D — the record's bits, 11 down to 0, each through SS:0x35AA.
+   * A sublevel switch returns into this walk (CS:0x489C `ret`), so the bits
+   * below it act on the freshly loaded sublevel. */
+  async function runProgressBits(rec) {
+    for (const act of progressActions(rec.bits)) {
+      switch (act) {
+        case 'sublevelB': await enterSublevelB(); break;
+        case 'genPassword': break;               // done in startProgressTally, see there
+        case 'poolReset':
+          /* FUN_1000_6992 (bit 9). The original re-runs a chunk of
+           * FUN_1000_8c34's own level-init sequence: destructible blocks,
+           * System-A's entity-group runtime, and several small hazard-pool
+           * clears. The destructible-block restore/clear pair in THAT
+           * sequence is gated `world != 3`; it is left untouched here. What
+           * genuinely resets: System-A's entity-group runtime (the same
+           * three-structure mirror of FUN_1000_de6f the teleport-zone branch
+           * uses) and the line-hazard pool (FUN_1000_dbfb). A "spawn flash"
+           * pool at DS:0xac90 and the pickup-sparkle array at DS:0xb578 have
+           * no port-side module yet; the world-2 nest pool (DS:0xcfcc) is not
+           * reset here either. */
+          slotsA = new GroupSlots();
+          groupsA = [];
+          enemiesA = [];
+          lineHazards = new LineHazards();
+          break;
+        case 'clearKeys': clearNonPotionInventory(inventory, level.cats); break;   // FUN_1000_6ad4
+        case 'reshutDoors':                                                          // CS:0x6AD0 -> 0x41BC
+          reshutDoors(level.map.planeA, level.map.planeB, DOOR_TILES[level.world - 1],
+            events.actionCtx.zones);
+          break;
+        case 'teleportCursor': progress.setTeleportCursor(levelInfo.world); break;  // CS:0x6973
+        case 'timerReset': events.actionCtx.timer = 0; break;                       // CS:0x6B21
+        case 'shop':
+          /* CS:0x6BED — no shipped record sets bit 4. */
+          console.warn('[progress] bit 4 (shop) set on record', rec.addr.toString(16));
+          break;
+        case 'advance': {
+          /* FUN_1000_6b00 — +1, wrapped 5->1, sublevel FORCED to A. */
+          const next = advanceWorld(levelInfo.world);
+          await switchLevel(levelKeyFor(next.world, next.sublevel));
+          break;
+        }
+      }
+    }
+    $('event').textContent = `progress record "${rec.text.trim()}" (bits 0x${rec.bits.toString(16)})`;
   }
 
   /**
@@ -2273,89 +2429,17 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
         enemiesA = [];
         $('event').textContent = `teleport zone -> (${dest.x}, ${dest.y})`;
       } else if (zoneHit && zoneHit.kind === ZONE_EXIT && !transitioning && !tallyScreen) {
-        const dest = resolveExitDestination(zoneHit.arg);
-        if (!dest) {
+        /* CS:0x0FAC-0x0FDC only sets DS:0x178 (from DS:0xE67C[arg-2]) and
+         * DS:0x36A — the tally and its bit walk run from the main loop's own
+         * pending check (CS:0x02F0, `call 0x6553`), the same path a selector-6
+         * checkpoint takes. See startProgressTally. */
+        if (!progress.setExit(zoneHit.arg)) {
           $('event').textContent =
             `level exit — arg ${zoneHit.arg} out of range, inert (CS:0x0FC8)`;
-        } else {
-          /* CS:0x0FAC-0x0FDC in the original only sets DS:0x178/DS:0x36a —
-           * the real dispatch (world advance, key clear, password reveal)
-           * runs from the main loop's own post-frame check (CS:0x02F0, `call
-           * 0x6553`), AFTER the tally screen's own bonus countdown, not on
-           * the zone hit itself. `game/tally.js`'s own header covers the
-           * full citation; everything below that used to run synchronously
-           * here (`clearNonPotionInventory`, the pool reset, `advanceWorld`+
-           * `switchLevel`) is now deferred into `finishTallyScreen`, called
-           * once `tallyScreen.done` goes true (see the tick callback). */
-          const fx2 = exitEffects(dest.bits);
-          const completedWorld = levelInfo.world;
-          /* FUN_1000_69d7 — generate-if-empty, keyed to the world being
-           * LEFT. Generated here rather than at tally-screen completion (a
-           * disclosed simplification: this port's own `rng` draws no other
-           * randomness during the tally sequence, so the exact tick the
-           * draw happens on doesn't change the result) but only SHOWN if
-           * this call is what freshly filled the slot — CS:0x69e3's own
-           * `cmp byte[SI],0/jnz` bails silently on a slot that already had
-           * one, which this mirrors via `wasEmpty`. */
-          let passwordReveal = null;
-          if (fx2.genPassword) {
-            const passwordSlot = passwordSlotForWorld(completedWorld);
-            const wasEmpty = passwordSlot >= 0 && passwordSlot < passwordSlots.length &&
-              !passwordSlots[passwordSlot];
-            if (wasEmpty) { passwordSlots[passwordSlot] = generatePassword(rng); persistPasswordSlots(); }
-            if (wasEmpty) {
-              passwordReveal = {
-                worldNumber: completedWorld + 1,             // CS:0x69f7 `inc cl` — see tally.js header
-                code: passwordToString(passwordSlots[passwordSlot]),
-              };
-            }
-          }
-          tallyScreen = new TallyScreen({
-            title: dest.text.trim().replace(/\s+/g, ' '),
-            lives: fx.lives,
-            health: health.target,          // DS:0x192, not the chasing bar (DS:0x19a) — see combat.js's Health
-            moneyTotal: purse.total,
-            password: passwordReveal,
-          });
-          audio.play(tallyFanfareSfx(dest.word2));    // CS:0x657B -> FUN_1000_67f5, once on entry
-          const finishTallyScreen = () => {
-            if (fx2.clearKeys) clearNonPotionInventory(inventory, level.cats);
-            if (fx2.poolReset) {
-              /* FUN_1000_6992, LEVEL THREE only (see the table in zones.js's
-               * header — bit 9 is set on no other record). The original
-               * re-runs a chunk of FUN_1000_8c34's own level-init sequence:
-               * destructible blocks, System-A's entity-group runtime, and
-               * several small hazard-pool clears. The destructible-block
-               * restore/clear pair in THAT sequence is itself gated
-               * `world != 3`, so at the world this handler fires from (3) it
-               * is already a no-op in the ORIGINAL — `blocks` is correctly
-               * left untouched here, not an omission. What genuinely resets:
-               * System-A's entity-group runtime (the same three-structure
-               * mirror of FUN_1000_de6f the teleport-zone branch above
-               * already uses) and the line-hazard pool (FUN_1000_dbfb,
-               * game/line-hazard.js). Two further sub-resets in the
-               * original's own sequence — a "spawn flash" pool at DS:0xac90
-               * and the pickup-sparkle array at DS:0xb578 — have no port-side
-               * module at all yet; the world-2 nest pool (DS:0xcfcc) is
-               * world-2-specific and already empty by world 3 in ordinary
-               * play. None of those three are reproduced here. */
-              slotsA = new GroupSlots();
-              groupsA = [];
-              enemiesA = [];
-              lineHazards = new LineHazards();
-            }
-            $('event').textContent = `level exit -> "${dest.text.trim()}"`;
-            if (fx2.advance) {
-              /* FUN_1000_6b00 — the ENTIRE advance rule: +1, wrapped 5->1,
-               * sublevel FORCED to A. Never a jump to a specific world. */
-              const next = advanceWorld(completedWorld);
-              switchLevel(levelKeyFor(next.world, next.sublevel));  // fire-and-forget
-            }
-            tallyScreen = null;
-          };
-          tallyScreen.onDone = finishTallyScreen;   // read by the tick callback below
         }
       }
+      /* CS:0x02F0 — `cmp byte [0x36a],0 / call 0x6553`. */
+      if (progress.pending && !transitioning && !tallyScreen) startProgressTally();
 
       /* CS:0x0282 — the nest walker, BEFORE the System-B entity step at
        * 0x0285 (below) and after the CS:0x027F brood gate (game/nest.js's
@@ -2943,7 +3027,10 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
             $('event').textContent = 'GAME OVER';
           } else {
             health.respawn();                                       // CS:0x084B/0x0851
-            const pos = findRespawnPosition(spawn.x, spawn.y, level.map.planeB); // CS:0x0873-0x08BD
+            /* CS:0x0845 reads DS:0x16E/0x170 — the last selector-6 checkpoint
+             * (game/progress.js), which CS:0x8C34 seeds with the level spawn. */
+            const pos = findRespawnPosition(progress.respawn.x, progress.respawn.y,
+              level.map.planeB);                                      // CS:0x0873-0x08BD
             player.teleportTo(pos.x, pos.y);                         // CS:0x08D6-0x08E6 (state 4)
             player.fallDamage = 0;                                   // CS:0x08E0, teleportTo doesn't touch this
             cam = cameraForSpawn(pos.x, pos.y);                      // CS:0x08CC-0x08D3

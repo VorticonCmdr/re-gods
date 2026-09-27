@@ -151,20 +151,21 @@ export const ARRIVAL_ZONE_TABLE = Object.freeze([
 
 /**
  * CS:0x0873-0x08BD, inside `FUN_1000_0845` (the respawn routine, fully
- * disassembled this pass). Rounds the level's own STATIC spawn point
- * (DS:0x16e/0x170 — the same per-world point this port's own `levelSpawn`
- * table already produces, NOT the hero's death location) to its tile
- * origin, then radiates outward through `ARRIVAL_ZONE_TABLE` looking for a
- * plane-B cell tagged exactly `0xFF`.
+ * disassembled this pass). Rounds the respawn point (DS:0x16e/0x170) to its
+ * tile origin, then radiates outward through `ARRIVAL_ZONE_TABLE` looking
+ * for a plane-B cell tagged exactly `0xFF`.
+ *
+ * ⚠️ CORRECTED: DS:0x16e/0x170 is NOT a static per-level point. CS:0x8C34
+ * seeds it with the level spawn, but every selector-6 checkpoint cell the
+ * hero touches (CS:0x38F5) overwrites it with the hero's own position — see
+ * game/progress.js. The caller passes `progress.respawn`.
  *
  * If none of the 14 real candidates match, the true fallback (`[PROVEN]`
- * live this session, see `ARRIVAL_ZONE_TABLE`'s own header) is the table's
- * 15th, all-zero sentinel entry — land exactly on the rounded spawn tile,
- * no offset. This is always ground the hero was already safely standing on
- * (it's the level's own spawn point), unlike the meaningful-but-wrong
- * offset this project's earlier, 14-entry reading of the table applied.
+ * live, see `ARRIVAL_ZONE_TABLE`'s own header) is the table's 15th,
+ * all-zero sentinel entry — land exactly on the rounded point, no offset:
+ * ground the hero already stood on (the spawn, or a checkpoint he touched).
  *
- * @param {number} spawnX @param {number} spawnY the level's static spawn point
+ * @param {number} spawnX @param {number} spawnY the respawn point, DS:0x16e/0x170
  * @param {Uint8Array|number[]} planeB
  * @returns {{x:number, y:number}}
  */

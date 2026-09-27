@@ -137,7 +137,9 @@
  *      words are byte-identical to DS:0xe67c's 4 pointers, so the two tables
  *      are adjacent, not the same, in memory. This second writer just
  *      re-derives the SAME record on every level (re)load and plays no
- *      further role in the exit mechanism itself, so it is not ported.
+ *      further role in the exit mechanism itself. (⚠️ Superseded: it is the
+ *      start of the world's selector-6 progress chain — see game/progress.js,
+ *      which ports it.)
  *   2. Each record carries a THIRD field, at +0x1e (a u16), read by
  *      CS:0x6553's own score-tally screen as a bit-dispatch selector via
  *      CS:0x694d. A prior pass mis-derived the bit mapping (claimed 11/6/1);
@@ -166,8 +168,11 @@
  *      the true next one) — but nothing ported below relies on that cursor,
  *      so the refutation doesn't touch the world/sublevel-advance answer.
  *      See CLAUDE.md's own `UNKNOWN_level_exit_destination` section for the
- *      full trace, including the (still open, still irrelevant here)
- *      residual of what `[0x178]+=0x22` is actually for.
+ *      full trace. (⚠️ Resolved since: `[0x178]+=0x22` walks each world's
+ *      selector-6 progress chain, which starts at DS:0xE674's record, not
+ *      at an exit record; the 36-byte LEVEL records are each world's last
+ *      link, so the stride mismatch after them is never walked — a world
+ *      advance re-seeds the pointer. game/progress.js.)
  *
  * A shipped .MAP census (all 8 files) confirms the mechanism end to end:
  * exactly 3 ACT4 records exist in the whole game, one per world-1/2/3
@@ -241,15 +246,15 @@ export function resolveExitDestination(arg) {
   return EXIT_DESTINATIONS[idx];
 }
 
-/* ── The bit-dispatch table, CS:0x694d -> SS:0x35aa, and its four live
- * handlers ──────────────────────────────────────────────────────────────
+/* ── The bit-dispatch table, CS:0x694d -> SS:0x35aa ─────────────────────
  *
- * Only these four bits are ever set by a shipped destination record (see
- * the table above); bit 11 (FUN_1000_4828, sublevel B) is real code but
- * unreachable from any of the 4 records, so it has no port-side effect and
- * is not exported here — see CLAUDE.md's own `UNKNOWN_sublevel_b_entry_point`
- * correction for why FUN_1000_4828 is not "the" answer to how sublevel B is
- * really entered. */
+ * ⚠️ SUPERSEDED for the game itself: main.js now walks ALL twelve bits
+ * through game/progress.js's `progressActions`, for the exit records AND
+ * the mid-world records selector 6 reaches (the four exit records above are
+ * only the chain's last link per world). Bit 11 — and bits 0 and 3, the same
+ * handler — is how sublevel B is entered: a world's mid-world record, not an
+ * exit record. `EXIT_BIT`/`exitEffects` stay as the exit records' own
+ * four-bit decoder, which the suite still checks against the bytes. */
 export const EXIT_BIT = {
   WORLD_ADVANCE: 1 << 1,    // 0x0002 — FUN_1000_6b00
   KEY_CLEAR:     1 << 8,    // 0x0100 — FUN_1000_6ad4
