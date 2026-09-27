@@ -400,7 +400,14 @@ export class EntityB {
       return null;
     }
     if (this.state === EST.MATERIALISING) {
-      if (--this.timer <= 0) { this.state = this.hp; this.timer = 0; }
+      if (--this.timer <= 0) {
+        this.state = this.hp; this.timer = 0;            // CS:0xFF37-0xFF3C
+        /* CS:0xFF3F-0xFF45 — `mov al,0xa / sub al,[si+0xb] / mov [di+6],ax`:
+         * the step delay starts at 10 - speed, so a fresh entity stands
+         * still (and, on a tile crossing, re-runs the pathfinder) before its
+         * first step. [PROVEN] against PJOYL2 cursors 1589/1590. */
+        this.delay = 10 - this.speed;
+      }
       return null;
     }
     /* CS:0xFF20's `jmp f030` arm — every tick AFTER the kill tick (the kill
