@@ -330,7 +330,7 @@ export class Arsenal {
       if (s.weapon === MAGIC_AXE_WEAPON) {
         const wallAt = (x, y, dirSign) => axeWallAt(x, y, dirSign, planeB);
         const r = stepMagicAxe(s.area, s.axeState, cam, wallAt,
-          { grid, weapon: w, debris });
+          { grid, weapon: w, debris, planeB });
         moved += r.moved; culled += r.culled;
         this.stamped += r.stamped;
         this.axeBounced = (this.axeBounced || 0) + r.bounced;

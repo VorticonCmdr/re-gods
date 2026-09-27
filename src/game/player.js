@@ -604,7 +604,11 @@ export class Player {
    *        health on its own. `null` is a valid caller (tests, tools): the
    *        fall physics run identically, landing simply never damages.
    */
-  tick(map, input, fire = null, tock = 1, pickup = null, health = null) {
+  tick(map, input, fire = null, tock = 1, pickup = null, health = null, tock36d = tock) {
+    /* DS:0x36D — gravity's own every-other-tick gate (CS:0x48BB). It runs in
+     * step with DS:0x36C except after a shop, whose loop toggles 0x36C alone
+     * (CS:0x6C9E), so it is passed separately. Defaults to `tock`. */
+    this.tock36d = tock36d;
     this.footstep = false;
     this.climbStep = false;
     this.emitted = null;
@@ -721,7 +725,7 @@ export class Player {
       /* CS:0x4DD5 — +4, then gravity, then the velocity, then fall-damage.
        * No steering: states 22/23 never test the direction bits. */
       this.y += FALL_BASE;
-      this._gravity(tock);                               // CS:0x48B0
+      this._gravity(this.tock36d);                       // CS:0x48B0
       this.y += this.fallV;
       this.fallDamage = (this.fallDamage || 0) + 1;      // DS:0x176
       /* CS:0x4DEE `call 0x48d4` — the fall-fire pair steers too (an earlier
@@ -1572,7 +1576,7 @@ export class Player {
      * landing, as CS:0x4C34/0x4D39 do, makes the landing check and every
      * later ground check agree by construction. */
     this.y += FALL_BASE;                     // CS:0x4CCC `add [0x17c],4`
-    this._gravity(tock);                     // CS:0x4CD1 `call 0x48b0`
+    this._gravity(this.tock36d);             // CS:0x4CD1 `call 0x48b0`
     this.y += this.fallV;                    // CS:0x4CD7
     this.fallDamage = (this.fallDamage || 0) + 1;      // DS:0x176
     this._airSteer(map, input);                        // CS:0x4CE5 `call 0x48d4`

@@ -146,11 +146,13 @@ export class EventRunner {
     return {
       inventory: [0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF],
       slots3: [0xFFFF, 0xFFFF, 0xFFFF],
-      events: null, event_count: 0,
-      /* DS:0x192 hero health, max 24 (see trigger.js case 7/8). The port
-       * does not model damage yet, so it reports 0 — which makes the
-       * "help bonus" triggers fire, the correct behaviour for a hurt
-       * player, rather than silently never firing. */
+      /* COND5/6 read the event word `[0x932c + (arg-1)*4]` as signed: a
+       * consumed record holds 0xFFFF (CS:0x39FE). */
+      events: this.pal.events.map((e, i) =>
+        (this.consumedEvents.has(i) ? -1 : (e.selector << 16) >> 16)),
+      /* The host passes the live health target (DS:0x192), lives (DS:0x224),
+       * score, the three weapon slots and the inventory in `extra`; these
+       * are only the defaults for tools and tests. */
       health: 0, timer: 0,
       levers: leverBytes, lever_count: LEVER_COUNT,
       score: 0, lives: 0,

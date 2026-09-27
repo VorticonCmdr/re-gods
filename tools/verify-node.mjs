@@ -116,7 +116,9 @@ async function fireSequence(key, colFn) {
     const y = row * 16;
     for (let x = 0; x < 4096; x += 4) {
       /* Drive the runner's own logic, overriding only the column rule. */
-      const fired = run.step(x, y, run.makeState({ timer: 0 }), colFn(x));
+      /* `events: null` — COND5/6 see no consumed events, so this compares the
+       * column rule alone, not the order the two walks consume events in. */
+      const fired = run.step(x, y, run.makeState({ timer: 0, events: null }), colFn(x));
       if (fired) seq.push({ id: `${row}:${fired.trigger}`, x });
     }
   }

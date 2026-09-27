@@ -1032,6 +1032,12 @@ async function main() {
    * hatch animation reads (DS:0x36c). Not modelled elsewhere in this port
    * yet, so it is owned here. */
   let tock = 0;
+  /* DS:0x36D — the other every-other-tick alternator (CS:0x0176-0x0181,
+   * inc/wrap at 2). In step with `tock` except that the shop loop toggles
+   * DS:0x36C alone (CS:0x6C9E), so after a shop the two can disagree.
+   * Gravity (CS:0x48BB) and the rock burst pool (CS:0xB43A/0xB553/0xB5FF)
+   * read this one. */
+  let tock36d = 0;
   /* DS:0x8b4c — a purely visual, non-interacting particle effect (see
    * game/debris.js's header for the conflation this project made and
    * corrected chasing it). Fully ported and unit-tested but never
@@ -1223,7 +1229,7 @@ async function main() {
       groupsB = []; groupsA = []; popup = new Popup();
       messages = new MessageEngine(); seenTypes = new SeenBitmap();
       rng = new GodsRandom(1);
-      nests = new Nests(level.world, rng); shots = new EnemyShots(); tock = 0;
+      nests = new Nests(level.world, rng); shots = new EnemyShots(); tock = 0; tock36d = 0;
       lineHazards = new LineHazards();
       markerList = new MarkerList();                    // CS:0x1437
       brood = new Brood();
@@ -1574,6 +1580,7 @@ async function main() {
    * gives `switchLevel` — a joyg segment's own `enterAttractState` calls
    * `switchLevel` itself, so the two guards compose rather than duplicate). */
   let attractLoading = false;
+  let shopTrace = null;   // ?debug: "cursor:tock" after each attract shop pass
   let shopIterAcc = 0;    // fractional shop passes owed during a demo (see the tape block)
 
   /**
@@ -2059,11 +2066,20 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
         shopIterAcc += 4 / 3;
         while (shopIterAcc >= 1 && shopScreen && !shopScreen.done && t.cursor < t.ticks.length) {
           shopIterAcc -= 1;
+          /* CS:0x6C9E `not byte [0x36c]` — once per shop pass, right after the
+           * pass's first poll (CS:0x6C93) and BEFORE its fire-release wait
+           * (CS:0x6E62), so the pass that picks EXIT toggles too; only an
+           * ended tape (CS:0x6E50, [0x382] = 0xFF) skips it. The level was
+           * loaded (DS:0x36C = 0, CS:0x8CAF) BEFORE the shop, so gameplay
+           * starts with the parity the shop leaves. [PROVEN] against PJOYL2:
+           * DS:0x36C sampled live at 29 cursors across its 1190-cursor shop. */
+          tock ^= 1;
           do {
             const purchase = shopScreen.iterate(t.ticks[t.cursor].bits);
             t.cursor++;
             if (purchase && !purchase.refused) audio.play(BUY_CONFIRM_SFX);
           } while (shopScreen && shopScreen.fireWait && t.cursor < t.ticks.length);
+          if (shopTrace) shopTrace.push(`${t.cursor}:${tock}`);   // ?debug
         }
         input.up = input.down = input.left = input.right = input.fire = false;
         if (t.cursor >= t.ticks.length) enterAttractState(nextState(attract.state));
@@ -2113,6 +2129,7 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
         if (!attract) {
           const purchase = shopScreen.step(input);
           if (purchase && !purchase.refused) audio.play(BUY_CONFIRM_SFX);
+          tock ^= 1;                                             // CS:0x6C9E, every pass
         }
         return;
       }
@@ -2212,6 +2229,7 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
        * tick, so every consumer ran on the opposite parity; PJOYG3's opening
        * fall (80->85->90 in DOSBox) is what exposed it. */
       tock ^= 1;
+      tock36d ^= 1;                                     // CS:0x0176-0x0181
       /* DS:0x34 — a guardian is installed (selector 11). CS:0x01FC skips the
        * object pass (activation, walk, popup, chest burst) outside world 2;
        * CS:0x0223/0x0226/0x0272 skip the turrets, rock pools, kill smoke and
@@ -2320,7 +2338,8 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
           (wx, wy, vx, cam) => shots.fire(wx, wy, vx, cam),
           (wx, wy, n, cam) => lineHazards.spawn(wx, wy, player.x + 8, player.y + 6, n),
           { invuln: fx.invuln > 0, score, debris, planeB: level.map.planeB,
-            sfx: (id) => audio.play(id), flashPool, rng: () => rng.next(), difficulty }).drawn;
+            sfx: (id) => audio.play(id), flashPool, rng: () => rng.next(), difficulty,
+            tock36d }).drawn;
       };
       let fr = null;
       if (!deathSeq) {
@@ -2335,7 +2354,7 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
                    hero: { x: player.x, y: player.y } },
         treasure: { values: level.objValues, inventory, purse, score, burst },
         starburst, blocks, debris,
-        burst, tock, inventory,
+        burst, tock, tock36d, inventory,
         /* CS:0x1045 — idle+FIRE's own lever/switch toggle (game/levers.js).
          * `level.palfils.levers` is the SAME parsed PALFILS window `events.js`
          * already reads for COND11/12; `leverToggle` mutates it in place, so
@@ -2508,7 +2527,13 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
       events.actionCtx.objects = level.drawObjects;
       /* plane-B cell -> event record -> selector 2 -> trigger evaluator */
       const fired = events.step(player.x, player.y,
-        events.makeState({ timer: clock.tick, inventory }));
+        events.makeState({ timer: clock.tick, inventory,
+          /* COND7/8 health target DS:0x192, COND13/14 the score, COND15/16
+           * lives DS:0x224, COND3/4 the three weapon slots (0xFFFF = empty).
+           * These used to default to 0 / empty, which made COND16 ("lives <
+           * n") pass and fire PLEV2A's trigger 97 instead of 96 in PJOYL2. */
+          health: health.target, lives: fx.lives, score: score.value,
+          slots3: arsenal.slots.map((s) => (s.weapon < 0 ? 0xFFFF : s.weapon)) }));
       if (fired) {
         /* The verb now RUNS (game/trigger-actions.js); `fired.result` says what
          * it did. Doors and gates write the live plane arrays, so the change is
@@ -3766,7 +3791,7 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
       world: levelInfo.world, sub: levelInfo.sublevel, tick: clock.tick,
       r: rng.cursor,
       slots: arsenal.slots.map((sl) => `${sl.weapon}:${sl.live}`).join(' '),
-      hp: health.target, ph: player.phase, pst: player.state, freeze: fx.freeze,
+      hp: health.target, ph: player.phase, pst: player.state, freeze: fx.freeze, tock,
       sfx: sfxTrace.splice(0).map((id) => id.toString(16)).join(','),
     });
     sfxTrace = [];
@@ -3783,6 +3808,7 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
         return {
           A: enemiesA.map(f).join(' '), B: enemies.map(f).join(' '),
           s2: selectorTwo.slots.filter(Boolean).map((sl) => sl.entities.map(f).join(' ')).join(' | '),
+          s2hits: (selectorTwo.lastHits || []).join('; '),
           shots: arsenal.slots.map((sl) => sl.area.filter((r) => r.tag >= 0).map((r) => `${r.x},${r.y}`).join(' ')).join(' | '),
         };
       },
@@ -3801,6 +3827,9 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
         }
         rng.cursor = cursor & 0x1ff;
       },
+      traceShop() { shopTrace = []; return shopTrace; },
+      /* The damage grid as left by the last tick, and the camera it used. */
+      grid: () => ({ grid, cam: { x: cam.snapX, y: cam.snapY } }),
       async startAttractAt(state) { clock.stop(); await enterAttractState(state); await settle(); return snap(); },
       /* Step until `n` ticks ran, recording a snapshot after each. */
       async stepTicks(n, record = true) {

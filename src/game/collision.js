@@ -194,6 +194,13 @@ export class DamageGrid {
    * DS:0x1e4 (height), which System-B sets to 0x20/0x20 at CS:0xFF93.
    */
   scan(x, y, w, h) {
+    /* CS:0xAA09-0xAA12 — the half-up round comes FIRST, and the clip works on
+     * the ROUNDED position. Clipping the raw one loses a column: a 32-wide box
+     * at screen x = -28 keeps 24 px in the original (rounded -24 -> +8) and
+     * only 20 here, so a shot in the second column went unseen. [PROVEN]
+     * against PJOYL2 cursor 1423, where DOSBox's turret finds the fireball. */
+    x = (x + 4) & ~7;
+    y = (y + 4) & ~7;
     /* CS:0xA9EF-0xAA83 — the clip prologue, ported. See clipScanBox below. */
     const c = clipScanBox(x, y, w, h);
     if (!c.hit) return 0;                       // CS:0xAB3B — it shrank away

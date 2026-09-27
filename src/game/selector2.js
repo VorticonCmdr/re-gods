@@ -696,6 +696,7 @@ export class SelectorTwoSpawns {
    */
   step(cam, hero, freezeTimer, health, grid, decodeTag, tock, fire, spawnHazard, opts = {}) {
     const drawn = [];
+    this.lastHits = [];
     for (const slot of this.slots) {
       if (!slot) continue;
       if (!slot.materialised) { this.#materialise(slot, opts); continue; }
@@ -724,7 +725,8 @@ export class SelectorTwoSpawns {
      * used to guess. Stepped unconditionally here regardless, since this
      * port has no model of `DS:0x34`'s cutscene engine at all. */
     this.rockSettle.step(cam, tock, drawn, opts.planeB, hero, health, { invuln: opts.invuln }, opts.debris);
-    this.rockBurst.step(cam, hero, health, tock, { invuln: opts.invuln }, drawn, opts.debris, opts.planeB);
+    /* The burst pool's gates read DS:0x36D (CS:0xB43A/0xB553/0xB5FF). */
+    this.rockBurst.step(cam, hero, health, opts.tock36d ?? tock, { invuln: opts.invuln }, drawn, opts.debris, opts.planeB);
     return { drawn };
   }
 
@@ -824,8 +826,9 @@ export class SelectorTwoSpawns {
       const proxy = { x: e.x, y: e.y, state: e.state };
       /* CS:0xABDE — a damaging hit that does not kill drops a spark whose
        * position draws two random numbers (combat.js hitSparkAxis). */
-      creatureScansGrid(proxy, grid, cam, decodeTag, opts.difficulty || 0, { w: slot.w, h: slot.h },
+      const hitR = creatureScansGrid(proxy, grid, cam, decodeTag, opts.difficulty || 0, { w: slot.w, h: slot.h },
                          null, { sfx: opts.sfx, rng: opts.rng, debris: opts.debris });
+      if (hitR.hit) this.lastHits.push(`${e.x},${e.y} tag${hitR.tag} dmg${hitR.damage}`);   // debug
       e.state = proxy.state;
       killed = e.state < 0;
     }

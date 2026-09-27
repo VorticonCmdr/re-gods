@@ -7,6 +7,7 @@ running. Each stop is at the input poller CS:0x241D, i.e. the state at the
 END of the previous tick. Ranges are `off:len` in hex, DS-relative.
 
   python3 peek.py joyl1 12 103 107 aec0:140 dd10:92
+  python3 peek.py joyl2 103 100-106,1417-1419 0 36c:1      (`lo` may be a list)
 Writes NAME.peek.json: [{c, r, ranges: {off: hex}}].
 """
 import json, sys
@@ -14,7 +15,12 @@ from sweep import API, DS, CS, POLLER, call, mem, word, wait_stop
 
 
 def main():
-    name, inject, lo, hi = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4])
+    name, inject = sys.argv[1], int(sys.argv[2])
+    if '-' in sys.argv[3]:
+        cursors = [c for part in sys.argv[3].split(',')
+                   for a, b in [map(int, part.split('-'))] for c in range(a, b + 1)]
+    else:
+        cursors = list(range(int(sys.argv[3]), int(sys.argv[4]) + 1))
     ranges = [tuple(int(v, 16) for v in a.split(':')) for a in sys.argv[5:]]
     here = __file__.rsplit('/', 1)[0]
     cap = json.load(open(f'{here}/{name}.raw.json'))['output']
@@ -33,12 +39,14 @@ def main():
         call('POST', '/debug/continue')
         since = wait_stop(since)['stop_id']
 
-    run_to(inject)
-    call('PUT', f'/memory/{DS}/{0x7E14}', table, raw=True)
     out = []
-    for c in range(lo, hi + 1):
+    for c in sorted(set(cursors) | {inject}):
         run_to(c)
         assert mem(DS, 0x3E6, 1)[0] == cycler
+        if c == inject:
+            call('PUT', f'/memory/{DS}/{0x7E14}', table, raw=True)
+        if c not in cursors:
+            continue
         out.append({'c': c, 'r': word(DS, 0x160),
                     'hero': [word(DS, 0x17A), word(DS, 0x17C)],
                     'ranges': {f'{o:x}': mem(DS, o, n).hex() for o, n in ranges}})

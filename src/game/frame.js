@@ -97,7 +97,7 @@ export function stepHeroFrame({ input, arsenal, grid, player, map, cam,
                                world = 1, objects = null, bar = 1,
                                cats = null, health = null, treasure = null,
                                burst = null, alloc = null, starburst = null,
-                               blocks = null, debris = null, tock = 1,
+                               blocks = null, debris = null, tock = 1, tock36d = tock,
                                inventory = null, levers = null,
                                leverToggle = null, invuln = false,
                                zoneScan = null, beforePlayer = null,
@@ -177,7 +177,7 @@ export function stepHeroFrame({ input, arsenal, grid, player, map, cam,
    * events (CS:0x5E9B -> 0x5FAB), so a selector-2 event materialises its
    * turrets on the NEXT tick; System A/B (CS:0x0285/0x028B) spawn in the same one. */
   if (beforePlayer) beforePlayer();                                   // 0223
-  player.tick(map, input, arsenal, tock, pickupCtx, healthApi);      // 0254
+  player.tick(map, input, arsenal, tock, pickupCtx, healthApi, tock36d);   // 0254
   return { projectiles, emitted: player.emitted, picked: picked.taken,
            consumed: picked.consumed || [], treasures: picked.treasures || [],
            loot, burstFx, blockFx, debrisFx, keyCollected: player.keyCollected,

@@ -801,11 +801,20 @@ export const unpackHunterVel = (dir) => ({
  *   A6B8  cmp dx,4 / jnl move      ; moving left: only when (x & 0x1f) < 4
  *   A6C4  mov cx,0x4               ; vx := +4
  *
- * Vertical — gravity is `+2` clamped at `8`, a THIRD distinct rule after the
- * hero's (`4 + v`, cap 10), the enemy's (`v` then `++`, cap 16) and the time
- * bomb's (`++`, cap 4). Four gravity implementations, no two alike.
+ * Vertical — gravity is `+2`, and a result above 8 has the 2 taken back, so
+ * an ODD velocity settles at 7 and an even one at 8 (not a clamp to 8 — the
+ * PJOYL2 capture shows a +7 axe). A third distinct rule after the hero's
+ * (`4 + v`, cap 10), the enemy's (`v` then `++`, cap 16) and the time bomb's
+ * (`++`, cap 4).
  *
  *   A703  add cx,0x2 / cmp cx,8 / jng / sub cx,0x2
+ *
+ * It also BOUNCES OFF FLOORS [PROVEN] against PJOYL2 (236 -> 240 -> 232 -> 226):
+ *   A6DA  vy < 0 -> gravity
+ *   A6DF  call 0xa60c   ; cell below the NEW position, (x&~31, y&~15)+0x80 == 1?
+ *   A6E4  cmp byte [si],1 / jz gravity   ; not while inside a solid cell
+ *   A6EA  y &= 0xfff0 ; dl = 1 ; vy = -vy (0 -> -4) ; sfx 0x209 ; no gravity
+ * and `dl` makes that tick's sprite the bare 0x1aa (CS:0xA73F).
  *
  * Lifetime: `A737 dec word [si+0x4] / js` — expiry calls CS:0xa633 and then
  * despawns. Sprite: `0x1aa + ((weaponFrame + phase) mod 6) + 1`, and 0x1aa is
@@ -924,10 +933,24 @@ export function stepMagicAxe(area, state, cam, wallAt, opts = {}) {
       if (sub > 0xc && wallAt(p.x, p.y, +1)) { s.vx = -AXE_BOUNCE_VX; bounced++; }
     } else if (sub < 4 && wallAt(p.x, p.y, -1)) { s.vx = AXE_BOUNCE_VX; bounced++; }
 
-    p.x = (p.x + s.vx) | 0;
-    p.y = (p.y + s.vy) | 0;
-    s.vy = Math.min(AXE_VY_CAP, s.vy + AXE_GRAVITY);      // CS:0xa703
-
+    p.x = (p.x + s.vx) | 0;                               // CS:0xA6CE
+    let ny = (p.y + s.vy) | 0;                            // CS:0xA6D0
+    p.landed = false;
+    const cellAt = (x, y) => {
+      const i = ((y & ~0xf) >> 4) * 128 + ((x & ~0x1f) >> 5);
+      return opts.planeB && i >= 0 && i < opts.planeB.length ? opts.planeB[i] : 0;
+    };
+    if (s.vy >= 0 && cellAt(p.x, ny + 16) === 1 && cellAt(p.x, ny) !== 1) {   // A6DA-A6E7
+      ny &= 0xfff0;                                       // A6EA
+      s.vy = -s.vy;                                       // A6EF
+      if (s.vy === 0) s.vy -= 4;                          // A6F7-A6FC
+      p.landed = true;                                    // A6ED `mov dl,1`
+      bounced++;                                          // A6F1 sfx 0x209
+    } else {
+      s.vy += AXE_GRAVITY;                                // CS:0xA703
+      if (s.vy > AXE_VY_CAP) s.vy -= AXE_GRAVITY;         // CS:0xA706-0xA70B
+    }
+    p.y = ny;
     const sx = p.x - cam.x, sy = p.y - cam.y;
     if (sx <= CULL.xMin || sy <= CULL.yMin || sx >= CULL.xMax || sy >= CULL.yMax) {
       p.tag = 0; culled++; continue;
@@ -943,8 +966,9 @@ export function stepMagicAxe(area, state, cam, wallAt, opts = {}) {
 }
 
 /** CS:0xa73c-0xa762 — the sprite for record `i`; `phase` is the loop counter 8-i. */
-export const axeSprite = (weaponFrame, i) =>
-  AXE_SPRITE_BASE + ((weaponFrame + (MOVER_WALK - 1 - i)) % AXE_SPRITE_PHASES) + 1;
+export const axeSprite = (weaponFrame, i, landed = false) =>
+  landed ? AXE_SPRITE_BASE
+         : AXE_SPRITE_BASE + ((weaponFrame + (MOVER_WALK - 1 - i)) % AXE_SPRITE_PHASES) + 1;
 
 /* ── Mover 3, CS:0xa058 — the time bomb, and `dir` is a FUSE `[PROVEN]` ──
  *
