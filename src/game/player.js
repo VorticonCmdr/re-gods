@@ -1681,8 +1681,14 @@ export class Player {
      * needs a DIRECTION as well as the fire bit — pressing fire alone on a
      * ladder does nothing, which is why passing a hard-coded 0 here would make
      * states 24/25 look ported while being unreachable. */
-    if (input.fire && (input.left || input.right)) {
-      this.ladderFacing = input.right ? 1 : -1;
+    /* The facing PERSISTS: with FIRE alone neither direction branch runs and
+     * CS:0x55CF reaches the entry with the DS:0x378 an earlier tick left, so
+     * holding FIRE keeps re-firing once a direction has been given (only the
+     * mount, CS:0x59B5, clears it). [PROVEN] against PJOYL3 861/862: FIRE
+     * held with no direction re-enters state 25; the port used to demand a
+     * direction on every shot. */
+    if (input.fire && (input.left || input.right)) this.ladderFacing = input.right ? 1 : -1;
+    if (input.fire && this.ladderFacing !== 0) {
       const id = this.ladderFacing > 0 ? 24 : 25;
       /* CS:0x55E7 — the entry saves Y and the phase, and nudges Y up 4 when
        * that phase is EVEN (CS:0x55F1 `test cl,1 / jnz`). */
