@@ -2370,6 +2370,20 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
             sfx: (id) => audio.play(id), flashPool, rng: () => rng.next(), difficulty,
             tock36d }).drawn;
       };
+      /* CS:0x01BD-0x01C9 (`bar <= 0`, combat.js's `health.dead`) — tested at
+       * the TOP of the tick, before the player, against the bar the previous
+       * tick's chase (CS:0x02C6) left. On a hit it jumps to the death driver
+       * CS:0x09BB, which plays the death sound (CS:0x0A34) on this same tick.
+       * The port used to detect it at the END of the chasing tick, starting
+       * the burst (and its sound's random draw) a tick early — [PROVEN]
+       * against PJOYG3 cursors 808/809. See game/death.js. */
+      if (!deathSeq && health.dead) {
+        deathSeq = new DeathBurst(player.x - cam.snapX, player.y - cam.snapY);
+        audio.play(DEATH_SFX);   // once, right as the burst begins — this gate only ever fires once per death
+        lastDebrisFx = [];
+        lastBurstFx = null;
+        lastBlockFx = [];
+      }
       let fr = null;
       if (!deathSeq) {
       fr = stepHeroFrame({
@@ -3224,25 +3238,6 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
        * multi-frame descent from one hit plays it once, matching tally.js's
        * own `sfxPending` consume-and-reset pattern. */
       if (health.hurtSounds > 0) { audio.play(HURT_SFX); health.hurtSounds = 0; }
-      /* CS:0x01BD-0x01C9 (`bar <= 0`, combat.js's `health.dead`) — detected
-       * here, one step later than the original's own per-frame ordering
-       * (which tests the bar BEFORE that frame's player-state-machine call
-       * even runs; this port's `stepHeroFrame` gate above only takes effect
-       * from the NEXT frame on). See game/death.js's own header for the
-       * full CS:0x09BB/0x0930/0x0845 chain this block ports. */
-      if (!deathSeq && health.dead) {
-        deathSeq = new DeathBurst(player.x - cam.snapX, player.y - cam.snapY);
-        audio.play(DEATH_SFX);   // once, right as the burst begins — this gate only ever fires once per death
-        /* `fr` (stepHeroFrame's own per-tick return) is gated off for the
-         * whole burst below, so lastDebrisFx/lastBurstFx/lastBlockFx would
-         * otherwise keep redrawing whatever they held on the tick death was
-         * detected, for all 18 frames of the burst. Clear them here rather
-         * than inside the `if (fr)` block, since that block simply doesn't
-         * run during the burst. */
-        lastDebrisFx = [];
-        lastBurstFx = null;
-        lastBlockFx = [];
-      }
       if (deathSeq) {
         const r = deathSeq.tick();
         lastDeathBurstFx = r.sprites;
