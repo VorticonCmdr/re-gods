@@ -3636,9 +3636,16 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
       x: player.x, y: player.y, st: player.stateIndex, camX: cam.x, camY: cam.y,
       world: levelInfo.world, sub: levelInfo.sublevel, tick: clock.tick,
       r: rng.cursor,
+      slots: arsenal.slots.map((sl) => `${sl.weapon}:${sl.live}`).join(' '),
     });
     window.__gods = {
       snap,
+      /* One slot's projectile records, for comparing against DS:0xDD10+. */
+      slotDetail(i) {
+        const sl = arsenal.slots[i];
+        return sl.area.slice(0, 9).map((r, k) =>
+          `${r.tag}/${r.x}/${r.y}/${r.dir}/${sl.wobble ? sl.wobble[k] : ''}`).join(' ');
+      },
       /* Load a captured DS:0x7E14 table (512 bytes as hex, little-endian
        * words) and DS:0x160 cursor into the shared generator, in place, so
        * every holder of `rng` sees it. */

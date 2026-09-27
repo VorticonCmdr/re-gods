@@ -6712,7 +6712,7 @@ export async function checkWeaponsProjectiles(fetchRaw) {
     const stems = ok.map((i) => (dmap[PINNED_SPRITE[i]] || {}).stem);
     const objectStems = GROUP_STEMS.objects;
     check(`every spawnable weapon's pinned sprite resolves inside \`objects\``,
-      ok.length === 8 && stems.length === 8
+      ok.length === 10 && stems.length === 10
         && stems.every((s) => s && objectStems.includes(s)),
       `descriptors ${ok.map((i) => PINNED_SPRITE[i]).join(', ')} -> ` +
       `${stems.join(', ')}. main.js loads always + objects + level<N>; a ` +
@@ -6723,8 +6723,10 @@ export async function checkWeaponsProjectiles(fetchRaw) {
   /* ── how much of the arsenal is actually reachable ────────────────────── */
   {
     const s = spawnableWeapons(w1);
-    check(`exactly 8 of the 11 shipped weapons have a decoded spawn handler`,
-      s.ok.length === 8 && s.ok.join() === '0,1,4,5,7,8,9,10',
+    /* 10 now: the fireball (2/3) and spear (6/7) handlers are decoded too
+     * (PJOYL2's shop buys fireballs); only the cut "flame" (3) is left. */
+    check(`exactly 10 of the 11 shipped weapons have a decoded spawn handler`,
+      s.ok.length === 10 && s.ok.join() === '0,1,2,4,5,6,7,8,9,10',
       `handlers 12/13 are decoded but NO shipped weapon references them; the ` +
       `time bomb (1) uses its own spawner (\`spawnTimeBombVolley\`, a later ` +
       `pass — see that function's own citation), the hunter (8) uses its ` +

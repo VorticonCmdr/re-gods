@@ -139,6 +139,20 @@ export const HANDLERS = {
    * — this pair also seeds a companion state slot per entry. */
   14: { facing: -1, dx: 0x10, dy: -0x10, dirs: [1, 0, 2], at: 0x9bc1 },
   15: { facing: +1, dx: 0x10, dy: -0x10, dirs: [1, 0, 2], at: 0x9b15 },
+  /* 2/3 — the FIREBALL, CS:0x99D7 (left) / CS:0x996F (right). The ordinary
+   * three-entry volley and +0x0e facing write, plus one extra store per
+   * entry: DS:0xDEFC[tag - [0x340] - 1] := 0xFFFA (-6) — the wobble word
+   * mover 1 (stepFireball) adds to Y and then increments, so a fireball
+   * starts climbing 6 px/tick and arcs over. The muzzle adjust is NOT a
+   * mirror pair: left `add ax,0x10 / sub bx,6`, right `add bx,5` (no X).
+   * [PROVEN] live: PJOYL2 (world 2's shop buys fireballs). */
+  2:  { facing: -1, dx: 0x10, dy: -6, dirs: DIRS.left,  at: 0x99d7, wobbleSeed: -6 },
+  3:  { facing: +1, dx: 0,    dy: +5, dirs: DIRS.right, at: 0x996f, wobbleSeed: -6 },
+  /* 6/7 — the SPEAR, CS:0x9A48 (left: `sub bx,4 / sub ax,0x18 / jmp
+   * 0x991c`) and CS:0x9A42 (right: `sub bx,4 / jmp 0x98d1`) — the common
+   * left/right bodies with their own muzzle offsets, like 12/13. */
+  6:  { facing: -1, dx: -0x18, dy: -4, dirs: DIRS.left,  at: 0x9a48 },
+  7:  { facing: +1, dx: 0,     dy: -4, dirs: DIRS.right, at: 0x9a42 },
 };
 
 /* Handlers 2/3 and 6/7 are not decoded. Shipped weapons reference 2/3
@@ -153,7 +167,7 @@ export const HANDLERS = {
  * this table: its muzzle offset and initial vx differ by facing in a shape
  * `HANDLERS`'s uniform `{dx, dy, dirs}` record can't express (see that
  * function's own citation). */
-export const DECODED_HANDLERS = [0, 1, 8, 9, 10, 11, 12, 13, 14, 15];
+export const DECODED_HANDLERS = [0, 1, 2, 3, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
 
 /**
  * CS:0x98d1 — how many of the three entries a volley fills.

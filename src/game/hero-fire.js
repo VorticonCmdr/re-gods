@@ -62,7 +62,7 @@ import { WEAPON_SLOTS, MAX_SUBSLOTS, tagFor, allocateShots, armWeapon,
          reloadWorld } from './weapons.js';
 import { spawnVolley, spawnAxeVolley, spawnHunterVolley, spawnTimeBombVolley,
          stepProjectiles, stepHunterArray, stepMagicAxe, stepTimeBomb, timeBombHoldTicks,
-         axeWallAt, bombWallAt, bombGroundAt, newAxeState,
+         axeWallAt, bombWallAt, bombGroundAt, newAxeState, newWobble, stepFireball, HANDLERS,
          DECODED_HANDLERS, NULL_HANDLERS, AREA_ENTRIES, ENTRIES_REACHABLE, GROUP_ENTRIES,
          MOVER_WALK,
          muzzle } from './projectiles.js';
@@ -125,6 +125,11 @@ export class Slot {
      * "still flying" (the mover's own sentinel, CS:0xa188). Reset fresh on
      * every throw in `emit()` below. */
     this.bombState = { phase: -1, vx: 0, vy: 0 };
+    /* DS:0xDEFC — the fireball's per-record wobble words (mover 1). One
+     * array per slot for the same reason as bombState above: the original's
+     * is global, indexed by tag - [0x340] - 1, and only the fireball's slot
+     * ever reaches it. */
+    this.wobble = newWobble();
   }
 
   /** CS:0x9724 — a sub-slot is free when all THREE of its records are empty. */
@@ -277,6 +282,8 @@ export class Arsenal {
         const rec = s.area[head + k];
         rec.tag = e.tag; rec.x = e.x; rec.y = e.y; rec.dir = e.dir;
         if (isAxe) Object.assign(s.axeState[head + k], states[k]);
+        const seed = HANDLERS[handler] && HANDLERS[handler].wobbleSeed;
+        if (seed !== undefined) s.wobble[head + k] = seed;   // CS:0x99A1 / 0x9A0C
       });
       /* CS:0x9A54/0x9A5A — the spawn handler ITSELF seeds the time bomb's
        * globals (vx from facing, vy=0, phase=-1/"still flying"), not the
@@ -329,6 +336,13 @@ export class Arsenal {
         this.axeBounced = (this.axeBounced || 0) + r.bounced;
         axeBounced += r.bounced;
         this.axeExpired = (this.axeExpired || 0) + r.expired;
+        continue;
+      }
+      if (w.mover === 1) {                         // CS:0x9d97, the fireball
+        const r = stepFireball(s.area, cam, s.wobble, { grid, weapon: w, planeB });
+        moved += r.moved; culled += r.culled;
+        this.stamped += r.stamped;
+        this.hitTerrain += r.hitTerrain;
         continue;
       }
       if (s.weapon === TIME_BOMB_WEAPON) {
