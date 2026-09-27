@@ -61,4 +61,74 @@ This section is ported as `gods-web/src/game/guardian.js`. Per tick it matches t
   - **Screen:** screen x ≤ −16 or > 0x168 frees the record.
   - **Hero:** `0xDB4E` at hot point (x+10, y+8) costs the hero 2 and frees the record.
 
-Worlds 2–4 are not ported. The world-2 and world-3 drivers are `0xCD7B` and `0xD53B`; world 3 has a script interpreter at `0xD7A3`.
+## World 3 `[PROVEN]` structure, ported
+
+The port matches the `PJOYG3` hero for the whole demo; the random stream matches to cursor 838.
+
+- **Entry (`C516`):**
+  - driver `0xD53B`
+  - respawn `0xC533`
+  - health 0x8CA
+  - spawn position (0x2C0, 0x70)
+  - script `SS:0x5468` (generated from live memory)
+
+  The respawn does **not** free the pool. It restarts the script but keeps the health and the shots already in flight.
+- **Script (`D778`):** 3-byte records (frame, signed dx, signed dy), one record per tick.
+  - Command `0xFD` lifts the hero 16 px, starts the camera-x shake counter `[0x2D2]` = 8 (±4 on `[0x36C]`, applied at `CS:0x01CF` before the snapshot) and does `[0x270]` −= 8. It plays sfx `0x4B39`.
+  - Any other command byte (`0xFE`) rewinds the pointer 0x5D bytes unless the guardian's tick-start x is right of the hero.
+  - x is clamped to [0x60, 0x2C0].
+  - Entering frame 0, 8 or 0x19 plays sfx `0x2839`.
+- **Shots (`D609`/`D6DE`):**
+  - They use the `DS:0xD030` pool and are moved by the driver itself.
+  - A shot fires on the tick the frame *becomes* 0x1D (left) or 0x27 (right).
+  - Each tick: vy += 1, and the frame cycles on `[0x36C]`=0. Screen y ≥ 0xC0 frees the record.
+  - A hero hit (`DB4E`) costs 2+2 and draws 8 randoms for two sparks.
+- **Hit box (`D5C0`):** `A9E4` at (x+0xC, y), 0x28×0x58.
+- **Not ported:** the death (`D923`) and the corpse gate (`D557`).
+
+## World 2 `[STATIC]`, ported; the hero matches `PJOYG2` to cursor 415
+
+Spec source: a disassembly of the live code segment, re-read by hand for `CE87`, `D1BA`–`D2DD`, `D2DE`–`D3A2`, `D3A3`–`D530` and VGA export 37.
+
+- **Entry (`C54C`):**
+  - driver `0xCD7B`
+  - respawn `0xC57B`
+  - arm health `[0x2D4]` 2000, body health `[0x2D6]` 2400; `[0x28A]` = max(0, arm) + body
+  - the `D211` gate NOPed
+  - position (0x280, 0x370)
+  - head offset (−28, −30)
+  - arm angles `[0x2E0/2E2/2E4]` = 0x100/0x130/0x150, all speeds +0x18
+
+  The respawn resets all of this except the healths, the jaw counter `[0x2F0]` and `[0x32]`.
+- **The scripted camera `[0x32]` (`CS:0x5E22`):**
+  - The driver sets the target (0xA0, 0x354) and sets `[0x32]` = 1 if it is 0.
+  - While `[0x32]` ≠ 0, the player epilogue (`CS:0x5EB3`) runs `5E22` instead of the normal camera, with no dead zones and no clamps. X moves a flat 4 px per tick; Y halves toward the target.
+  - `[0x32]` counts 1→2 on arrival, then 2→3→4.
+  - `CS:0x08C5` skips the respawn camera re-init while it is set.
+  - Because the probe (`5FAB`) runs before the camera step, the pan starts the tick after the install.
+- **Movement (`CE87`):**
+  - Once `[0x32]` > 2 and the guardian sits on its target, it retargets: the hero, or the first marker (`DS:0xB5DC`) of type 0x6D. It then applies (+0x70, −0x3C) and, right of x = 0x80, the lean (bx sar 2 added to y, bx sar 3 subtracted from x). Two random draws add ±16.
+  - It moves 1/4 of the distance per tick, with the leftward step capped at 12.
+  - During a fireball burst it retargets every tick and does not move.
+- **Head (`CF52`):**
+  - Script `SS:0x5742`: 24 records (dx, dy, frame), stepped on `[0x36D]`=0 and read every tick.
+  - Frame 2 spawns a fireball every tick, into the first free record of 8 in `DS:0xD030`; the burst counter `[0x2DE]` caps it at 7. The second fireball plays `0x3C29`.
+  - Neck balls at the body anchor, the midpoint and the head anchor.
+  - Jaw: `[0x2F0]` steps on `[0x36D]`=0; when it wraps to 0 it plays `0x0B26`. Table `SS:0x57D0`.
+- **Arm (`D3A3`/`D49C`):**
+  - P0 = (x+0x3C, y+0x1F); P1/P2/P3 come from SINCOS.DAT at the three angles, before this tick's advance. An angle's speed flips when the new angle is ≤ 0x100 or ≥ 0x258.
+  - Ten Bezier samples (BEZIER.DAT, `w = bswap(w) >> 1`, samples 0, 20, …, 180) are evaluated by graphics export 37: Σ (c·p) >> 15, 16-bit.
+- **Claw (`D2DE`):**
+  - Its frame comes from `DS:0xDC78`/`0xDC8C`, indexed by (angle A − 0x100) / 0x18 and chosen by the sign of A's speed.
+  - Frame 1 on a `[0x36C]` tick fires a zap into the line-hazard pool (`DBC6`, n = 6). It first makes two jitter draws (y, then x), even when the pool is full. The zap starts at the t=0.9 arm point and aims at the jittered hero +8/+6.
+- **Hits (`CD9D`):**
+  - `A9E4` runs over six body boxes (head, three neck balls, jaw, body), then, while the arm lives, over REC6 and the ten 8×8 arm points. A part already dead still contact-damages and plays `0xF22`.
+  - While arm ≥ body, the arm gives `arm sar 1` to the body every tick.
+  - REC6's x,y (`SS:0x4870`) has no writer found, so the port uses 0, the screen's top-left (`UNKNOWN_w2_rec6_xy`).
+- **Fireball gate (`D212`):**
+  - Each tick x −= 7, y += 5. The size t goes 7→0 on `[0x36D]`=0; the phase is `[0xD092]`+i mod 3.
+  - Screen y ≥ 0xB0 frees the record and draws 2 randoms for a spark.
+  - A `DB4E` hit costs 2. While the hero is invulnerable, a fireball passes through him.
+- **Not ported:** the death (`CE78` → `D923`).
+
+World 4 (`0xC5EA`) is not ported.
