@@ -3860,6 +3860,8 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
           Bx: enemies.map((e) => `m${e.mode} d${e.delay} v${e.vel} t${e.timer} V${e.lastVerdict}`).join(' '),
           s2: selectorTwo.slots.filter(Boolean).map((sl) => sl.entities.map(f).join(' ')).join(' | '),
           s2hits: (selectorTwo.lastHits || []).join('; '),
+          nests: nests.slots.filter((n) => n.x >= 0).map((n) => `${n.x},${n.y}:${n.state}/${n.hp}/t${n.timer}`).join(' '),
+          brood: brood.slots.filter((b) => b.frame >= 0).map((b) => `${b.x},${b.y}:f${b.frame}/s${b.strength}`).join(' '),
           shots: arsenal.slots.map((sl) => sl.area.filter((r) => r.tag >= 0).map((r) => `${r.x},${r.y}`).join(' ')).join(' | '),
         };
       },
