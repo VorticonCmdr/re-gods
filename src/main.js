@@ -777,7 +777,11 @@ async function main() {
   /* CS:0xA461 — the starburst potion's 80-slot particle array. It is a real
    * damage source (tag 0xFC), so it lives beside the projectiles rather than
    * with the cosmetics. */
-  let starburst = new Starburst(new GodsRandom(2));
+  /* CS:0x12FD/0x1312 (chest burst) and CS:0xA56F (starburst chain) read
+   * the same DS:0x7E14 table as everything else, so both hold a view of the
+   * CURRENT `rng` (which a level load replaces), not a generator of their own. */
+  const sharedRandom = { next: () => rng.next() };
+  let starburst = new Starburst(sharedRandom);
   /* `starburst.bursts` only counts real spawner runs (starburst.js: "how
    * many times the spawner actually ran"), incremented once per call
    * regardless of how many of the 8 particles it seeds — edge-detecting it
@@ -789,7 +793,7 @@ async function main() {
    * and only the six terrain-stopping weapons can reach it. */
   let blocks = new Destructibles(1);
   let purse = new Purse(), score = new Score();
-  let burst = new TreasureBurst(new GodsRandom(1));
+  let burst = new TreasureBurst(sharedRandom);
   let opened = 0, lootLanded = 0, sbStamps = 0, lastBurstFx = null;
   let lastBlockFx = [];
   let lastNestFx = [], lastShotsFx = null, lastDebrisFx = [], lastLineHazardFx = null;
@@ -1237,8 +1241,8 @@ async function main() {
        * does not — its ten records live in a fixed array that the next
        * chest overwrites wholesale anyway (CS:0x12EA never looks for free
        * slots). */
-      burst = new TreasureBurst(new GodsRandom(1)); opened = 0; lootLanded = 0;
-      starburst = new Starburst(new GodsRandom(2));
+      burst = new TreasureBurst(sharedRandom); opened = 0; lootLanded = 0;
+      starburst = new Starburst(sharedRandom);
       lastStarburstBursts = 0;  // a fresh instance restarts its own bursts count at 0 too
       /* CS:0x69B1/0x8E40 restore every broken block, then clear the queue. */
       if (blocks) blocks.restoreAll(level.map.planeA, level.map.planeB);
