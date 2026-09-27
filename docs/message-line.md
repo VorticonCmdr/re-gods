@@ -336,6 +336,10 @@ from the ordinary in-level pickup path, in any world, every time.
 ⚠️ `DS:0x3ab` has a **fourth** writer at `CS:0x4846`, inside an orphan block
 (`CS:0x4828`-`0x484b`) that no instruction references. Because the block has no
 owning function, caller- and xref-based sweeps miss it. `[STATIC]`.
+⚠️ It is not orphaned: no *instruction* references it, but the `SS:0x35AA` bit
+table does (bits 0, 3, 11). It is the sublevel-B switch, reached from the
+progress-record tally — `[PROVEN]` live, see `docs/camera-and-world-nav.md`'s
+selector-6 section.
 
 ### The once-per-type bitmap, `DS:0x8cea`
 
