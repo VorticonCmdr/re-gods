@@ -101,12 +101,19 @@ export function stepHeroFrame({ input, arsenal, grid, player, map, cam,
                                inventory = null, levers = null,
                                leverToggle = null, invuln = false,
                                zoneScan = null, beforePlayer = null,
-                               objectPass = true, effects = null }) {
-  arsenal.latchTick(input.fire);                                    // 019D
+                               objectPass = true, effects = null,
+                               heroDead = false }) {
+  /* `heroDead`: the death driver CS:0x09BB runs this same pre-player half of
+   * the tick (grid clear, blocks, barriers, object pass, projectiles,
+   * starburst, selector 2) WITHOUT the fire latch (CS:0x019D) and without the
+   * player, then rejoins the main loop at CS:0x0257. [PROVEN] against PJOYG2
+   * 429-437: shots already in flight keep hitting the guardian while the
+   * hero's death burst plays; the port used to freeze them. */
+  if (!heroDead) arsenal.latchTick(input.fire);                     // 019D
   /* CS:0x49F9 — the SAME "one action per press" shape as the weapon latch
    * above, cleared every tick fire is not held. Unconditional, regardless
    * of the hero's state, exactly like arsenal's own latch clear. */
-  if (leverToggle) leverToggle.latchTick(input.fire);
+  if (leverToggle && !heroDead) leverToggle.latchTick(input.fire);
   grid.clear();                                                     // 01CC
   /* CS:0x0206 -> CS:0x1432, the object pass. Weapon pickup lives here, and it
    * runs BEFORE the projectile step — so a weapon collected this tick has its
@@ -181,6 +188,12 @@ export function stepHeroFrame({ input, arsenal, grid, player, map, cam,
    * events (CS:0x5E9B -> 0x5FAB), so a selector-2 event materialises its
    * turrets on the NEXT tick; System A/B (CS:0x0285/0x028B) spawn in the same one. */
   if (beforePlayer) beforePlayer();                                   // 0223
+  if (heroDead) {
+    return { heroDead, projectiles, emitted: null, picked: picked.taken,
+             consumed: picked.consumed || [], treasures: picked.treasures || [],
+             loot, burstFx, blockFx, debrisFx, keyCollected: null, leverToggled: null,
+             footstep: false, climbStep: false, ladderLand: false };
+  }
   player.tick(map, input, arsenal, tock, pickupCtx, healthApi, tock36d);   // 0254
   return { projectiles, emitted: player.emitted, picked: picked.taken,
            consumed: picked.consumed || [], treasures: picked.treasures || [],

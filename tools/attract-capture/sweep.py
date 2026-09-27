@@ -47,6 +47,9 @@ def wait_stop(since):
 
 def main():
     name, inject, end = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
+    # optional DS pokes at the inject cursor: `off:hexbytes` (e.g. 1d4:0100
+    # seeds the starburst gravity phase, a value DOS carries across cycles)
+    pokes = [(int(a.split(':')[0], 16), bytes.fromhex(a.split(':')[1])) for a in sys.argv[4:]]
     here = __file__.rsplit('/', 1)[0]
     cap = json.load(open(f'{here}/{name}.raw.json'))['output']
     snaps = [e.split(':') for e in cap['rnd'].split(';') if e]
@@ -65,6 +68,8 @@ def main():
     assert mem(DS, 0x3E6, 1)[0] == cycler, 'cycler moved before the inject cursor'
     call('PUT', f'/memory/{DS}/{0x7E14}', table, raw=True)
     assert mem(DS, 0x7E14, 512) == table
+    for off, data in pokes:
+        call('PUT', f'/memory/{DS}/{off}', data, raw=True)
     log = [{'inject': inject, 'snap': int(snap[0]), 'r_live': word(DS, 0x160), 'r_cap': int(snap[1])}]
 
     call('DELETE', '/debug/breakpoints')

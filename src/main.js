@@ -2437,8 +2437,9 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
       camWasScripted = camScript.mode !== 0;
       camPending = null;
       let fr = null;
-      if (!deathSeq) {
+      {
       fr = stepHeroFrame({
+        heroDead: !!deathSeq,                        // CS:0x09BB — see frame.js
         input, arsenal, grid, player,
         map: level.map, cam: { x: cam.snapX, y: cam.snapY }, world: level.world,
         /* CS:0x0206 — the object pass. `drawObjects` is the same array the
@@ -2627,7 +2628,9 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
        * stale array. */
       events.actionCtx.objects = level.drawObjects;
       /* plane-B cell -> event record -> selector 2 -> trigger evaluator */
-      const fired = events.step(player.x, player.y,
+      /* The plane-B probe is the player epilogue's (CS:0x5E9B -> 0x5FAB); the
+       * death driver never reaches it. */
+      const fired = (fr && fr.heroDead) ? null : events.step(player.x, player.y,
         events.makeState({ timer: events.actionCtx.timer, inventory,
           /* COND7/8 health target DS:0x192, COND13/14 the score, COND15/16
            * lives DS:0x224, COND3/4 the three weapon slots (0xFFFF = empty).
@@ -2721,7 +2724,7 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
       /* CS:0x5EB3 — the player epilogue runs the scripted camera instead of
        * the normal one while DS:0x32 is set. It lands in the committed
        * camera; everything below still uses the snapshot (CS:0x0263). */
-      if (camWasScripted && fr) {
+      if (camWasScripted && fr && !fr.heroDead) {
         camPending = { x: cam.x, y: cam.y };
         scriptedCameraStep(camPending, camScript);
       }
@@ -3369,7 +3372,9 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
           }
         }
       }
-      if (!camWasScripted) cam.update(player.x, player.y, levelInfo);
+      /* The camera step is the player epilogue's too (CS:0x5EA4); while the
+       * death burst plays (CS:0x09BB) it does not run. */
+      if (!camWasScripted && !(fr && fr.heroDead && deathSeq)) cam.update(player.x, player.y, levelInfo);
       else if (camPending) { cam.x = camPending.x; cam.y = camPending.y; }
       /* CS:0xD7E7 `[0x270] -= 8` lands on the camera the update just computed,
        * which CS:0x02EA commits. */
