@@ -135,3 +135,27 @@ export async function runDemo(name, { fields = FIELDS, context = 3, random = fal
     end: { dos: lastD && `${lastD.x},${lastD.y} st${lastD.st}`, port: lastP && `${lastP.x},${lastP.y} st${lastP.st}` },
   };
 }
+
+/* The guardian stream `gd` (capture.lua): one entry per tick while DS:0x34
+ * is set, holding only the fields that changed, as `cursor:i=v,i=v`. Field i
+ * is GD_FIELDS[i-1]. Returns Map(cursor -> {field: value}) with every field
+ * carried forward. Older captures used a positional format; those return null. */
+export const GD_FIELDS = ['hp_28a', 'x_28c', 'y_28e', 'frame_290', 'script_292',
+  'w2ca', 'w2cc', 'w2ce', 'w2d0', 'w2d4', 'w2d6', 'w2d8', 'w2da', 'w2dc', 'w2de',
+  'w2e0', 'w2e2', 'w2e4', 'w2e6', 'w2e8', 'w2ea', 'cam32', 'poolN', 'poolSum'];
+
+export async function loadGd(name) {
+  const t = await (await fetch(`/tools/attract-capture/${name}.raw.json`)).text();
+  const raw = JSON.parse(t).output;
+  if (!raw.gd || !/=/.test(raw.gd)) return null;
+  const out = new Map(), cur = {};
+  for (const e of raw.gd.split(';').filter(Boolean)) {
+    const [c, body] = e.split(':');
+    for (const kv of (body || '').split(',').filter(Boolean)) {
+      const [i, v] = kv.split('=');
+      cur[GD_FIELDS[+i - 1]] = +v;
+    }
+    out.set(+c, { ...cur });
+  }
+  return out;
+}

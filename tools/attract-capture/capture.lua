@@ -6,8 +6,9 @@
 --   0x192, lives 0x224, death counter 0x24C, script mode 0x34, respawn X
 --   0x16E), as cursor:name=value.
 -- gd: while DS:0x34 ~= 0 (a guardian is installed, selector 11), one entry
---   per tick: cursor:health 0x28A,x 0x28C,frame 0x290,script 0x292, then the
---   15 x 10-byte projectile pool DS:0xD030 summarised as live-count,checksum.
+--   per tick holding only the fields that CHANGED since the previous entry,
+--   as cursor:i=v,i=v. Field i is GD_WORDS[i] (a DS word), then the DS:0x32
+--   byte, then the DS:0xD030 pool summarised as live count and checksum.
 -- rnd: the 512-byte random table DS:0x7E14 (hex) with the tape cursor and
 --   DS:0x160 at the moment it was seen — at playback start and again
 --   whenever its first word changes (a level load regenerates it).
@@ -31,25 +32,31 @@ local t0 = rw(S, 0x7E14)
 rnd[1] = cur .. ':' .. rw(S, 0x160) .. ':' .. tablehex()
 local a, b2, c, d, e, f, g, r = 0, 0, 0, 0, 0, 0, -1, 0
 local hp, lv, dt, m34, rx = -1, -1, -1, -1, -1
-local gd, gnow = {}, nil
+local gd, gnow, gprev = {}, nil, {}
+local GD_WORDS = { 0x28A, 0x28C, 0x28E, 0x290, 0x292, 0x2CA, 0x2CC, 0x2CE, 0x2D0, 0x2D4, 0x2D6,
+  0x2D8, 0x2DA, 0x2DC, 0x2DE, 0x2E0, 0x2E2, 0x2E4, 0x2E6, 0x2E8, 0x2EA }
 -- The pool is read raw every frame and only summarised once per tick (at
 -- the cursor change), to stay inside the Lua step budget.
-local function gdhex(g)
-  -- The pool summarised, to stay under the 64 KB script output: the number
-  -- of live records (+6 >= 0) and the sum of their x+y+vy+vx words.
-  local n, sum, p = 0, 0, g[6]
+local function gddelta(g)
+  local n, sum, p = 0, 0, g.pool
   local function w(i) local v = string.byte(p, i) + 256 * string.byte(p, i + 1); if v >= 32768 then v = v - 65536 end; return v end
   for k = 0, 14 do
     local o = k * 10 + 1
     if w(o + 6) >= 0 then n = n + 1; sum = sum + w(o) + w(o + 2) + w(o + 4) + w(o + 8) end
   end
-  return g[1] .. ',' .. g[2] .. ',' .. g[4] .. ',' .. g[5] .. ',' .. n .. ',' .. sum
+  local vals, out = {}, {}
+  for i = 1, #GD_WORDS do vals[i] = g.w[i] end
+  vals[#GD_WORDS + 1] = g.b32; vals[#GD_WORDS + 2] = n; vals[#GD_WORDS + 3] = sum
+  for i = 1, #vals do
+    if vals[i] ~= gprev[i] then out[#out + 1] = i .. '=' .. vals[i]; gprev[i] = vals[i] end
+  end
+  return table.concat(out, ',')
 end
 while rb(S, 0x3BD) ~= 0 do
   local k = rw(S, 0x282)
   if k ~= cur then
     rows[#rows + 1] = cur .. ',' .. a .. ',' .. b2 .. ',' .. c .. ',' .. d .. ',' .. e .. ',' .. r
-    if gnow then gd[#gd + 1] = cur .. ':' .. gdhex(gnow); gnow = nil end
+    if gnow then gd[#gd + 1] = cur .. ':' .. gddelta(gnow); gnow = nil end
     cur = k
   end
   a, b2, c, d, e = rw(S, 0x17A), rw(S, 0x17C), rb(S, 0x377), rw(S, 0xA), rw(S, 0xC)
@@ -61,7 +68,9 @@ while rb(S, 0x3BD) ~= 0 do
   v = rb(S, 0x34); if v ~= m34 then m34 = v; ev[#ev + 1] = k .. ':d34=' .. v end
   v = rw(S, 0x16E); if v ~= rx then rx = v; ev[#ev + 1] = k .. ':rx=' .. v end
   if rb(S, 0x34) ~= 0 then
-    gnow = { rw(S, 0x28A), rw(S, 0x28C), rw(S, 0x28E), rw(S, 0x290), rw(S, 0x292), rd(S, 0xD030, 150) }
+    local w = {}
+    for i = 1, #GD_WORDS do w[i] = rw(S, GD_WORDS[i]) end
+    gnow = { w = w, b32 = rb(S, 0x32), pool = rd(S, 0xD030, 150) }
   end
   v = rw(S, 0x7E14); if v ~= t0 then t0 = v; rnd[#rnd + 1] = k .. ':' .. r .. ':' .. tablehex() end
   dosbox.wait_frames(1)
