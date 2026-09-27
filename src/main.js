@@ -770,8 +770,8 @@ const guardianTables = {
     /* CS:0x93DD-0x9417 — a STARBURST particle (tag 0xFC) that hits something
      * outside guardian mode also sets off a new burst at the struck grid
      * cell: bp - 0x16CA split by 0x30 into row/column, 8 px each, plus the
-     * camera. [STATIC], read from the live code segment; not yet seen to
-     * fire live (PJOYL3 1040's burst is being traced to its caller). */
+     * camera. [PROVEN] live: a CS:0xA461 trace at PJOYL3 1043 returned into
+     * CS:0x941A. */
     if ((tag & 0xff) === 0xfc && mode === 0) {
       const off = grid.lastHitSi - 0x16ca;
       if (off >= 0) {

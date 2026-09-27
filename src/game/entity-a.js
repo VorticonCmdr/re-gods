@@ -881,6 +881,13 @@ export function stageFacingAndFire(e, desc) {
 
   /* CS:0xE66B `dec word [di+0xe] / jnz` — 16-bit, fires only on reaching
    * exactly zero (a timer left at 0 wraps and waits 65535 ticks). */
+  /* System A's materialise (CS:0xDE8D-0xDEE0) never writes +0x0E, and its
+   * entity array DS:0xE96 is never bulk-cleared (the only reference is the
+   * per-tick base load at CS:0xDF42), so a fresh slot holds its BSS zero —
+   * read live: +0x0E is 0 in nearly every slot — and the first shot waits
+   * 65535 ticks unless the slot fired before. [STATIC] + a live memory read;
+   * no attract demo has a System-A shooter, so it is not replay-checked.
+   * The per-slot carry-over is not modelled: UNKNOWN_sysA_fire_timer_carry. */
   e.reloadTimer = (e.reloadTimer - 1) & 0xffff;
   if (e.reloadTimer !== 0) return null;
   e.reloadTimer = (0x10 - loNibble) << 2;         // CS:0xe670-e67a

@@ -59,8 +59,9 @@ export async function runPort(name, maxTicks = 4000, rnd = []) {
    * run from a known value so the harness is reproducible. */
   /* The captures' cross-cycle state (bytes DOS never resets), seeded so a
    * capture replays: PJOYG2's jaw DS:0x2F0 and PJOYL3's starburst gravity
-   * phase DS:0x1D4, each fitted to its capture's own cycle (the live runs
-   * need jaw 3 / phase 5 — see compareLive). */
+   * phase DS:0x1D4. These values are FITTED (the only ones that replay each
+   * capture exactly), not read from memory; of the live runs' values, only
+   * PJOYL3's phase 5 was measured (a DS:0x8CFA peek), jaw 3 was fitted too. */
   const seed = CAPTURE_SEEDS[name] || {};
   g.resetProcessJaw();
   g.setLandFlag357(1);
