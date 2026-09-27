@@ -1480,14 +1480,22 @@ async function main() {
    * order was established (and why entering the shop directly, skipping
    * the level load, crashes). Real prices are charged — `UNKNOWN_shop_
    * prices` is closed, see shop.js's own `PRICES` table and shop.md. */
+  /* CS:0x2EA0 — a real password match AND the attract "L"+digit bypass land
+   * here alike: [0x42]:=world, [0x391]:=1, JMP 0x2D9E -> the loader, whose
+   * level start runs CS:0x8C34's full restart ([0x391] set) and then, at
+   * CS:0x00BD-0x00CB, the shop — because [0x38C] (set when the title loop
+   * starts, CS:0x2C8A; cleared only on the BEGIN QUEST path, CS:0x2D99, and
+   * the joyg loader) is still 1 — for every world except 1. [PROVEN] live:
+   * PJOYL2's "L2" opens the world-2 shop (VALUE 05000, money 80000). */
   async function enterViaPassword(matchWorld) {
     uiState = 'shop';
-    purse = new Purse(); score = new Score();
-    inventory = [INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY];
-    deathSeq = null; lastDeathBurstFx = []; gameOverFade = null;
-    await switchLevel(levelKeyFor(matchWorld, 0));
-    purse.add(SHOP_STARTING_MONEY);
+    await fullRestart(levelKeyFor(matchWorld, 0));
+    if (matchWorld === 1) { uiState = 'game'; return; }          // CS:0x00C4
+    purse = new Purse();
+    purse.add(SHOP_STARTING_MONEY);                             // CS:0x0643 sets it, not adds
+    shopIterAcc = 0;
     shopScreen = new ShopScreen({
+      prices: level.objValues,
       roster: shopRosterForWorld(matchWorld),
       inventory,
       state: { health, arsenal },
@@ -1509,6 +1517,7 @@ async function main() {
    * gives `switchLevel` — a joyg segment's own `enterAttractState` calls
    * `switchLevel` itself, so the two guards compose rather than duplicate). */
   let attractLoading = false;
+  let shopIterAcc = 0;    // fractional shop passes owed during a demo (see the tape block)
 
   /**
    * Load `attract.js`'s `CYCLE[state]` and put the port into whatever state
@@ -1981,6 +1990,27 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
        * the load gate's assumption above.) */
       if (attract && tallyScreen) {
         input.up = input.down = input.left = input.right = input.fire = false;
+      } else if (attract && shopScreen && !transitioning && !attractLoading) {
+        /* The shop runs its OWN loop (CS:0x6C19): one DS:0x382 poll — one
+         * tape entry — per pass, each pass ending in a 2-PIT-tick frame wait
+         * (CS:0x6D72 `mov ax,2 / call 0x35ad`, i.e. 20 Hz: 4 passes per 3
+         * of our ticks), plus one poll per pass of the fire-release wait
+         * (CS:0x6E62), which has no frame wait at all. Feeding the tape in
+         * exactly those units is what makes a recording's shop visit replay
+         * the same way; see ShopScreen#iterate. */
+        const t = attract.tape;
+        shopIterAcc += 4 / 3;
+        while (shopIterAcc >= 1 && shopScreen && !shopScreen.done && t.cursor < t.ticks.length) {
+          shopIterAcc -= 1;
+          do {
+            const purchase = shopScreen.iterate(t.ticks[t.cursor].bits);
+            t.cursor++;
+            if (purchase && !purchase.refused) audio.play(BUY_CONFIRM_SFX);
+          } while (shopScreen && shopScreen.fireWait && t.cursor < t.ticks.length);
+        }
+        input.up = input.down = input.left = input.right = input.fire = false;
+        if (t.cursor >= t.ticks.length) enterAttractState(nextState(attract.state));
+        return;   // the shop owned this tick; gameplay resumes on the next one
       } else if (attract && !transitioning && !attractLoading) {
         const t = attract.tape;
         const frame = t.cursor < t.ticks.length ? t.ticks[t.cursor] : null;
@@ -2021,9 +2051,12 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
          * persists across ticks, so gating on it would replay the sound
          * every tick after a purchase instead of once, on the tick it
          * actually completed. Refusals have no cited sfx id (shop.md only
-         * documents a message priority for them), so they stay silent. */
-        const purchase = shopScreen.step(input);
-        if (purchase && !purchase.refused) audio.play(BUY_CONFIRM_SFX);
+         * documents a message priority for them), so they stay silent.
+         * During a demo the tape block above already drove the shop. */
+        if (!attract) {
+          const purchase = shopScreen.step(input);
+          if (purchase && !purchase.refused) audio.play(BUY_CONFIRM_SFX);
+        }
         return;
       }
       /* The title menu / password / name-entry / hiscore-table screens
@@ -2064,19 +2097,16 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
           if (r.sfx) audio.play(r.sfx);
           if ('submit' in r) {
             /* CS:0x2e51-0x2e6a — the attract-mode "L"+digit bypass fires
-             * ONLY during playback, and lands on the SAME continuation as
-             * BEGIN QUEST (CS:0x2ea0/0x2d9e -> JMP 0x1000:2a37), not the
-             * real-password match's own shop entry — see matchPassword()'s
-             * own citation and docs/shop.md's "a correct password takes the
-             * player straight into that world's shop" (that is true only
-             * for a REAL match, below). */
+             * ONLY during playback. ⚠️ CORRECTED: it lands on the SAME
+             * continuation as a real match (CS:0x2EA0), so it opens the
+             * shop too — see enterViaPassword. An earlier revision sent it
+             * straight into gameplay. */
             const bypass = !!attract && r.submit.length === 2 && r.submit[0] === 'L'
               && r.submit[1] >= '2' && r.submit[1] <= '4';
             const world = bypass ? r.submit.charCodeAt(1) - 0x30 : matchPassword(r.submit);
             passwordEntry = null;
             uiState = 'menu';                 // CS:0x2e8a default; overridden below on a match
-            if (bypass) { uiState = 'game'; fullRestart(levelKeyFor(world, 0)); }
-            else if (world > 0) enterViaPassword(world);
+            if (world > 0) enterViaPassword(world);
           }
         }
         return;

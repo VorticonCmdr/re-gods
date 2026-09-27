@@ -186,7 +186,9 @@ export class ShopScreen {
    *   caller decides what to show, if anything
    * @param {()=>void} [onDone] called once, when the EXIT cell is confirmed
    */
-  constructor({ roster, inventory, selectedSlot = -1, state = {}, purse = null, onRefused, onDone }) {
+  constructor({ roster, inventory, selectedSlot = -1, state = {}, purse = null, onRefused, onDone,
+                prices = null }) {
+    this.prices = prices;          // per-world POBJECTS +6 values, or null for PRICES
     this.candidates = roster ? roster.slice() : [];   // the FULL raw list, SS:0x51aa
     this.roster = new Array(DATA_SLOTS).fill(null);   // the visible grid — #rebuildVisible fills this
     this.inventory = inventory;
@@ -208,6 +210,10 @@ export class ShopScreen {
     this.done = false;
     this.firePrev = false;
     this.dirPrev = { up: false, down: false, left: false, right: false };
+    /* `iterate()` state — the original's own per-pass bookkeeping. */
+    this.repeatBits = 0;          // DS:0x339, the input byte being held
+    this.repeatCount = 0;         // DS:0x33A
+    this.fireWait = false;        // inside CS:0x6E62's poll-until-released loop
 
     this.#rebuildVisible();      // an unaffordable/ineligible starting item is never shown, CS:0x72c9
   }
@@ -235,6 +241,51 @@ export class ShopScreen {
     const firePressed = !!input.fire && !this.firePrev;
     this.firePrev = !!input.fire;
     return firePressed ? this.#fire() : null;
+  }
+
+  /**
+   * One pass of the original's shop loop (CS:0x6C90-0x6D78), or one poll of
+   * its fire-release wait (CS:0x6E62-0x6E72), fed one input byte — exactly
+   * one DS:0x382 poll (CS:0x241D), i.e. one tape entry during a demo. This
+   * is what a joyl recording's bytes mean inside the shop; `step()` (edge-
+   * triggered, per tick) stays the keyboard path.
+   *     6CAA  byte == 0          -> [0x339]:=0, [0x33A]:=0, move
+   *     6CB1  [0x339] == 0       -> [0x33A]:=1, [0x339]:=byte, move
+   *     6CC6  byte == [0x339]    -> [0x33A]++ ; < 8 skip ; else [0x33A]:=6, move
+   *           else (changed)     -> [0x33A]:=0, skip  (no move until released)
+   *     6CEF  move: RIGHT inc (dec back if > 0x11) ; LEFT dec (inc back if
+   *           < 0) ; UP -6 (+6 back if < 0) ; DOWN +6 (-6 back if > 0x11) —
+   *           a FLAT cursor, so LEFT/RIGHT wrap between rows (an earlier
+   *           note here said every direction clamps at the grid edge; only
+   *           the flat ends clamp)
+   *     6D53  FIRE -> CS:0x6E62: poll until an entry without FIRE, then act
+   *           on the cursor (EXIT, preview, buy) and restart the loop.
+   * @param {number} bits DS:0x382: 1 UP, 2 DOWN, 4 LEFT, 8 RIGHT, 0x80 FIRE
+   * @returns {?object} a purchase, like `step()`, or null
+   */
+  iterate(bits) {
+    if (this.done) return null;
+    if (this.fireWait) {
+      if (bits & 0x80) return null;              // CS:0x6E6D `jnz 0x6e62`
+      this.fireWait = false;
+      return this.#fire();                        // CS:0x6E74
+    }
+    let move;
+    if (bits === 0) { this.repeatBits = 0; this.repeatCount = 0; move = true; }
+    else if (this.repeatBits === 0) { this.repeatCount = 1; this.repeatBits = bits; move = true; }
+    else if (this.repeatBits === bits) {
+      this.repeatCount++;
+      if (this.repeatCount < 8) move = false;
+      else { this.repeatCount = 6; move = true; }
+    } else { this.repeatCount = 0; move = false; }
+    if (move) {
+      if (bits & 0x08) { this.cursor++; if (this.cursor > EXIT_SLOT) this.cursor--; }
+      if (bits & 0x04) { this.cursor--; if (this.cursor < 0) this.cursor++; }
+      if (bits & 0x01) { this.cursor -= GRID_COLS; if (this.cursor < 0) this.cursor += GRID_COLS; }
+      if (bits & 0x02) { this.cursor += GRID_COLS; if (this.cursor > EXIT_SLOT) this.cursor -= GRID_COLS; }
+    }
+    if (bits & 0x80) this.fireWait = true;       // CS:0x6D53 -> 0x6E62
+    return null;
   }
 
   #move(dir) {
@@ -272,7 +323,12 @@ export class ShopScreen {
         return null;
       }
       const purchase = this.#buy(id);
-      this.previewId = null;
+      /* ⚠️ DS:0x258 is NOT cleared by a purchase — neither the consumable
+       * path (CS:0x6EE0-0x6F3E) nor the weapon path (CS:0x6FA7-0x7037)
+       * writes it; both just rebuild the grid (CS:0x7233) and loop. So a
+       * later first press on a cell that shows the same id buys at once.
+       * An earlier revision reset it to null here. [PROVEN] live: PJOYL2's
+       * shop keeps [0x258]=197 after buying 197. */
       this.pendingWarning = null;
       return purchase;
     }
@@ -369,7 +425,12 @@ export class ShopScreen {
    *  WEAPON_ID_BASE`, since a dead/unused roster slot's `0xFFFF` sentinel
    *  would otherwise also read as a "weapon" id here. */
   #priceFor(id) {
-    if (!isWeaponPickup(id)) return PRICES[id];
+    /* CS:0x7392: the price is the runtime descriptor's +6 word, which
+     * CS:0x35FB copies from the LOADED world's POBJECTS record — so it is
+     * per world. `PRICES` below is world 1's file; worlds 2-4 charge more
+     * for 2/3 (20000/32500, PJOYL2's shop). A caller that passes `prices`
+     * (main.js: the level's own `objValues`) gets the real ones. */
+    if (!isWeaponPickup(id)) return this.prices ? this.prices[id] : PRICES[id];
     return this.state.arsenal?.weapons?.[weaponIndexOf(id)]?.value;
   }
 
@@ -418,12 +479,22 @@ export class ShopScreen {
    * newly-opened gate (buying the familiar reveals 40/41 on the very same
    * rebuild) can each change the eligible set. */
   #rebuildVisible() {
-    const eligible = this.candidates.filter((id) => this.#isEligible(id));
+    /* CS:0x7347-0x7391: the survivors are PUSHED onto the stack (which
+     * reverses them), bubble-sorted there by price with a strict `>` swap
+     * (`cmp bx,dx / jle` — stable), then popped back in ascending order. So
+     * equal prices end up in REVERSE list order. ⚠️ An earlier revision sorted
+     * the list in its own order, which put 38 before 197 (both 5000) in
+     * world 2's grid; PJOYL2's live shop shows 197 in cell 8. */
+    const eligible = this.candidates.filter((id) => this.#isEligible(id)).reverse();
     eligible.sort((a, b) => (this.#priceFor(a) ?? 0) - (this.#priceFor(b) ?? 0));
     const visible = eligible.length > DATA_SLOTS
       ? eligible.slice(eligible.length - DATA_SLOTS)
       : eligible;
     for (let i = 0; i < DATA_SLOTS; i++) this.roster[i] = visible[i] ?? null;
+    /* CS:0x7306-0x730D: no survivors at all -> the cursor is FORCED onto
+     * EXIT. [PROVEN] live: PJOYL2's third 5000 purchase empties the purse at
+     * cursor 1226 and [0x385] becomes 0x11 in the same pass. */
+    if (eligible.length === 0) this.cursor = EXIT_SLOT;
   }
 
   /** Text-only rendering — no shop-icon sprite sheet was RE'd this session,

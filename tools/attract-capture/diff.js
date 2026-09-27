@@ -98,7 +98,10 @@ export async function window_(name, from, to) {
 }
 
 /** Compare; returns the first divergence per field plus a compact summary. */
-export async function runDemo(name, { fields = FIELDS, context = 3 } = {}) {
+/* `random: true` also compares DS:0x160 (the random cursor) — a strong
+ * diagnostic, but other subsystems' draws make it diverge long before the
+ * hero does, so it is off by default. */
+export async function runDemo(name, { fields = FIELDS, context = 3, random = false } = {}) {
   const dos = await loadCapture(name);
   const port = await runPort(name, 4000, dos.rnd);
   const firstBad = {};
@@ -110,7 +113,7 @@ export async function runDemo(name, { fields = FIELDS, context = 3 } = {}) {
      * leftovers from the previous demo, so only gameplay rows compare. */
     if (p.ui !== 'game') continue;
     compared++;
-    for (const f of fields.concat(d.r === undefined ? [] : ['r'])) {
+    for (const f of fields.concat(random && d.r !== undefined ? ['r'] : [])) {
       if (d[f] === undefined) continue;
       if (firstBad[f] === undefined && p[f] !== d[f]) firstBad[f] = d.cursor;
     }

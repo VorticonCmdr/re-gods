@@ -45,6 +45,7 @@ export function decodeJoyRecording(bytes) {
       left: !!(b & JOY_BIT.LEFT),
       right: !!(b & JOY_BIT.RIGHT),
       fire: !!(b & JOY_BIT.FIRE),
+      bits: b,               // the whole DS:0x382 byte — the shop compares it as one value
     });
   }
   return { ticks, terminatorIndex, liveBitsClean };

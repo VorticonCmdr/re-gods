@@ -16013,11 +16013,13 @@ export function checkShop() {
   }
 
   /* ── navigation: clamped, not wrapped, CS:0x6cef-0x6d42 ───────────────── */
+  /* (A one-item roster: with NO survivors the original forces the cursor
+   * onto EXIT at once, CS:0x730D — so an empty roster can't test moving.) */
   {
     const held = (dir) => ({ up: false, down: false, left: false, right: false, fire: false, [dir]: true });
     const release = { up: false, down: false, left: false, right: false, fire: false };
 
-    const s = new ShopScreen({ roster: [], inventory: [INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY] });
+    const s = new ShopScreen({ roster: [0], inventory: [INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY] });
     check('starts at cursor 0', s.cursor === 0);
     s.step(held('left')); check('LEFT from column 0 is a no-op (clamped, not wrapped)', s.cursor === 0);
     s.step(release);
@@ -16041,13 +16043,13 @@ export function checkShop() {
     check('RIGHT clamps at the row\'s own last column, does not spill into '
       + 'the next row', s.cursor === 5);
 
-    const s2 = new ShopScreen({ roster: [], inventory: [INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY] });
+    const s2 = new ShopScreen({ roster: [0], inventory: [INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY] });
     s2.cursor = 17;   // EXIT, reached by DOWN+DOWN+RIGHT*5 in real play
     s2.step(held('right'));
     check('RIGHT from EXIT (last cell) is a no-op — nothing past the grid',
       s2.cursor === 17);
 
-    const s3 = new ShopScreen({ roster: [], inventory: [INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY] });
+    const s3 = new ShopScreen({ roster: [0], inventory: [INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY] });
     for (let i = 0; i < 3; i++) { s3.step(held('down')); s3.step(release); }
     check('DOWN three times from row 0 col 0 clamps at row 2 col 0 (index '
       + '12) — a fourth +6 step would land past EXIT (18), so it is '
@@ -16056,7 +16058,7 @@ export function checkShop() {
     /* CS:0x6cef's own AX=0x11 bound on DOWN — row 2 col 0 (index 12) is as
      * far as +6 steps reach; only RIGHT moves from there to EXIT (17). */
 
-    const s4 = new ShopScreen({ roster: [], inventory: [INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY] });
+    const s4 = new ShopScreen({ roster: [0], inventory: [INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY] });
     s4.step(held('right'));   // the press itself — the one edge in this test
     check('a single press moves exactly once (edge-triggered, no auto-'
       + 'repeat — a disclosed simplification, see shop.js\'s own header)',
@@ -16090,14 +16092,18 @@ export function checkShop() {
     check('the FIRST press on a slot only previews it — no purchase yet',
       s2.previewId === 0 && s2.lastPurchase === null);
     s2.step(fire); s2.step(release);
+    /* DS:0x258 KEEPS the id after a purchase (neither buy path writes it —
+     * PJOYL2's shop, cursor 311), so previewId stays 0. */
     check('the SECOND press on the SAME slot executes the purchase',
       s2.lastPurchase && s2.lastPurchase.id === 0
-      && s2.lastPurchase.rank === 0 && s2.previewId === null);
+      && s2.lastPurchase.rank === 0 && s2.previewId === 0);
     check('a completed purchase locks its own rank in DS:0x319\'s own '
       + 'once-per-visit sense', s2.purchasedCategories.has(0));
 
-    const emptyRoster = new Array(DATA_SLOTS).fill(null);
-    const s3 = new ShopScreen({ roster: emptyRoster, inventory: [INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY] });
+    /* An empty CELL, not an empty roster: with no survivors at all the
+     * original forces the cursor onto EXIT (CS:0x730D), so fire would leave. */
+    const s3 = new ShopScreen({ roster: [0], inventory: [INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY] });
+    s3.cursor = 5;
     s3.step(fire); s3.step(release);
     check('FIRE on a genuinely empty grid cell is a no-op, not a crash',
       s3.lastPurchase === null && !s3.done);
