@@ -191,7 +191,7 @@ So the trigger evaluator is **selector 3, not 2** — which dissolves the `PLEV3
 
 Three further consequences `[PROVEN]`:
 
-- **Dying re-arms every consumed event.** `CS:0x3880` is called from level load (`CS:0x0095`) *and* from the respawn path (`CS:0x485E`), restoring the pristine master and wiping all `0xFFFF` consume markers.
+- ~~**Dying re-arms every consumed event.**~~ ⚠️ **Corrected: entering a level or a sublevel re-arms every consumed event; dying does not.** `CS:0x3880` has exactly two callers (an operand search over the whole image): level load (`CS:0x0095`) and `CS:0x485E`. That second one is inside `FUN_1000_484e`, the continuation of the sublevel-B switch (see `docs/camera-and-world-nav.md`'s selector-6 section). It is not in the death/respawn routine `FUN_1000_0845`, as this line previously said. Both calls restore the pristine master and wipe all `0xFFFF` consume markers. `[STATIC]` for the caller set; the unpack itself was `[PROVEN]` as before.
 - **Records 251 and 252 are hard-patched** on every unpack to `{11,0}` and `{6,0}` (`CS:0x3894`), discarding whatever `PALFILS` holds. All 8 shipped files already read exactly that, so it is a no-op on shipped data.
 - **Trigger actions write plane B**, so the event map is not immutable. `ACT2` zeroes three cells (`0x42D1`–`0x42E3`), `ACT9` sets them to 1, `ACT7`/`ACT8` write one each. A door opening can erase an event cell permanently.
 
