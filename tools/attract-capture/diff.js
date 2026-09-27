@@ -11,6 +11,7 @@
  *   await m.runDemo('joyg1')
  */
 
+const CAPTURE_SEEDS = { joyg2: { jaw: 2 }, joyl3: { gravity: 1 } };
 const STATE_OF = { joyl1: 0, joyg1: 1, joyl2: 2, joyg2: 3, joyl3: 4, joyg3: 5 };
 const FIELDS = ['x', 'y', 'st', 'camX', 'camY', 'world', 'sub'];
 
@@ -56,11 +57,14 @@ export async function runPort(name, maxTicks = 4000, rnd = []) {
   const g = window.__gods;
   /* DS:0x2F0 carries over between fights (see game/guardian.js); start each
    * run from a known value so the harness is reproducible. */
+  /* The captures' cross-cycle state (bytes DOS never resets), seeded so a
+   * capture replays: PJOYG2's jaw DS:0x2F0 and PJOYL3's starburst gravity
+   * phase DS:0x1D4, each fitted to its capture's own cycle (the live runs
+   * need jaw 3 / phase 5 — see compareLive). */
+  const seed = CAPTURE_SEEDS[name] || {};
   g.resetProcessJaw();
   g.setLandFlag357(1);
-  /* DS:0x1d4: PJOYL3's potion burst (1031) first feels gravity at 1033 in
-   * every live cycle observed, so the phase stands at 5 before it. */
-  g.setStarburstGravityPhase(name === 'joyl3' ? 5 : 0);
+  g.setStarburstGravityPhase(seed.gravity ?? 0);
   let first = await g.startAttractAt(STATE_OF[name]);
   const pending = rnd.slice();
   const inject = (cursor) => {
@@ -71,9 +75,11 @@ export async function runPort(name, maxTicks = 4000, rnd = []) {
   };
   inject(0); first = g.snap();
   const byCursor = new Map([[0, first]]);
+  let jawSet = seed.jaw === undefined;
   for (let i = 0; i < maxTicks; i++) {
     const [s] = await g.stepTicks(1);
     if (!s.attract || s.attract.state !== STATE_OF[name]) break;   // tape ran out, cycler moved on
+    if (!jawSet && g.guardianRaw()) { g.guardianRaw().jaw = seed.jaw; jawSet = true; }
     inject(s.attract.cursor);
     byCursor.set(s.attract.cursor, s);
   }
