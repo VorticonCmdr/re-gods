@@ -2640,14 +2640,32 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
        * ran before the player and used the tick-start value. */
       const gmLate = guardian !== null;
       const camNow = { x: cam.snapX, y: cam.snapY };
+      /* CS:0x8997 (nest) / the brood's own call — the full CS:0xA9E4: hero
+       * contact (ac59), then, if that did not report, the weapon grid scan
+       * (a9ef), whose non-lethal hits draw the spark's two random numbers.
+       * The port used to stop after the contact, so no shot could ever hurt
+       * a nest or its brood. [PROVEN] against PJOYL2 cursors 1819/1820. */
+      /* The statues take the bare contact and run their own scan
+       * (`statueScanGrid`), so they keep this one. */
       const nestContact = (box) => attackHero(
         { x: box.x, y: box.y, w: box.w, h: box.h, strength: box.hp },
         { x: player.x, y: player.y, state: player.stateIndex }, health,
         { invuln: fx.invuln > 0, sfx: (id) => audio.play(id) }).strengthOut;
+      const nestContactScan = (box) => {
+        const out = attackHero(
+          { x: box.x, y: box.y, w: box.w, h: box.h, strength: box.hp },
+          { x: player.x, y: player.y, state: player.stateIndex }, health,
+          { invuln: fx.invuln > 0, sfx: (id) => audio.play(id) }).strengthOut;
+        if (out < 0) return out;
+        const proxy = { x: box.x, y: box.y, state: out };
+        creatureScansGrid(proxy, grid, camNow, decodeTag, difficulty, { w: box.w, h: box.h },
+          null, { rng: () => rng.next(), debris, sfx: (id) => audio.play(id) });
+        return proxy.state;
+      };
       if (!gmLate) {
         const nestResult = nests.step(
           camNow, { x: player.x }, fx.freeze,
-          nestContact, brood, tock);
+          nestContactScan, brood, tock);
         for (const s of nestResult.shots) {
           shots.fire(s.x, s.y, s.dir, camNow);
         }
@@ -2655,7 +2673,7 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
         /* CS:0x894E — the brood children a nest death just spawned (if any).
          * Ground-bounce honours "freezes aliens"; ballistic fall ignores it —
          * see Brood#step's own header for why that asymmetry is real. */
-        lastBroodFx = brood.step(camNow, fx.freeze, nestContact, level.map.planeB).drawn;
+        lastBroodFx = brood.step(camNow, fx.freeze, nestContactScan, level.map.planeB).drawn;
       }
 
       /* CS:0x7CBD/0x7B68 — the world-1-sublevel-B awakened statue. `statues`
