@@ -822,8 +822,10 @@ export class SelectorTwoSpawns {
     let killed = e.state < 0;
     if (!killed && decodeTag) {
       const proxy = { x: e.x, y: e.y, state: e.state };
-      creatureScansGrid(proxy, grid, cam, decodeTag, 0, { w: slot.w, h: slot.h },
-                         null, { sfx: opts.sfx });
+      /* CS:0xABDE — a damaging hit that does not kill drops a spark whose
+       * position draws two random numbers (combat.js hitSparkAxis). */
+      creatureScansGrid(proxy, grid, cam, decodeTag, opts.difficulty || 0, { w: slot.w, h: slot.h },
+                         null, { sfx: opts.sfx, rng: opts.rng, debris: opts.debris });
       e.state = proxy.state;
       killed = e.state < 0;
     }

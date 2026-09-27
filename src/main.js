@@ -2317,7 +2317,7 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
           (wx, wy, vx, cam) => shots.fire(wx, wy, vx, cam),
           (wx, wy, n, cam) => lineHazards.spawn(wx, wy, player.x + 8, player.y + 6, n),
           { invuln: fx.invuln > 0, score, debris, planeB: level.map.planeB,
-            sfx: (id) => audio.play(id), flashPool }).drawn;
+            sfx: (id) => audio.play(id), flashPool, rng: () => rng.next(), difficulty }).drawn;
       };
       let fr = null;
       if (!deathSeq) {
