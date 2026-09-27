@@ -296,6 +296,9 @@ export const EST = { FREE: 0, DYING: -1, WAITING: -2, MATERIALISING: -3 };
  * sprite formula — see the file header's correction for the full trace. */
 export const isDying = (e) => e.state === EST.DYING;
 export const MATERIALISE_TICKS = 5;    // CS:0xff7f `mov word [di+0x6],5`
+/** CS:0xFF5A / CS:0xB096 — the materialise flash's sound, shared by System A,
+ *  System B and the selector-2 turrets. ADL draws a random number for it. */
+export const SFX_MATERIALISE = 0x446;
 export const DEATH_SPRITE_BASE = 0x6c;   // CS:0xF094 `add cx,0x6c` — a flat constant, not a class lookup
 export const DEATH_FRAMES = 7;           // CS:0xF071 `cmp word[di+4],0x7`
 
@@ -329,6 +332,10 @@ export class EntityB {
     this.state = EST.WAITING;   // +0x08
     this.hp = hp;               // descriptor +0x01
     this.timer = delay;         // +0x06, the per-entity stagger
+    /* CS:0xECA4-0xECAB — `mov [di+6],dx / or dx,dx / jnz / call 0xff59`: a
+     * zero stagger materialises AT SPAWN rather than on the first tick. */
+    this.flash = false;
+    if (delay === 0) this.materialise();
     this.reloadTimer = 0;       // +0xe — CS:0xe659's per-entity fire/reload timer
     this.deathCacheX = null;    // CS:0xF03A-F042, +8 baked in — see the note above EntityB
     this.deathCacheY = null;
@@ -353,6 +360,17 @@ export class EntityB {
   get alive() { return this.state > 0; }
 
   get animBase() { return MODE_TABLE[this.mode].animBase; }
+
+  /** CS:0xFF59 — enter MATERIALISING (`[di+8]=-3`, `[di+6]=5`). It also
+   *  plays sfx 0x446 (CS:0xFF5A) and starts a flash in the DS:0xAC90 pool.
+   *  The flash is not drawn here, but the SOUND matters: ADL draws a random
+   *  number for it (audio/adl-random.js). `flash` asks the caller to play
+   *  it at once, so the draw lands in the original's order. */
+  materialise() {
+    this.state = EST.MATERIALISING;
+    this.timer = MATERIALISE_TICKS;
+    this.flash = true;
+  }
 
   /**
    * One 15 Hz tick.
@@ -379,7 +397,7 @@ export class EntityB {
      *   materialising (-3): 5 ticks, then become alive with the descriptor HP
      * The materialise effect itself (CS:0xff59) is not ported. */
     if (this.state === EST.WAITING) {
-      if (--this.timer <= 0) { this.state = EST.MATERIALISING; this.timer = MATERIALISE_TICKS; }
+      if (--this.timer <= 0) this.materialise();            // CS:0xFF4B-0xFF53
       return null;
     }
     if (this.state === EST.MATERIALISING) {

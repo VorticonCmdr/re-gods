@@ -2208,10 +2208,14 @@ export function checkEntityB() {
    * `state <= 0`, or a group would satisfy "all dead/dying" the instant it
    * spawns, before a single entity has even ticked once. */
   {
-    const fresh = new EntityB({ x: 10, y: 20, mode: MODE.WALK_L });
+    const fresh = new EntityB({ x: 10, y: 20, mode: MODE.WALK_L, delay: 3 });
     check('a freshly-spawned entity is WAITING (-2), which satisfies `state <= 0` '
       + '— the exact trap that made an earlier revision of the group-reward check fire at spawn',
       fresh.state === EST.WAITING && fresh.state <= 0, `state=${fresh.state}`);
+    const now = new EntityB({ x: 10, y: 20, mode: MODE.WALK_L, delay: 0 });
+    check('a ZERO stagger materialises at spawn (-3, timer 5) and raises the 0x446 flash',
+      now.state === EST.MATERIALISING && now.timer === 5 && now.flash === true,
+      `CS:0xECA7 or dx,dx / jnz / call 0xff59; state=${now.state} timer=${now.timer}`);
     check('...and MATERIALISING (-3) also satisfies `state <= 0`',
       EST.MATERIALISING <= 0);
     check('the cache is UNSET before any entity has died',
@@ -2861,9 +2865,10 @@ export function checkEntityA() {
   {
     const desc0 = { seedPair: 0, seedWeight: 0, stepCap: 4, speedCap: 4, fireByte: 0, flags: 0 };
     const fresh = new EntityA({ x: 10, y: 20, hp: 5 });
-    check('a freshly-spawned System-A entity is WAITING (-2), which satisfies `state <= 0` '
+    check('a freshly-spawned System-A entity is already MATERIALISING (-3), which satisfies `state <= 0` '
       + '— the same trap System B\'s own group-reward guard already documents',
-      fresh.state === ESTA.WAITING && fresh.state <= 0, `state=${fresh.state}`);
+      fresh.state === ESTA.MATERIALISING && fresh.state <= 0 && fresh.flash === true,
+      `CS:0xDEE0: System A's spawn DX is always 0, so every entity calls 0xff59 at once; state=${fresh.state}`);
     check('the cache is UNSET before any entity has died',
       fresh.deathCacheSeq === -1 && fresh.deathCacheX === null);
 

@@ -151,7 +151,7 @@ import { MARKER_MAX } from './markers.js';
 
 /** Sticky-strategy sentinel: matches EntityB's WAITING convention of -2. */
 export const EST = { FREE: 0, DYING: -1, WAITING: -2, MATERIALISING: -3 };
-export const MATERIALISE_TICKS = 5;    // by analogy with System B — see file header
+export const MATERIALISE_TICKS = 5;    // CS:0xFF7F, the SAME CS:0xFF59 System B calls (CS:0xDEE0/0xE322) — see file header
 
 /* DYING is written by the contact routine (combat.js's creatureTouchesHero,
  * shared with System B — CS:0xff93/0xac59 are proven common to both systems).
@@ -1026,6 +1026,11 @@ export class EntityA {
     this.delay = delay;         // spawn stagger, port-level (see file header)
     this.hp = hp;
     this.timer = delay;
+    /* CS:0xDED9-0xDEE0 — the same `or dx,dx / jnz / call 0xff59` as System
+     * B, and DX is always 0 in System A's spawn loop, so every System-A
+     * entity materialises AT SPAWN, with the 0x446 flash sound. */
+    this.flash = false;
+    if (delay === 0) this.materialise();
     /* strategy1's own bookkeeping (CS:0xe9da): which zone the last goal was
      * picked in, and whether that goal is still "fresh" (i.e. not yet
      * superseded by a later re-roll). -1 is this file's own existing
@@ -1073,6 +1078,14 @@ export class EntityA {
 
   get alive() { return this.state > 0; }
 
+  /** CS:0xFF59, shared with System B (entity.js's `materialise`): -3, a
+   *  5-tick countdown, and the 0x446 sound the caller plays via `flash`. */
+  materialise() {
+    this.state = EST.MATERIALISING;
+    this.timer = MATERIALISE_TICKS;
+    this.flash = true;
+  }
+
   /**
    * One 15 Hz tick.
    * @param {{x:number,y:number}} hero  world position, per stage-1 chase (e7ca adds +8 to Y)
@@ -1105,7 +1118,7 @@ export class EntityA {
   tick(hero, desc, draw, frozen = false, camera = null, markers = null, grid = null, objects = null) {
     /* Pre-life FSM — see UNKNOWN_sysA_prelife_driver in the file header. */
     if (this.state === EST.WAITING) {
-      if (--this.timer <= 0) { this.state = EST.MATERIALISING; this.timer = MATERIALISE_TICKS; }
+      if (--this.timer <= 0) this.materialise();            // CS:0xE31A-0xE322
       return null;
     }
     if (this.state === EST.MATERIALISING) {

@@ -47,7 +47,7 @@ import { parseGroupsB, parseGroupsA, GroupSlots, spriteForEntity, MAX_ENTITIES,
          CREATURE_DESCRIPTOR_BASE, groupSlotReleasable } from './game/spawn.js';
 import { EntityB, MODE, MODE_TABLE, groundBelow, isDying, EST,
 DEATH_SPRITE_BASE, DEATH_FRAMES, stealAttemptB, stepCarriedItemB,
-groupRewardPosition } from './game/entity.js';
+groupRewardPosition, SFX_MATERIALISE } from './game/entity.js';
 import { EntityA, CLASS_TABLES_A, spriteForEntityA, EST as ESTA,
 groupRewardPositionA,
 isDyingA, DEATH_SPRITE_BASE_A, DEATH_FRAMES_A, stepCarriedItem } from './game/entity-a.js';
@@ -1073,6 +1073,9 @@ async function main() {
    * the cursor), and the count is unchecked against the 10 slots — we clamp
    * and surface the clamp rather than silently truncating. */
   let clamped = 0;
+  /* CS:0xFF59's sound, played the moment an entity starts materialising
+   * (entity.js's `materialise`), so its random draw keeps the original's order. */
+  const playFlash = (e) => { if (e.flash) { e.flash = false; audio.play(SFX_MATERIALISE); } };
   const runSpawns = () => {
     for (const slot of slots.slots) {
       if (slot.state !== 2) continue;
@@ -1090,6 +1093,7 @@ async function main() {
           new EntityB({ x, y, mode, speed: d.speed, hp: d.hp || 1,
                         cls: d.cls, delay }),
           { desc: d });      // the pathfinder reads +0x08/+0x09/+0x0c/+0x0d
+        playFlash(e);        // CS:0xECAB — a zero stagger materialises at spawn
         enemies.push(e);
         members.push(e);
         delay += d.stagger;
@@ -1124,6 +1128,7 @@ async function main() {
         const e = Object.assign(
           new EntityA({ x, y, cls: d.cls, hp: d.hp || 1, delay: 0 }),
           { desc: d });
+        playFlash(e);        // CS:0xDEE0 — every System-A entity materialises at spawn
         enemiesA.push(e);
         members.push(e);
       }
@@ -2266,6 +2271,23 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
        * tick (enemies, hazards, projectiles, events) keeps running, matching
        * the busiest reading of FUN_1000_09bb's own call graph; only the
        * player's own actions (fire, pickups, block-breaking, levers) stop. */
+      const stepSelectorTwo = () => {
+        const camS2 = { x: cam.snapX, y: cam.snapY };
+        /* CS:0xAD88/0xAD0D — the selector-2 stationary shooting turrets
+         * (game/selector2.js). `fire`/`spawnHazard` route into the SAME
+         * `shots`/`lineHazards` pools every other emitter in this file
+         * shares. `spawnHazard`'s target is deliberately the bare, unjittered
+         * `hero.x+8, hero.y+6` this system's own CS:0xDBC6 computes — NOT
+         * `lineHazards.spawnJittered`'s own jittered target — see
+         * selector2.js's own `stepHandlerB` header for why. */
+        lastSelectorTwoFx = selectorTwo.step(
+          camS2, { x: player.x, y: player.y, state: player.stateIndex }, fx.freeze,
+          health, grid, decodeTag, tock,
+          (wx, wy, vx, cam) => shots.fire(wx, wy, vx, cam),
+          (wx, wy, n, cam) => lineHazards.spawn(wx, wy, player.x + 8, player.y + 6, n),
+          { invuln: fx.invuln > 0, score, debris, planeB: level.map.planeB,
+            sfx: (id) => audio.play(id) }).drawn;
+      };
       let fr = null;
       if (!deathSeq) {
       fr = stepHeroFrame({
@@ -2285,6 +2307,7 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
          * already reads for COND11/12; `leverToggle` mutates it in place, so
          * a level's own trigger conditions see the flip on the very next tick. */
         levers: level.palfils.levers, leverToggle,
+        beforePlayer: stepSelectorTwo,
         zoneScan: (x, y) => scanZones(events.actionCtx.zones, x, y),
         /* CS:0x38D7 — first-fit over the 200-slot runtime array. `drawObjects`
          * already excludes the map's dead slots, so the headroom here is
@@ -2686,20 +2709,10 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
        * which is where the draw loop below puts it. */
       lastKillSmokeFx = killSmoke.step(camNow);
 
-      /* CS:0xAD88/0xAD0D — the selector-2 stationary shooting turrets
-       * (game/selector2.js). `fire`/`spawnHazard` route into the SAME
-       * `shots`/`lineHazards` pools every other emitter in this file
-       * shares. `spawnHazard`'s target is deliberately the bare, unjittered
-       * `hero.x+8, hero.y+6` this system's own CS:0xDBC6 computes — NOT
-       * `lineHazards.spawnJittered`'s own jittered target — see
-       * selector2.js's own `stepHandlerB` header for why. */
-      lastSelectorTwoFx = selectorTwo.step(
-        camNow, { x: player.x, y: player.y, state: player.stateIndex }, fx.freeze,
-        health, grid, decodeTag, tock,
-        (wx, wy, vx, cam) => shots.fire(wx, wy, vx, cam),
-        (wx, wy, n, cam) => lineHazards.spawn(wx, wy, player.x + 8, player.y + 6, n),
-        { invuln: fx.invuln > 0, score, debris, planeB: level.map.planeB,
-          sfx: (id) => audio.play(id) }).drawn;
+      /* The selector-2 walker (below, `stepSelectorTwo`) runs inside
+       * stepHeroFrame, before the player (CS:0x0223). On death ticks the
+       * death driver calls it here instead (CS:0x09F8). */
+      if (!fr) stepSelectorTwo();
       /* CS:0x0223 / CS:0xAED0-0xAF0F — drain selector2.js's own group-
        * elimination rewards into the SAME single-slot popup. FIRST of the
        * six channels (the walker is CS:0xAD88, earlier in the frame than
@@ -2753,6 +2766,8 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
          * entity.js's fireB header) — the muzzle/hazard it returns is routed
          * exactly like System A's own stage 6, below. */
         const muzzleB = e.tick(level.map.planeB, verdict, e.desc);
+        playFlash(e);                                    // CS:0xFF53
+
         if (muzzleB && muzzleB.hazard) {
           firedHazardsByB++;
           if (muzzleB.attackBits === 1) {
@@ -2802,6 +2817,7 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
           { x: player.x, y: player.y }, e.desc,
           () => rng.next(), fx.freeze > 0,
           { x: cam.snapX, y: cam.snapY }, markerList.entries, grid, level.drawObjects);
+        playFlash(e);                                    // CS:0xE322
         if (muzzle && muzzle.hazard) {
           /* CS:0xE5E4 — attackBits 1 throws at a jittered point near the
            * hero; 2 or 3 throw at the hero's exact position, muzzle +0x10 X. */

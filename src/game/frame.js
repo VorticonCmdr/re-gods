@@ -100,7 +100,7 @@ export function stepHeroFrame({ input, arsenal, grid, player, map, cam,
                                blocks = null, debris = null, tock = 1,
                                inventory = null, levers = null,
                                leverToggle = null, invuln = false,
-                               zoneScan = null }) {
+                               zoneScan = null, beforePlayer = null }) {
   arsenal.latchTick(input.fire);                                    // 019D
   /* CS:0x49F9 — the SAME "one action per press" shape as the weapon latch
    * above, cleared every tick fire is not held. Unconditional, regardless
@@ -169,6 +169,11 @@ export function stepHeroFrame({ input, arsenal, grid, player, map, cam,
    * threaded as one small object matching the {invulnerable, hurt} shape
    * this project already uses at every other combat.js consumer site. */
   const healthApi = health ? { invulnerable: invuln, hurt: (n) => health.damage(n) } : null;
+  /* CS:0x0223 — the selector-2 turret walker (CS:0xAD88) runs here, after the
+   * projectiles and BEFORE the player. The player's epilogue fires plane-B
+   * events (CS:0x5E9B -> 0x5FAB), so a selector-2 event materialises its
+   * turrets on the NEXT tick; System A/B (CS:0x0285/0x028B) spawn in the same one. */
+  if (beforePlayer) beforePlayer();                                   // 0223
   player.tick(map, input, arsenal, tock, pickupCtx, healthApi);      // 0254
   return { projectiles, emitted: player.emitted, picked: picked.taken,
            consumed: picked.consumed || [], treasures: picked.treasures || [],

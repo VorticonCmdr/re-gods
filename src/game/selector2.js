@@ -196,6 +196,7 @@
  */
 
 import { CLASS_TABLES_B } from './spawn.js';
+import { SFX_MATERIALISE } from './entity.js';
 import { attackHero, creatureScansGrid } from './combat.js';
 import { RockSettlePool, RockBurstPool } from './rockfall.js';
 
@@ -697,7 +698,7 @@ export class SelectorTwoSpawns {
     const drawn = [];
     for (const slot of this.slots) {
       if (!slot) continue;
-      if (!slot.materialised) { this.#materialise(slot); continue; }
+      if (!slot.materialised) { this.#materialise(slot, opts); continue; }
 
       let deadCount = 0, dyingCount = 0;
       for (const e of slot.entities) {
@@ -728,7 +729,7 @@ export class SelectorTwoSpawns {
   }
 
   /** CS:0xADAE-0xAE0E. */
-  #materialise(slot) {
+  #materialise(slot, opts = {}) {
     const d = slot.desc;
     let stagger = 0;
     for (let i = 0; i < d.entityCount; i++) {
@@ -737,6 +738,9 @@ export class SelectorTwoSpawns {
         state: d.entityState0, facing: d.entityFacing,
         stagger, reloadTimer: (16 - d.reloadByte) << 2,
       });
+      /* CS:0xADC7-0xADCF — `or cx,cx / jnz / call 0xb095`: an entity whose
+       * stagger is 0 flashes at once, playing sfx 0x446 (a random draw). */
+      if (stagger === 0 && opts.sfx) opts.sfx(SFX_MATERIALISE);
       stagger += d.staggerStep;
     }
     slot.materialised = true;
@@ -745,7 +749,11 @@ export class SelectorTwoSpawns {
   /** CS:0xAE39-0xAE49 (stagger countdown) folded into the alive-tick path —
    *  an entity whose stagger has not yet elapsed does nothing this tick. */
   #stepAlive(slot, e, cam, hero, freezeTimer, health, grid, decodeTag, tock, fire, spawnHazard, drawn, opts) {
-    if (e.stagger > 0) { e.stagger -= 1; return; }         // CS:0xAE41/0xAE44
+    if (e.stagger > 0) {                                    // CS:0xAE41/0xAE44
+      e.stagger -= 1;
+      if (e.stagger === 0 && opts.sfx) opts.sfx(SFX_MATERIALISE);   // CS:0xAE46 call 0xb095
+      return;
+    }
     if (e.stagger < 0) { e.stagger += 1; return; }         // CS:0xAE3F/0xAE11 — reachable only if
                                                             // something else drives it negative;
                                                             // materialise never does, kept for parity

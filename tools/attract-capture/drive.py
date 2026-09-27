@@ -1,4 +1,4 @@
-import json, time, urllib.request, os
+import json, time, urllib.request, os, sys
 API = 'http://localhost:8386/api/v1/script/'
 NAMES = {1: 'joyl1', 2: 'joyg1', 3: 'joyl2', 4: 'joyg2', 5: 'joyl3', 0: 'joyg3'}
 src = open('capture.lua').read()
@@ -10,8 +10,10 @@ def call(p, body=None, text=None):
     else:
         req = urllib.request.Request(API + p)
     return json.load(urllib.request.urlopen(req, timeout=10))
-have = {n for n in NAMES.values() if os.path.exists(n + '.raw.json')}
-while len(have) < 6:
+# `python3 drive.py joyg1 ...` re-captures just those demos (overwriting);
+# with no arguments, every demo that has no capture yet.
+want = set(sys.argv[1:]) or {n for n in NAMES.values() if not os.path.exists(n + '.raw.json')}
+while want:
     time.sleep(2.5)
     try: call('stop', body={})
     except Exception as e: pass
@@ -30,7 +32,8 @@ while len(have) < 6:
         if st.get('state') in ('completed', 'error'): break
     if st.get('state') == 'error': print('ERR', st, flush=True); continue
     name = NAMES[st['output']['cycler']]
+    if name not in want: print('skip', name, flush=True); continue
     json.dump(st, open(name + '.raw.json', 'w'))
-    have.add(name)
+    want.discard(name)
     print('saved', name, st['output']['n'], flush=True)
 print('done', flush=True)
