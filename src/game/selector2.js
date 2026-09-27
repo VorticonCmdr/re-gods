@@ -710,8 +710,10 @@ export class SelectorTwoSpawns {
           continue;
         }
         this.#stepAlive(slot, e, cam, hero, freezeTimer, health, grid, decodeTag, tock, fire, spawnHazard, drawn, opts);
-        if (e.state === 0) deadCount++;         // culled this same tick
-        else if (e.state < 0) dyingCount++;      // killed this same tick — draws via the ALIVE path once more
+        if (e.state === 0) deadCount++;         // culled this same tick (CS:0xAF2F -> 0xAF20)
+        /* Killed this same tick: NOT counted. DS:0x1F4 is bumped only on the
+         * dying path at the loop head (CS:0xAFBD), i.e. from the next tick.
+         * [PROVEN] against PJOYL2 1761/1762 (the reward lands a tick later). */
       }
 
       if (deadCount + dyingCount >= slot.entities.length) {

@@ -68,7 +68,7 @@
  */
 
 import { verbOf, consumesInventory, consumesKey } from './trigger.js';
-import { allocObject } from './objects.js';
+import { allocObject, WEAPON_TYPE_MIN, CATEGORY } from './objects.js';
 import { KillSmoke } from './kill-smoke.js';
 
 /* ── The per-world door / gate tile constants ────────────────────────────────
@@ -243,6 +243,14 @@ function act0(t, ctx) {
 
   slot.x = t.x; slot.y = t.y; slot.type = type; slot.flag6 = 1;
   ctx.dirty[slot.slot] = 0xff;                       // DS:0x438 + dx
+  /* CS:0x3DC3-0x3DC8 — that same 0xFF is the fall-physics sentinel, so a
+   * fall-eligible spawn (a weapon, or category < 3) drops to the ground like
+   * an activated map object. The port's fall reads `fallDirty`, which ACT0
+   * never set, so the item hung where the trigger placed it. [PROVEN]
+   * against PJOYL2 cursors 1807-1813 (trigger 61, 317 -> 340). ACT1
+   * (CS:0x3E08) writes no dirty byte and stays put. */
+  const cat = ctx.categoryOf ? ctx.categoryOf(type) : undefined;
+  if (type >= WEAPON_TYPE_MIN || (cat !== undefined && cat < CATEGORY.LEVER)) slot.fallDirty = -1;
   ctx.spawned.push(slot);
 
   if (type >= 0x40 && type <= 0x44) return { verb: 0, ok: true, type, quiet: true };

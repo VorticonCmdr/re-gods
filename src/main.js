@@ -1571,6 +1571,7 @@ async function main() {
     if (matchWorld === 1) { uiState = 'game'; return; }          // CS:0x00C4
     purse = new Purse();
     purse.add(SHOP_STARTING_MONEY);                             // CS:0x0643 sets it, not adds
+    events.actionCtx.timer = 0;                                 // CS:0x6B21, the shop entry
     shopIterAcc = 0;
     shopScreen = new ShopScreen({
       prices: level.objValues,
@@ -2245,6 +2246,12 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
        * fall (80->85->90 in DOSBox) is what exposed it. */
       tock ^= 1;
       tock36d ^= 1;                                     // CS:0x0176-0x0181
+      /* CS:0x0154 -> 0x317D — the 32-bit level timer DS:0x11E/0x120 that
+       * COND9/COND10 divide by 17. Advanced once per gameplay tick only (the
+       * shop never calls it); zeroed at level init (CS:0x8EDE), at the shop
+       * entry (CS:0x6B21) and by ACT14. It used to be the app's global tick
+       * count, which failed PLEV2A's trigger 61 (`timer/17 < 50`) in PJOYL2. */
+      events.actionCtx.timer = (events.actionCtx.timer + 1) >>> 0;
       /* DS:0x34 — a guardian is installed (selector 11). CS:0x01FC skips the
        * object pass (activation, walk, popup, chest burst) outside world 2;
        * CS:0x0223/0x0226/0x0272 skip the turrets, rock pools, kill smoke and
@@ -2542,7 +2549,7 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
       events.actionCtx.objects = level.drawObjects;
       /* plane-B cell -> event record -> selector 2 -> trigger evaluator */
       const fired = events.step(player.x, player.y,
-        events.makeState({ timer: clock.tick, inventory,
+        events.makeState({ timer: events.actionCtx.timer, inventory,
           /* COND7/8 health target DS:0x192, COND13/14 the score, COND15/16
            * lives DS:0x224, COND3/4 the three weapon slots (0xFFFF = empty).
            * These used to default to 0 / empty, which made COND16 ("lives <
@@ -3004,7 +3011,13 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
        * at-most-one-frame-early popup, not a mechanism error. */
       for (const g of groupsB) {
         if (g.rewardGiven) continue;
-        if (!g.members.every((e) => e.state === EST.FREE || e.state === EST.DYING)) continue;
+        /* A DYING member counts only once its first dying tick has run
+         * (CS:0xFF20 -> 0xF030, which caches DS:0x202/0x204 and bumps
+         * DS:0x1F4). One killed THIS tick went through the alive path, so it
+         * is not counted until the next tick. [PROVEN] against PJOYL2 1758/1759:
+         * the reward spawns a tick later, at the LAST member's position. */
+        if (!g.members.every((e) => e.state === EST.FREE
+            || (e.state === EST.DYING && e.deathCacheSeq >= 0))) continue;
         g.rewardGiven = true;
         if (g.desc.rewardId >= 0) {
           /* CS:0xED84: the position is DS:0x202/0x204 — a shared scratch pair
@@ -3065,7 +3078,8 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
        * System A's reward position. */
       for (const g of groupsA) {
         if (g.rewardGiven) continue;
-        if (!g.members.every((e) => e.state === ESTA.FREE || e.state === ESTA.DYING)) continue;
+        if (!g.members.every((e) => e.state === ESTA.FREE
+            || (e.state === ESTA.DYING && e.deathCacheSeq >= 0))) continue;   // as System B above
         g.rewardGiven = true;
         if (g.desc.rewardId >= 0) {
           /* Same same-tick-kill race as groupsB above (see entity.js's own
@@ -3847,6 +3861,13 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
         rng.cursor = cursor & 0x1ff;
       },
       traceShop() { shopTrace = []; return shopTrace; },
+      popup: () => popup && { active: popup.active, x: popup.x, y: popup.y, id: popup.id, vy: popup.vy },
+      /* Live objects inside a world box. */
+      objsNear(x0, y0, x1, y1) {
+        return level.drawObjects.filter((o) => !o.dead && !isDeadType(o.type)
+          && o.x >= x0 && o.x <= x1 && o.y >= y0 && o.y <= y1)
+          .map((o) => `slot${o.slot} t${o.type} ${o.x},${o.y} f${o.flag6}`).join(' ');
+      },
       /* The object table: size, distinct slots, free (dead) slots. */
       objs() {
         const o = level.drawObjects;

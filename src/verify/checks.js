@@ -12190,10 +12190,13 @@ export function checkSelectorTwo() {
     const e0 = pool.slots[0].entities[0];
     const touchingHero = { x: e0.x - 0x0a, y: e0.y - 0x08, state: 0 };
     pool.step(cam, touchingHero, 0, health, grid, missDecode, 0, noop, noop, {});
+    const onKillTick = pool.rewards.length;
+    pool.step(cam, { x: 100000, y: 100000, state: 0 }, 0, health, grid, missDecode, 0, noop, noop, {});
 
-    check('CS:0xAED0-0xAF0F: the reward fires on the SAME tick a lone member is killed '
-      + 'by hero contact (dead+dying already equals the batch count)',
-      pool.eliminated === 1 && pool.rewards.length === 1, JSON.stringify(pool.rewards));
+    check('CS:0xAED0-0xAF0F: the reward fires on the tick AFTER a lone member is killed '
+      + '(DS:0x1F4 counts it only on the dying path, CS:0xAFBD, which also caches DS:0x202/0x204)',
+      onKillTick === 0 && pool.eliminated === 1 && pool.rewards.length === 1,
+      `kill tick ${onKillTick}, then ${JSON.stringify(pool.rewards)}; [PROVEN] PJOYL2 1761/1762`);
     check('the reward lands at the entity\'s OWN (spawnX+8, spawnY+8) — NOT the stale '
       + '(8, 8) an unset lastDyingX/Y used to produce for every entityCount===1 batch',
       pool.rewards[0].x === 708 && pool.rewards[0].y === 908, JSON.stringify(pool.rewards));
