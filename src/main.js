@@ -1126,6 +1126,10 @@ async function main() {
                         cls: d.cls, delay }),
           { desc: d });      // the pathfinder reads +0x08/+0x09/+0x0c/+0x0d
         playFlash(e);        // CS:0xECAB — a zero stagger materialises at spawn
+        /* CS:0xED0C-0xED13 — after spawning, the driver marks the slot live and
+         * moves on to the NEXT slot: a new group is not ticked until the
+         * following tick. [PROVEN] against PJOYL2 (the pathfinder's first draw). */
+        e.spawnTick = true;
         enemies.push(e);
         members.push(e);
         delay += d.stagger;
@@ -1161,6 +1165,7 @@ async function main() {
           new EntityA({ x, y, cls: d.cls, hp: d.hp || 1, delay: 0 }),
           { desc: d });
         playFlash(e);        // CS:0xDEE0 — every System-A entity materialises at spawn
+        e.spawnTick = true;  // CS:0xDF37 `jmp 0xdf62` — not ticked until the next tick
         enemiesA.push(e);
         members.push(e);
       }
@@ -2824,6 +2829,7 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
          * enemy never searches. Applying a verdict outside that gate re-seeds
          * the hop cursor every frame and freezes the entity in mid-air. */
         for (const e of enemies) {
+          if (e.spawnTick) { e.spawnTick = false; continue; }
           let verdict = VERDICT_NONE;
           const walking = e.mode === MODE.WALK_L || e.mode === MODE.WALK_R;
           if (e.alive && walking && (e.x & 0x1c) === 0
@@ -2890,6 +2896,7 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
          * own signature, so this call is the only thing that actually arms
          * them — see entity-a.js's header for what each one does. */
         for (const e of enemiesA) {
+          if (e.spawnTick) { e.spawnTick = false; continue; }
           const muzzle = e.tick(
             { x: player.x, y: player.y }, e.desc,
             () => rng.next(), fx.freeze > 0,
@@ -3828,6 +3835,18 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
         rng.cursor = cursor & 0x1ff;
       },
       traceShop() { shopTrace = []; return shopTrace; },
+      /* Record the caller of every random draw (stack frames 2-3), per tick. */
+      traceRng() {
+        const log = [];
+        const raw = rng.next.bind(rng);
+        rng.next = () => {
+          const st = (new Error().stack || '').split('\n').slice(2, 5)
+            .map((l) => l.trim().replace(/^at /, '').replace(/\(.*\/src\//, '(').replace(/\?t=\d+/, '')).join(' < ');
+          log.push(`c${attract ? attract.tape.cursor : -1}: ${st}`);
+          return raw();
+        };
+        return log;
+      },
       /* The damage grid as left by the last tick, and the camera it used. */
       grid: () => ({ grid, cam: { x: cam.snapX, y: cam.snapY } }),
       async startAttractAt(state) { clock.stop(); await enterAttractState(state); await settle(); return snap(); },
