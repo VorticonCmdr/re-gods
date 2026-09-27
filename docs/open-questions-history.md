@@ -91,6 +91,8 @@
 
 40. Which menu choice the `joyl` recordings make — **CLOSED `[PROVEN]` live in DOSBox.** `joyl1` picks BEGIN QUEST. `joyl2` picks ENTER PASSWORD and types `"L2"`, the attract-only shortcut to world 2. `joyl3` picks ENTER PASSWORD, submits an empty entry that can never match, and returns to the menu. The other password-grid leftovers (erase/confirm icon sprites, cell-to-record mapping beyond A–Z, the row-4 space cell) were already closed in `docs/passwords.md`; only stale sentences there and in `CLAUDE.md` still called them open.
 
+41. `UNKNOWN_unpack_entry_ax_semantics` — **CLOSED `[PROVEN]`.** `UNPACK.EXE` is the stock PKWARE DCL v1.02. `GAME.EXE`'s `AX` is the segment of `explode`'s work buffer (`ES:SI = AX:0000` at image `0x0DA2`). It is a *relocated* segment: an MZ fixup sits at `0x259F`, and the raw word is `0x79F3`, not the `0x89F3` Ghidra shows. That corrects the earlier "bare constant, not an address" claim. Live `AX = 0x7D60` = load segment `0x36D` + `0x79F3`.
+
 ⚠️ `UNKNOWN_openlist_field4` was listed here *and* in the resolved list below. It is **closed** — the resolved entry is correct.
 
 ### Resolved by static (Ghidra + `ndisasm`) passes
