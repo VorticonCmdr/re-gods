@@ -74,26 +74,14 @@ const WANTED = [
   // atlas.js). All three confirmed live in DOSBox and by direct decode —
   // see intro.js's own header.
   'PSTBACK.PI1','PONE.PI1','PINTROFT.PI1','PINTROFT.DAT',
-  // INTROV.EXE's own intro music (game/intro.js) — PMUSIC.MUS, a plain
-  // single-blob SMF (mus-container.js's own header), NOT part of the same
-  // 5-name sound-config dispatch table PSTBACK/PONE/PINTROFT's neighbours
-  // are — it sits in INTROV.EXE's general always-loaded asset cluster
-  // instead (execution-and-boot.md's own citation). The real shipped
-  // GODS.INI here selects Sound Blaster, whose own intro track is
-  // PDEMOSB4.SB — PMUSIC.MUS is a disclosed substitute using this port's
-  // own already-working SMF player, not a claim that it's what GODS.INI's
-  // actual config would play.
-  'PMUSIC.MUS',
-  // PDEMOSB4.SB — the REAL Sound-Blaster-only digitized voice sample
-  // GODS.INI's shipped config actually plays (layered under PGODMUS2.MUS,
-  // execution-and-boot.md's "intro sound-file list"). Format and playback
-  // rate are now decoded (formats/sb-voice.js's own header: raw 8-bit
-  // unsigned mono PCM, DSP time constant 0xA0 live-confirmed in DOSBox by
-  // breakpointing PLAYER.BIN's own DSP-command-write primitive, effective
-  // rate 1,000,000/96 ≈ 10417 Hz) — played by this port as an authentic
-  // bonus layer alongside the PMUSIC.MUS substitute, not a replacement for
-  // it (PGODMUS2.MUS itself is not decoded/ported).
-  'PDEMOSB4.SB',
+  // INTROV.EXE's intro music under the shipped GODS.INI (Sound Blaster,
+  // driver id 4): PGODMUS2.MUS (FM, a word-dictionary-compressed SMF —
+  // audio/mus-container.js's expandBlob) PLUS PDEMOSB4.SB, an 11-clip
+  // sample-music sequence (formats/sb-voice.js). PPLAYER.BIN's AH=1 start
+  // handler (0000:01c4) launches both. PPLAYER.BIN itself is staged only
+  // for the note->rate table the SB sequencer reads (0000:2992).
+  // PMUSIC.MUS (the AdLib-config track) is kept for the dev music picker.
+  'PMUSIC.MUS', 'PGODMUS2.MUS', 'PDEMOSB4.SB', 'PPLAYER.BIN',
   // #11 audio, music half. GAME.EXE's own only music-related string literals
   // are `pgods.mus`/`gods.mus` (Table 2/Table 1) — a raw byte scan of both
   // GAME.EXE and TGAME.EXE found no reference at all to any of the other

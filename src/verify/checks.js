@@ -16451,6 +16451,44 @@ export async function checkMusic(fetchRaw) {
       expandBlob(blobs[25]) === blobs[25]);
   }
 
+  /* INTROV's Sound-Blaster intro audio (formats/sb-voice.js). Every number
+   * here was checked against a live DOSBox run: clip 5 at counter 1544 and
+   * clip 6 at 1640 are this simulation's 1536/1632 plus INTROV's +8 start;
+   * 10383 Hz is the rate read live at PPLAYER's DS:0x294C. */
+  {
+    const { parseSbSequence } = await import('../formats/sb-voice.js');
+    const sb = dclDecompress(await fetchRaw('game/PDEMOSB4.SB')).data;
+    const player = dclDecompress(await fetchRaw('game/PPLAYER.BIN')).data;
+    const seq = parseSbSequence(sb, player);
+    const pcmBytes = seq.clips.reduce((a, c) => a + c.length, 0);
+    check('PDEMOSB4.SB is 11 clips whose PCM plus the 0x21E-byte header is exactly the whole file '
+      + '(not one 227494-byte voice clip, as first read)',
+      seq.clips.length === 11 && 0x21e + pcmBytes === sb.length, `clips=${seq.clips.length} pcm=${pcmBytes} file=${sb.length}`);
+    const c5 = seq.events.find((e) => e.clip === 5), c6 = seq.events.find((e) => e.clip === 6);
+    check('the SB script runs 64 notes over 7680 ticks; clips 5/6 first sound at ticks 1536/1632 '
+      + '(live: 1544/1640 = +8); first note at 10383 Hz (live DS:0x294C)',
+      seq.events.length === 64 && seq.endTick === 7680 && c5?.tick === 1536 && c6?.tick === 1632
+      && seq.events[0].rateHz === 10383,
+      `n=${seq.events.length} end=${seq.endTick} c5=${c5?.tick} c6=${c6?.tick} r0=${seq.events[0]?.rateHz}`);
+    const last = seq.events[seq.events.length - 1];
+    const lastEnd = 8 + last.tick + (seq.clips[last.clip].length / last.rateHz) * 50;
+    check('the last audible SB note ends before INTROV\'s own final stop at counter 7632 '
+      + '(UNKNOWN_sb_voice_stream_end: nothing audible is cut short)', lastEnd < 7632, `ends ~${lastEnd.toFixed(0)}`);
+    const mus2 = expandBlob(parseMusContainer(dclDecompress(await fetchRaw('game/PGODMUS2.MUS')).data)[0]);
+    const mus2Ev = mus2 ? parseSmf(mus2).events : [];
+    check('PGODMUS2.MUS (the FM half of the SB intro) expands to SMF, division 420, 3375 note-ons',
+      !!mus2 && parseSmf(mus2).division === 420 && mus2Ev.filter((e) => e.type === 'noteOn').length === 3375);
+  }
+  {
+    const { INTRO_TIMELINE, INTRO_HZ } = await import('../game/intro.js');
+    const firstOf = (sec) => INTRO_TIMELINE.find((s) => s[2] === sec)[0];
+    const pages = INTRO_TIMELINE.filter((s) => s[2] === 'story' && s[3] >= 0);
+    check('intro order is opener -> logo -> STORY -> CREDITS (CS:0x0136 calls 0ab3, 0870, 057c, 0143)',
+      firstOf('opener') < firstOf('logo') && firstOf('logo') < firstOf('story') && firstOf('story') < firstOf('credits'));
+    check('story page 1 starts at the live-confirmed counter 1641 and page 2 at 1641+0x180 (FUN_1000_07ae)',
+      pages.length === 8 && pages[0][0] === 1641 && pages[1][0] === 1641 + 0x180 && INTRO_HZ === 50);
+  }
+
   /* PGODSRLB-G.RL (six more files, same letter family) are NOT staged or
    * fetched by this check — GAME.EXE never loads any of them for real play
    * (this module's own header), so re-deriving their shape here would only

@@ -100,7 +100,7 @@ import { WebAudioBus } from './audio/audio-bus.js';
 import { parseMusContainer, isSmf, expandBlob } from './audio/mus-container.js';
 import { MusicPlayer } from './audio/music-player.js';
 import { PcmPlayer } from './audio/pcm-player.js';
-import { parseSbVoice, SB_VOICE_SAMPLE_RATE_HZ } from './formats/sb-voice.js';
+import { parseSbSequence, SB_TICK_HZ } from './formats/sb-voice.js';
 
 const LEVELS = ['1A','1B','2A','2B','3A','3B','4A','4B'];
 
@@ -622,31 +622,25 @@ async function main() {
     introAssets = await loadIntroAssets();
   } catch (e) { console.error('intro assets failed to load', e); }
 
-  /* INTROV.EXE's own music — PMUSIC.MUS, a single SMF blob (see copy-
-   * assets.mjs's own citation for why this file and not PGODMUS2.MUS, the
-   * one GODS.INI here actually selects for the music bed). Reuses
-   * `musicPlayer` (declared above for the level-music dev picker) rather
-   * than a second player — only one track is ever audible at a time
-   * regardless. */
+  /* INTROV.EXE's intro music under the shipped GODS.INI (Sound Blaster,
+   * driver id 4): PPLAYER.BIN's AH=1 handler (0000:01c4) starts BOTH the
+   * FM song — PGODMUS2.MUS's only blob, a dictionary-compressed SMF
+   * (mus-container.js's expandBlob) — and the PDEMOSB4.SB sample sequence
+   * (formats/sb-voice.js). Both run off INTROV's 50 Hz counter, so they stay
+   * in step with game/intro.js's INTRO_TIMELINE. The FM half plays through
+   * this port's built-in synth (music-player.js), not an OPL model. */
   let introMusicBlob = null;
   try {
-    const raw = dclDecompress(await fetchRaw('game/PMUSIC.MUS')).data;
-    const blobs = parseMusContainer(raw);
-    if (blobs[0] && isSmf(blobs[0])) introMusicBlob = blobs[0];
+    const raw = dclDecompress(await fetchRaw('game/PGODMUS2.MUS')).data;
+    introMusicBlob = expandBlob(parseMusContainer(raw)[0]);
   } catch (e) { console.error('intro music failed to load', e); }
 
-  /* PDEMOSB4.SB — the real Sound-Blaster digitized voice sample GODS.INI's
-   * shipped config actually plays, layered under the music bed (copy-
-   * assets.mjs's own citation; format/rate decoded and live-confirmed in
-   * DOSBox, see formats/sb-voice.js's header). Played once, as a bonus
-   * layer on top of the PMUSIC.MUS substitute, via a separate PcmPlayer
-   * so it doesn't interrupt/replace the SMF scheduling above. */
-  let introVoicePcm = null;
+  let introSbSequence = null;
   try {
-    const raw = dclDecompress(await fetchRaw('game/PDEMOSB4.SB')).data;
-    const { clips } = parseSbVoice(raw);
-    if (clips[0]) introVoicePcm = clips[0].pcm;
-  } catch (e) { console.error('intro voice sample failed to load', e); }
+    const sb = dclDecompress(await fetchRaw('game/PDEMOSB4.SB')).data;
+    const player = dclDecompress(await fetchRaw('game/PPLAYER.BIN')).data;
+    introSbSequence = parseSbSequence(sb, player);
+  } catch (e) { console.error('intro SB sequence failed to load', e); }
 
   /* The true shipped "TOP TEN GODS" defaults (game/formats/hiscores.js's
    * own `DEFAULT_TABLE`, hardcoded rather than fetched — see that export's
@@ -1522,8 +1516,11 @@ async function main() {
    * NOT one and will not unlock it, matching the browser's own policy. */
   const introVoicePlayer = new PcmPlayer();
   const playIntroAudio = () => {
-    if (introMusicBlob) musicPlayer.play(introMusicBlob);
-    if (introVoicePcm) introVoicePlayer.play(introVoicePcm, SB_VOICE_SAMPLE_RATE_HZ);
+    /* Both layers start at INTROV counter 8 (live: the first DMA start);
+     * a late unlock (pointerdown mid-intro) joins them at the current tick. */
+    const behind = Math.max(0, intro.t - 8);
+    if (introMusicBlob) musicPlayer.play(introMusicBlob, behind / SB_TICK_HZ);
+    if (introSbSequence) introVoicePlayer.playSequence(introSbSequence, SB_TICK_HZ, behind);
   };
   playIntroAudio();
   const unlockIntroAudio = () => {

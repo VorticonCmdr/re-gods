@@ -36,10 +36,53 @@ export class PcmPlayer {
     this.#source = source;
   }
 
+  /**
+   * Schedule a whole `formats/sb-voice.js` sequence. Each event starts its
+   * clip at `tick / tickHz` seconds and cuts the previous one off — the
+   * driver halts the running DMA before every new note (`0000:26a8`).
+   * @param {{clips: Uint8Array[], events: Array<{tick:number, clip:number, rateHz:number}>}} seq
+   * @param {number} tickHz  the sequencer's tick rate (50)
+   * @param {number} [offsetTicks=0]  skip this many ticks of the sequence
+   */
+  playSequence({ clips, events }, tickHz, offsetTicks = 0) {
+    const ctx = this.#ensureContext();
+    this.stop();
+    const buffers = new Map();
+    const bufferFor = (clip, rateHz) => {
+      const key = `${clip}@${rateHz}`;
+      if (!buffers.has(key)) {
+        const pcm = clips[clip];
+        const b = ctx.createBuffer(1, pcm.length, rateHz);
+        const ch = b.getChannelData(0);
+        for (let i = 0; i < pcm.length; i++) ch[i] = (pcm[i] - 128) / 128;
+        buffers.set(key, b);
+      }
+      return buffers.get(key);
+    };
+    const t0 = ctx.currentTime + 0.05 - offsetTicks / tickHz;
+    this.#seqSources = [];
+    let prev = null;
+    for (const e of events) {
+      const when = t0 + e.tick / tickHz;
+      if (when < ctx.currentTime) continue;
+      const src = ctx.createBufferSource();
+      src.buffer = bufferFor(e.clip, e.rateHz);
+      src.connect(ctx.destination);
+      src.start(when);
+      if (prev) prev.stop(when);
+      prev = src;
+      this.#seqSources.push(src);
+    }
+  }
+
+  #seqSources = [];
+
   stop() {
     if (this.#source) {
       try { this.#source.stop(); } catch { /* already ended */ }
       this.#source = null;
     }
+    for (const s of this.#seqSources) { try { s.stop(); } catch { /* not started/ended */ } }
+    this.#seqSources = [];
   }
 }

@@ -1,86 +1,95 @@
-/* sb-voice.js — decodes PDEMOSB4.SB: INTROV.EXE's Sound-Blaster-only
- * digitized voice sample, layered under `godmus2.mus` when `GODS.INI`
- * selects Sound Blaster (execution-and-boot.md's "intro sound-file list").
+/* sb-voice.js — decodes PDEMOSB4.SB: INTROV.EXE's Sound-Blaster intro
+ * track. The file name is kept from when this was believed to be one voice
+ * clip; ⚠️ that reading was wrong.
  *
- * Format `[PROVEN]`, decoded by disassembling PPLAYER.BIN (the shared sound
- * driver both `music-player.js` and this module trace back to) in Ghidra
- * AND cross-checking every finding live in DOSBox — not from the byte shape
- * alone. The decompressed blob (`blast.py`) is a tiny directory over one or
- * more embedded clips, read by `FUN_0000_22f9` in PLAYER.BIN's own address
- * space:
- *   byte 0        clip count (1 for PDEMOSB4.SB — a single voice line)
- *   byte 1..3     unused padding (not read by the loader)
- *   per clip i, at offset 4 + i*4 (4 bytes, all little-endian):
- *     u16  dataStart   byte offset into THIS SAME blob where the clip's
- *                      raw PCM begins (8 for PDEMOSB4.SB's one clip — right
- *                      after the 8-byte count+directory header)
- *     u8   stateByte   copied verbatim to the driver's own state variable
- *                      (0xFF for PDEMOSB4.SB's clip; not otherwise decoded)
- *     u8   param       copied to a second driver scratch byte (0xFC for
- *                      PDEMOSB4.SB's clip; not otherwise decoded)
- * A clip's raw PCM runs from its own `dataStart` to the next clip's
- * `dataStart` (or EOF for the last clip) — the directory carries no
- * explicit length field, only start offsets.
+ * PDEMOSB4.SB is a SAMPLE-MUSIC SEQUENCE: 11 PCM clips plus a byte-code
+ * script, played by PPLAYER.BIN's own sequencer. Read from the driver's
+ * code (ndisasm of the blast.py-decompressed PPLAYER.BIN), then checked
+ * live in DOSBox (Gods/docs/execution-and-boot.md, "PDEMOSB4.SB").
  *
- * Sample data is 8-bit UNSIGNED mono PCM (confirmed by this project's own
- * already-`[PROVEN]` byte-histogram read of PDEMOSB4.SB: mean 127.76≈128,
- * silence-biased, smooth — see drivers-and-memory.md's `PGOD0x.PAT` closure,
- * which uses PDEMOSB4.SB as its own "what real 8-bit PCM looks like"
- * reference sample).
+ * LAYOUT (all little-endian, offsets into the decompressed file):
+ *   byte 0          sequence count (1)
+ *   u16 at 2        offset of the clip table (0x1DC)
+ *   per sequence i, 4 bytes at 4 + 4*i:
+ *     u16 script offset, u8 "also start FM" flag (0xFF — `0000:01e0`),
+ *     s8 pitch bias ([0x2950], -4 here)
+ *   clip table, 6 bytes per clip: {u16 offset, u16 paragraph, u16 length}
+ *     — clip k's PCM starts at paragraph*16 + offset, 8-bit unsigned mono.
+ *     11 real entries; header 0x21E + their 226960 PCM bytes = the whole
+ *     227502-byte file.
  *
- * SAMPLE RATE `[PROVEN]` live in DOSBox, not merely read out of the file
- * (the file itself carries no rate field at all — the rate is a driver-side
- * constant baked into PLAYER.BIN, applied uniformly to every clip). Booted
- * `GODS.EXE`->`INTROV.EXE` with `GODS.INI` set to Sound Blaster, located
- * PLAYER.BIN's own DSP-command-write primitive live (a fixed, position-
- * independent byte signature — the routine never embeds its own load
- * segment, just the hardwired I/O port 0x22C — found via `mem_scan` at
- * physical 0x293F3, giving a live load segment of 0x26BE), and set an
- * execute breakpoint on its `OUT DX,AL` instruction. Live command sequence,
- * confirmed across three streamed blocks:
- *   0xD1                    "speaker on" (once, at stream start)
- *   0x40, 0xA0               "set time constant" = 0xA0 (160 decimal) —
- *                             STABLE across every block observed
- *   0x14, 0x39, 0x00          "8-bit single-cycle DMA output", length-1 =
- *                             0x0039 = 57 -> 58-byte block, re-issued once
- *                             per DMA-complete interrupt (this is a
- *                             STREAMED playback, not one large DMA transfer)
- * The standard Sound Blaster DSP formula (confirmed live at PLAYER.BIN's
- * own `SetupSbPlayback`, `0000:2667` in the `/PLAYER.BIN` Ghidra project:
- * `AX = 1000000 / rateHz; timeConstant = -AX` truncating 8-bit) gives, for
- * timeConstant=0xA0=160: `1000000 / (256 - 160) = 1000000 / 96 ≈ 10416.67`.
- * The driver's own REQUESTED rate (read live from its `[rate]` parameter
- * word, DS:0x294C at the same live segment) is 10383 — the ~0.3% gap
- * between the two is the same integer-truncation rounding the original
- * code itself accepts, not a decode error on this project's part. This
- * port uses the achieved hardware rate (10417, rounded) since that is what
- * a real Sound Blaster actually played back, not the driver's pre-rounding
- * request.
+ * SCRIPT (`0000:23c0`, jump table at `0000:239c`), one byte per opcode:
+ *   00 n  repeat count R       02 n  step length S
+ *   07 n  select clip n        01    rest one step
+ *   04 n  call sub-sequence n  05    return (at top level: STOP)
+ *   03    jump to the current sequence's start
+ *   >= 20 play the current clip, rate = word at PPLAYER.BIN 0x2992 + (op-0x20)
+ *         (a BYTE offset, `0000:2549`), scaled by (256 + bias) / 256
+ *         (`0000:269a`, with [0x1f90] = 256)
+ * A step lasts (S+1)*(R+1) driver ticks (`0000:237a`); the driver is ticked
+ * by INTROV's own 50 Hz timer (`CS:0x14F4`). Each new note halts the
+ * previous DMA first (`0000:26a8`), so clips never overlap.
  *
- * `UNKNOWN_sb_voice_stream_end`: not chased down this pass — whether
- * playback runs to the clip's own natural end-of-buffer or is cut short by
- * the intro's own credits-timing logic advancing past the Sound-Blaster
- * card. This port just plays the whole decoded clip once.
+ * Checked live: clip 5 (15502 bytes) started at counter 1544 and clip 6 at
+ * 1640 — the simulation's 1536/1632 plus INTROV's constant +8 start offset;
+ * the first note's rate, 10548*252/256 = 10383, is the value an earlier
+ * session read live at the driver's DS:0x294C. The script runs 64 notes
+ * over 7680 ticks (153.6 s) and its last audible note ends at counter ~7614,
+ * before INTROV's own final stop at 7632 — so `UNKNOWN_sb_voice_stream_end`
+ * closes as "nothing audible is cut short"; the stop only cuts the script's
+ * closing rest.
  */
 
-export const SB_VOICE_SAMPLE_RATE_HZ = 10417; // 1_000_000 / (256 - 0xA0), rounded — see header
+export const SB_TICK_HZ = 50;
 
 /**
- * @param {Uint8Array} bytes  DCL-decompressed PDEMOSB4.SB (blast.py/dclDecompress's `.data`).
- * @returns {{ count: number, clips: Array<{ dataStart: number, stateByte: number, param: number, pcm: Uint8Array }> }}
+ * @param {Uint8Array} sb      DCL-decompressed PDEMOSB4.SB
+ * @param {Uint8Array} player  DCL-decompressed PPLAYER.BIN (for the rate table)
+ * @param {number} [seq=0]     sequence index
+ * @returns {{ clips: Uint8Array[], events: Array<{tick:number, clip:number, rateHz:number}>, endTick:number }}
  */
-export function parseSbVoice(bytes) {
-  const count = bytes[0];
+export function parseSbSequence(sb, player, seq = 0) {
+  const u16 = (b, o) => b[o] | (b[o + 1] << 8);
+  const seqCount = sb[0];
+  if (seq >= seqCount) throw new Error(`sequence ${seq} >= count ${seqCount}`);
+  const table = u16(sb, 2);
+  const entry = 4 + 4 * seq;
+  const script = u16(sb, entry);
+  const bias = (sb[entry + 3] << 24) >> 24;
+
   const clips = [];
-  for (let i = 0; i < count; i++) {
-    const entryOff = 4 + i * 4;
-    const dataStart = bytes[entryOff] | (bytes[entryOff + 1] << 8);
-    const stateByte = bytes[entryOff + 2];
-    const param = bytes[entryOff + 3];
-    const nextDataStart = i + 1 < count
-      ? (bytes[entryOff + 4] | (bytes[entryOff + 5] << 8))
-      : bytes.length;
-    clips.push({ dataStart, stateByte, param, pcm: bytes.subarray(dataStart, nextDataStart) });
+  for (let k = 0; ; k++) {
+    const o = table + 6 * k;
+    const start = u16(sb, o + 2) * 16 + u16(sb, o);
+    const len = u16(sb, o + 4);
+    if (start < table || start + len > sb.length) break;   // past the real entries
+    clips.push(sb.subarray(start, start + len));
   }
-  return { count, clips };
+
+  const events = [];
+  const stack = [];
+  let si = script, t = 0, S = 0, R = 0, clip = 0;
+  for (let guard = 0; guard < 100000; guard++) {
+    const op = sb[si++];
+    if (op >= 0x20) {
+      const rate = u16(player, 0x2992 + (op - 0x20));
+      events.push({ tick: t, clip, rateHz: Math.floor(rate * (256 + bias) / 256) });
+      t += (S + 1) * (R + 1);
+    } else if (op === 0x00) R = sb[si++];
+    else if (op === 0x02) S = sb[si++];
+    else if (op === 0x07) clip = sb[si++];
+    else if (op === 0x01) t += (S + 1) * (R + 1);
+    else if (op === 0x04) {
+      const n = sb[si++];
+      if (n < seqCount) { stack.push(si); si = u16(sb, 4 + 4 * n); }
+    } else if (op === 0x05) {
+      if (!stack.length) return { clips, events, endTick: t };
+      si = stack.pop();
+    } else {
+      /* 03 (loop forever) and the rarer opcodes (06 slide, 08 halt, ...)
+       * are not used by the shipped file; refuse rather than guess. */
+      throw new Error(`PDEMOSB4 opcode 0x${op.toString(16)} at 0x${(si - 1).toString(16)} not ported`);
+    }
+  }
+  throw new Error('PDEMOSB4 script did not terminate');
 }

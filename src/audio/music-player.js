@@ -79,8 +79,9 @@ export class MusicPlayer {
    */
   get playing() { return this.#timer != null; }
 
-  /** @param {Uint8Array} blob one SMF blob from `mus-container.js`'s `parseMusContainer`, already checked with `isSmf` */
-  play(blob) {
+  /** @param {Uint8Array} blob one SMF blob from `mus-container.js`'s `parseMusContainer`, already checked with `isSmf`
+   * @param {number} [offsetSeconds=0] start this far into the piece (notes before it are skipped) */
+  play(blob, offsetSeconds = 0) {
     this.stop();
     const { division, events } = parseSmf(blob);
     const tempoMap = buildTempoMap(events, division);
@@ -92,8 +93,9 @@ export class MusicPlayer {
       })
       .sort((a, b) => a.time - b.time);
     this.#cursor = 0;
+    while (this.#cursor < this.#notes.length && this.#notes[this.#cursor].time < offsetSeconds) this.#cursor++;
     const ctx = this.#ensureContext();
-    this.#startTime = ctx.currentTime + SCHEDULE_DELAY_S;
+    this.#startTime = ctx.currentTime + SCHEDULE_DELAY_S - offsetSeconds;
     this.#scheduleAhead();
     this.#timer = setInterval(() => this.#scheduleAhead(), SCHEDULER_INTERVAL_MS);
   }

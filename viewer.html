@@ -629,19 +629,23 @@ function parseMusicContainer(buf) {
  * src/formats/sb-voice.js / src/audio/pcm-player.js for the same decode
  * wired live into the port's own intro.
  * ════════════════════════════════════════════════════════════════════════ */
-const SB_VOICE_SAMPLE_RATE_HZ = 10417; // 1_000_000 / (256 - 0xA0) rounded — [PROVEN] live, PDEMOSB4.SB only
+/* ⚠️ Superseded: PDEMOSB4.SB is an 11-clip sample-music SEQUENCE, not one
+ * clip — see src/formats/sb-voice.js. The clip table is at u16@2, 6 bytes
+ * per clip {offset, paragraph, length}; the script picks a rate per note
+ * (10383 / 16482 / 8241 Hz for this file), so 10383 below is only the
+ * first note's rate, used for preview. */
+const SB_VOICE_SAMPLE_RATE_HZ = 10383;
 function parseSbVoice(buf) {
-  const count = buf[0];
+  const u16 = (o) => buf[o] | (buf[o + 1] << 8);
+  const table = u16(2);
   const clips = [];
-  for (let i = 0; i < count; i++) {
-    const o = 4 + i * 4;
-    const dataStart = buf[o] | (buf[o + 1] << 8);
-    const stateByte = buf[o + 2];
-    const param = buf[o + 3];
-    const nextDataStart = i + 1 < count ? (buf[o + 4] | (buf[o + 5] << 8)) : buf.length;
-    clips.push({ index: i, dataStart, stateByte, param, pcm: buf.subarray(dataStart, nextDataStart) });
+  for (let i = 0; i < 64; i++) {
+    const o = table + 6 * i;
+    const dataStart = u16(o + 2) * 16 + u16(o), len = u16(o + 4);
+    if (dataStart < table || dataStart + len > buf.length) break;
+    clips.push({ index: i, dataStart, stateByte: null, param: null, pcm: buf.subarray(dataStart, dataStart + len) });
   }
-  return { count, clips };
+  return { count: clips.length, clips };
 }
 
 /* ════════════════════════════════════════════════════════════════════════
@@ -1151,11 +1155,11 @@ RENDERERS.pcm = (main, entry) => {
   try { dir = parseSbVoice(buf); } catch (e) { dir = null; }
   if (!dir || dir.count === 0 || dir.count > 64 || dir.clips.some((c) => c.dataStart < 4 || c.dataStart > buf.length)) {
     main.appendChild(h('p', { class: 'warn' },
-      `${buf.length} bytes — does not parse as the known 1-count clip directory (PDEMOSB4.SB's own shape). Showing raw bytes as one flat clip instead.`));
+      `${buf.length} bytes — does not parse as PDEMOSB4.SB's clip table. Showing raw bytes as one flat clip instead.`));
     dir = { count: 1, clips: [{ index: 0, dataStart: 0, stateByte: null, param: null, pcm: buf }] };
   }
   main.appendChild(h('p', { class: 'small' },
-    `${buf.length} bytes total, ${dir.count} clip${dir.count === 1 ? '' : 's'}. Playback rate ${SB_VOICE_SAMPLE_RATE_HZ} Hz — [PROVEN] live in DOSBox (execution-and-boot.md), not a guess.`));
+    `${buf.length} bytes total, ${dir.count} clip${dir.count === 1 ? '' : 's'}. Previewed at ${SB_VOICE_SAMPLE_RATE_HZ} Hz (the first note's real rate); the script plays other clips at 16482/8241 Hz — see src/formats/sb-voice.js.`));
   dir.clips.forEach((c) => {
     main.appendChild(h('h3', null, `Clip ${c.index}${c.stateByte != null ? ` — dataStart ${c.dataStart}, stateByte 0x${c.stateByte.toString(16).padStart(2,'0')}, param 0x${c.param.toString(16).padStart(2,'0')}` : ''}`));
     main.appendChild(h('p', { class: 'small' },

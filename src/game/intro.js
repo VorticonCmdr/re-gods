@@ -12,7 +12,10 @@
  * header before touching the constants below; several are now real,
  * disassembly-derived facts, not guesses:
  *
- * REAL SEQUENCE (entry() -> FUN_1000_0136, traced call-by-call):
+ * REAL SEQUENCE (entry() -> FUN_1000_0136, traced call-by-call). ⚠️ ORDER
+ * CORRECTED: 0136 calls 0ab3, 0870, 057c, 0143 — so step 4 (story) runs
+ * BEFORE step 3 (credits); the numbering below is kept from the first
+ * draft, the playback order is 1, 2, 4, 3, 5 (see INTRO_TIMELINE):
  *   1. FUN_1000_0ab3: "RENEGADE" / "PRESENTS" / "A BITMAP BROTHERS" / "GAME"
  *      — 4 separate single-line full screens, WHITE "titles" font (`bd`
  *      register/global `DS:0xbd` = 0x30 for this whole call).
@@ -103,50 +106,11 @@
  * not retyped from prose. The eight story pages are separated in the
  * shipped bytes by a literal 0xFF marker.
  *
- * TIMING — real, relative, disassembly-derived for the FOUR white-font
- * cards (the `DS:0x93` tick counter's own thresholds, "id<2" sound-driver
- * branch): RENEGADE holds ~87 ticks; PRESENTS ~193; A BITMAP BROTHERS
- * ~180; GAME ~188 (i.e. RENEGADE is a short flash, the three-word phrases
- * hold roughly twice as long each — CREDIT_HOLD_WEIGHTS below encodes
- * these ratios instead of the first draft's flat uniform guess). The GOLD
- * credit cards' own thresholds were read too but not fully reduced to
- * per-card deltas this pass; they're within the same rough order of
- * magnitude and this port keeps a flat hold for them, disclosed as
- * unweighted. **Still open, not from this pass**: `DS:0x93`'s own tick
- * rate in Hz (it's driven by the sound driver's own reprogrammed timer,
- * not the 15Hz game-logic tick or the confirmed ~VGA-vsync-rate
- * `FUN_1000_1901` wait — its ISR was not traced), and the 8 story pages'
- * own individual hold lengths (`FUN_1000_07ae`'s wait target is register-
- * passed, not a static per-call literal, so it wasn't recovered by
- * decompilation alone). UNKNOWN_intro_page_timing narrows to just these
- * two residuals; UNKNOWN_intro_credits_timing is otherwise closed.
- *
- * PALETTE — LOGO now fixed, STORY still open. `FUN_1000_1635` is confirmed
- * as the DAC-install routine (16-entry table -> `INT 10h AX=1012h`), fed
- * from a table at `DS:0x73` that `FUN_1000_0db5`/`FUN_1000_0d9c` rotate
- * between card transitions (a genuine per-card colour-cycle/dissolve
- * effect, not a static palette) — but this pass could not pin down where
- * `DS:0x73`'s OWN source values come from (a direct memory read at the
- * address this file's first draft guessed, `DS:0x2`, turned out to be
- * unrelated ASCII filename data, not a palette — a wrong guess, corrected
- * here rather than left silently). **User-reported: the "GODS" wordmark
- * rendered solid red instead of gold on the logo card.** Root cause: this
- * port was presenting the logo card under `PSTBACK.PI1`'s OWN embedded
- * palette, whose index 2 is a pure-red entry the wordmark's own pixels
- * legitimately hit. Checked directly (not assumed): `PSTBACK.PI1` and
- * `PINTROFT.PI1` turn out to share ONE real palette — decoding `PSTBACK`'s
- * indices under `PINTROFT`'s embedded palette reproduces `PSTBACK`'s own
- * native stone-wall colors exactly. So the logo card now presents under
- * `PINTROFT`'s palette throughout (`Intro#palette()`), fixing both the
- * backdrop AND the wordmark at once — a real fix, not a tradeoff. The SAME
- * check against `PONE.PI1` (the story backdrop) came out wrong — garish
- * green/orange bands, not its own gradient — so `PONE.PI1` genuinely does
- * NOT share `PINTROFT`'s palette, and the story page's own gold-vs-salmon
- * text hue mismatch is still open. UNKNOWN_intro_glyph_palette narrows to
- * the STORY section only. Next
- * step is a live DAC port read (0x3C7/0x3C9) during an actual DOSBox
- * run, the technique already validated for UNKNOWN_level_palette_source,
- * not more static reading.
+ * TIMING and PALETTE — both CLOSED; see INTRO_TIMELINE and palette() below
+ * for the full citations (UNKNOWN_intro_page_timing: DS:0x93 is a 50 Hz
+ * PIT-driven counter and story pages hold a fixed 0x180 ticks;
+ * UNKNOWN_intro_glyph_palette: DS:0x73 is a working palette faded toward
+ * static DS tables or PONE.PI1's own embedded palette).
  */
 
 import { SCREEN_W } from '../formats/pi1.js';
@@ -225,12 +189,8 @@ const CREDITS_ADVANCE = 16;   // FUN_1000_0d2a: AX += 0x10, confirmed
 const STORY_ADVANCE = 8;      // FUN_1000_0d72: AX += 8, confirmed
 
 /* ── Step 1: the white-font opener ───────────────────────────────────────
- * FUN_1000_0ab3, one screen per entry, WHITE font. Weights are the real
- * relative DS:0x93 tick deltas (see this file's TIMING header) normalised
- * to RENEGADE=1; still no absolute Hz, so this port scales them onto its
- * own OPENER_BASE_HOLD rather than claiming a measured duration. */
+ * FUN_1000_0ab3, one screen per entry, WHITE font. Timing: INTRO_TIMELINE. */
 export const OPENER_CARDS = ['RENEGADE', 'PRESENTS', 'A BITMAP BROTHERS', 'GAME'];
-const OPENER_WEIGHTS = [87, 193, 180, 188].map((t) => t / 87);
 
 /* ── Step 3: the gold-font production credits ────────────────────────────
  * FUN_1000_0143, confirmed line-for-line by FUN_1000_0d10's own call count
@@ -268,81 +228,110 @@ export const STORY_PAGES = [
   ['preparing to', 'carve one more', 'story on', 'its walls'],
 ];
 
-const TICK_HZ = 15;
-const T = (seconds) => Math.round(seconds * TICK_HZ);
+/* ── The real timeline ─────────────────────────────────────────────────
+ * `UNKNOWN_intro_page_timing` — CLOSED. Every wait in INTROV.EXE compares the
+ * word counter DS:0x93 against an absolute threshold. That counter is bumped
+ * once per timer interrupt by `0x14F4`, called from the INT 8 handler at
+ * `0x15D1`, which `0x1321` installs after `0x15B8` reprograms PIT channel 0
+ * with divisor 0x5D38 = 23864 -> 1193182/23864 = 49.999 Hz. So the counter is
+ * a 50 Hz clock, and it is also the sound driver's tick (`0x14F4` calls
+ * PPLAYER.BIN AH=2 right after the increment), which is why every step below
+ * lands on the music's own bar lines (96 ticks = one 4/4 bar of PGODMUS2 at
+ * 480000 us/quarter). Live-confirmed in DOSBox: counter-vs-BIOS-tick rate
+ * 50.05 Hz, story page 1 entered at exactly the threshold 1641, page 2 at
+ * 2025 = 1641 + 0x180.
+ *
+ * Each wait carries THREE thresholds, picked by the sound-driver id
+ * DS:0x195 (`== 2`, `< 2`, `> 2`). GODS.INI's shipped "Sound Blaster" sets
+ * id 4 (read live), so this port uses the `> 2` column throughout. The
+ * sequence origin is counter 7 (`CS:0x005A`/`0x0060`).
+ *
+ * Story pages: `FUN_1000_07ae` takes DI = the page's text, NOT a hold length
+ * (the earlier "register-passed wait target" reading was wrong). It snapshots
+ * the counter on entry and waits for `start + 0x180` = 384 ticks = 7.68 s
+ * (0x110 under driver id 3). The LAST page of each batch then stays up until
+ * the next absolute threshold — 19 s and 28 s respectively — live-confirmed
+ * with page 3 still on screen at counter 3149.
+ *
+ * ORDER, corrected: `CS:0x0136` calls 0ab3 (opener) -> 0870 (logo) -> 057c
+ * (STORY) -> 0143 (CREDITS). The story comes BEFORE the production credits;
+ * this file's first two drafts had them the other way round. Live-confirmed:
+ * the credits routine is entered at counter 6434, after the story's last
+ * threshold (6400).
+ *
+ * Fades are the real 8-/7-step palette ramps (`0xDCC`/`0xE51`, AX retrace
+ * waits per step), about 0.34 s at AX=3; modelled here as linear ramps of
+ * that length. The logo and credits palette-cycle effects between the
+ * static tables at DS:0xF3/0x113/0x133/0x173 are not modelled.
+ */
+export const INTRO_HZ = 50;
+const FADE = 17;      // 8 steps x 3 retraces at 70 Hz ~ 0.34 s ~ 17 ticks
+const PAGE_HOLD = 0x180;
 
-/* Absolute pacing is still this port's own choice (see TIMING header) —
- * only the OPENER's own relative weights are real. */
-const OPENER_BASE_HOLD = T(0.7);
-const LOGO_FADE = T(0.5);
-const LOGO_HOLD = T(1.6);
-const CREDIT_FADE = T(0.35);
-const CREDIT_HOLD = T(1.5);
-const PAGE_FADE = T(0.5);
-const PAGE_HOLD = T(2.2);
+/* Each shot: [inTick, outTick, section, index]. `in` = the palette fade-in
+ * (or page flip) threshold, `out` = the fade-out threshold. */
+export const INTRO_TIMELINE = [
+  [7, 90, 'opener', 0], [194, 288, 'opener', 1], [384, 472, 'opener', 2], [577, 665, 'opener', 3],
+  [768, 1256, 'logo', 0],
+  [1342, 1641, 'story', -1],                        // the portrait alone, faded in
+  [1641, 1641 + PAGE_HOLD, 'story', 0],
+  [1641 + PAGE_HOLD, 1641 + 2 * PAGE_HOLD, 'story', 1],
+  [1641 + 2 * PAGE_HOLD, 3368, 'story', 2],          // last of batch 1: held to 3368
+  [3427, 3442, 'story', -1],
+  [3442, 3442 + PAGE_HOLD, 'story', 3],              // ~15 ticks after 3427 for the fade (estimate)
+  [3442 + PAGE_HOLD, 3442 + 2 * PAGE_HOLD, 'story', 4],
+  [3442 + 2 * PAGE_HOLD, 3442 + 3 * PAGE_HOLD, 'story', 5],
+  [3442 + 3 * PAGE_HOLD, 3442 + 4 * PAGE_HOLD, 'story', 6],
+  [3442 + 4 * PAGE_HOLD, 6400, 'story', 7],          // held to 6400
+  [6534, 6634, 'credits', 0], [6634, 6729, 'credits', 1], [6729, 6824, 'credits', 2],
+  [6824, 6919, 'credits', 3], [6919, 7014, 'credits', 4], [7014, 7109, 'credits', 5],
+  [7109, 7204, 'credits', 6], [7204, 7497, 'credits', LOGO_INSERT_AFTER],
+  [7497, 7775, 'credits', LOGO_INSERT_AFTER + 1],    // 7632 + 200 retraces (CS:0x00A5)
+  [7861, 7900, 'loading', 0],                        // after the fade-outs + 50 retraces
+];
+export const INTRO_END_TICK = 7900;
 
-/** Tick-polled, same `step()`-per-frame shape as title-menu.js's widgets.
- * Nothing here reads `input` directly — INTROV.EXE's own "any key skips"
- * is real and confirmed (see this file's SKIP header), handled uniformly
- * by main.js's keydown listener, the same way it already handles skipping
- * attract-mode playback. Runs the sequence exactly ONCE (see the DOES NOT
- * LOOP header note) and reports completion via `done`; main.js transitions
- * to 'menu' when it sees that, same as a skip. */
+/** Tick-polled at the game's 15 Hz, but keeps time in INTROV's own 50 Hz
+ * counter units so every threshold above is used verbatim. Nothing here
+ * reads `input` directly — any key skips (see the SKIP header), handled by
+ * main.js's keydown listener. Runs once (see DOES NOT LOOP). */
 export class Intro {
   constructor() {
-    this.tick = 0;
-    this.section = 'opener';   // 'opener' | 'logo' | 'credits' | 'story' | 'loading'
-    this.cardIndex = 0;
-    this.pageIndex = 0;
+    this.t = 7;
     this.done = false;
+    this.#sync();
   }
 
-  step() {
+  #sync() {
+    const shot = INTRO_TIMELINE.find(([a, b]) => this.t >= a && this.t < b)
+      || INTRO_TIMELINE.findLast(([a]) => this.t >= a);
+    this.shot = shot;
+    this.section = shot[2];
+    this.cardIndex = shot[2] === 'story' ? 0 : shot[3];
+    this.pageIndex = shot[2] === 'story' ? shot[3] : 0;
+  }
+
+  step(ticks = INTRO_HZ / 15) {
     if (this.done) return;
-    this.tick++;
-    if (this.section === 'opener') {
-      const hold = OPENER_BASE_HOLD * OPENER_WEIGHTS[this.cardIndex];
-      if (this.tick >= hold) {
-        this.tick = 0;
-        this.cardIndex++;
-        if (this.cardIndex >= OPENER_CARDS.length) { this.section = 'logo'; this.cardIndex = 0; }
-      }
-      return;
-    }
-    if (this.section === 'logo') {
-      if (this.tick >= LOGO_FADE * 2 + LOGO_HOLD) { this.tick = 0; this.section = 'credits'; this.cardIndex = 0; }
-      return;
-    }
-    if (this.section === 'credits') {
-      if (this.tick >= CREDIT_FADE * 2 + CREDIT_HOLD) {
-        this.tick = 0;
-        this.cardIndex++;
-        const total = CREDIT_CARDS.length + 1;   // + INTO_WONDERFUL
-        if (this.cardIndex >= total) { this.section = 'story'; this.pageIndex = 0; }
-      }
-      return;
-    }
-    if (this.section === 'story') {
-      if (this.tick >= PAGE_FADE * 2 + PAGE_HOLD) {
-        this.tick = 0;
-        this.pageIndex++;
-        if (this.pageIndex >= STORY_PAGES.length) { this.section = 'loading'; }
-      }
-      return;
-    }
-    // 'loading'
-    if (this.tick >= CREDIT_FADE * 2 + CREDIT_HOLD) { this.done = true; }
+    this.t += ticks;
+    if (this.t >= INTRO_END_TICK) { this.done = true; return; }
+    this.#sync();
   }
 
+  /** 0..1 brightness from the fade ramps at the shot's own in/out ticks.
+   * Consecutive story pages and credit cards share one faded-in screen, so
+   * only the section's first/last shot actually ramps. */
   fadeT() {
-    if (this.section === 'opener') return 1;
-    if (this.section === 'loading') return 1;
-    const fadeIn = this.section === 'logo' ? LOGO_FADE : this.section === 'credits' ? CREDIT_FADE : PAGE_FADE;
-    const hold = this.section === 'logo' ? LOGO_HOLD : this.section === 'credits' ? CREDIT_HOLD : PAGE_HOLD;
-    if (this.tick < fadeIn) return this.tick / fadeIn;
-    if (this.tick < fadeIn + hold) return 1;
-    const fadeOutT = this.tick - fadeIn - hold;
-    return Math.max(0, 1 - fadeOutT / fadeIn);
+    const [a, b, sec, idx] = this.shot;
+    if (this.t >= b) return 0;
+    const i = INTRO_TIMELINE.indexOf(this.shot);
+    const prev = INTRO_TIMELINE[i - 1], next = INTRO_TIMELINE[i + 1];
+    const contIn = prev && prev[2] === sec && prev[1] === a && sec !== 'opener';
+    const contOut = next && next[2] === sec && next[0] === b && sec !== 'opener';
+    let v = 1;
+    if (!contIn) v = Math.min(v, (this.t - a) / FADE);
+    if (!contOut) v = Math.min(v, (b - this.t) / FADE);
+    return Math.max(0, Math.min(1, v));
   }
 
   draw(renderer, assets) {
@@ -363,9 +352,6 @@ export class Intro {
         lines.forEach((line, i) =>
           drawIntroCentered(renderer, assets.creditsGlyphs, line, y0 + i * 18, CREDITS_ADVANCE));
       } else if (this.cardIndex === LOGO_INSERT_AFTER) {
-        /* The wordmark-only re-insert — no backdrop redraw in the real
-         * sequence at this point, so this port keeps whatever was drawn
-         * last (the credits section never blits a backdrop either). */
         drawLogo(renderer, assets.logoTiles, 70);
       } else {
         drawIntroCentered(renderer, assets.creditsGlyphs, INTO_WONDERFUL_CARD, 92, CREDITS_ADVANCE);
@@ -374,6 +360,7 @@ export class Intro {
     }
     if (this.section === 'story') {
       if (assets.portraitBg) renderer.blitBackground(assets.portraitBg);
+      if (this.pageIndex < 0) return;
       const lines = STORY_PAGES[this.pageIndex];
       const y0 = 20;
       lines.forEach((line, i) =>
@@ -384,23 +371,20 @@ export class Intro {
     drawIntroCentered(renderer, assets.creditsGlyphs, LOADING_CARD, 92, CREDITS_ADVANCE);
   }
 
-  /** The palette to present with — see this file's own PALETTE header for
-   * the open gap (still real for the STORY section only — see below). */
+  /** `UNKNOWN_intro_glyph_palette` — CLOSED. DS:0x73 is a WORKING palette,
+   * zeroed at entry (`CS:0x003B`) and stepped by the fade routines toward a
+   * target table: the static tables at DS:0xD3/0xF3/0x113/0x133/0x153/0x173,
+   * or DS:0x393, which `CS:0x05CD` fills by byte-swapping the 16 words at
+   * `1b51:0002` — the embedded ST palette of PONE.PI1 (loaded there by
+   * `CS:0x0F3F`, filename DS:0x3EB "one.pi1"). Live-confirmed: DS:0x393 read
+   * back word-for-word equal to PONE.PI1's header. So the story pages, text
+   * included, really are shown under PONE's own palette; the salmon-ish
+   * story text is the original's look, not a port error.
+   * 'logo': PSTBACK.PI1 and PINTROFT.PI1 share one palette (checked
+   * directly), and the wordmark rendered red under PSTBACK's own index 2, so
+   * the logo card presents under PINTROFT's palette. */
   palette(assets) {
-    /* 'logo': PSTBACK.PI1 and PINTROFT.PI1 turn out to share ONE palette —
-     * rendering PSTBACK's own indices under PINTROFT's embedded palette
-     * reproduces PSTBACK's own native colors exactly (checked directly,
-     * not assumed), so this is a real fix, not the same tradeoff STORY
-     * still has: user-reported, the wordmark rendered solid RED under
-     * PSTBACK's own palette (index 2 there is a pure-red entry the
-     * wordmark's pixels legitimately hit) instead of gold. PONE.PI1 does
-     * NOT share PINTROFT's palette (checked the same way — comes out as
-     * wrong garish bands), so STORY is unaffected by this fix. */
-    if (this.section === 'opener' || this.section === 'credits' ||
-        this.section === 'loading' || this.section === 'logo') {
-      return assets.fontPalette;
-    }
     if (this.section === 'story' && assets.portraitBg) return assets.portraitBg.palette;
-    return assets.logoBg ? assets.logoBg.palette : null;
+    return assets.fontPalette;
   }
 }
