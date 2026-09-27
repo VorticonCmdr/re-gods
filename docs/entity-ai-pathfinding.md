@@ -198,6 +198,20 @@ So descriptor **`+0x08` carries two strategy ids, one per nibble**, and **`+0x09
 
 `POBJECTS` type 45 reads **`"potion..........attracts monsters"`**. So the mechanism is exactly what the item says: enemies stop heading for the hero and head for the marker list at `DS:0xb5dc` instead. (Type 46, `"distracts monsters"`, takes the same marker-append path without setting the gate.) `UNKNOWN_marker_record` — what the 6-byte records hold beyond the leading `{x, y}` that `0xf7bb` reads is not established.
 
+⚠️ **The marker list is rebuilt on every tick, `[PROVEN]` live.** The object walk's own head resets it:
+
+```
+1432  mov byte [0x398],0x0            ; count := 0
+1437  mov byte [0x399],0x0            ; override off
+143c  mov byte [0x39a],0x0
+1441  mov word [0x208],0xb5dc         ; rewind the write cursor
+...
+14b8  cmp byte [0x399],0 / jz         ; after the walk:
+14bf  mov byte [0x398],0x1            ;   under the override, only marker 0 (the potion) counts
+```
+
+So the list holds only this tick's on-screen category-0/1/2 objects. It also re-arms the override each tick while an attract potion stays on screen. A live trace at `PJOYL2` cursor 2092 (`CS:0xF5C3`) read `[0x398]` = 1 with a single marker, and goal cells 250/270 painted from it. `gods-web` had cleared the list only on level load. Its pathfinder chased 20 stale copies of one falling object, and that was the last random-stream divergence in `PJOYL2`.
+
 ⚠️ **Strategy 2 is NOT inert when there are no markers — it retries the other nibble.** `0xf799` jumps to `0xf71a`, which is `xchg cx,dx` followed by the dispatch. The same fallback fires when every marker lands off-grid (`0xf7d2` tests `DS:0x3cf`). Since markers exist only after an attract potion, that fallback is the *common* case, and implementing it is what took the port's hero-relative coverage from **72.5% to 97.4%** of shipped descriptors.
 
 **Strategy 3's waypoints are static data**, four per-world pointers at `DS:0xdb28` = `{0xdb30, 0xdb58, 0xdba8, 0xdba8}` — **worlds 3 and 4 share a list**. Records are `{u16 tileX, i16 tileY}`, terminated by a negative `tileY`:
