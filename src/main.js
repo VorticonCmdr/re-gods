@@ -767,6 +767,18 @@ const guardianTables = {
       Object.fromEntries(arsenal.slots.filter((s) => s.st).map((s) => [s.weapon, s.st])),
       mode);
     despawnConsumedHit(d, arsenal.weapons, arsenal.slots.map((s) => s.area));
+    /* CS:0x93DD-0x9417 — a STARBURST particle (tag 0xFC) that hits something
+     * outside guardian mode also sets off a new burst at the struck grid
+     * cell: bp - 0x16CA split by 0x30 into row/column, 8 px each, plus the
+     * camera. [STATIC], read from the live code segment; not yet seen to
+     * fire live (PJOYL3 1040's burst is being traced to its caller). */
+    if ((tag & 0xff) === 0xfc && mode === 0) {
+      const off = grid.lastHitSi - 0x16ca;
+      if (off >= 0) {
+        const row = Math.floor(off / 0x30), col = off % 0x30;
+        starburst.spawn(col * 8 + cam.snapX, row * 8 + cam.snapY);   // CS:0x9417 -> 0xA461
+      }
+    }
     return d;
   };
   /* DS:0x365 — level progression only. 0 on world 1, so full damage here. */

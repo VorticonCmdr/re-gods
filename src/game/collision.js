@@ -218,7 +218,7 @@ export class DamageGrid {
     for (let r = 0; r <= rows; r++) {           // `dec al / jns` -> rows+1 passes
       for (let c = 0; c < cols; c++, si++) {
         const i = this._at(si);
-        if (i >= 0 && i < GRID_BYTES && this.buf[i] !== 0) return this.buf[i];
+        if (i >= 0 && i < GRID_BYTES && this.buf[i] !== 0) { this.lastHitSi = si; return this.buf[i]; }
       }
       si += advance;
     }

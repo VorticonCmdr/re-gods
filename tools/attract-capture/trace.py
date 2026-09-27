@@ -53,7 +53,8 @@ def main():
             break
         di = reg['edi'] & 0xFFFF
         rec = mem(DS, di, 16)
-        log.append({'c': cur, 'at': hex(reg['eip'] & 0xFFFF), 'r': word(DS, 0x160), 'di': hex(di),
+        log.append({'c': cur, 'at': hex(reg['eip'] & 0xFFFF), 'ret': hex(word(SS, reg['esp'] & 0xFFFF)),
+                    'r': word(DS, 0x160), 'di': hex(di),
                     'ranges': {k: mem(g, o, n).hex() for g, k, o, n in extra}, 'si': hex(reg['esi'] & 0xFFFF),
                     'cam': [word(DS, 0xA), word(DS, 0xC)], 'hero': [word(DS, 0x17A), word(DS, 0x17C)],
                     'rec': [int.from_bytes(rec[i:i + 2], 'little', signed=True) for i in range(0, 16, 2)]})
