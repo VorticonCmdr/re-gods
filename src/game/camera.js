@@ -161,3 +161,32 @@ export class Camera {
     }
   }
 }
+
+/**
+ * CS:0x5E22 — the scripted camera, run from the player epilogue (CS:0x5EB3)
+ * INSTEAD of `update` while DS:0x32 is non-zero. No dead zones and no clamps.
+ * X moves a flat 4 px toward DS:0x2EC; Y halves toward DS:0x2EE. DS:0x32
+ * counts 1 -> 2 on the tick both axes land, then 2 -> 3 -> 4 (the unguarded
+ * `jz` paths at CS:0x5E2C/0x5E5C), and stays at 4.
+ * @param {{x:number,y:number}} c  the camera, moved in place
+ * @param {{mode:number, tx:number, ty:number}} cs  DS:0x32, DS:0x2EC/0x2EE
+ */
+export function scriptedCameraStep(c, cs) {
+  let bp = 0;
+  if (cs.tx === c.x) bp++;                             // 5E2C `jz 0x5e53`
+  else {
+    c.x += cs.tx > c.x ? 4 : -4;                       // 5E2E-5E37
+    if (cs.tx === c.x && cs.mode <= 2) bp++;           // 5E40-5E53
+  }
+  const d = cs.ty - c.y;
+  if (d !== 0) {                                       // 5E5C `jz 0x5e8b`
+    const h = d >> 1;                                  // 5E60 / 5E6E `sar dx,1`
+    if (h === 0) c.y += d > 0 ? 1 : -1;                // 5E64 / 5E72 (only d = 1 reaches it)
+    c.y += h;
+    if (cs.ty !== c.y) return;                         // 5E82
+    if (cs.mode > 2) return;                           // 5E84
+  }
+  if (bp === 0) return;                                // 5E8B
+  if (cs.mode >= 4) return;                            // 5E8F
+  cs.mode++;                                           // 5E96
+}

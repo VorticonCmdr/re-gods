@@ -46,3 +46,17 @@ export const W3_SCRIPT = Uint8Array.from([
   29,0,0,25,0,0,8,252,0,8,0,0,10,252,0,10,0,0,12,252,0,12,0,0,
   14,252,0,14,0,0,255,
 ]);
+
+/** SS:0x5742, 24 records [dx, dy, frame], terminator frame 0xFF at +72. Read by CS:0xCF71 every tick, stepped on DS:0x36D == 0. */
+export const W2_SCRIPT = Object.freeze([
+  [0,0,0],[0,0,0],[0,0,0],[0,0,0],[1,-1,0],[1,-1,0],[2,-1,0],[3,-1,0],
+  [-3,2,1],[-3,4,1],[-3,4,1],[-2,4,2],[0,0,2],[0,0,2],[0,0,2],[1,-3,1],
+  [1,-3,0],[1,-2,0],[1,-2,0],[0,0,0],[0,0,0],[0,0,0],[0,0,0],[0,0,0],
+]);
+/** SS:0x57D0, 4 records [spriteAdd, dy], indexed by DS:0x2F0 at CS:0xD112. */
+export const W2_JAW = Object.freeze([[6,0],[4,14],[5,27],[4,14]]);
+/** DS:0xDC78 (speed >= 0) and DS:0xDC8C (speed < 0): claw frame by angle bucket (CS:0xD2F5). */
+export const W2_CLAW_POS = Uint8Array.from([6,5,4,4,4,4,4,4,4,5,5,5,5,5,5,0,0,0,0,0]);
+export const W2_CLAW_NEG = Uint8Array.from([0,0,0,0,0,0,0,0,0,1,1,1,1,0,7,6,0,0,0,0]);
+/** DS:0xDCA0, [dx, dy] claw draw offset by frame (CS:0xD33C). */
+export const W2_CLAW_OFF = Object.freeze([[-8,0],[-11,-4],[-7,-7],[-4,-10],[-1,-7],[2,-4],[-1,-2],[-4,2]]);

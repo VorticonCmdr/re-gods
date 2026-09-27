@@ -53,5 +53,43 @@ for k in range(0, len(w3), 24):
     out.append('  ' + ','.join(str(v) for v in w3[k:k + 24]) + ',')
 out.append(']);')
 out.append('')
+# World 2 (CS:0xC54C). All read live; the claw tables are in DS (0x136A).
+DS = 0x136A
+
+
+def readds(off, n):
+    return urllib.request.urlopen(f'http://localhost:8386/api/v1/memory/{DS}/{off}/{n}').read()
+
+
+def s16(lo, hi):
+    v = lo | hi << 8
+    return v - 0x10000 if v & 0x8000 else v
+
+
+d = read(0x5742, 128)
+i = 0
+while not d[i + 2] & 0x80:
+    i += 3
+recs = [f'[{d[k] - 256 if d[k] > 127 else d[k]},{d[k+1] - 256 if d[k+1] > 127 else d[k+1]},{d[k+2]}]'
+        for k in range(0, i, 3)]
+out.append(f'/** SS:0x5742, {i // 3} records [dx, dy, frame], terminator frame 0x{d[i+2]:02X} at +{i}. '
+           'Read by CS:0xCF71 every tick, stepped on DS:0x36D == 0. */')
+out.append('export const W2_SCRIPT = Object.freeze([')
+for k in range(0, len(recs), 8):
+    out.append('  ' + ','.join(recs[k:k + 8]) + ',')
+out.append(']);')
+j = read(0x57D0, 16)
+out.append('/** SS:0x57D0, 4 records [spriteAdd, dy], indexed by DS:0x2F0 at CS:0xD112. */')
+out.append('export const W2_JAW = Object.freeze([' +
+           ','.join(f'[{s16(j[k], j[k+1])},{s16(j[k+2], j[k+3])}]' for k in range(0, 16, 4)) + ']);')
+c = readds(0xDC78, 40)
+out.append('/** DS:0xDC78 (speed >= 0) and DS:0xDC8C (speed < 0): claw frame by angle bucket (CS:0xD2F5). */')
+out.append(f'export const W2_CLAW_POS = Uint8Array.from([{",".join(map(str, c[:20]))}]);')
+out.append(f'export const W2_CLAW_NEG = Uint8Array.from([{",".join(map(str, c[20:]))}]);')
+o = readds(0xDCA0, 32)
+out.append('/** DS:0xDCA0, [dx, dy] claw draw offset by frame (CS:0xD33C). */')
+out.append('export const W2_CLAW_OFF = Object.freeze([' +
+           ','.join(f'[{s16(o[k], o[k+1])},{s16(o[k+2], o[k+3])}]' for k in range(0, 32, 4)) + ']);')
+out.append('')
 open(__file__.rsplit('/', 2)[0] + '/src/game/guardian-data.js', 'w').write('\n'.join(out))
 print('wrote', len(SCRIPTS), 'scripts')

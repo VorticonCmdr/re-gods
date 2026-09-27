@@ -24,12 +24,12 @@ import { runAllChecks, checkDescriptorAnchors, checkHeroSprites,
          checkMapWriter,
          checkShop, checkMusic } from './verify/checks.js';
 import { EventRunner, parsePalfils, palfilsNameFor } from './game/events.js';
-import { Guardian } from './game/guardian.js';
+import { Guardian, convertBezier } from './game/guardian.js';
 import { FlashPool } from './game/flash.js';
 import { LineBarriers, parseLineBarrierRecords } from './game/line-barriers.js';
 import { makeActionContext, makeGates, DOOR_TILES,
          ACTION_NAMES } from './game/trigger-actions.js';
-import { cameraForSpawn, Camera } from './game/camera.js';
+import { cameraForSpawn, Camera, scriptedCameraStep } from './game/camera.js';
 import { spriteFor, STATE_INFO, UNMODELLED_PHASE_STATES } from './game/states.js';
 import { buildDescriptorMap, GROUP_STEMS, HERO_DESCRIPTOR_MAX,
          LEVEL_LOAD_ORDER } from './formats/descriptors.js';
@@ -573,6 +573,12 @@ async function main() {
   } catch (e) { console.error('atlas render failed', e); }
 
   let level = await loadLevel(LEVELS[0]);
+/* The world-2 guardian's arm: SINCOS.DAT (SS:0x40B0) and BEZIER.DAT
+ * (SS:0x48E0, loaded raw at CS:0x0570 and converted by CS:0xD489). */
+const guardianTables = {
+  sincos: await fetchRaw('game/SINCOS.DAT'),
+  bezier: convertBezier(await fetchRaw('game/BEZIER.DAT')),
+};
   let hero = null;
   /* CS:0x0df8's own export-21 anchor (formats/descriptors.js, descriptor
    * #127) — sliced once per hero (re)load into ten 8x7 glyph frames the
@@ -1062,17 +1068,23 @@ async function main() {
    * (CS:0xD7E1), and the committed-camera-y nudge it applies (CS:0xD7E7,
    * `[0x270] -= 8`). The shake runs at CS:0x01CF whatever DS:0x34 holds. */
   let camShake = 0, camNudgeY = 0;
+  /* DS:0x32 — the scripted camera (camera.js scriptedCameraStep) and its
+   * target DS:0x2EC/0x2EE. Only the level (re)init clears it (CS:0x8D53);
+   * a death keeps it. `camPending` is this tick's scripted result, applied
+   * where the normal camera update would run. */
+  let camScript = { mode: 0, tx: 0, ty: 0 }, camPending = null, camWasScripted = false;
   /* DS:0xAC90 — the materialise flash pool (game/flash.js). */
   const flashPool = new FlashPool();
   let flashFx = [];
   const wireSpawn = () => {
     guardian = null; guardianFx = []; camShake = 0; camNudgeY = 0;
+    camScript = { mode: 0, tx: 0, ty: 0 }; camPending = null; camWasScripted = false;
     flashPool.reset(); flashFx = [];
     /* Selector 11 — CS:0xC49C. Only world 1's guardian is ported; the other
      * worlds' events are still counted as unhandled. */
     events.onGuardian = () => {
-      if (level.world !== 1 && level.world !== 3) return false;
-      guardian = new Guardian(level.world);
+      if (level.world === 4) return false;
+      guardian = new Guardian(level.world, guardianTables);
       return true;
     };
     events.onSpawnB = (param) => {
@@ -2384,6 +2396,10 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
         lastBurstFx = null;
         lastBlockFx = [];
       }
+      /* DS:0x32 as the player epilogue will see it (the driver only sets it
+       * after the player). */
+      camWasScripted = camScript.mode !== 0;
+      camPending = null;
       let fr = null;
       if (!deathSeq) {
       fr = stepHeroFrame({
@@ -2660,6 +2676,13 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
        * the enemy suite this tick. The CS:0x01FC/0x0223/0x0226 gates above
        * ran before the player and used the tick-start value. */
       const gmLate = guardian !== null;
+      /* CS:0x5EB3 — the player epilogue runs the scripted camera instead of
+       * the normal one while DS:0x32 is set. It lands in the committed
+       * camera; everything below still uses the snapshot (CS:0x0263). */
+      if (camWasScripted && fr) {
+        camPending = { x: cam.x, y: cam.y };
+        scriptedCameraStep(camPending, camScript);
+      }
       const camNow = { x: cam.snapX, y: cam.snapY };
       /* CS:0x8997 (nest) / the brood's own call — the full CS:0xA9E4: hero
        * contact (ac59), then, if that did not report, the weapon grid scan
@@ -3025,7 +3048,11 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
           planeB: level.map.planeB,
           /* The world-3 script's 0xFD (CS:0xD7E1-0xD7EC): the hero's tick has
            * already run, so he is drawn at the old y this tick. */
-          lift: () => { camShake = 8; camNudgeY -= 8; player.y -= 16; } };
+          lift: () => { camShake = 8; camNudgeY -= 8; player.y -= 16; },
+          /* World 2: DS:0x36D, DS:0x32, the marker list, and CS:0xDBC6
+           * (DS:0x1F0 = 6 steps, aimed at the jittered hero +8/+6). */
+          tock36d, camScript, markers: markerList,
+          zap: (x, y, tx, ty) => lineHazards.spawn(x, y, tx, ty, 6) };
         guardianFx = guardian.drive(gOpts).concat(guardian.moveSpits(gOpts));
       }
       /* `UNKNOWN_f030_item_drop` — System-B's own per-GROUP elimination
@@ -3278,14 +3305,15 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
               level.map.planeB);                                      // CS:0x0873-0x08BD
             player.teleportTo(pos.x, pos.y);                         // CS:0x08D6-0x08E6 (state 4)
             player.fallDamage = 0;                                   // CS:0x08E0, teleportTo doesn't touch this
-            cam = cameraForSpawn(pos.x, pos.y);                      // CS:0x08CC-0x08D3
+            if (camScript.mode === 0) cam = cameraForSpawn(pos.x, pos.y);   // CS:0x08C5 skips it while DS:0x32 is set
             forceActivation();                                       // CS:0x08EB -> 0x1196
             fx.invuln = INVULN_TICKS_SPAWN;                          // CS:0x0860
             $('event').textContent = `respawned — ${fx.lives} ${fx.lives === 1 ? 'life' : 'lives'} left`;
           }
         }
       }
-      cam.update(player.x, player.y, levelInfo);
+      if (!camWasScripted) cam.update(player.x, player.y, levelInfo);
+      else if (camPending) { cam.x = camPending.x; cam.y = camPending.y; }
       /* CS:0xD7E7 `[0x270] -= 8` lands on the camera the update just computed,
        * which CS:0x02EA commits. */
       if (camNudgeY) { cam.y += camNudgeY; camNudgeY = 0; }
