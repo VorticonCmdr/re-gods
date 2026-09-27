@@ -3888,6 +3888,9 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
     window.__gods = {
       snap,
       /* The selector-11 guardian, for comparing against DS:0x28A/0x28C/0xD030. */
+      /* The live guardian object (for seeding carried-over state such as
+       * the world-2 jaw counter DS:0x2F0, which no fight initialises). */
+      guardianRaw: () => guardian,
       guardian() {
         if (guardian && guardian.world === 2) {
           const G = guardian;

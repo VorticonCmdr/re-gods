@@ -17,13 +17,14 @@ from sweep import API, DS, CS, SS, POLLER, call, mem, word, wait_stop
 
 def main():
     name, inject = sys.argv[1], int(sys.argv[2])
+    first = 4 if '-' in sys.argv[3] else 5          # the list form has no `hi`
     if '-' in sys.argv[3]:
         cursors = [c for part in sys.argv[3].split(',')
                    for a, b in [map(int, part.split('-'))] for c in range(a, b + 1)]
     else:
         cursors = list(range(int(sys.argv[3]), int(sys.argv[4]) + 1))
     ranges = [(SS if a[0] == 's' else DS,) + tuple(int(v, 16) for v in a.lstrip('s').split(':'))
-              for a in sys.argv[5:]]
+              for a in sys.argv[first:]]
     here = __file__.rsplit('/', 1)[0]
     cap = json.load(open(f'{here}/{name}.raw.json'))['output']
     snap = [s for s in (e.split(':') for e in cap['rnd'].split(';') if e) if int(s[0]) <= inject][-1]
