@@ -93,6 +93,8 @@
 
 41. `UNKNOWN_unpack_entry_ax_semantics` — **CLOSED `[PROVEN]`.** `UNPACK.EXE` is the stock PKWARE DCL v1.02. `GAME.EXE`'s `AX` is the segment of `explode`'s work buffer (`ES:SI = AX:0000` at image `0x0DA2`). It is a *relocated* segment: an MZ fixup sits at `0x259F`, and the raw word is `0x79F3`, not the `0x89F3` Ghidra shows. That corrects the earlier "bare constant, not an address" claim. Live `AX = 0x7D60` = load segment `0x36D` + `0x79F3`.
 
+42. Two small verification gaps — **both CLOSED.** (a) The spike overlay's frame-0 17-row draw (`CS:0x1C15`'s byte write of `0x10`) is real, but its 17th row is frame row 16 drawn onto the screen row the base draw has just filled with the same frame row 16. It is pixel-identical to 16 rows `[STATIC]`. (b) The mid-air ladder grab's `Y &= 0xFFF8` is `[PROVEN]` in the running code. The live bytes at all four sites are `83 26 7C 01 F8`, and no instruction self-modifies them (calibrated against the 59 known `CS:`-override patch sites).
+
 ⚠️ `UNKNOWN_openlist_field4` was listed here *and* in the resolved list below. It is **closed** — the resolved entry is correct.
 
 ### Resolved by static (Ghidra + `ndisasm`) passes
