@@ -8242,6 +8242,9 @@ export async function checkWeaponsProjectiles(fetchRaw) {
       let sbDraws = 0;
       const sb = new Starburst({ next: () => (sbDraws++ === 0 ? 0 : 0xffff) });
       sb.spawn(400, 300);
+      /* DS:0x374 starts a fresh burst at -10, a cooldown (CS:0xA568 `js`
+       * skips the draw); open it so the re-burst can fire on this step. */
+      sb.chain = -1;
       const before = sb.slots.map((sl) => `${sl.x},${sl.y}`).join('|');
       const g = new DamageGrid();
       const p2 = new Player(400, 300);

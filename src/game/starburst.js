@@ -52,8 +52,12 @@ export const AGE_STEP = 2;            // CS:0xA4C9
 /* ── The chain window, DS:0x374 ───────────────────────────────────────────
  * Set to -10 when a FRESH burst starts (CS:0xA4A5) and again on every
  * re-burst (CS:0xA581); incremented once per frame (CS:0xA4CE). The chain
- * test is `cmp byte [0x374],0 / js` — so re-bursts are possible only in the
- * ten frames after the last one, and each re-burst reopens that window.
+ * test is `cmp byte [0x374],0 / js 0xa58f` — `js` SKIPS the draw, so the
+ * particles draw (and may re-burst) only once the byte has climbed back to
+ * >= 0: a ten-frame COOLDOWN after every burst, not a window. It is a byte,
+ * so `inc` wraps 127 -> -128 and shuts the chain again for 128 frames.
+ * [PROVEN] live against PJOYL3: the potion bursts at 1031 and the first
+ * CS:0xA572 draws come at 1040. An earlier revision had the test inverted.
  *
  * ⚠️ BUT A CHAIN RE-BURST DOES NOT RESET THE AGE. CS:0xA493's `js` skips the
  * whole init block — age, active flag and chain window — when DS:0x34d is
@@ -171,7 +175,7 @@ export class Starburst {
     if (!this.active) return out;                          // CS:0xA4C1 `js`
 
     this.age += AGE_STEP;                                  // CS:0xA4C9
-    this.chain += 1;                                       // CS:0xA4CE
+    this.chain = ((this.chain + 1 + 0x80) & 0xff) - 0x80;  // CS:0xA4CE `inc byte`
     this.phase = (this.phase + 1) % SPRITE_FRAMES;         // CS:0xA4D2
     this.gravityTick = (this.gravityTick + 1) & (GRAVITY_PERIOD - 1);  // CS:0xA4E2
     const sprite = SPRITE_BASE + this.phase;               // CS:0xA517
@@ -198,9 +202,9 @@ export class Starburst {
       if (grid && grid.stamp2x2(sx, sy, TAG)) out.stamped++;
       out.drawn.push({ x: sx, y: sy, sprite });
 
-      /* THE CHAIN. CS:0xA568 — only inside the ten-frame window, and only
-       * against a threshold that decays with the burst's age. */
-      if (this.chain < 0) {
+      /* THE CHAIN. CS:0xA568 — only once the cooldown byte is >= 0, and
+       * only against a threshold that decays with the burst's age. */
+      if (this.chain >= 0) {
         const r = this.rnd.next();                         // CS:0xA56F
         if (r <= chainThreshold(this.age)) {               // CS:0xA57D `ja`
           this.chain = CHAIN_WINDOW;                       // CS:0xA581
