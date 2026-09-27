@@ -2135,6 +2135,24 @@ export function checkEntityB() {
   check(`spawn runs waiting(delay) -> materialising(5) -> alive with descriptor HP`,
     trace.join() === '-2,-2,-2,-3,-3,-3,-3,-3,3,3,3,3', trace.join(','));
 
+  /* CS:0xF16E — with no path, a walker on a tile crossing turns at a ledge:
+   * the mode flips and nothing else moves that tick. */
+  {
+    const pb = new Uint8Array(128 * 64);
+    for (let c = 10; c <= 20; c++) pb[20 * 128 + c] = 1;   // floor under cols 10..20, row 20
+    const w = new EntityB({ x: 10 * 32, y: 18 * 16, mode: MODE.WALK_L, speed: 9, hp: 5 });
+    w.state = 5; w.delay = 1;
+    w.tick(pb, VERDICT_NONE);
+    check('a patrolling walker turns at a ledge without stepping (CS:0xF16E -> 0xF1A2)',
+      w.mode === MODE.WALK_R && w.x === 320 && w.delay === 1,
+      `mode ${w.mode} x ${w.x} delay ${w.delay}; [PROVEN] PJOYL2 cursor 1621`);
+    const v = new EntityB({ x: 12 * 32, y: 18 * 16, mode: MODE.WALK_L, speed: 9, hp: 5 });
+    v.state = 5; v.delay = 0;
+    v.tick(pb, VERDICT_NONE);
+    check('...and walks on when the floor continues', v.mode === MODE.WALK_L && v.x === 12 * 32 - 4,
+      `mode ${v.mode} x ${v.x}`);
+  }
+
   /* The cull window is asymmetric — 64 px of slack on the left and top only. */
   check(`cull window is x (-63,351), y (-63,223) — slack on left/top only`,
     onScreen(-63 + 1, 0, 0, 0) && !onScreen(-64, 0, 0, 0) &&

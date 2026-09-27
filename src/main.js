@@ -2844,6 +2844,7 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
               markers: markerList.entries,       // DS:0xb5dc
               markersOverride: markerList.override,   // DS:0x399
             }).verdict;
+            e.lastVerdict = verdict;   // ?debug
           }
           /* CS:0xE659, called BEFORE the mode dispatch for System B (see
            * entity.js's fireB header) — the muzzle/hazard it returns is routed
@@ -3814,6 +3815,7 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
         const f = (e) => `${e.x},${e.y}:${e.state}`;
         return {
           A: enemiesA.map(f).join(' '), B: enemies.map(f).join(' '),
+          Bx: enemies.map((e) => `m${e.mode} d${e.delay} v${e.vel} t${e.timer} V${e.lastVerdict}`).join(' '),
           s2: selectorTwo.slots.filter(Boolean).map((sl) => sl.entities.map(f).join(' ')).join(' | '),
           s2hits: (selectorTwo.lastHits || []).join('; '),
           shots: arsenal.slots.map((sl) => sl.area.filter((r) => r.tag >= 0).map((r) => `${r.x},${r.y}`).join(' ')).join(' | '),

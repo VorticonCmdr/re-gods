@@ -545,10 +545,42 @@ export class EntityB {
       case 'apply':                              // CS:0xf150 `call 0xf2ac`
         applyVerdict(this, verdict);
         return;
-      case 'keep':                               // CS:0xf14e `jz 0xf1be`
       case 'patrol':                             // CS:0xf14c `js` -> wall probes
+        this._patrol(planeB);
+        return;
+      case 'keep':                               // CS:0xf14e `jz 0xf1be`
       default:
         this._step();
+    }
+  }
+
+  /** CS:0xF16E (walking left) / CS:0xF235 (walking right) — no path, so probe
+   *  the entity's own cell (CS:0xF554, `(x&~31, y&~15)`) on the tile crossing.
+   *  A side is BLOCKED by a solid cell beside either body row, or by no floor
+   *  under the next column:
+   *      left   [di-1] / [di+0x7f] == 1, or [di+0xff] != 1
+   *      right  [di+1] / [di+0x81] == 1, or [di+0x101] != 1
+   *  Ahead open -> the ordinary step. Ahead blocked but behind open -> turn:
+   *  the mode flips and NOTHING else happens this tick (no step, no delay
+   *  count, CS:0xF1A2 / 0xF269). Both blocked -> stand and animate in place
+   *  (the step's +/-4 is undone, CS:0xF1B9 / 0xF280). [PROVEN] against PJOYL2
+   *  cursor 1621: the entity at x=3616 turns at a ledge with mode 0 -> 1 and
+   *  its delay unchanged. The port used to step straight off the ledge. */
+  _patrol(planeB) {
+    const di = cellIndex(this.x, this.y);
+    const solid = (o) => planeB[di + o] === 1;
+    const blockedL = solid(-1) || solid(0x7f) || !solid(0xff);
+    const blockedR = solid(1) || solid(0x81) || !solid(0x101);
+    const left = this.mode === MODE.WALK_L;
+    if (!(left ? blockedL : blockedR)) { this._step(); return; }
+    if (!(left ? blockedR : blockedL)) {
+      this.mode = left ? MODE.WALK_R : MODE.WALK_L;
+      return;
+    }
+    this.vel = 0;
+    if (--this.delay < 0) {
+      this.delay = 10 - this.speed;
+      this.frame = (this.frame + 1) & WALK_ANIM_MASK;
     }
   }
 
