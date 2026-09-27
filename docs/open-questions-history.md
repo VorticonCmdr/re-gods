@@ -104,7 +104,8 @@
 46. The object-activation gate `CS:0x1187` — **ported, `[PROVEN]` by capture parity.** The recompute-every-32-px rule was already documented `[STATIC]` (`docs/consumables-and-treasure.md`), but `gods-web` recomputed every tick. Porting the exact gate (the `DS:0x379` column latch, plus the five direct `0x1196` call sites) moved `PJOYG2`'s first random draw onto the same cursor as the DOSBox capture.
 
 47. Attract-demo parity (the `/goal` of 2026-09-27) — **DONE: all six demos match DOSBox exactly (hero, camera, random stream) once the port's copies of three process-lifetime bytes are seeded to the cycle being compared.** Those bytes are the world-2 jaw `[0x2F0]`, the starburst gravity phase `[0x1D4]` and the landing hold flag `[0x357]`. `PJOYL3` has real world-3 gameplay. - **Totals.** `runDemo` now reports all six captures exact: 404 / 523 / 888 / 833 / 937 / 911 compared gameplay ticks, every field.
-- **Seeds.** The two captures from later cycles are seeded: `PJOYG2` with jaw 2, `PJOYL3` with gravity phase 1. `compareLive()` reproduces the live runs with jaw 3 and phase 5.
+- **Seeds.** The two captures from later cycles are seeded: `PJOYG2` with jaw 2, `PJOYL3` with gravity phase 1. `compareLive()` reproduces the live runs with jaw 3 and phase 5. These are *fitted* values, the only ones that replay each run exactly; only the live `PJOYL3` phase 5 was read from memory.
+- **Scope of "exact".** Compared on every gameplay tick: the hero's x/y/state, the camera, and the random cursor `DS:0x160`. The menu, password and shop phases are not compared row by row (the 20 Hz shop sampling skips cursors), and neither are enemy positions; that enemies match is implied by the random stream.
 - **The last fix** was the respawn tick. The death driver's `pop ax / jmp 0x930` (`CS:0x0A21`) skips the whole post-player half on the tick the counter reaches 0x12.
     - **Fully exact, random stream included:** `PJOYL1`, `PJOYG1`, `PJOYL2`, `PJOYG3`.
     - **`PJOYG2` and `PJOYL3`:** the port matches every *live* run checked, and differs from the older captures only through state that DOS carries across attract cycles. That state is the world-2 jaw `[0x2F0]`, the starburst gravity phase `[0x1D4]`, the landing hold flag `[0x357]`, and one unidentified value (`UNKNOWN_w2_attract_carryover`).
@@ -156,6 +157,7 @@
     - **`UNKNOWN_w2_rec6_xy`** — **CLOSED `[PROVEN]`.** Live, it reads (0, 0) (`docs/guardians.md`).
     - **Guardian deaths** (`CS:0xD923` / `0xCE78`) and **the world-4 guardian** (`CS:0xC5EA`) — **not ported.** No attract demo reaches them.
     - **How `PJOYL3`'s password entry reaches world 3** — **not traced.** The port gets there as DOS does, but the mechanism was not read.
+    - **`UNKNOWN_sysA_fire_timer_carry`** — **open.** System A's materialise (`CS:0xDE8D`) never writes the fire timer `+0x0E`, and the entity array `DS:0xE96` is never bulk-cleared. So a slot's timer carries over from whatever last used it (BSS 0 on first use, which waits 65535 ticks under `CS:0xE66B`'s exact-zero `dec/jnz`). `gods-web` starts every System-A entity at 0 and does not model the carry. No attract demo contains a System-A shooter, so this is unchecked by replay.
 
 ⚠️ `UNKNOWN_openlist_field4` was listed here *and* in the resolved list below. It is **closed** — the resolved entry is correct.
 
