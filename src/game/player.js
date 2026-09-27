@@ -193,6 +193,7 @@ export const S = {
   WALK_L: 0, WALK_R: 1,
   TURN_LR: 2, TURN_RL: 3,   // turn left->right / right->left — CS:0x5dbb/0x5dde
   JUMP_L: 8, JUMP_R: 9,
+  FALL_LADDER: 10,   // CS:0x4C5D — off a ladder's foot
   FALL_L: 11, FALL_R: 12,
   CLIMB: 14,
   CLIMB_DOWN: 13,
@@ -398,6 +399,21 @@ function climbableHereCol(map, x, y) {
 function climbableHere(map, x, y) {
   return climbableHereCol(map, x, y) !== null;
 }
+/* The ladder-continues tests run AFTER each climb step, on the cursor of the
+ * NEW position (CS:0x496A: column x & ~31, no straddle split):
+ *   ascending  CS:0x58E7  row +1 or row -1 is a ladder   ([si+0x80] / [si-0x80])
+ *   descending CS:0x569B  row +2 or row +3 is a ladder   ([si+0x100] / [si+0x180])
+ * [PROVEN] against PJOYL3 972: the descending hero drops off the ladder's
+ * foot where the port (testing rows 0/+1, with a straddle column) kept
+ * climbing. */
+const ladderAbove = (map, x, y) => {
+  const si = mapCursor(x, y);
+  return cellAt(map, si + MAP_COLS) === CELL_CLIMBABLE || cellAt(map, si - MAP_COLS) === CELL_CLIMBABLE;
+};
+const ladderBelow = (map, x, y) => {
+  const si = mapCursor(x, y);
+  return cellAt(map, si + 2 * MAP_COLS) === CELL_CLIMBABLE || cellAt(map, si + 3 * MAP_COLS) === CELL_CLIMBABLE;
+};
 
 /* CS:0x14ED3/0x14F15 (state 8) and their mirrors CS:0x150D2/0x15114 (state
  * 9) — the mid-air ladder-grab test. UNLIKE `climbableHereCol` above, this
@@ -841,7 +857,7 @@ export class Player {
     if (stateIndex === S.WALK_L || stateIndex === S.WALK_R) this.state = ST.GROUND;
     else if (stateIndex === S.JUMP_L || stateIndex === S.JUMP_R) this.state = ST.JUMP;
     else if (stateIndex === S.CLIMB || stateIndex === S.CLIMB_DOWN) this.state = ST.CLIMB;
-    else if (stateIndex === S.FALL_L || stateIndex === S.FALL_R) {
+    else if (stateIndex === S.FALL_L || stateIndex === S.FALL_R || stateIndex === S.FALL_LADDER) {
       /* CS:0x540F / 0x5441 clear the fall triple on the way out of a jump. */
       this.state = ST.FALL;
       this.fallV = 0;
@@ -1590,8 +1606,15 @@ export class Player {
     this.y += this.fallV;                    // CS:0x4CD7
     this.fallDamage = (this.fallDamage || 0) + 1;      // DS:0x176
     this._airSteer(map, input);                        // CS:0x4CE5 `call 0x48d4`
-    this.stateIndex = this.facing < 0 ? S.FALL_L : S.FALL_R;
-    this.phase = 0;
+    /* State 10 (CS:0x4C5D, off a ladder's foot) runs the same physics but
+     * keeps its own index and phase (no `xor cl,cl`), has no fire test, and
+     * lands by the ladder facing DS:0x378 (CS:0x4C9B-0x4CA7: >= 0 -> 0x10,
+     * negative -> 0x11). [PROVEN] against PJOYL3 972-976. */
+    const ladderFall = this.stateIndex === S.FALL_LADDER;
+    if (!ladderFall) {
+      this.stateIndex = this.facing < 0 ? S.FALL_L : S.FALL_R;
+      this.phase = 0;
+    }
     if (solidThreeBelow(map, this.x, this.y)) {   // CS:0x4BEB / 0x4CED
       this.y &= 0xfff0;                            // CS:0x4C34 / 0x4D39
       this.fallV = 0;
@@ -1607,9 +1630,10 @@ export class Player {
        * and the state dispatcher runs CS:0x5020 / 0x5042 on later ticks,
        * which hold one tick and then drain DS:0x176 by 4 per tick before
        * handing back to walk (see `_land`). Live-confirmed by PJOYG3. */
-      this._enterLand(this.stateIndex === S.FALL_R);
+      this._enterLand(ladderFall ? this.ladderFacing >= 0 : this.stateIndex === S.FALL_R);
       return;
     }
+    if (ladderFall) return;                        // CS:0x4C8E / 0x4C98: no fire test
     /* CS:0x4D06 (state 12) / CS:0x4C04 (state 11) — the fire test sits AFTER
      * the fall physics and the landing check, so a tick that lands never
      * fires. Read straight off state 12: the `add [0x17c],4`, the gravity
@@ -1755,7 +1779,7 @@ export class Player {
       /* CS:0x58c3 `sub word [0x17c],0x6` — see CLIMB_STEP's own note: this
        * used to be 4 px, taken from the wrong (ladder-FIRE) sites. */
       const newY = this.y - CLIMB_STEP;
-      if (climbableHere(map, this.x, newY)) {
+      if (ladderAbove(map, this.x, newY)) {
         this.y = newY;
       } else {
         /* CS:0x58e7-0x58fa — when neither row around the new spot is still
@@ -1778,12 +1802,12 @@ export class Player {
         this.phase = 0;
         return;
       }
-      if (climbableHere(map, this.x, newY)) {
-        this.y = newY;
-      } else {
-        /* CS:0x56af — the ladder ends with nothing solid below either:
-         * fall off the bottom. */
+      this.y = newY;                              // the step stands either way
+      if (!ladderBelow(map, this.x, newY)) {
+        /* CS:0x56AF — the ladder ends with nothing solid below either: fall
+         * off the bottom, into state 10 (not 11/12), phase cleared. */
         this._enterFall();
+        this.stateIndex = S.FALL_LADDER;
         return;
       }
     }
