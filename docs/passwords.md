@@ -48,10 +48,9 @@ the same interactive grid+keyboard loop, `FUN_1000_2eb0`) and is an **8-column �
 | 4 | `Y Z . <space> 0 1 2 3` |
 | 5 | `4 5 6 7 8 9` `<erase icon>` `<confirm icon>` |
 
-Row 4's middle cell (obscured by decorative artwork in every screenshot taken) is
-read as Space rather than confirmed pixel-for-pixel, resting on the already-
-established alphabet ordering (`.` then Space) rather than a clean read. The
-erase/confirm icons' own sprite source was never chased down. This cross-validates
+*(Both of the following were closed later in this file — see* The exact rendering *and* Residual open ends*: the grid draws descriptor `0x80 + cell`, i.e. PGODFONT records 0–39 in row-major order; record 27 is proven Space; the erase/confirm icons are records 38/39.)* Row 4's middle cell (obscured by decorative artwork in every screenshot taken) was
+first read as Space from the alphabet ordering rather than a clean read. The
+erase/confirm icons' own sprite source was not chased down at first. This cross-validates
 against an independent, earlier byte-level finding: completing a real hiscore-name
 entry moved the cursor "from index 34 to 39" via 5× right-presses — row-major index
 34 in this 8×5 grid is row 4 col 2 (the `6` cell) and index 39 is row 4 col 7

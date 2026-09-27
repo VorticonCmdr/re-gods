@@ -89,6 +89,8 @@
 
 39. `UNKNOWN_timebomb_refire` — **CLOSED `[PROVEN]` live in DOSBox.** One pickup throws repeatedly, one bomb at a time, and the weapon is not consumed. The despawn is `CS:0xA41C mov [di],0`, on the bomb's own record, not a fragment's as previously written. It runs once no fragment or smoke puff is live, which for a plain pickup is 9 ticks after detonation (`2(n−1)+7`, `n = extra+2` puffs). Measured live with the weapon armed via the real pickup routine: detonation → clear at `A41C` with `BP=0` and puff counters advanced exactly 10 times → second and third throws spawned into the same record. `gods-web` now holds the record for that time.
 
+40. Which menu choice the `joyl` recordings make — **CLOSED `[PROVEN]` live in DOSBox.** `joyl1` picks BEGIN QUEST. `joyl2` picks ENTER PASSWORD and types `"L2"`, the attract-only shortcut to world 2. `joyl3` picks ENTER PASSWORD, submits an empty entry that can never match, and returns to the menu. The other password-grid leftovers (erase/confirm icon sprites, cell-to-record mapping beyond A–Z, the row-4 space cell) were already closed in `docs/passwords.md`; only stale sentences there and in `CLAUDE.md` still called them open.
+
 ⚠️ `UNKNOWN_openlist_field4` was listed here *and* in the resolved list below. It is **closed** — the resolved entry is correct.
 
 ### Resolved by static (Ghidra + `ndisasm`) passes
