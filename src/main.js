@@ -1058,17 +1058,21 @@ async function main() {
    * the main loop swaps the enemy suite for the guardian's driver. A new
    * level (every wireSpawn) starts without one. */
   let guardian = null, guardianFx = [];
+  /* DS:0x2D2 — the camera-x shake counter the world-3 guardian's 0xFD sets
+   * (CS:0xD7E1), and the committed-camera-y nudge it applies (CS:0xD7E7,
+   * `[0x270] -= 8`). The shake runs at CS:0x01CF whatever DS:0x34 holds. */
+  let camShake = 0, camNudgeY = 0;
   /* DS:0xAC90 — the materialise flash pool (game/flash.js). */
   const flashPool = new FlashPool();
   let flashFx = [];
   const wireSpawn = () => {
-    guardian = null; guardianFx = [];
+    guardian = null; guardianFx = []; camShake = 0; camNudgeY = 0;
     flashPool.reset(); flashFx = [];
     /* Selector 11 — CS:0xC49C. Only world 1's guardian is ported; the other
      * worlds' events are still counted as unhandled. */
     events.onGuardian = () => {
-      if (level.world !== 1) return false;
-      guardian = new Guardian(1);
+      if (level.world !== 1 && level.world !== 3) return false;
+      guardian = new Guardian(level.world);
       return true;
     };
     events.onSpawnB = (param) => {
@@ -2262,6 +2266,9 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
        * state machine, probe plane B, then update the camera (CS:0x023f ->
        * 0x4993 -> 0x5ea0 -> 0x5ea4). Everything drawn this frame uses the
        * snapshot, so the hero and the background never skew apart. */
+      /* CS:0x01CF -> 0x050C: while DS:0x2D2 counts down, the camera x moves
+       * -4 when DS:0x36C is set and +4 otherwise, before this tick's snapshot. */
+      if (camShake > 0) { cam.x += tock ? -4 : 4; camShake--; }
       cam.snapshot();
       /* CS:0x0e83/0x0e8a — the health bar's own shimmer phase (game/health-
        * bar.js), gated on every OTHER tick in the original; unconnected to
@@ -3001,7 +3008,10 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
           hero: { x: player.x, y: player.y, state: player.stateIndex }, health, grid,
           decodeTag, difficulty, rng: () => rng.next(), debris,
           sfx: (id) => audio.play(id), invuln: fx.invuln > 0,
-          planeB: level.map.planeB };
+          planeB: level.map.planeB,
+          /* The world-3 script's 0xFD (CS:0xD7E1-0xD7EC): the hero's tick has
+           * already run, so he is drawn at the old y this tick. */
+          lift: () => { camShake = 8; camNudgeY -= 8; player.y -= 16; } };
         guardianFx = guardian.drive(gOpts).concat(guardian.moveSpits(gOpts));
       }
       /* `UNKNOWN_f030_item_drop` — System-B's own per-GROUP elimination
@@ -3281,6 +3291,9 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
         }
       }
       cam.update(player.x, player.y, levelInfo);
+      /* CS:0xD7E7 `[0x270] -= 8` lands on the camera the update just computed,
+       * which CS:0x02EA commits. */
+      if (camNudgeY) { cam.y += camNudgeY; camNudgeY = 0; }
     },
     () => {
       /* uiState === 'quitting' — see the `quitFade` declaration above.

@@ -37,5 +37,21 @@ for name, (off, cite) in SCRIPTS.items():
         out.append('  ' + ','.join(steps[k:k + 12]) + ',')
     out.append(']);')
     out.append('')
+# World 3 (CS:0xC545 [0x292] := 0x5468): 3-byte records (frame, dx, dy);
+# frame bytes >= 0x80 are commands (0xFD lift, 0xFE x-test). Kept as raw
+# bytes, because the x-test rewinds the pointer by 0x5D bytes (CS:0xD801).
+W3_OFF = 0x5468
+d = read(W3_OFF, 1024)
+i = 0
+while d[i] != 0xFF:
+    i += 3
+w3 = d[:i + 1]
+out.append(f'/** SS:0x{W3_OFF:04X}, {i // 3} records of 3 bytes, terminator 0xFF at +{i}. '
+           'CS:0xC545; interpreted by CS:0xD778-0xD83E. */')
+out.append('export const W3_SCRIPT = Uint8Array.from([')
+for k in range(0, len(w3), 24):
+    out.append('  ' + ','.join(str(v) for v in w3[k:k + 24]) + ',')
+out.append(']);')
+out.append('')
 open(__file__.rsplit('/', 2)[0] + '/src/game/guardian-data.js', 'w').write('\n'.join(out))
 print('wrote', len(SCRIPTS), 'scripts')

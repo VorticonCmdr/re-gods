@@ -25,7 +25,7 @@
  * the first spit-split random draw at cursor 122 returning into CS:0xDAE5.
  */
 import { attackHero, creatureScansGrid, db4eHit } from './combat.js';
-import { W1_SCRIPT } from './guardian-data.js';
+import { W1_SCRIPT, W3_SCRIPT } from './guardian-data.js';
 
 export const POOL_SLOTS = 15;                 // CS:0xC508 `mov cx,0xf`
 export const BODY_SPRITE = 0x1c2;             // CS:0xD8D7 `add cx,0x1c2` (+2*frame, and +1 for the right half)
@@ -36,32 +36,146 @@ export const SFX_SPIT = 0x4b41;               // CS:0xD9F9
 export const SPIT_FRAME = 16;                 // CS:0xD8A6 / 0xD8AD `cmp cx,0x10`
 
 const W1 = { hp: 1500, x: 0xf20, y: 0x230, script: W1_SCRIPT };   // CS:0xC4DD / 0xC4E9 / 0xC4EF
+const W3 = { hp: 0x8ca, x: 0x2c0, y: 0x70, script: W3_SCRIPT };   // CS:0xC527 / 0xC533 / 0xC539
+
+/* ── World 3 (entry CS:0xC516, driver CS:0xD53B) [PROVEN] structure, read
+ * from the live code segment; see Gods/docs/guardians.md. The script is
+ * 3-byte records (frame, signed dx, signed dy) interpreted by CS:0xD778: one
+ * frame record per tick; 0xFD lifts the hero 16 px and nudges the camera;
+ * any other command byte (0xFE) rewinds 0x5D bytes unless the guardian is
+ * right of the hero. Its projectiles live in the same DS:0xD030 pool but are
+ * moved by the driver itself (CS:0xD609), not by a gate. */
+export const W3_SHOT_SPRITE = 0x1d7;          // CS:0xD653 `add bp,0x1d7`
+export const W3_BODY_BOX = { w: 0x28, h: 0x58 };   // CS:0xD5CA / 0xD5D0
+export const W3_SFX_FRAME = 0x2839;           // CS:0xD7D0, entering frame 0 / 8 / 0x19
+export const W3_SFX_LIFT = 0x4b39;            // CS:0xD7F2
+export const W3_SFX_SHOT = 0x0b26;            // CS:0xD725 (DS:0x85 != 2; it reads 1 live)
+const s8 = (b) => (b & 0x80 ? b - 0x100 : b);
 
 export class Guardian {
   constructor(world) {
-    if (world !== 1) throw new Error(`guardian for world ${world} is not ported`);
+    if (world !== 1 && world !== 3) throw new Error(`guardian for world ${world} is not ported`);
     this.world = world;
-    this.hp = W1.hp;                 // DS:0x28A
-    this.script = W1.script;
+    const cfg = world === 1 ? W1 : W3;
+    this.cfg = cfg;
+    this.hp = cfg.hp;                // DS:0x28A
+    this.script = cfg.script;
     this.pool = Array.from({ length: POOL_SLOTS },
       () => ({ x: 0, y: 0, vy: 0, frame: -1, vx: 0 }));   // DS:0xD030: +0 +2 +4 +6 +8
     this.reset();
   }
 
-  /** CS:0xC4E9 (entry tail, and the respawn re-entry [0x288]). */
+  /** World 1: CS:0xC4E9 (entry tail and respawn re-entry [0x288]), which also
+   *  frees the pool. World 3: CS:0xC533, which does NOT: a respawn restarts
+   *  the script but keeps the health and the shots in flight. */
   reset() {
-    this.x = W1.x;                   // DS:0x28C
-    this.y = W1.y;                   // DS:0x28E
+    this.x = this.cfg.x;             // DS:0x28C
+    this.y = this.cfg.y;             // DS:0x28E
     this.frame = 0;                  // DS:0x290
-    this.step = 0;                   // DS:0x292, as an index into `script`
-    for (const s of this.pool) s.frame = -1;               // CS:0xC505
+    this.step = 0;                   // DS:0x292, as an index (world 1) or a byte offset (world 3)
+    if (this.world === 1) for (const s of this.pool) s.frame = -1;   // CS:0xC505
   }
 
   get dead() { return this.hp < 0; }
 
+  drive(opts) { return this.world === 1 ? this.drive1(opts) : this.drive3(opts); }
+
+  /** CS:0xD53B, the world-3 driver: D778 script, D609 shots, D6DE fire,
+   *  D83F draw, D5C0 hit box — in that order, which is the random-draw order.
+   *  `opts.lift()` applies the 0xFD command's hero and camera effects. */
+  drive3({ tock, cam, hero, health, grid, decodeTag, difficulty = 0, rng, debris, sfx, invuln, targets, lift }) {
+    const drawn = [];
+    if (this.hp < 0) return drawn;                          // D778 `jns` (unreachable, see the spec)
+    /* ── D778: the script step. */
+    const x0 = this.x;                                      // D782 ax
+    const prev = this.frame;                                // D789 cx
+    const fireArmed = !(prev === 0x1d || prev === 0x27);    // D78D-D79D -> [0x2CE]
+    const S = this.script;
+    let p = this.step, cx;
+    for (;;) {
+      const cl = S[p], dl = s8(S[p + 1]), dh = s8(S[p + 2]);
+      p += 3;                                               // D7B0
+      cx = s8(cl);
+      if (this.frame !== cx && (cx === 0 || cx === 0x19 || cx === 8)) sfx(W3_SFX_FRAME);   // D7BA-D7D3
+      if (cx >= 0) {                                        // D7D7 `jg` -> FRAME
+        this.y += dh;                                       // D809-D80E, not clamped
+        let x = x0 + dl;                                    // D812
+        if (x <= 0x60) x = 0x60;                            // D81A
+        if (x > 0x2c0) x = 0x2c0;                           // D822
+        this.x = x;
+        if (S[p] === 0xff) p = 0;                           // D82D, wrap to SS:0x5468
+        this.frame = cx;                                    // D836
+        this.step = p;                                      // D83A
+        break;
+      }
+      if (cl === 0xfd) {                                    // D7DC: lift / thump
+        if (lift) lift();                                   // [0x2D2]=8, [0x270]-=8, [0x17C]-=16
+        sfx(W3_SFX_LIFT);                                   // D7F2
+        continue;
+      }
+      if (x0 > hero.x) continue;                            // D7FB `jg`, signed, tick-start x
+      p -= 0x5d;                                            // D801
+    }
+    /* ── D609: move, draw and hero-test the shots (before this tick's fire). */
+    for (const s of this.pool) {
+      if (s.frame < 0) continue;                            // D60F
+      const x = s.x + s.vx, y = s.y + s.vy;                 // D618-D620
+      const f0 = s.frame;                                   // D623, the drawn frame
+      s.x = x; s.y = y;
+      s.vy++;                                               // D62B
+      if (tock === 0) s.frame = (s.frame + 1) & 3;          // D62E-D638
+      const sx = x - cam.x, sy = y - cam.y;
+      if (sy >= 0xc0) { s.frame = -1; continue; }           // D644, the only cull
+      drawn.push({ x: sx, y: sy, sprite: W3_SHOT_SPRITE + f0 });   // D653-D662
+      /* D667-D679: CS:0xDB4E at screen (sx+0xC, sy+0xC) -> world (x+0x12, y+0x10). */
+      if (db4eHit(x + 0x12, y + 0x10, hero, health, { invuln }).hit) {
+        s.frame = -1;                                       // [bp] = &+6
+        if (debris) debris.spawn(x + 0x10, y + 0x10, 0, 0); // DB4E's own spark (cosmetic)
+        health.damage(2);                                   // D684, on top of DB4E's 2
+        for (let k = 0; k < 2; k++) {                       // D68B / D695 -> D6AC
+          const jy = sy + (rng() & 0xf) - 8;                // D6AD
+          const vx = (rng() & 7) - 4;                       // D6B8
+          const vy = (rng() & 7) - 4;                       // D6C3
+          const jx = (rng() & 0xf) - 8 + sx;                // D6CE
+          if (debris) debris.spawn(jx + cam.x, jy + cam.y, vx, vy);   // CS:0xA633 (screen in, +camera)
+        }
+      }
+    }
+    /* ── D6DE: fire on the tick the frame BECOMES 0x1D (left) or 0x27 (right). */
+    if (fireArmed && (cx === 0x1d || cx === 0x27)) {
+      const s = this.pool.find((q) => q.frame < 0);         // D765 (it scans 16; see the spec)
+      if (s) {
+        const left = cx === 0x1d;
+        s.x = this.x + (left ? 3 : 0x1d);                   // D6FE / D744
+        s.y = this.y + 0x13;
+        s.vx = left ? -8 : 8;
+        s.frame = 2;                                        // D70E
+        s.vy = (rng() & 2) - 1;                             // D713 / D759
+        sfx(W3_SFX_SHOT);                                   // D725
+      }
+    }
+    /* ── D83F: draw, the frame NOT doubled (world 1 doubles it). */
+    const bx = this.x - cam.x, by = this.y - cam.y;
+    drawn.push({ x: bx, y: by, sprite: BODY_SPRITE + cx });
+    drawn.push({ x: bx + 0x20, y: by, sprite: BODY_SPRITE + cx + 1 });
+    /* ── D5C0: CS:0xA9E4 at (x+0xC, y), 0x28 x 0x58, strength = health. */
+    const ax = this.x + 0xc;
+    const r = attackHero({ x: ax, y: this.y, ...W3_BODY_BOX, strength: this.hp },
+                          hero, health, { reportGate: 1, invuln, sfx });
+    this.hp = r.strengthOut;
+    if (this.hp >= 0 && decodeTag) {
+      const proxy = { x: ax, y: this.y, state: this.hp };
+      creatureScansGrid(proxy, grid, cam, (tag) => decodeTag(tag, 1), difficulty, W3_BODY_BOX,
+                        targets || null, { rng, debris, sfx });
+      this.hp = proxy.state;
+    }
+    /* D5E3 `jns` — the death (CS:0xD923, the corpse gate D557) is not ported yet. */
+    return drawn;
+  }
+
   /** CS:0xD866, the world-1 driver. `tock` is DS:0x36C. Returns the sprites
    *  to draw (screen space). */
-  drive({ tock, cam, hero, health, grid, decodeTag, difficulty = 0, rng, debris, sfx, invuln, targets }) {
+  drive1({ tock, cam, hero, health, grid, decodeTag, difficulty = 0, rng, debris, sfx, invuln, targets }) {
     const drawn = [];
     if (this.hp < 0) return drawn;                          // D866 `jns` / D86D -> ret
     let cx = this.frame;                                    // D87A
@@ -112,6 +226,7 @@ export class Guardian {
   /** CS:0xDA63 — the spit mover (behind the CS:0xDA62 gate). */
   moveSpits({ tock, cam, planeB, hero, health, rng, debris, invuln }) {
     const drawn = [];
+    if (this.world !== 1) return drawn;                     // the DA62 gate is world 1's alone
     for (const s of this.pool) {
       if (s.frame < 0) continue;                            // DA6A `jns`
       let nx = s.x + s.vx, ny = s.y + s.vy;                 // DA73-DA7B
