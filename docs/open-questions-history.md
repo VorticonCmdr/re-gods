@@ -120,7 +120,16 @@
     - **Grid scan.** The damage-grid scan rounds the box before its edge clip (CS:0xAA09).
     - **World-1 guardian.** Ported; see `docs/guardians.md`.
 
-    Remaining: `PJOYL2` random parity reaches cursor 1623 (a System B pathfinder verdict differs there), and its hero stays exact to cursor 2078. `PJOYG2` and `PJOYG3` need the world-2 and world-3 guardians.
+    Further fixes, each `[PROVEN]` against `PJOYL2`:
+    - **System B patrol.** With no path, walkers turn at walls and ledges (CS:0xF16E / 0xF235).
+    - **Magic-axe wall probe.** A missed diagonal falls through to the same row (CS:0xA5D0).
+    - **Object table.** It keeps the map's empty records as free slots, and CS:0x38D7 allocates first-fit by slot index. The port had dropped them, so every runtime spawn failed as "table full".
+    - **Group rewards** (System A/B, selector 2). A member killed this tick is counted only from its first dying tick (DS:0x1F4, CS:0xAFBD).
+    - **COND9/10.** They read the real 32-bit level timer (CS:0x317D; zeroed at level init, at the shop entry CS:0x6B21, and by ACT14).
+    - **ACT0 spawns fall** (CS:0x3DC3).
+    - **Nests and brood take weapon hits** (the full A9E4, CS:0x8997).
+
+    `PJOYL2`'s hero is now exact for the whole demo. `PJOYG2` and `PJOYG3` still need the world-2 and world-3 guardians.
 
 ⚠️ `UNKNOWN_openlist_field4` was listed here *and* in the resolved list below. It is **closed** — the resolved entry is correct.
 
