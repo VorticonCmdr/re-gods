@@ -87,6 +87,8 @@
 
 38. The `VGA.EXE` instruction that writes the driver's scratch filename (item 32's residual) — **CLOSED `[PROVEN]` live.** It is export 22's `VGA:0x0AEC` `CS: MOVSB` loop into `ES:0x4A`, with `ES` = the caller's `DS`, so the cell is GAME.EXE's `DS:0x4A`. The suffixes come from `DS:0x58` (`.pi1`) and `DS:0x5D` (`.dat`). A live read at `VGA:0x0B07` gave `"obj1.pi1"`. Item 33 had already described the mechanism, but item 32's "still open" line was never updated.
 
+39. `UNKNOWN_timebomb_refire` — **CLOSED `[PROVEN]` live in DOSBox.** One pickup throws repeatedly, one bomb at a time, and the weapon is not consumed. The despawn is `CS:0xA41C mov [di],0`, on the bomb's own record, not a fragment's as previously written. It runs once no fragment or smoke puff is live, which for a plain pickup is 9 ticks after detonation (`2(n−1)+7`, `n = extra+2` puffs). Measured live with the weapon armed via the real pickup routine: detonation → clear at `A41C` with `BP=0` and puff counters advanced exactly 10 times → second and third throws spawned into the same record. `gods-web` now holds the record for that time.
+
 ⚠️ `UNKNOWN_openlist_field4` was listed here *and* in the resolved list below. It is **closed** — the resolved entry is correct.
 
 ### Resolved by static (Ghidra + `ndisasm`) passes

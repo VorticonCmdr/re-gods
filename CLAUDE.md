@@ -96,6 +96,8 @@ A sixth, `UNKNOWN_level_palette_source` (ranked item 24), CLOSED — and, like i
 
 **`UNKNOWN_level_palette_source` has no residuals left (ranked item 37), `[PROVEN]` live in DOSBox.** The level palette comes from graphics export 22 loading the `level<N>` atlas group, which is {`PLEVEL<N>A`, `PLEVEL<N>B`}; the last file loaded wins, which explains world 4's "sublevel B palette" anomaly. The black/blue slot-0/1 override is written into the same buffer once per level entry at `CS:0x00FE`. World 3's "drift" didn't reproduce in any of four live paths, and its surviving recorded value is unexplained. See `docs/asset-formats.md`.
 
+**`UNKNOWN_timebomb_refire` is CLOSED (ranked item 39), `[PROVEN]` live.** A time-bomb pickup can be thrown repeatedly. After each explosion, `CS:0xA41C` frees the record once the smoke (and any fragments) are gone, 9 ticks for a plain pickup, and the next throw goes into the same record. See `docs/combat-and-projectiles.md`.
+
 ## Tooling
 
 Moved to the `gods-re-tooling` skill (`.claude/skills/gods-re-tooling/SKILL.md`) — Ghidra MCP, DOSBox MCP, `blast.py`, and the `gods-web` port's verification tooling, with the same gotchas as before. Load it when actually running any of those tools.
