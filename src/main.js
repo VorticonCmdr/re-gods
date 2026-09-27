@@ -24,7 +24,7 @@ import { runAllChecks, checkDescriptorAnchors, checkHeroSprites,
          checkMapWriter,
          checkShop, checkMusic } from './verify/checks.js';
 import { EventRunner, parsePalfils, palfilsNameFor } from './game/events.js';
-import { Guardian, convertBezier } from './game/guardian.js';
+import { Guardian, convertBezier, resetProcessJaw } from './game/guardian.js';
 import { FlashPool } from './game/flash.js';
 import { LineBarriers, parseLineBarrierRecords } from './game/line-barriers.js';
 import { makeActionContext, makeGates, DOOR_TILES,
@@ -3893,6 +3893,9 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
       /* The live guardian object (for seeding carried-over state such as
        * the world-2 jaw counter DS:0x2F0, which no fight initialises). */
       guardianRaw: () => guardian,
+      /* DS:0x2F0 lives for the process; the diff harness resets it to the
+       * static-image 0 (a first attract cycle) or seeds a later cycle's value. */
+      resetProcessJaw,
       enemiesB: () => enemies,
       guardian() {
         if (guardian && guardian.world === 2) {

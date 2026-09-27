@@ -54,6 +54,9 @@ export async function loadCapture(name) {
  * so both sides draw from the same DS:0x7E14 state. */
 export async function runPort(name, maxTicks = 4000, rnd = []) {
   const g = window.__gods;
+  /* DS:0x2F0 carries over between fights (see game/guardian.js); start each
+   * run from a known value so the harness is reproducible. */
+  g.resetProcessJaw();
   let first = await g.startAttractAt(STATE_OF[name]);
   const pending = rnd.slice();
   const inject = (cursor) => {

@@ -72,6 +72,14 @@ export const W2_FIREBALL_SLOTS = 8;           // CS:0xD1D3 / 0xD215
  * top-left corner. UNKNOWN_w2_rec6_xy until read live. */
 export const W2_REC6_XY = [0, 0];
 
+/* DS:0x2F0 — the world-2 jaw counter. Its only writers are the jaw step
+ * (CS:0xD0F5/0xD0F9) and world 4's CBCB; no entry, respawn or level init
+ * touches it, so it lives for the whole process and each fight starts where
+ * the last one left it (static image: 0). [PROVEN] live: three PJOYG2 attract
+ * cycles started from different jaw phases (Gods/docs/guardians.md). */
+let processJaw = 0;
+export const resetProcessJaw = () => { processJaw = 0; };
+
 /** BEZIER.DAT as CS:0xD489 leaves it: each word byte-swapped and `shr 1`. */
 export function convertBezier(raw) {
   const out = new Int32Array(raw.length >> 1);
@@ -90,7 +98,7 @@ export class Guardian {
       this.armHp = W2_ARM_HP;                      // DS:0x2D4
       this.bodyHp = W2_BODY_HP;                    // DS:0x2D6
       this.hp = W2_ARM_HP + W2_BODY_HP;            // DS:0x28A
-      this.jaw = 0;                                // DS:0x2F0 — never initialised (spec §1)
+      this.jaw = processJaw;                       // DS:0x2F0 — never initialised: carried over
       this.pool = Array.from({ length: POOL_SLOTS }, () => ({ x: 0, y: 0, t: 0, live: -1 }));
       this.armPts = Array.from({ length: 10 }, () => ({ x: 0, y: 0 }));   // SS:0x4890
       this.tip = { x: 0, y: 0 };                   // DS:0x116/0x118
@@ -240,6 +248,7 @@ export class Guardian {
     let jy = bsy - 0x1a;
     if (o.tock36d === 0) {
       this.jaw = (this.jaw + 1) & 3;
+      processJaw = this.jaw;
       if (this.jaw === 0) sfx(W2_SFX_JAW);         // DS:0x85 != 2 (it reads 1 live)
     }
     const [jadd, jdy] = W2_JAW[this.jaw];
