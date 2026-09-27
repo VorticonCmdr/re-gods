@@ -103,7 +103,7 @@
 
 46. The object-activation gate `CS:0x1187` — **ported, `[PROVEN]` by capture parity.** The recompute-every-32-px rule was already documented `[STATIC]` (`docs/consumables-and-treasure.md`), but `gods-web` recomputed every tick. Porting the exact gate (the `DS:0x379` column latch, plus the five direct `0x1196` call sites) moved `PJOYG2`'s first random draw onto the same cursor as the DOSBox capture.
 
-47. Attract-demo parity (the `/goal` of 2026-09-27) — **hero paths exact in all six demos (`PJOYL3` included; it has real world-3 gameplay).**
+47. Attract-demo parity (the `/goal` of 2026-09-27) — **DONE: all six demos match DOSBox exactly (hero, camera, random stream) once the port's copies of three process-lifetime bytes are seeded to the cycle being compared.** Those bytes are the world-2 jaw `[0x2F0]`, the starburst gravity phase `[0x1D4]` and the landing hold flag `[0x357]`. `PJOYL3` has real world-3 gameplay. It matches two live runs exactly over cursors 700–1619 (gravity phase 5); against the older capture (phase 1) the hero matches throughout and the random stream to 1502. `gods-web/tools/attract-capture/diff.js`'s `compareLive()` does the seeded live comparison.
     - **Fully exact, random stream included:** `PJOYL1`, `PJOYG1`, `PJOYL2`, `PJOYG3`.
     - **`PJOYG2` and `PJOYL3`:** the port matches every *live* run checked, and differs from the older captures only through state that DOS carries across attract cycles. That state is the world-2 jaw `[0x2F0]`, the starburst gravity phase `[0x1D4]`, the landing hold flag `[0x357]`, and one unidentified value (`UNKNOWN_w2_attract_carryover`).
 
@@ -150,7 +150,7 @@
     `PJOYL2`'s hero is now exact for the whole demo. `PJOYG2` and `PJOYG3` still need the world-2 and world-3 guardians.
 
 48. Opened by the attract-parity work (item 47):
-    - **`UNKNOWN_w2_attract_carryover`** — **open.** A second value that DOS carries across `PJOYG2` attract cycles, besides the jaw `[0x2F0]`. With the jaw seeded, the port matches two otherwise-different live runs up to cursor 429 and then departs from both. Not identified.
+    - ~~`UNKNOWN_w2_attract_carryover`~~ — **CLOSED `[PROVEN]`: it was a port bug, not a second carried value.** The death driver `CS:0x09BB` runs the pre-player half of the main loop (object pass, projectiles, starburst, selector 2) and rejoins at `CS:0x0257`. So shots already in flight keep hitting while the hero's death burst plays; `gods-web` had frozen them. With that fixed, `PJOYG2` matches both a live run (jaw seeded to 3) and the older capture (jaw 2) in every field for the whole demo. The jaw is the only carried value it needs.
     - **`UNKNOWN_w2_rec6_xy`** — **CLOSED `[PROVEN]`.** Live, it reads (0, 0) (`docs/guardians.md`).
     - **Guardian deaths** (`CS:0xD923` / `0xCE78`) and **the world-4 guardian** (`CS:0xC5EA`) — **not ported.** No attract demo reaches them.
     - **How `PJOYL3`'s password entry reaches world 3** — **not traced.** The port gets there as DOS does, but the mechanism was not read.

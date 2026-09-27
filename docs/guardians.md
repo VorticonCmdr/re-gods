@@ -136,6 +136,6 @@ Spec source: a disassembly of the live code segment, re-read by hand for `CE87`,
   - The port starts the jaw at 0, the static-image value, which is the first fight after boot. It matched one run (cursors 368–388) field for field, `[0x2F0]` included.
   - Seeding the port's jaw to the value another run implies carries it to cursor 429 against both of the other runs.
 
-  At least one more carried value is involved and is not identified: `UNKNOWN_w2_attract_carryover`. The hero's path is identical in every run and in the port.
+  ~~At least one more carried value is involved (`UNKNOWN_w2_attract_carryover`)~~ — **closed.** It was a port bug: shots froze during the hero's death burst, whereas the death driver `CS:0x09BB` keeps stepping them. With that fixed and the jaw seeded (3 for the live run, 2 for the older capture), `PJOYG2` matches DOS exactly for the whole demo.
 
 World 4 (`0xC5EA`) is not ported.

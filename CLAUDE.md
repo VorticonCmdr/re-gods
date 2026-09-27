@@ -107,4 +107,4 @@ A sixth, `UNKNOWN_level_palette_source` (ranked item 24), CLOSED — and, like i
 
 Moved to the `gods-re-tooling` skill (`.claude/skills/gods-re-tooling/SKILL.md`) — Ghidra MCP, DOSBox MCP, `blast.py`, and the `gods-web` port's verification tooling, with the same gotchas as before. Load it when actually running any of those tools.
 
-**Attract-demo parity (ranked item 47): the hero path matches DOSBox tick for tick in all six demos.** `PJOYL1`, `PJOYG1`, `PJOYL2` and `PJOYG3` are exact including the random stream. `PJOYL3` has real world-3 gameplay, correcting item 40. It and `PJOYG2` match every live run checked, and differ from older captures only through state DOS carries across attract cycles: `[0x2F0]`, `[0x1D4]`, `[0x357]` and `UNKNOWN_w2_attract_carryover`.
+**Attract-demo parity (ranked item 47) is done: all six demos match DOSBox tick for tick (hero, camera, random stream).** The only condition is that the port's copies of three bytes DOS never resets are seeded to the cycle being compared: `[0x2F0]`, `[0x1D4]` and `[0x357]`. `PJOYL3` has real world-3 gameplay, correcting item 40. The last gap was a port bug: shots froze during the death burst.
