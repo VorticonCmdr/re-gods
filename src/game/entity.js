@@ -262,8 +262,10 @@ export function fireB(e, desc) {
   const loNibble = fireByte & 0xf;
   if (fireByte === 0 || loNibble === 0) return null;   // CS:0xe659/0xe666
 
-  e.reloadTimer--;
-  if (e.reloadTimer > 0) return null;                  // CS:0xe66b
+  /* CS:0xE66B `dec word [di+0xe] / jnz` — 16-bit, fires only on reaching
+   * exactly zero (a timer left at 0 wraps and waits 65535 ticks). */
+  e.reloadTimer = (e.reloadTimer - 1) & 0xffff;
+  if (e.reloadTimer !== 0) return null;                  // CS:0xe66b
   e.reloadTimer = (0x10 - loNibble) << 2;               // CS:0xe670-e67a
 
   const hiNibble = (fireByte >> 4) & 0xf;

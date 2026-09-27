@@ -2169,21 +2169,28 @@ export function checkEntityB() {
     fireB(new EntityB({ x: 0, y: 0 }), null) === null);
 
   const bRight = new EntityB({ x: 0, y: 0, mode: MODE.WALK_R });
+  bRight.reloadTimer = 1;   // one tick from firing (CS:0xE66B fires on reaching 0)
   const shotR = fireB(bRight, { fire: 0x31, flags: 0 });
   check(`mode WALK_R (odd) fires from x+32, dir = +hiNibble — no velocity gate needed`,
     shotR && shotR.x === bRight.x + 0x20 && shotR.dir === 3, JSON.stringify(shotR));
 
   const bLeft = new EntityB({ x: 0, y: 0, mode: MODE.HOP_L });
+  bLeft.reloadTimer = 1;   // one tick from firing (CS:0xE66B fires on reaching 0)
   const shotL = fireB(bLeft, { fire: 0x31, flags: 0 });
   check(`mode HOP_L (even) fires from x-8, dir = -hiNibble — mid-hop still fires`,
     shotL && shotL.x === bLeft.x - 8 && shotL.dir === -3, JSON.stringify(shotL));
 
   const bReload = new EntityB({ x: 0, y: 0, mode: MODE.WALK_R });
+  bReload.reloadTimer = 1;   // one tick from firing (CS:0xE66B fires on reaching 0)
   const first = fireB(bReload, { fire: 0x31, flags: 0 });
   const second = fireB(bReload, { fire: 0x31, flags: 0 });
   check(`the reload timer blocks an immediate second shot`, first && second === null);
+  const bWrap = new EntityB({ x: 0, y: 0, mode: MODE.WALK_R });   // reloadTimer left at 0
+  check(`a fire timer at 0 wraps to 0xFFFF and does NOT fire (CS:0xE66B dec/jnz)`,
+    fireB(bWrap, { fire: 0x31, flags: 0 }) === null && bWrap.reloadTimer === 0xffff);
 
   const bHazard = new EntityB({ x: 10, y: 20, mode: MODE.WALK_L });
+  bHazard.reloadTimer = 1;   // one tick from firing (CS:0xE66B fires on reaching 0)
   const hazardB = fireB(bHazard, { fire: 0x61, flags: 0x10 });   // (0x10>>4)&3 = 1
   check(`attackBits != 0 diverts to a hazard spawn, unmuzzled, n = hi nibble`,
     hazardB && hazardB.hazard === true && hazardB.attackBits === 1 &&
@@ -2596,11 +2603,11 @@ export function checkEntityA() {
   const f1 = new EntityA({ x: 0, y: 0 }); f1.vx = 0;
   check(`zero own velocity means no fire, even with a live fireByte`,
     stageFacingAndFire(f1, { fireByte: 0x31, flags: 0 }) === null);
-  const f2 = new EntityA({ x: 0, y: 0 }); f2.vx = 4;
+  const f2 = new EntityA({ x: 0, y: 0 }); f2.reloadTimer = 1; f2.vx = 4;
   const shot = stageFacingAndFire(f2, { fireByte: 0x31, flags: 0 });   // hi nibble 3, lo nibble 1
   check(`facing right (vx>0) fires from x+32, dir = +hiNibble`,
     shot && shot.x === f2.x + 0x20 && shot.dir === 3, JSON.stringify(shot));
-  const f3 = new EntityA({ x: 0, y: 0 }); f3.vx = -4;
+  const f3 = new EntityA({ x: 0, y: 0 }); f3.reloadTimer = 1; f3.vx = -4;
   const shotL = stageFacingAndFire(f3, { fireByte: 0x31, flags: 0 });
   check(`facing left (vx<0) fires from x-8, dir = -hiNibble`,
     shotL && shotL.x === f3.x - 8 && shotL.dir === -3, JSON.stringify(shotL));
@@ -2609,7 +2616,7 @@ export function checkEntityA() {
    * NOT test vx (CS:0xe6a5's zero-velocity gate sits inside the attackBits
    * == 0 branch only). desc.flags bits [5:4] carry attackBits; fireByte's
    * hi nibble becomes `n`, not a shot direction, in this branch. */
-  const f4 = new EntityA({ x: 10, y: 20 });   // vx left at 0 — must NOT block the divert
+  const f4 = new EntityA({ x: 10, y: 20 }); f4.reloadTimer = 1;   // vx left at 0 — must NOT block the divert
   const hazard1 = stageFacingAndFire(f4, { fireByte: 0x61, flags: 0x10 });  // (0x10>>4)&3 = 1
   check(`attackBits!=0 diverts to a hazard spawn even at zero velocity`,
     hazard1 && hazard1.hazard === true && hazard1.attackBits === 1,
@@ -2618,7 +2625,7 @@ export function checkEntityA() {
     hazard1 && hazard1.n === 6, JSON.stringify(hazard1));
   check(`the hazard spawn's x/y are the entity's own position, unmuzzled`,
     hazard1 && hazard1.x === 10 && hazard1.y === 20, JSON.stringify(hazard1));
-  const f5 = new EntityA({ x: 0, y: 0 });
+  const f5 = new EntityA({ x: 0, y: 0 }); f5.reloadTimer = 1;
   const hazard2 = stageFacingAndFire(f5, { fireByte: 0x21, flags: 0x20 }); // (0x20>>4)&3 = 2
   check(`attackBits==2 also diverts (only 0 fires an ordinary shot)`,
     hazard2 && hazard2.hazard === true && hazard2.attackBits === 2, JSON.stringify(hazard2));

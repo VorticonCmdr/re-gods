@@ -1171,6 +1171,11 @@ const guardianTables = {
           new EntityB({ x, y, mode, speed: d.speed, hp: d.hp || 1,
                         cls: d.cls, delay }),
           { desc: d });      // the pathfinder reads +0x08/+0x09/+0x0c/+0x0d
+        /* CS:0xECAE-0xECC2 — the spawn arms the fire timer +0x0E to a FULL
+         * reload, (0x10 - (fire & 0xF)) << 2, so the first shot waits one
+         * period. [PROVEN] against PJOYL3 1167: the port fired on the first
+         * live tick, DOS did not. */
+        if (d.fire & 0xf) e.reloadTimer = (0x10 - (d.fire & 0xf)) << 2;
         playFlash(e);        // CS:0xECAB — a zero stagger materialises at spawn
         /* CS:0xED0C-0xED13 — after spawning, the driver marks the slot live and
          * moves on to the NEXT slot: a new group is not ticked until the
