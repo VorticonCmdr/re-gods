@@ -149,6 +149,12 @@
 
     `PJOYL2`'s hero is now exact for the whole demo. `PJOYG2` and `PJOYG3` still need the world-2 and world-3 guardians.
 
+48. Opened by the attract-parity work (item 47):
+    - **`UNKNOWN_w2_attract_carryover`** — **open.** A second value that DOS carries across `PJOYG2` attract cycles, besides the jaw `[0x2F0]`. With the jaw seeded, the port matches two otherwise-different live runs up to cursor 429 and then departs from both. Not identified.
+    - **`UNKNOWN_w2_rec6_xy`** — **CLOSED `[PROVEN]`.** Live, it reads (0, 0) (`docs/guardians.md`).
+    - **Guardian deaths** (`CS:0xD923` / `0xCE78`) and **the world-4 guardian** (`CS:0xC5EA`) — **not ported.** No attract demo reaches them.
+    - **How `PJOYL3`'s password entry reaches world 3** — **not traced.** The port gets there as DOS does, but the mechanism was not read.
+
 ⚠️ `UNKNOWN_openlist_field4` was listed here *and* in the resolved list below. It is **closed** — the resolved entry is correct.
 
 ### Resolved by static (Ghidra + `ndisasm`) passes
