@@ -8483,6 +8483,16 @@ export async function checkWeaponsProjectiles(fetchRaw) {
       'reproduces the x16 verbatim: "fixing" it would diverge from the ' +
       'original on a chest that does not exist');
 
+    /* CS:0x38D7 — first fit in SLOT order, whatever order the table is kept in. */
+    {
+      const tbl = [{ slot: 7, dead: true, type: 0xffff }, { slot: 2, dead: false, type: 5 },
+                   { slot: 3, dead: true, type: 0xffff }];
+      const got = allocObject(tbl);
+      check('allocObject takes the lowest free SLOT, not the first free array entry',
+        got === tbl[2] && !got.dead && allocObject(tbl) === tbl[0] && allocObject(tbl) === null,
+        'the port keeps the table in draw order; CS:0x38DF walks slot 0..199');
+    }
+
     /* ── The burst's flight and settle. */
     {
       const burst = new TreasureBurst(new GodsRandom(3));

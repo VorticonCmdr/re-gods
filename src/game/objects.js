@@ -429,13 +429,16 @@ export function expandMapObjects(mapObjects) {
  * Note the caller reads the result through the zero flag, not a pointer test,
  * and `dx` is what the dirty-mark at CS:0x13DB indexes. */
 export function allocObject(slots) {
+  /* First fit in SLOT order, not array order: the port keeps the table in
+   * draw order, so the lowest `slot` index stands for CS:0x38DF's walk. */
+  let best = null;
   for (const s of slots) {
-    if (s.dead || isDeadType(s.type)) {
-      s.dead = false; s.flag6 = 0;
-      return s;
-    }
+    if (!(s.dead || isDeadType(s.type))) continue;
+    if (best === null || (s.slot ?? Infinity) < (best.slot ?? Infinity)) best = s;
   }
-  return null;                                   // CS:0x38F2 `or cx,cx` -> ZF
+  if (!best) return null;                        // CS:0x38F2 `or cx,cx` -> ZF
+  best.dead = false; best.flag6 = 0;
+  return best;
 }
 
 /* ⚠️ A NEWLY ALLOCATED OBJECT MUST BE RE-RANKED, NOT APPENDED.

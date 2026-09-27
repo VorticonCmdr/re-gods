@@ -263,7 +263,17 @@ async function loadLevel(key) {
   } catch (e) {
     console.warn(`PGOD0${key[0]}.PAT failed to load — PAT objects inert on this level`, e);
   }
+  /* The live objects in draw order, THEN the table's empty records. The
+   * original's table is 200 fixed slots and CS:0x38D7 allocates the first
+   * free one (`+4` negative), so a level whose map fills 170 slots still has
+   * 30 free for runtime spawns (ACT0, dropped items). Dropping the empty
+   * records made every such spawn fail as "object table full" — PJOYL2's
+   * trigger 57, which DOSBox honours. Each record keeps its slot index. */
+  map.objects.forEach((o, i) => { o.slot = i; });
   const drawObjects = sortForDraw(map.objects.filter((o) => !isDeadType(o.type)), cats);
+  for (const o of map.objects) {
+    if (isDeadType(o.type)) drawObjects.push(Object.assign(o, { dead: true, flag6: 0 }));
+  }
 
   /* PWEAPONS is per-world, and Power (+0x06) genuinely differs between them —
    * the axe is 4 in worlds 1-2 and 12 in 3-4. The sprite fields and the pickup
@@ -3837,6 +3847,12 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
         rng.cursor = cursor & 0x1ff;
       },
       traceShop() { shopTrace = []; return shopTrace; },
+      /* The object table: size, distinct slots, free (dead) slots. */
+      objs() {
+        const o = level.drawObjects;
+        return { n: o.length, distinct: new Set(o).size,
+          dead: o.filter((x) => x.dead || isDeadType(x.type)).length };
+      },
       /* Record the caller of every random draw (stack frames 2-3), per tick. */
       traceRng() {
         const log = [];
