@@ -130,5 +130,12 @@ Spec source: a disassembly of the live code segment, re-read by hand for `CE87`,
   - Screen y ≥ 0xB0 frees the record and draws 2 randoms for a spark.
   - A `DB4E` hit costs 2. While the hero is invulnerable, a fireball passes through him.
 - **Not ported:** the death (`CE78` → `D923`).
+- **`UNKNOWN_w2_rec6_xy` is closed, `[PROVEN]` live.** `SS:0x4870/0x4872` read (0, 0) throughout a live `PJOYG2` fight (cursors 383–385). REC6 really is a 16×16 box at the screen's top-left corner.
+- **The attract demo is not repeatable across cycles, `[PROVEN]` live.** Nothing initialises the jaw counter `[0x2F0]`, so each `PJOYG2` fight starts where the previous cycle's fight left it. That changes REC4's height and so which shots hit. Evidence:
+  - Three live DOSBox runs of `PJOYG2`, all fed the same injected random table, first disagree with one another at cursors 380, 385 and 429.
+  - The port starts the jaw at 0, the static-image value, which is the first fight after boot. It matched one run (cursors 368–388) field for field, `[0x2F0]` included.
+  - Seeding the port's jaw to the value another run implies carries it to cursor 429 against both of the other runs.
+
+  At least one more carried value is involved and is not identified: `UNKNOWN_w2_attract_carryover`. The hero's path is identical in every run and in the port.
 
 World 4 (`0xC5EA`) is not ported.
