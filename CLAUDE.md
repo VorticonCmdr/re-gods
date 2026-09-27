@@ -100,6 +100,8 @@ A sixth, `UNKNOWN_level_palette_source` (ranked item 24), CLOSED — and, like i
 
 **The `joyl` menu choices are CLOSED (ranked item 40), live.** `joyl1` picks BEGIN QUEST. `joyl2` picks ENTER PASSWORD and types the attract shortcut `"L2"` (world 2). `joyl3` picks ENTER PASSWORD with an empty entry and falls back to the menu. The password grid's icons, cell mapping and space cell were already closed in `docs/passwords.md`.
 
+**Selector 6 is the progress checkpoint (ranked item 43), `[PROVEN]` live.** It moves the respawn point to the hero on every hit. New positions count toward per-world progress records (`DS:0xE674` chains), whose tallies include the real sublevel A→B switch (`FUN_1000_4828` via `+0x1E` bit 0; the hero continues in place through `FUN_1000_484e`). It corrects two earlier claims: "`DS:0x16E` has one writer" and "`4828` is unreachable". `gods-web` does not implement it yet. See `docs/camera-and-world-nav.md`.
+
 ## Tooling
 
 Moved to the `gods-re-tooling` skill (`.claude/skills/gods-re-tooling/SKILL.md`) — Ghidra MCP, DOSBox MCP, `blast.py`, and the `gods-web` port's verification tooling, with the same gotchas as before. Load it when actually running any of those tools.

@@ -95,6 +95,8 @@
 
 42. Two small verification gaps — **both CLOSED.** (a) The spike overlay's frame-0 17-row draw (`CS:0x1C15`'s byte write of `0x10`) is real, but its 17th row is frame row 16 drawn onto the screen row the base draw has just filled with the same frame row 16. It is pixel-identical to 16 rows `[STATIC]`. (b) The mid-air ladder grab's `Y &= 0xFFF8` is `[PROVEN]` in the running code. The live bytes at all four sites are `83 26 7C 01 F8`, and no instruction self-modifies them (calibrated against the 59 known `CS:`-override patch sites).
 
+43. Selector 6 (`CS:0x38F5`) — **disassembled and CLOSED `[PROVEN]` live.** It is the progress checkpoint. Every hit sets the respawn point `DS:0x16E/0x170` to the hero's position; the earlier "exactly one writer" claim was wrong, because the function had not been disassembled. A hit more than 0x40 from the last six checkpoints (ring `DS:0x8B34`) also increments `[0x369]` and fires the tally when it reaches the current progress record's target. The tally's `+0x22` step walks a per-world chain of records (`DS:0xE674` starts). Their `+0x1E` bit 0 runs `FUN_1000_4828`, the real sublevel A→B switch: `[0x38B]` routes the loader tail to `FUN_1000_484e`, which skips `8C34`, so the hero continues in place. This also closes the `+0x22` residual and corrects "`4828` is unreachable". **Port gap (not yet fixed): `gods-web` names selector 6 but never runs it, so it has no checkpoint respawn, no mid-world tallies and no A→B switch.**
+
 ⚠️ `UNKNOWN_openlist_field4` was listed here *and* in the resolved list below. It is **closed** — the resolved entry is correct.
 
 ### Resolved by static (Ghidra + `ndisasm`) passes

@@ -250,9 +250,42 @@ Every offset in the "address" column is arithmetic (`0xe6ea + offset`), not a se
 
 ⚠️ **This refutes the natural reading of `FUN_1000_6553`'s own `ADD word[0x178],0x22`.** `LEVEL ONE`'s record is **36 bytes**, not 34 — it carries a third trailer word (`+0x22 = 0xFFFF`) that `WORLD ONE`/`WORLD TWO`/the two blank records do not. Advancing the stored pointer by a flat `0x22` (34) from a 36-byte record lands **2 bytes short of the true next record**, inside `LEVEL ONE`'s own trailing `0xFFFF` word rather than at `WORLD ONE`'s header. So `[0x178] += 0x22` is not "walk to the next record in this stream" — record sizes are not uniform, and the arithmetic doesn't respect the boundaries this pass just mapped. Whatever that increment is actually for (the tally screen re-reads `[SI+0x1e]` a second time afterward, from the *advanced* `SI` — see the `67b1` line above — so it does do *something* meaningful with the shifted pointer) is now a narrower, still-open question, not the world/sublevel answer.
 
-**Residuals, narrower than before:** the `DS:0x178`/`+0x22` pointer arithmetic's own purpose (it is not a record-cursor advance, per the refutation below, and what it actually threads through the tally screen's second `+0x1e` read is unresolved); why the world-indexed `DS:0xe674` table's own 4 entries resolve to text reading `WORLD ONE`/`WORLD TWO`/two blank records rather than something more obviously purposeful (likely just level-load flavour, distinct from the exit-side mechanism this section closes); and two further table slots this pass did not chase — bits 0/2–7/12+ and their handlers (`FUN_1000_6ad0`, `FUN_1000_6973`, `FUN_1000_6b21`, `FUN_1000_6bed`), none of which are ever set by any of the 4 shipped `+0x1e` values and so cannot matter for real gameplay, only for completeness of the dispatch table's own documentation.
+**Residuals, narrower than before:** *(⚠️ the first two are CLOSED by the selector-6 section below: `+0x22` steps a chain of 34-byte progress records, and the `WORLD ONE`/`WORLD TWO` records are the mid-world tallies)* the `DS:0x178`/`+0x22` pointer arithmetic's own purpose (it is not a record-cursor advance, per the refutation below, and what it actually threads through the tally screen's second `+0x1e` read is unresolved); why the world-indexed `DS:0xe674` table's own 4 entries resolve to text reading `WORLD ONE`/`WORLD TWO`/two blank records rather than something more obviously purposeful (likely just level-load flavour, distinct from the exit-side mechanism this section closes); and two further table slots this pass did not chase — bits 0/2–7/12+ and their handlers (`FUN_1000_6ad0`, `FUN_1000_6973`, `FUN_1000_6b21`, `FUN_1000_6bed`), none of which are ever set by any of the 4 shipped `+0x1e` values and so cannot matter for real gameplay, only for completeness of the dispatch table's own documentation.
 
 The resolved mechanism (`FUN_1000_6b00`'s world-advance, `FUN_1000_6ad4`'s key-inventory clear, `FUN_1000_69d7`'s password generation, `FUN_1000_6992`'s pool reset — all four gated on the correct `+0x1e` bits of the correct, arg-selected destination record) is what a port's `zones.js` should implement in place of the "cycles the 8 shipped `.MAP` files in a fixed order" placeholder; see the project's own backlog memory for the port-side follow-up.
+
+### Selector 6 (`CS:0x38F5`) is the progress checkpoint, and it drives the whole in-world progression — `[PROVEN]` live (ranked item 43)
+
+This handler had never been disassembled. It is the plane-B event that the port's `events.js` only named ("progress / position marker"). Read in full (`CS:0x38F5`–`0x3987`, proximity test `CS:0x3988`–`0x39AD`, `FUN_1000_64e3`):
+
+```
+38F9  [0x16E],[0x170] := hero X,Y           ; RESPAWN POINT := here, unconditionally
+3907..395D  for each of the 6 ring entries DS:0x8B34..0x8B4A: CALL 3988
+            ; 3988: CLC (= "near") iff |X-ringX| <= 0x40 and |Y-ringY| <= 0x40 -> exit
+3962  inc [0x368] / inc [0x369]              ; a NEW checkpoint position
+396A  STD / REP MOVSW (10 words) / CLD        ; shift the ring down one slot
+3979  ring[0] := hero X,Y
+3980  call 64E3:
+64E4    SI := [0x178]                         ; the current progress record
+64EA    cmp AL=[SI] (target), [0x369]  -> equal: [0x36A] := 1  (tally pending)
+64F7    world 3 sublevel A only: X >= 0x450 and 0x300 <= Y <= 0x310
+651D      -> [0x369] := 0 and [0x36A] := 1 (the world-3A special exit)
+```
+
+**The progress records.** `FUN_1000_8c34` points `[0x178]` at `word[0xE674 + (world−1)*2]` at level load and zeroes the counters (`CS:0x8CD3`/`0x8CD6`). The tally (`FUN_1000_6553`) then reads the record, runs its `+0x1E` bit dispatch (`FUN_1000_694d`), and advances `[0x178]` by `0x22`. That is the long-unexplained `ADD word[0x178],0x22`: **it steps along a chain of 34-byte records, one per in-world stage.** Read straight from `GAME.EXE` (target = checkpoint count that fires the tally; bits = handlers via the `SS:0x35AA` table, bit 11 at `0x35E8` down to bit 0 at `0x35D2`):
+
+| world | chain (target → tally text → handlers) |
+|---|---|
+| 1 | 3 → WORLD ONE (`6973`, clear keys) · 6 → WORLD TWO (**`4828` sublevel B**, `6b21`, `6973`, clear keys, pool reset) · 8 → (blank, none) · 12 → LEVEL ONE (advance, clear keys, password) |
+| 2 | 6 → WORLD ONE (`6ad0`, clear keys) · 10 → WORLD TWO (**`4828`**, `6973`, `6ad0`, clear keys, pool reset) · 11 → blank · 15 → blank · 16 → LEVEL TWO |
+| 3 | 100 → WORLD ONE (**`4828`** ×2, `6ad0`, clear keys, pool reset) *(reached only via the 3A position special case)* · 6 → WORLD TWO · 100 → LEVEL THREE |
+| 4 | 5 → WORLD ONE (**`4828`**, clear keys, pool reset) · 6 → blank · 9 → blank · 12 → WORLD TWO · 20 → GAME |
+
+**This is how the game reaches sublevel B.** `FUN_1000_4828` sits in three table slots (bits 0, 3 and 11), not only bit 11. The earlier "unreachable" verdict checked only the four exit records, none of which has bit 11 set. Bit 0 is set on every world's sublevel-A hand-over record. `4828` sets `[0x43]=1` and `[0x38B]=1`, then jumps into the loader (`2A4A`). The loader's tail (`CS:0x2C3E`) sees `[0x38B]` and goes to `FUN_1000_484e` instead of `FUN_1000_006f`. `484E` reloads the events and the level's objects but **never calls `8C34`**, so hero position, respawn point, counters and the chain pointer all carry straight into sublevel B. The same chain continues there until the LEVEL record, which the B-side exit zone (ACT4) also resolves to.
+
+**The respawn point moves with every checkpoint.** `DS:0x16E/0x170` is written here as well as by `8C34`. The earlier "exactly one writer" sweep missed `0x38F5` because Ghidra had not disassembled it as code at the time. So the respawn routine (`FUN_1000_0845`) starts its arrival-zone search from the **last checkpoint touched**, not the level's static spawn. The 6-entry ring at `DS:0x8B34`, seeded from the spawn at level load, is the de-duplication list: only positions more than 0x40 from all of the last six count toward progress.
+
+**Live, `[PROVEN]`:** at a world-3 checkpoint, `[0x178]` was `0xE7BA` (world 3's first record, target 100) and the hero was at (592,120). Before the handler, the respawn point read (380,208), counters 1/1, ring [336,208]. After it: respawn (592,120), counters 2/2, ring [592,120],[336,208], and `AX=100` (the target it compared against). `gods-web` does not yet implement this (see the port note in `docs/open-questions-history.md`, ranked item 43).
 
 ### The tally/bonus screen body and the password-reveal overlay, `CS:0x656e`–`0x6a5a` — fully disassembled and live-confirmed `[PROVEN]`
 
