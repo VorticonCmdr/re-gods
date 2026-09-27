@@ -101,7 +101,7 @@ export function stepHeroFrame({ input, arsenal, grid, player, map, cam,
                                inventory = null, levers = null,
                                leverToggle = null, invuln = false,
                                zoneScan = null, beforePlayer = null,
-                               objectPass = true }) {
+                               objectPass = true, effects = null }) {
   arsenal.latchTick(input.fire);                                    // 019D
   /* CS:0x49F9 — the SAME "one action per press" shape as the weapon latch
    * above, cleared every tick fire is not held. Unconditional, regardless
@@ -114,7 +114,11 @@ export function stepHeroFrame({ input, arsenal, grid, player, map, cam,
   /* `objectPass` false: DS:0x34's CS:0x01FC skip (a guardian outside world
    * 2) — no pickups and no chest burst this tick. */
   const picked = objects && objectPass
-    ? stepPickups(objects, player, arsenal, bar, { cats, health, treasure })
+    /* `effects` carries the consumables' state (the starburst, the hero's
+     * position, ...). It used to be dropped here, so the starburst potion
+     * was consumed with no burst — [PROVEN] against PJOYL3 1031, where DOS
+     * bursts from CS:0x6205. */
+    ? stepPickups(objects, player, arsenal, bar, { cats, health, treasure, effects })
     : { taken: [], consumed: [], treasures: [] };
   /* CS:0x132D, the chest burst. It sits in the same object pass, and it runs
    * AFTER the pickup walk that can spawn it — so an item thrown out of a chest

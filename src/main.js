@@ -2557,6 +2557,11 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
       for (const id of fr.projectiles.bombSfx) audio.play(id);
       for (const c of fr.consumed) {
         consumed++;
+        if (window.__consumedLog) window.__consumedLog.push({ ...c, result: c.result && { ...c.result } });   // ?debug
+        /* CS:0x17EF and CS:0x181B — every category-0 pickup sounds 0x638
+         * TWICE, before and after the rank count. [PROVEN] live: PJOYL3 1031
+         * logs both (returns 0x17F5 / 0x1821). */
+        if (c.sfx) { audio.play(c.sfx); audio.play(c.sfx); }
         postPickupMessage(c);
         /* CS:0x6377 — over-healing is banked into DS:0x168 at 32 a point,
          * not discarded. UNKNOWN_DS_0168, so it is only counted here. */
@@ -3945,6 +3950,8 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
        * before (PJOYL1 lands), so the harness seeds 1. */
       setLandFlag357,
       enemiesB: () => enemies,
+      starburst: () => ({ active: starburst.active, age: starburst.age, live: starburst.liveCount,
+        bursts: starburst.bursts, refused: starburst.refused }),
       cf40: () => cf40.slots.map((q) => `${q.x},${q.y} hp${q.hp} st${q.state} f${q.face} v${q.vx},${q.vy}`),
       guardian() {
         if (guardian && guardian.world === 2) {
