@@ -94,7 +94,7 @@ import { scanZones, unpackTeleportDest,
          ZONE_TELEPORT, ZONE_EXIT, advanceWorld,
          clearNonPotionInventory, generatePassword, passwordSlotForWorld,
          passwordWorldForSlot, passwordToString, PASSWORD_SLOTS } from './game/zones.js';
-import { DeathBurst, findRespawnPosition, loseLife, DEATH_SFX } from './game/death.js';
+import { DeathBurst, findRespawnPosition, loseLife, DEATH_SFX, DEATH_BURST_TICKS } from './game/death.js';
 import { Progress, progressActions, reshutDoors } from './game/progress.js';
 import { TitleMenu, PasswordEntry, NameEntry, HiscoreTable, HISCORE_TABLE_TICKS,
          drawCentered, MENU_ADVANCE, MENU_ARROW_LEFT_DESC, MENU_ARROW_RIGHT_DESC } from './game/title-menu.js';
@@ -1096,6 +1096,50 @@ const guardianTables = {
   /* DS:0xAC90 — the materialise flash pool (game/flash.js). */
   const flashPool = new FlashPool();
   let flashFx = [];
+  /* The respawn / game-over tail of the death sequence (CS:0x0930 on). */
+  const respawnOrGameOver = () => {
+          deathSeq = null;
+          const { lives, gameOver } = loseLife(fx.lives);   // CS:0x093A/0x093E
+          fx.lives = lives;
+          if (gameOver) {
+            /* CS:0x0943 onward — the real game-over cascade (Gods/docs/
+             * dynamic-trace-and-runtime-data.md's "hiscore name-entry
+             * screen" + "TOP TEN GODS" sections), superseding the earlier
+             * `gameOverPlaceholder()`/"press R" stand-in death.js's own
+             * header still documents (that function stays exported and
+             * tested — see checks.js — it is just no longer what real play
+             * reaches). `FUN_1000_318f`'s own `[0x38d]` gate (skip the
+             * whole mechanism under some condition this project has not
+             * traced) is not modelled — every game over here attempts the
+             * real cascade. */
+            pendingHiscoreRank = rankOf(hiscoreEntries, score.value);
+            pendingHiscoreScoreBytes = encodeScoreBytes(score.bytes);
+            /* CS:0x095D-0x0966's own 150-iteration fade — see
+             * `gameOverFade`'s own header. The render callback below owns
+             * the actual ramp and the transition into 'name-entry'/
+             * 'hiscore-table' once it completes, the same split `quitFade`
+             * already uses. */
+            gameOverFade = {
+              snapshot: renderer.buf.slice(), palette: level.palette, start: performance.now(),
+              next: pendingHiscoreRank >= 0 ? 'name-entry' : 'hiscore-table',
+            };
+            uiState = 'game-over-fade';
+            $('event').textContent = 'GAME OVER';
+          } else {
+            health.respawn();                                       // CS:0x084B/0x0851
+            /* CS:0x0845 reads DS:0x16E/0x170 — the last selector-6 checkpoint
+             * (game/progress.js), which CS:0x8C34 seeds with the level spawn. */
+            if (guardian) guardian.reset();                          // CS:0x086D call [0x288]
+            const pos = findRespawnPosition(progress.respawn.x, progress.respawn.y,
+              level.map.planeB);                                      // CS:0x0873-0x08BD
+            player.teleportTo(pos.x, pos.y);                         // CS:0x08D6-0x08E6 (state 4)
+            player.fallDamage = 0;                                   // CS:0x08E0, teleportTo doesn't touch this
+            if (camScript.mode === 0) cam = cameraForSpawn(pos.x, pos.y);   // CS:0x08C5 skips it while DS:0x32 is set
+            forceActivation();                                       // CS:0x08EB -> 0x1196
+            fx.invuln = INVULN_TICKS_SPAWN;                          // CS:0x0860
+            $('event').textContent = `respawned — ${fx.lives} ${fx.lives === 1 ? 'life' : 'lives'} left`;
+          }
+  };
   const wireSpawn = () => {
     guardian = null; guardianFx = []; camShake = 0; camNudgeY = 0;
     camScript = { mode: 0, tx: 0, ty: 0 }; camPending = null; camWasScripted = false;
@@ -2621,6 +2665,18 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
        * UNCONDITIONAL, and deliberately outside the `if (fr)` guard above:
        * CS:0x02DB is straight-line in the main loop, and `fr` is null on
        * death/game-over frames, where a message must still count down. */
+      /* CS:0x0A21-0x0A30 — on the tick the death counter reaches 0x12 the
+       * death driver has run only the pre-player half (above); `pop ax /
+       * jmp 0x930` discards its pushed CS:0x0257 return, so the whole
+       * post-player half (enemy suite, shot movers, messages, camera commit)
+       * is skipped and the respawn jumps straight back to the loop head
+       * (CS:0x0926 `jmp 0x11b`). [PROVEN] against PJOYL3 1486-1503: running
+       * the enemies on that tick put every one of them a tick ahead. */
+      if (deathSeq && deathSeq.counter >= DEATH_BURST_TICKS) {
+        deathSeq.tick();
+        respawnOrGameOver();
+        return;
+      }
       messages.step();
       /* Re-sync ACT6's kill target: level.drawObjects is reassigned (not
        * mutated) by insertSpawned above on a loot settle / carried-item drop,
@@ -3328,49 +3384,7 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
       if (deathSeq) {
         const r = deathSeq.tick();
         lastDeathBurstFx = r.sprites;
-        if (r.done) {
-          deathSeq = null;
-          const { lives, gameOver } = loseLife(fx.lives);   // CS:0x093A/0x093E
-          fx.lives = lives;
-          if (gameOver) {
-            /* CS:0x0943 onward — the real game-over cascade (Gods/docs/
-             * dynamic-trace-and-runtime-data.md's "hiscore name-entry
-             * screen" + "TOP TEN GODS" sections), superseding the earlier
-             * `gameOverPlaceholder()`/"press R" stand-in death.js's own
-             * header still documents (that function stays exported and
-             * tested — see checks.js — it is just no longer what real play
-             * reaches). `FUN_1000_318f`'s own `[0x38d]` gate (skip the
-             * whole mechanism under some condition this project has not
-             * traced) is not modelled — every game over here attempts the
-             * real cascade. */
-            pendingHiscoreRank = rankOf(hiscoreEntries, score.value);
-            pendingHiscoreScoreBytes = encodeScoreBytes(score.bytes);
-            /* CS:0x095D-0x0966's own 150-iteration fade — see
-             * `gameOverFade`'s own header. The render callback below owns
-             * the actual ramp and the transition into 'name-entry'/
-             * 'hiscore-table' once it completes, the same split `quitFade`
-             * already uses. */
-            gameOverFade = {
-              snapshot: renderer.buf.slice(), palette: level.palette, start: performance.now(),
-              next: pendingHiscoreRank >= 0 ? 'name-entry' : 'hiscore-table',
-            };
-            uiState = 'game-over-fade';
-            $('event').textContent = 'GAME OVER';
-          } else {
-            health.respawn();                                       // CS:0x084B/0x0851
-            /* CS:0x0845 reads DS:0x16E/0x170 — the last selector-6 checkpoint
-             * (game/progress.js), which CS:0x8C34 seeds with the level spawn. */
-            if (guardian) guardian.reset();                          // CS:0x086D call [0x288]
-            const pos = findRespawnPosition(progress.respawn.x, progress.respawn.y,
-              level.map.planeB);                                      // CS:0x0873-0x08BD
-            player.teleportTo(pos.x, pos.y);                         // CS:0x08D6-0x08E6 (state 4)
-            player.fallDamage = 0;                                   // CS:0x08E0, teleportTo doesn't touch this
-            if (camScript.mode === 0) cam = cameraForSpawn(pos.x, pos.y);   // CS:0x08C5 skips it while DS:0x32 is set
-            forceActivation();                                       // CS:0x08EB -> 0x1196
-            fx.invuln = INVULN_TICKS_SPAWN;                          // CS:0x0860
-            $('event').textContent = `respawned — ${fx.lives} ${fx.lives === 1 ? 'life' : 'lives'} left`;
-          }
-        }
+        if (r.done) respawnOrGameOver();
       }
       /* The camera step is the player epilogue's too (CS:0x5EA4); while the
        * death burst plays (CS:0x09BB) it does not run. */
