@@ -92,6 +92,8 @@ A sixth, `UNKNOWN_level_palette_source` (ranked item 24), CLOSED — and, like i
 
 **`UNKNOWN_mus_type2` is now fully CLOSED (ranked item 35), `[PROVEN]` by decoding the bytes.** The three "type 2" SFX blobs (`PGODS.MUS` 19/20/40), and every other non-SMF music blob the game ships, are plain Standard MIDI Files compressed with a 256-word dictionary. The dictionary sits at blob+1, the index stream starts at blob+`0x201`, and tag `'c'` skips one lead pad byte. Two earlier static passes had misread the dictionary as a 9-entry identity table. Blob 20 is the tally screen's opening fanfare (`FUN_1000_67f5`, called once from `CS:0x657B`), and `gods-web` now plays it. See `docs/drivers-and-memory.md`.
 
+**The intro's three open items are CLOSED (ranked item 36), `[PROVEN]` live in DOSBox.** `INTROV.EXE`'s `DS:0x93` is a 50 Hz PIT-driven counter, and story pages hold a fixed 7.68 s. The story crawl plays *before* the production credits, not after as previously documented. The story palette is `PONE.PI1`'s own embedded one. `PDEMOSB4.SB` is not a voice clip: it is an 11-clip, 64-note sample-music sequence that `PPLAYER.BIN` plays alongside the FM track `PGODMUS2.MUS`. See `docs/dynamic-trace-and-runtime-data.md` and `docs/execution-and-boot.md`.
+
 ## Tooling
 
 Moved to the `gods-re-tooling` skill (`.claude/skills/gods-re-tooling/SKILL.md`) — Ghidra MCP, DOSBox MCP, `blast.py`, and the `gods-web` port's verification tooling, with the same gotchas as before. Load it when actually running any of those tools.
