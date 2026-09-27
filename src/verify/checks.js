@@ -15328,9 +15328,12 @@ export async function checkDeath(fetchRaw) {
     const t17 = fresh.tick();                            // counter==17 -> CS:0xA66 skip
     check('tick 17 (counter==0x11) draws NOTHING — CS:0xA66 `jz 0xaa4`, not a '
       + 'port simplification', t17.sprites.length === 0);
-    check('tick 17 IS the one that finishes — counter reaches 18 inside the '
-      + 'silent branch too, so `done` must not be hardcoded false there',
-      t17.done);
+    check('tick 17 does NOT finish: DOS tests `[0x24C]==0x12` at the TOP of '
+      + 'the next death tick (CS:0x0A21-0x0A30), so the respawn comes one tick '
+      + 'after the silent frame (PJOYG3: DOS respawns at c827, not c826)',
+      !t17.done);
+    check('tick 18 is the one that finishes, with nothing drawn',
+      (() => { const t = fresh.tick(); return t.done && t.sprites.length === 0; })());
     check('the counter reaches DEATH_BURST_TICKS (18) after exactly 18 tick() '
       + 'calls', fresh.counter === DEATH_BURST_TICKS);
 
@@ -15339,8 +15342,8 @@ export async function checkDeath(fetchRaw) {
     const b2 = new DeathBurst(0, 0);
     let doneAt = -1;
     for (let i = 0; i < 30 && doneAt < 0; i++) { if (b2.tick().done) doneAt = i; }
-    check('done fires on the 18th tick() call (index 17), matching '
-      + 'DEATH_BURST_TICKS', doneAt === DEATH_BURST_TICKS - 1);
+    check('done fires on the 19th tick() call (index 18): 18 counted ticks, '
+      + 'then the top-of-tick test', doneAt === DEATH_BURST_TICKS);
   }
 
   /* ── The full death->respawn->death cycle, driven exactly as main.js's own
@@ -15370,7 +15373,8 @@ export async function checkDeath(fetchRaw) {
       let done = false;
       while (!done && ticks < 30) { done = burst.tick().done; ticks++; }
       check(`cycle: life ${lives}'s burst finishes in exactly ` +
-        `${DEATH_BURST_TICKS} ticks, not more or fewer`, ticks === DEATH_BURST_TICKS);
+        `${DEATH_BURST_TICKS + 1} tick() calls (18 counted + the top-of-tick test)`,
+        ticks === DEATH_BURST_TICKS + 1);
       const result = loseLife(lives);               // CS:0x093A/0x093E
       lives = result.lives;
       gameOver = result.gameOver;

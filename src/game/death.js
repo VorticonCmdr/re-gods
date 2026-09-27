@@ -95,11 +95,16 @@ export class DeathBurst {
    * @returns {{done:boolean, sprites:Array<{x:number,y:number,sprite:number}>}}
    */
   tick() {
+    /* CS:0x0A21-0x0A30 — the counter is tested at the TOP of each death tick:
+     * 0x12 jumps to the respawn (CS:0x0930) on that tick, i.e. the tick AFTER
+     * the 17 frames and the blank one. Reporting `done` on the tick the
+     * counter reached 0x12 respawned a tick early ([PROVEN] PJOYG3 826/827). */
+    if (this.counter >= DEATH_BURST_TICKS) return { done: true, sprites: [] };
     /* CS:0xA66-0xA6B — the ONE tick (counter==17) that updates and draws
      * nothing at all, not a port simplification. */
     if (this.counter === 0x11) {
       this.counter++;
-      return { done: this.counter >= DEATH_BURST_TICKS, sprites: [] };
+      return { done: false, sprites: [] };
     }
     for (const p of this.particles) {
       p.x += p.vx; p.y += p.vy; p.vy += 1;   // CS:0xA78-0xA7E, gravity uncapped
@@ -107,7 +112,7 @@ export class DeathBurst {
     const sprite = DEATH_BURST_SPRITE_BASE + this.counter;
     const sprites = this.particles.map((p) => ({ x: p.x, y: p.y, sprite }));
     this.counter++;
-    return { done: this.counter >= DEATH_BURST_TICKS, sprites };
+    return { done: false, sprites };
   }
 }
 
