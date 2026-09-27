@@ -2285,6 +2285,7 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
          * already reads for COND11/12; `leverToggle` mutates it in place, so
          * a level's own trigger conditions see the flip on the very next tick. */
         levers: level.palfils.levers, leverToggle,
+        zoneScan: (x, y) => scanZones(events.actionCtx.zones, x, y),
         /* CS:0x38D7 — first-fit over the 200-slot runtime array. `drawObjects`
          * already excludes the map's dead slots, so the headroom here is
          * 200 minus what is live, which is the same number the original has. */
@@ -2467,11 +2468,11 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
        * records. Report it rather than diverging quietly. */
       while (diverged.length) console.warn('[trigger]', diverged.shift());
 
-      /* CS:0x4A6D — the hero-vs-zone scan; see game/zones.js for the full
-       * citation, including the honest gap (its own caller in the original
-       * is not located). Zones only exist once ACT3/ACT4 has fired one, so
-       * this is a no-op on every level until then, exactly as shipped. */
-      const zoneHit = scanZones(events.actionCtx.zones, player.x, player.y);
+      /* CS:0x4A6D — the hero-vs-zone scan, run by the player itself from
+       * idle's UP branch (CS:0x4A08, its only caller; see game/zones.js).
+       * The hit is acted on here, as CS:0x0324 acts on `[0x370]` after the
+       * player tick. `fr` is null on death ticks, where the player didn't run. */
+      const zoneHit = fr ? player.zoneHit : null;
       if (zoneHit && zoneHit.kind === ZONE_TELEPORT) {
         const dest = unpackTeleportDest(zoneHit.arg);
         player.teleportTo(dest.x, dest.y);

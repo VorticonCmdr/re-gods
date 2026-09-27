@@ -99,7 +99,8 @@ export function stepHeroFrame({ input, arsenal, grid, player, map, cam,
                                burst = null, alloc = null, starburst = null,
                                blocks = null, debris = null, tock = 1,
                                inventory = null, levers = null,
-                               leverToggle = null, invuln = false }) {
+                               leverToggle = null, invuln = false,
+                               zoneScan = null }) {
   arsenal.latchTick(input.fire);                                    // 019D
   /* CS:0x49F9 — the SAME "one action per press" shape as the weapon latch
    * above, cleared every tick fire is not held. Unconditional, regardless
@@ -142,7 +143,7 @@ export function stepHeroFrame({ input, arsenal, grid, player, map, cam,
    * the 4-slot inventory (DS:0x17e). `pickup.js` documents why the scan is
    * cheap to re-run every tick unconditionally. `levers`/`leverToggle` feed
    * IDLE+FIRE's own lever scan (CS:0x1045, game/levers.js) the same way. */
-  const pickupCtx = objects ? { objects, cats, inventory, levers, leverToggle } : null;
+  const pickupCtx = objects ? { objects, cats, inventory, levers, leverToggle, zoneScan } : null;
   /* ⚠️ ORDER MATTERS. CS:0x0206's object-draw pass (where CS:0x1D67's own
    * `inc [0x3a2]` lives) runs BEFORE CS:0x0254's player dispatch (where
    * CS:0x10BE's `[0x3a2]:=0` arms it) in the ORIGINAL's own per-tick order —

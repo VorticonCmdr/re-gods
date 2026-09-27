@@ -8,18 +8,19 @@
  * the READ side: CS:0x4A6D (the per-tick hero-vs-zone scan) and CS:0x0FAC-
  * 0x1042 (what firing a zone actually does).
  *
- * ⚠️ WHERE CS:0x4A6D IS CALLED FROM IS NOT ESTABLISHED. It sits inside the
- * player-state-machine's un-Ghidra'd gap, textually beside ladder-dismount
- * code (`DS:0x347/0x348/0x353/0x378` reset, state := 14), and no CALL or
- * jump-table word targeting it was found by either an operand-text search or
- * a raw `6D 4A` byte-pattern search across the whole image — meaning its
- * caller is itself undisassembled bytes in this Ghidra project, not that it
- * has no caller. Two things ARE established: the scan's own body (read
- * directly, below) and that it is reached at least once per relevant tick,
- * because `[0x370]`'s consumer (CS:0x0324) is unconditional in the main
- * loop. This port calls it every tick, matching the cadence of the other
- * universal per-tick probe this project already ported (the plane-B event
- * probe, `CS:0x5FAB`). `UNKNOWN_zone_scan_caller`.
+ * THE CALLER — CS:0x4A08, and nothing else. [PROVEN] by scanning the live
+ * GAME.EXE code segment (DOSBox, 877:0000, 64 KB) for every E8/E9 rel16
+ * that lands on 0x4A6D and every `6D 4A` word in CS and DS: one hit. It is
+ * idle's own handler (state 26, CS:0x49CA):
+ *     49CC  test [0x382],8 / jz   -> RIGHT: state 28, end tick
+ *     49DB  test [0x382],4 / jz   -> LEFT:  state 27, end tick
+ *     49EA  test [0x382],0x80     -> FIRE:  call 0x1045 (levers), end tick
+ *     49FE  test [0x382],1 / jnz  -> UP:    call 0x4A6D
+ *     4A0B  cmp [0x370],0 / jz 4A15 (the ladder test) ; else end tick
+ * So a zone fires only for an idle hero pressing UP, and a hit pre-empts
+ * the ladder grab that tick. (An earlier revision of this header called the
+ * caller undisassembled and ran the scan every tick; `UNKNOWN_zone_scan_caller`
+ * is CLOSED.) player.js calls it through `pickup.zoneScan`.
  *
  * THE SCAN — CS:0x4A6D-0x4AC4, read in full, not decompiled.
  *     4A74  cmp word [si+0x4],0x0        ; kind

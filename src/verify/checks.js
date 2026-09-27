@@ -10259,6 +10259,33 @@ export async function checkZones(fetchRaw) {
     ], 200, 100).arg === 11,
     'CS:0x4AC4 RETs on the first hit — it does not keep scanning for a better one');
 
+  /* --- the caller, CS:0x4A08: idle + UP only ---------------------------- */
+  {
+    const n = MC * 64, planeB = new Uint8Array(n);
+    for (let c = 0; c < MC; c++) planeB[12 * MC + c] = CELL_SOLID;
+    const m = { planeA: new Uint8Array(n), planeB, widthPx: 4096, heightPx: 1024 };
+    const IN = (o = {}) => ({ left: false, right: false, up: false, down: false, fire: false, ...o });
+    const run = (stateIndex, input) => {
+      const p = new Player(2 * 32, 9 * 16);
+      for (let i = 0; i < 4; i++) p.tick(m, IN());          // settle onto the floor
+      p.stateIndex = stateIndex; p.phase = 0;
+      let calls = 0;
+      const zoneScan = () => { calls++; return { kind: ZONE_TELEPORT, arg: 0 }; };
+      p.tick(m, input, null, 1, { objects: [], cats: [], inventory: [], zoneScan });
+      return { calls, hit: p.zoneHit, st: p.stateIndex };
+    };
+    const idleUp = run(PS.IDLE, IN({ up: true }));
+    check('an idle hero pressing UP runs the zone scan, and a hit ends the tick',
+      idleUp.calls === 1 && idleUp.hit && idleUp.st === PS.IDLE,
+      `CS:0x49FE -> call 0x4A6D -> [0x370] -> jmp 0x5E9B; got ${JSON.stringify(idleUp)}`);
+    const idleNoUp = run(PS.IDLE, IN());
+    const idleUpFire = run(PS.IDLE, IN({ up: true, fire: true }));
+    const walkUp = run(PS.WALK_R, IN({ up: true }));
+    check('no scan without UP, with FIRE (CS:0x49EA wins), or outside idle',
+      idleNoUp.calls === 0 && idleUpFire.calls === 0 && walkUp.calls === 0,
+      `calls ${idleNoUp.calls}/${idleUpFire.calls}/${walkUp.calls}: CS:0x4A08 is the only caller`);
+  }
+
   /* --- CS:0x0FDF-0x0FF2: the destination unpack ------------------------- */
   const d1 = unpackTeleportDest((5 << 8) | 3);   // col 5, row 3
   check('unpackTeleportDest: col*32+16, row*16 (no Y bias)',

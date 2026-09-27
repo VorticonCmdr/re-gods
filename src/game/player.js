@@ -610,6 +610,7 @@ export class Player {
     this.emitted = null;
     this.keyCollected = null;
     this.leverToggled = null;
+    this.zoneHit = null;
     if (this.fireState >= 0) { this._fireTick(map, input, fire, health, pickup, tock); return; }
     switch (this.state) {
       case ST.GROUND: this._ground(map, input, fire, pickup); break;
@@ -1160,6 +1161,16 @@ export class Player {
         this.fromLadder = false;
         this.jumpTakeoffX = this.x;   // CS:0x5A14/0x5C58 — see jumpTakeoffX's own note
         return;
+      }
+      /* CS:0x49FE-0x4A12 — idle's UP branch calls the zone scan (CS:0x4A6D)
+       * FIRST; a hit (`[0x370]`) ends the tick via 0x5E9B, before the ladder
+       * test. This is the scan's ONLY caller (a live-image scan of every
+       * E8/E9 rel16 and every `6D 4A` word), so teleports and exits fire
+       * only for an idle hero pressing UP. Idle's fire and direction tests
+       * (CS:0x49CC-0x49EF) come before it. */
+      if (this.stateIndex === S.IDLE && !input.fire && pickup && pickup.zoneScan) {
+        const hit = pickup.zoneScan(this.x, this.y);
+        if (hit) { this.zoneHit = hit; return; }
       }
       const climbCol = climbableHereCol(map, this.x, this.y);
       if (climbCol !== null) {
