@@ -121,6 +121,14 @@ export const SPAWNER_CALLERS = Object.freeze(
  * own walk. What bounds the cascade is the spawner's entry gate plus the 80
  * slots — NOT a recursion guard, which the original does not have.
  */
+/* DS:0x1d4 — the gravity phase. CS:0xA4E2/0xA4E6 are its only writers
+ * (the other `0x1d4` hits in the image are SS-relative tables or data), and
+ * nothing resets it: it counts starburst ticks since boot, mod 8. [PROVEN]
+ * live: in PJOYL3 the potion's burst at 1031 first feels gravity at 1033,
+ * i.e. the counter stood at 5 — in two different attract cycles. */
+let gravityPhase = 0;
+export const setStarburstGravityPhase = (v) => { gravityPhase = v & 7; };
+
 export class Starburst {
   constructor(rnd) {
     this.rnd = rnd;
@@ -131,7 +139,6 @@ export class Starburst {
     this.age = 0;              // DS:0x1d6
     this.chain = 0;            // DS:0x374
     this.phase = 0;            // DS:0x349, the 3-frame sprite cycle
-    this.gravityTick = 0;      // DS:0x1d4, the 0..7 counter
     this.bursts = 0;           // how many times the spawner actually ran
     this.chained = 0;          // ...of which were re-bursts
     this.refused = 0;          // spawner calls the age gate turned away
@@ -177,7 +184,7 @@ export class Starburst {
     this.age += AGE_STEP;                                  // CS:0xA4C9
     this.chain = ((this.chain + 1 + 0x80) & 0xff) - 0x80;  // CS:0xA4CE `inc byte`
     this.phase = (this.phase + 1) % SPRITE_FRAMES;         // CS:0xA4D2
-    this.gravityTick = (this.gravityTick + 1) & (GRAVITY_PERIOD - 1);  // CS:0xA4E2
+    gravityPhase = (gravityPhase + 1) & (GRAVITY_PERIOD - 1);          // CS:0xA4E2
     const sprite = SPRITE_BASE + this.phase;               // CS:0xA517
 
     for (let i = 0; i < SLOTS; i++) {
@@ -187,7 +194,7 @@ export class Starburst {
 
       s.x += s.vx; s.y += s.vy;                            // CS:0xA4FF/0xA503
       /* ⚠️ Gravity AFTER the step, and only on the eighth frame. */
-      if (this.gravityTick === 0) s.vy += 1;               // CS:0xA50D/0xA514
+      if (gravityPhase === 0) s.vy += 1;                   // CS:0xA50D/0xA514
 
       const sx = s.x - cam.x, sy = s.y - cam.y;            // CS:0xA51F
       if (sx > CULL.xMax || sx < CULL.xMin

@@ -58,6 +58,9 @@ export async function runPort(name, maxTicks = 4000, rnd = []) {
    * run from a known value so the harness is reproducible. */
   g.resetProcessJaw();
   g.setLandFlag357(1);
+  /* DS:0x1d4: PJOYL3's potion burst (1031) first feels gravity at 1033 in
+   * every live cycle observed, so the phase stands at 5 before it. */
+  g.setStarburstGravityPhase(name === 'joyl3' ? 5 : 0);
   let first = await g.startAttractAt(STATE_OF[name]);
   const pending = rnd.slice();
   const inject = (cursor) => {

@@ -41,7 +41,7 @@ import { spriteForType, parseObjectCategories, sortForDraw, isDeadType,
 import { parseObjectRecords, Score, Purse, TreasureBurst,
          INVENTORY_EMPTY } from './game/treasure.js';
 import { CONSUMABLES, WEAPON_ARCS, INVULN_TICKS_SPAWN } from './game/consumables.js';
-import { Starburst, SPRITE_BASE as SB_SPRITE, SPAWN_SFX } from './game/starburst.js';
+import { Starburst, SPRITE_BASE as SB_SPRITE, SPAWN_SFX, setStarburstGravityPhase } from './game/starburst.js';
 import { Destructibles } from './game/destructible.js';
 import { resetWeaponArc, setWeaponArc, projectileSprite, FIRE_SFX,
          TERRAIN_SFX, AXE_BOUNCE_SFX } from './game/projectiles.js';
@@ -3949,9 +3949,12 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
       /* DS:0x357 lives for the process too; any attract cycle has landed
        * before (PJOYL1 lands), so the harness seeds 1. */
       setLandFlag357,
+      /* DS:0x1d4, the starburst gravity phase, lives for the process too. */
+      setStarburstGravityPhase,
       enemiesB: () => enemies,
       starburst: () => ({ active: starburst.active, age: starburst.age, live: starburst.liveCount,
-        bursts: starburst.bursts, refused: starburst.refused }),
+        bursts: starburst.bursts, refused: starburst.refused, chain: starburst.chain,
+        slots: starburst.slots.map((q, i) => q.x >= 0 ? `${i}:${q.x},${q.y},${q.vx},${q.vy}` : null).filter(Boolean).join(' ') }),
       cf40: () => cf40.slots.map((q) => `${q.x},${q.y} hp${q.hp} st${q.state} f${q.face} v${q.vx},${q.vy}`),
       guardian() {
         if (guardian && guardian.world === 2) {
