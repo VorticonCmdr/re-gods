@@ -5530,11 +5530,13 @@ export async function checkWeaponsProjectiles(fetchRaw) {
      * this. */
     const pbWall = new Uint8Array(128 * 64);
     pbWall[5 * 128 + 4] = 1;         // solid at col 4, row 5 (y 80..95)
-    check(`axeWallAt tests the SAME row when y has no sub-tile remainder`,
+    check(`axeWallAt tests the SAME row with or without a sub-tile remainder`,
       axeWallAt(3 * 32, 5 * 16, +1, pbWall) === true       // y=80, no remainder
-      && axeWallAt(3 * 32, 5 * 16 + 8, +1, pbWall) === false,  // y=88, has one
-      'CS:0xA5C6 `and bx,0xf / jz` — the y%16==0 case tests [si+0x1] (same ' +
-      'row, one col over); the other case tests [si+0x81] (one row DOWN)');
+      && axeWallAt(3 * 32, 5 * 16 + 8, +1, pbWall) === true    // y=88: falls through
+      && axeWallAt(3 * 32, 6 * 16, +1, pbWall) === false,  // y=96: row 6, nothing
+      'CS:0xA5C6 `and bx,0xf / jz` — y%16==0 tests only [si+0x1]; otherwise ' +
+      '[si+0x81] (one row DOWN) first and, on a miss, [si+0x1] too ' +
+      '(CS:0xA5D0 `jz` skips only on a hit). [PROVEN] PJOYL2 cursor 1636');
     check(`...and the row-down neighbour when it does`,
       axeWallAt(3 * 32, 4 * 16 + 8, +1, pbWall) === true,   // y=72 -> row 4, +0x81 -> row 5 col 5...
       'CS:0xA5CB `cmp byte [si+0x81],1` — row+1, col+1 from a y with a ' +

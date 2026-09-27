@@ -828,13 +828,14 @@ export const unpackHunterVel = (dir) => ({
  * the tile cell is the usual `0x5004 + (x&~0x1f)>>5 + ((y&~0xf)<<3)`, and
  * which NEIGHBOUR cell gets tested depends on the Y sub-tile position —
  *
- *   A5C6  and bx,0xf / jz 0xa5d2        ; y has NO sub-tile remainder ->
- *   A5CB  cmp byte [si+0x81],1 / jz     ;   test the SAME row, one col over
- *   A5D2  cmp byte [si+0x1],1           ; y sub-tile != 0 -> test one row
- *                                       ;   DOWN as well as one col over
+ *   A5C6  and bx,0xf / jz 0xa5d2        ; y on a tile boundary -> same row only
+ *   A5CB  cmp byte [si+0x81],1 / jz     ; sub-tile y: one row DOWN, one col
+ *                                       ;   over first; a hit returns
+ *   A5D2  cmp byte [si+0x1],1           ; then the SAME row, one col over
  *   (mirrored on the left at si-1 / si+0x7f)
  *
- * — a diagonal look-ahead, not a same-row-only probe. `ZF` on return is the
+ * — a diagonal look-ahead AND the same row (the diagonal miss falls through
+ * to CS:0xA5D2), not a same-row-only probe. `ZF` on return is the
  * test result (byte == 1 -> wall); the caller's own `jnz` after the call
  * reads "not a wall -> keep flying".
  *
@@ -907,9 +908,13 @@ export function axeWallAt(x, y, dirSign, planeB) {
     const j = idx + off;
     return j >= 0 && j < planeB.length && planeB[j] === 1;
   };
+  /* ⚠️ With a sub-tile Y the diagonal cell is tested FIRST and, if it is
+   * not solid, the probe FALLS THROUGH to the same-row cell (CS:0xA5D0 `jz`
+   * skips only on a hit). Testing the diagonal alone missed PJOYL2's wall at
+   * cursor 1636. */
   return dirSign > 0
-    ? (ySub !== 0 ? at(129) : at(1))     // CS:0xA5CB (+0x81) / 0xA5D2 (+0x1)
-    : (ySub !== 0 ? at(127) : at(-1));   // CS:0xA5FF (+0x7f) / 0xA605 (-0x1)
+    ? ((ySub !== 0 && at(129)) || at(1))     // CS:0xA5CB (+0x81), then 0xA5D2 (+0x1)
+    : ((ySub !== 0 && at(127)) || at(-1));   // CS:0xA5FF (+0x7f), then 0xA605 (-0x1)
 }
 
 /**
