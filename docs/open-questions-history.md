@@ -103,6 +103,25 @@
 
 46. The object-activation gate `CS:0x1187` — **ported, `[PROVEN]` by capture parity.** The recompute-every-32-px rule was already documented `[STATIC]` (`docs/consumables-and-treasure.md`), but `gods-web` recomputed every tick. Porting the exact gate (the `DS:0x379` column latch, plus the five direct `0x1196` call sites) moved `PJOYG2`'s first random draw onto the same cursor as the DOSBox capture.
 
+47. Attract-demo parity (the `/goal` of 2026-09-27) — **in progress; `PJOYL1` and `PJOYG1` exact.** Both now match DOSBox on every tick in hero position, camera and the random stream. The tooling (all in `gods-web/tools/attract-capture/`):
+    - The captured random table is injected live at a chosen tape cursor.
+    - `sweep.py` logs every sound play (`CS:0x22CA`: id, caller) and random draw (`CS:0x3836`: caller).
+    - `peek.py` dumps DS ranges at chosen cursors.
+
+    Findings, each `[PROVEN]` against a capture:
+    - **Materialise flash.** The DS:0xAC90 pool plays sfx `0x446` (CS:0xFF59 / CS:0xB095), and ADL draws a random number for it. The entity only materialises (System A/B) or gets the −5 stagger (selector 2) when a record is free.
+    - **Spawn timing.** System A entities, and System B entities with a zero stagger, materialise at spawn. A new group is not ticked on its spawn tick (CS:0xED0C, CS:0xDF37).
+    - **System B step delay.** It starts at `10 − speed` (CS:0xFF3F).
+    - **Tick order.** The selector-2 walker (CS:0x0223) runs before the player, so its events materialise on the next tick.
+    - **Hurt sound.** Every landed AC59 hit plays `0x7822` (CS:0xACEE) unless CS:0x071D is enabled.
+    - **Trigger state.** It was stubbed (lives/health/score = 0), which fired the wrong PLEV2A trigger (97 instead of 96).
+    - **Shop parity.** The shop toggles DS:0x36C once per pass (CS:0x6C9E), the EXIT pass included; DS:0x36D is not toggled. Gravity (CS:0x48BB) and the rock burst pool read 0x36D.
+    - **Magic axe.** Gravity is `+2`, taking 2 back above 8 (odd speeds settle at 7), and it bounces off floors (CS:0xA6DA).
+    - **Grid scan.** The damage-grid scan rounds the box before its edge clip (CS:0xAA09).
+    - **World-1 guardian.** Ported; see `docs/guardians.md`.
+
+    Remaining: `PJOYL2` random parity reaches cursor 1623 (a System B pathfinder verdict differs there), and its hero stays exact to cursor 2078. `PJOYG2` and `PJOYG3` need the world-2 and world-3 guardians.
+
 ⚠️ `UNKNOWN_openlist_field4` was listed here *and* in the resolved list below. It is **closed** — the resolved entry is correct.
 
 ### Resolved by static (Ghidra + `ndisasm`) passes
