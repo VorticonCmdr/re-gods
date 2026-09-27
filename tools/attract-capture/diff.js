@@ -57,6 +57,7 @@ export async function runPort(name, maxTicks = 4000, rnd = []) {
   /* DS:0x2F0 carries over between fights (see game/guardian.js); start each
    * run from a known value so the harness is reproducible. */
   g.resetProcessJaw();
+  g.setLandFlag357(1);
   let first = await g.startAttractAt(STATE_OF[name]);
   const pending = rnd.slice();
   const inject = (cursor) => {

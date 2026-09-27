@@ -13,7 +13,7 @@ import { parseMap, TILE_COUNTS } from './formats/map.js';
 import { parseAtlas, cutAll } from './formats/atlas.js';
 import { Clock, LOGIC_HZ } from './engine/clock.js';
 import { Renderer } from './render/renderer.js';
-import { Player, ST, FOOTSTEP_SFX, CLIMB_STEP_SFX } from './game/player.js';
+import { Player, ST, FOOTSTEP_SFX, CLIMB_STEP_SFX, setLandFlag357 } from './game/player.js';
 import { sfxDrawsRandom } from './audio/adl-random.js';
 import { InventoryPanel, drawInventoryPanel } from './game/inventory-panel.js';
 import { runAllChecks, checkDescriptorAnchors, checkHeroSprites,
@@ -3896,6 +3896,9 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
       /* DS:0x2F0 lives for the process; the diff harness resets it to the
        * static-image 0 (a first attract cycle) or seeds a later cycle's value. */
       resetProcessJaw,
+      /* DS:0x357 lives for the process too; any attract cycle has landed
+       * before (PJOYL1 lands), so the harness seeds 1. */
+      setLandFlag357,
       enemiesB: () => enemies,
       guardian() {
         if (guardian && guardian.world === 2) {

@@ -189,6 +189,13 @@ export const ST = { GROUND: 'ground', JUMP: 'jump', FALL: 'fall', CLIMB: 'climb'
                      CROUCH: 'crouch', LAND: 'land' };
 
 /* Original state indices this port emits. See states.js for the proofs. */
+/* DS:0x357 — the landing pose's hold flag. Only landings write it (the
+ * state-11/12 and jump landings clear it, CS:0x4C2D/0x4D2F/0x4F64/0x5163/
+ * 0x526F/0x538C; the pose's first tick sets it), so it lives for the whole
+ * process and a state-10 landing, which does not clear it, inherits it. */
+let landFlag357 = 0;
+export const setLandFlag357 = (v) => { landFlag357 = v; };
+
 export const S = {
   WALK_L: 0, WALK_R: 1,
   TURN_LR: 2, TURN_RL: 3,   // turn left->right / right->left — CS:0x5dbb/0x5dde
@@ -1517,11 +1524,15 @@ export class Player {
    * pose, state 17 (left) / 16 (right), with [0x357] := 0 and CL := 0. The
    * fall-damage accumulator DS:0x176 is NOT cleared — the pose drains it.
    */
-  _enterLand(right) {
+  _enterLand(right, fromLadderFall = false) {
     this.state = ST.LAND;
     this.stateIndex = right ? S.LAND_R : S.LAND_L;
     this.facing = right ? +1 : -1;
-    this.landHeld = false;                 // DS:0x357
+    /* State 10's landing (CS:0x4C9B-0x4CC8) clears neither DS:0x357 nor CL,
+     * so it inherits the hold flag an earlier landing left (usually 1) and
+     * skips the hold tick. [PROVEN] against PJOYL3 975/976. */
+    if (fromLadderFall) return;
+    landFlag357 = 0;                        // DS:0x357
     this.phase = 0;
   }
 
@@ -1534,7 +1545,7 @@ export class Player {
    * and is walking (state 1) at 6.
    */
   _land() {
-    if (!this.landHeld) { this.landHeld = true; return; }
+    if (!landFlag357) { landFlag357 = 1; return; }
     this.fallDamage = (this.fallDamage || 0) - 4;
     if (this.fallDamage >= 0) return;
     const right = this.stateIndex === S.LAND_R;
@@ -1630,7 +1641,7 @@ export class Player {
        * and the state dispatcher runs CS:0x5020 / 0x5042 on later ticks,
        * which hold one tick and then drain DS:0x176 by 4 per tick before
        * handing back to walk (see `_land`). Live-confirmed by PJOYG3. */
-      this._enterLand(ladderFall ? this.ladderFacing >= 0 : this.stateIndex === S.FALL_R);
+      this._enterLand(ladderFall ? this.ladderFacing >= 0 : this.stateIndex === S.FALL_R, ladderFall);
       return;
     }
     if (ladderFall) return;                        // CS:0x4C8E / 0x4C98: no fire test
