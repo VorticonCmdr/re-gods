@@ -695,9 +695,11 @@ async function main() {
   /* The sound driver draws from the game's ONE random table for some sfx
    * (audio/adl-random.js) — so playing one must advance `rng` too, or every
    * later draw (enemy AI, spawns) reads a different number than DOS. */
+  let sfxTrace = null;   // ?debug: ids played since the last snap()
   {
     const rawPlay = audio.play.bind(audio);
     audio.play = (id, ...rest) => {
+      if (sfxTrace) sfxTrace.push(id);
       if (sfxDrawsRandom(id)) rng.next();
       return rawPlay(id, ...rest);
     };
@@ -3666,7 +3668,9 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
       r: rng.cursor,
       slots: arsenal.slots.map((sl) => `${sl.weapon}:${sl.live}`).join(' '),
       hp: health.target, ph: player.phase, pst: player.state, freeze: fx.freeze,
+      sfx: sfxTrace.splice(0).map((id) => id.toString(16)).join(','),
     });
+    sfxTrace = [];
     window.__gods = {
       snap,
       /* One slot's projectile records, for comparing against DS:0xDD10+. */
