@@ -172,6 +172,17 @@ The `.MAP`'s 200 six-byte object records are not what the game walks. `CS:0x8FEF
 1215  mov word [si+6],0x0            ; dead, or OUTSIDE the box -> CLEAR it
 ```
 
+**The gate, exactly** `[STATIC]`, with its effect `[PROVEN]` against a live capture:
+
+```
+1187  test [0xa],0x1f / jnz 1171     ; off a 32-px column: [0x379]:=0, then the Y test
+118F  cmp [0x379],0 / jnz 1176       ; on a column, already recomputed there: Y test
+1196  [0x379]:=1 ; [0x164]:=[0xc]    ; RECOMPUTE (fall-through from 118F)
+1176  |[0xc]-[0x164]| ; test ax,0x20 / jnz 1196   ; a BIT test, not >= 32
+```
+
+`DS:0x379` latches "already recomputed at this column", so a camera resting on a column boundary recomputes once, not every tick. `0x1196` is also called directly, skipping the gate, from five sites: level entry `CS:0x00B7` and `CS:0x901C`, respawn `CS:0x08EB`, teleport `CS:0x1015` and the sublevel-B switch `CS:0x4867`. Between recomputes nothing touches `+6`, so an object stays active after it leaves the box, and a freshly spawned one waits for the next recompute. `gods-web` used to recompute every tick. It now ports the gate, and the `PJOYG2` attract demo's first random draw (a world-2 nest spawn, which needs an active object) moved from cursor 2 to cursor 3, matching the DOSBox capture of the same demo.
+
 ⚠️ **It is not sticky** — an object that scrolls off has the flag cleared again. Three consumers gate on it: the draw walk (`CS:0x14A1`, as a **byte**), the crouch key pickup (`CS:0x6088`, as a **word**) and the burst settle, which creates objects with it already set. That byte/word asymmetry plus the chest path's whole-word writes raised the question of whether bits above 0 carry meaning — see `UNKNOWN_object_flag6_bits` below, now closed with the exhaustive attribution this document's `.DAT` word2 finding used as its gold standard.
 
 ### `UNKNOWN_object_flag6_bits` — CLOSED: bit 0 only `[STATIC]`

@@ -142,6 +142,8 @@ Table `SS:0x3592` (file `0x22AF2`). The evaluator **tail-jumps** into the handle
 | 11, 12, 13 | `3bcf`, `3bd0`, `3bc1` | — | **three separate single `C3` bytes** — no-ops | 6, 8, 77 |
 | 14 | `3bc2` | — | zero the 32-bit level timer | 13 |
 
+**Who reads the `DS:0x8f68` zones: `UNKNOWN_zone_scan_caller` — CLOSED `[PROVEN]`.** The hero-vs-zone scan `CS:0x4A6D` (box ±16 px in X, ±8 in Y, first match wins; it sets `[0x370]`, `[0x3A8]`=kind and `[0x22E]`=arg) has exactly one caller. A scan of the live `GAME.EXE` code segment (DOSBox `877:0000`, 64 KB) for every `E8`/`E9` rel16 landing on `0x4A6D`, and for every `6D 4A` word in CS and DS, finds only `CS:0x4A08`. That is inside idle's handler (state 26, `CS:0x49CA`), which tests RIGHT (→ state 28), LEFT (→ 27) and FIRE (→ the lever toggle `CS:0x1045`) first, each ending the tick. Only then does UP (`[0x382]` bit 0) call the scan, and a hit exits via `0x5E9B` before the ladder test at `CS:0x4A15`. **So a teleport or level exit fires only when an idle hero presses UP inside the zone.** `CS:0x0324` then acts on `[0x370]` later in the same main-loop pass. An earlier note said the caller sat in undisassembled bytes and ran the scan every tick; `gods-web` did the latter until this closure.
+
 `ACT13`'s 77 records are not inert: 52 carry real text (`"treasure room"`, `"you need the treasure key"`), so it is the **message / precondition-gate** verb. `ACT11`/`ACT12`'s 14 records have no text and are genuinely inert in the shipped data.
 
 **Clean negatives:** no action verb calls the random source `0x3836`, and none writes the lever table, the descriptors, or the entity array.
