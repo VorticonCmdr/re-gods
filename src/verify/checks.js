@@ -10,7 +10,7 @@ import { dclDecompress } from '../formats/dcl.js';
 import { DOOR_TILES, ZONE_TELEPORT, ZONE_EXIT, makeGates, makeActionContext,
          runAction, fireTrigger, SFX } from '../game/trigger-actions.js';
 import { RecordingAudioBus, SFX_VOICES } from '../audio/audio-bus.js';
-import { parseMusContainer, isSmf } from '../audio/mus-container.js';
+import { parseMusContainer, isSmf, expandBlob } from '../audio/mus-container.js';
 import { parseSmf, notesFromEvents, buildTempoMap, ticksToSeconds } from '../audio/smf-parser.js';
 import { KillSmoke, SLOTS as SMOKE_SLOTS, FRAMES as SMOKE_FRAMES,
          SPRITE_BASE as SMOKE_SPRITE_BASE,
@@ -31,7 +31,7 @@ import { ShopScreen, GRID_COLS, GRID_ROWS, GRID_SLOTS, EXIT_SLOT, DATA_SLOTS,
   WEAPON_ID_BASE, PRICES, BUY_CONFIRM_SFX } from '../game/shop.js';
 import { TallyScreen, timeBonus, healthBonus, moneyBonus, POOL_STEP,
          WAIT_AFTER_SUMMARY_TICKS, WAIT_AFTER_COUNTDOWN_TICKS,
-         SFX_EVERY_N_STEPS, CHA_CHING_SFX } from '../game/tally.js';
+         SFX_EVERY_N_STEPS, CHA_CHING_SFX, TALLY_FANFARE_SFX, TALLY_FANFARE_SMALL_SFX } from '../game/tally.js';
 import { consumesKey } from '../game/trigger.js';
 import { PI1_SIZE, decodePI1, TILE_COUNT } from '../formats/pi1.js';
 import { decodeStatusPanel, PANEL_W, PANEL_H, PANEL_Y0 } from '../game/status-panel.js';
@@ -16421,6 +16421,36 @@ export async function checkMusic(fetchRaw) {
       rlBlobs.length === 63 && rlOther.join() === '21', `blobs=${rlBlobs.length} other=${rlOther.join()}`);
   }
 
+  /* UNKNOWN_mus_type2 — CLOSED: the non-SMF blobs are word-dictionary-
+   * compressed SMF (mus-container.js's expandBlob, PPLAYER.BIN 0000:12e8 /
+   * 0000:13df). Expanding must land on a real MThd AND parse to End-of-Track
+   * — a wrong dictionary width or a wrong lead-byte offset fails both. */
+  {
+    const facts = [];
+    for (const i of [19, 20, 40]) {
+      const smf = expandBlob(blobs[i]);
+      if (!smf) { facts.push(`${i}:no MThd`); continue; }
+      const { format, division, events } = parseSmf(smf);
+      const ons = events.filter((e) => e.type === 'noteOn').length;
+      const tempos = events.filter((e) => e.type === 'tempo').length;
+      const ended = events.some((e) => e.type === 'end');
+      facts.push(`${i}:f${format}/d${division}/on${ons}/t${tempos}/${ended ? 'EOT' : 'noEOT'}`);
+    }
+    check('PGODS.MUS blobs 19/20/40 expand (dictionary at blob+1, index stream at '
+      + 'blob+0x201, lead byte skipped for tag \'c\') to format-0 SMF, division 420, '
+      + 'with the exact note/tempo counts of the Python decode, each reaching End-of-Track',
+      facts.join(' ') === '19:f0/d420/on90/t1/EOT 20:f0/d420/on126/t5/EOT 40:f0/d420/on90/t1/EOT',
+      facts.join(' '));
+    const rlSmf = expandBlob(parseMusContainer(dclDecompress(await fetchRaw('game/PGODSRLA.RL')).data)[21]);
+    const rlEv = rlSmf ? parseSmf(rlSmf).events : [];
+    check('PGODSRLA.RL blob 21 (the Roland file\'s own dictionary blob) expands to SMF '
+      + 'too — division 192, 156 note-ons, End-of-Track',
+      !!rlSmf && parseSmf(rlSmf).division === 192
+      && rlEv.filter((e) => e.type === 'noteOn').length === 156 && rlEv.some((e) => e.type === 'end'));
+    check('expandBlob leaves an ordinary SMF blob untouched (identity, same bytes)',
+      expandBlob(blobs[25]) === blobs[25]);
+  }
+
   /* PGODSRLB-G.RL (six more files, same letter family) are NOT staged or
    * fetched by this check — GAME.EXE never loads any of them for real play
    * (this module's own header), so re-deriving their shape here would only
@@ -16466,10 +16496,11 @@ export async function checkMusic(fetchRaw) {
     KILL_SFX, HURT_SFX, FIRE_SFX,
     0x020e /* FOOTSTEP */, 0x0240 /* CLIMB_STEP */, 0x021d /* TERRAIN */,
     0x0209 /* AXE_BOUNCE */, 0x0609 /* BOMB_THUD */, 0x1022 /* BOMB_DETONATE */,
+    TALLY_FANFARE_SFX, TALLY_FANFARE_SMALL_SFX,
   ];
   const unplayable = wiredSfxIds.filter((id) => {
-    const blob = blobs[id & 0x7f];
-    if (!blob || !isSmf(blob)) return true;
+    const blob = blobs[id & 0x7f] && expandBlob(blobs[id & 0x7f]);
+    if (!blob) return true;
     const seq = buildSfxSequence(blob);
     return !seq || seq.notes.length === 0 || seq.notes.every((n) => !n.registers);
   });

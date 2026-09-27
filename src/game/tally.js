@@ -109,6 +109,19 @@ export const SFX_EVERY_N_STEPS = 3;
  * main.js to play it through. */
 export const CHA_CHING_SFX = 0x52f;
 
+/* The tally screen's own opening fanfare, played ONCE on entry —
+ * `FUN_1000_67f5`, called only from `CS:0x657B` (right after `FUN_1000_22d0`
+ * and the sound-export far call at `CS:0x6576`, before any tally drawing):
+ * `cmp word[si+2],1000 / jl` picks `0x7914` (blob 20) when the destination
+ * record's `param2` is >= 1000, else `0x7928` (blob 40). Every real LEVEL
+ * record has param2 2500, so a genuine level completion plays blob 20. Both
+ * blobs are dictionary-compressed SMF sequences — see mus-container.js's
+ * `expandBlob`. */
+export const TALLY_FANFARE_SFX = 0x7914;
+export const TALLY_FANFARE_SMALL_SFX = 0x7928;
+/** CS:0x67F5 — the fanfare id for a destination record's `param2`. */
+export function tallyFanfareSfx(param2) { return param2 >= 1000 ? TALLY_FANFARE_SFX : TALLY_FANFARE_SMALL_SFX; }
+
 export const POOL_DIGITS = 6;
 export const POOL_X0 = 172, POOL_Y = 136, POOL_DIGIT_STEP = 16;   // CS:0x67da, live-confirmed layout
 

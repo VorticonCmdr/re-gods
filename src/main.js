@@ -95,9 +95,9 @@ import { decodeJoyRecording } from './formats/joy.js';
 import { CYCLE, JOYG_SHOWCASE_SPAWN, JOYG_SHOWCASE_LOADOUT, fileNameFor, nextState } from './game/attract.js';
 import { ShopScreen, BUY_CONFIRM_SFX } from './game/shop.js';
 import { Intro, buildIntroAssets } from './game/intro.js';
-import { TallyScreen, CHA_CHING_SFX } from './game/tally.js';
+import { TallyScreen, CHA_CHING_SFX, tallyFanfareSfx } from './game/tally.js';
 import { WebAudioBus } from './audio/audio-bus.js';
-import { parseMusContainer, isSmf } from './audio/mus-container.js';
+import { parseMusContainer, isSmf, expandBlob } from './audio/mus-container.js';
 import { MusicPlayer } from './audio/music-player.js';
 import { PcmPlayer } from './audio/pcm-player.js';
 import { parseSbVoice, SB_VOICE_SAMPLE_RATE_HZ } from './formats/sb-voice.js';
@@ -525,7 +525,9 @@ async function main() {
   const musicPlayer = new MusicPlayer();
   const musicSel = $('musicTrack');
   fetchRaw('game/PGODS.MUS').then((raw) => {
-    const blobs = parseMusContainer(dclDecompress(raw).data);
+    /* expandBlob: the 3 dictionary-compressed blobs (19/20/40) come back
+     * as plain SMF too — see mus-container.js. */
+    const blobs = parseMusContainer(dclDecompress(raw).data).map((b) => expandBlob(b) ?? b);
     /* Also feeds audio.setPgodsBlobs() below — the SAME blobs this dev
      * music picker already parses double as the real per-id SFX instrument
      * source (formats/sfx-instrument.js's own header has the full
@@ -533,7 +535,7 @@ async function main() {
     audio.setPgodsBlobs(blobs);
     musicSel.innerHTML = '<option value="-1">(none)</option>';
     blobs.forEach((blob, i) => {
-      if (!isSmf(blob)) return;   // the 3 mus_type2 blobs (19/20/40) — undecoded, see smf-parser.js
+      if (!isSmf(blob)) return;
       const o = document.createElement('option');
       o.value = String(i);
       o.textContent = `track ${i}`;
@@ -2354,6 +2356,7 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
             moneyTotal: purse.total,
             password: passwordReveal,
           });
+          audio.play(tallyFanfareSfx(dest.param2));   // CS:0x657B -> FUN_1000_67f5, once on entry
           const finishTallyScreen = () => {
             if (fx2.clearKeys) clearNonPotionInventory(inventory, level.cats);
             if (fx2.poolReset) {

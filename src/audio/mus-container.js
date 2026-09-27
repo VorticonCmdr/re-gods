@@ -34,6 +34,41 @@ export const isSmf = (blob) => (
 );
 
 /**
+ * The non-SMF blobs (`PGODS.MUS` 19/20/40, `PGODMUS2.MUS`'s only blob, and
+ * index 21 of every `PGODSRL?.RL`) are NOT a different music format: they are
+ * ordinary SMF files, WORD-DICTIONARY COMPRESSED. `Gods/docs/drivers-and-
+ * memory.md`'s `UNKNOWN_mus_type2` closure has the full citation; in short,
+ * `PPLAYER.BIN`'s own byte accessor (`0000:12e8`, taken whenever the tag
+ * byte stored at `[bp+0x8b]` by `0000:13ac` is `'C'`/`'c'`) reads logical
+ * byte `i` as
+ *
+ *     word = dict[ blob[0x201 + (i >> 1)] ],   dict = 256 × u16 LE at blob+1
+ *     byte = (i & 1) ? word >> 8 : word & 0xff
+ *
+ * and `0000:13df`-`13e8` starts the stream at logical byte 1 for tag `'c'`,
+ * 0 for `'C'` (the dictionary pairs bytes, so an odd-length SMF needs one
+ * lead pad byte). Expanding that way yields `MThd`...`MTrk` directly — all 11
+ * such blobs shipped in the game parse cleanly to End-of-Track.
+ *
+ * @param {Uint8Array} blob one container blob
+ * @returns {?Uint8Array} the SMF bytes (the blob itself if already SMF), or
+ *   null if the blob is neither shape
+ */
+export function expandBlob(blob) {
+  if (isSmf(blob)) return blob;
+  if (blob.length < 0x202 || (blob[0] !== 0x43 && blob[0] !== 0x63)) return null;
+  const n = blob.length - 0x201;
+  const out = new Uint8Array(2 * n);
+  for (let k = 0; k < n; k++) {
+    const v = blob[0x201 + k];
+    out[2 * k] = blob[1 + 2 * v];
+    out[2 * k + 1] = blob[2 + 2 * v];
+  }
+  const smf = out.subarray(blob[0] === 0x63 ? 1 : 0);
+  return isSmf(smf) ? smf : null;
+}
+
+/**
  * Split a decompressed `.MUS`/`.RL` buffer into its blobs.
  * @param {Uint8Array} data the DCL-decompressed container bytes
  * @returns {Uint8Array[]} one subarray per blob, in container order

@@ -10,7 +10,7 @@
  * FORMAT guarantees it stays that way, but every real file this project has
  * actually read reduces to the simple case.
  *
- * Deliberately NOT attempted: the 3 non-SMF blobs in `PGODS.MUS` (indices
+ * (Superseded: see mus-container.js expandBlob.) Originally NOT attempted: the 3 non-SMF blobs in `PGODS.MUS` (indices
  * 19/20/40) use the separate, only-partially-decoded `mus_type2` re-encoding
  * `drivers-and-memory.md` documents under `UNKNOWN_mus_type2` — `isSmf`
  * (mus-container.js) is how a caller tells them apart and skips them.
