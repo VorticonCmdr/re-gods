@@ -15,7 +15,7 @@
  * ── THE POOL, CS:0x8306 / 0x835C ─────────────────────────────────────────
  * 10 records of 14 bytes at DS:0xCF40:
  *   +0 x  +2 y (world)  +4 hp (negative = free; 0x19 at spawn)
- *   +6 state: <0 dormant, >0 rising, 0 flying, 0x1234 dying (death frame +8)
+ *   +6 state: <0 dormant, 0x2345 rising, 0..3 flying (flap), 0x1234 dying
  *   +8 facing sprite offset (0 / 4), or the death frame
  *   +A vx  +C vy
  * CS:0x835C is patched to RET when the pool is empty and to NOP by the spawn.
@@ -74,7 +74,11 @@ export class Cf40 {
     if (s.state === DYING) { this.#dying(s, cam, drawn); return; }
     this.#hit(s, o);                            // CS:0x8394 `call 0x8591`
     if (s.state === DYING) { this.#dying(s, cam, drawn); return; }
-    if (s.state > 0) {                          // CS:0x83A1 `jng` -> 0x8460: rising
+    /* CS:0x83A1 `jng` takes its flags from CS:0x8397 `cmp [si+6],0x1234`,
+     * so only the wake value 0x2345 rises; 0..3 is the flight's flap
+     * counter. [PROVEN] live: PJOYL3 925-942, DS:0xCF40 cycles 0..3 while
+     * moving (-3,-2) every tick. */
+    if (s.state > DYING) {                      // -> CS:0x8460: rising
       if (!freeze) s.y += s.vy;
       const sx = s.x - cam.x, sy = s.y - cam.y;
       let sprite = SPRITE_BASE;

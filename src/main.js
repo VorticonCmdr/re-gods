@@ -3933,6 +3933,7 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
        * before (PJOYL1 lands), so the harness seeds 1. */
       setLandFlag357,
       enemiesB: () => enemies,
+      cf40: () => cf40.slots.map((q) => `${q.x},${q.y} hp${q.hp} st${q.state} f${q.face} v${q.vx},${q.vy}`),
       guardian() {
         if (guardian && guardian.world === 2) {
           const G = guardian;
