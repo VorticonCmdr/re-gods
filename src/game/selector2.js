@@ -728,6 +728,15 @@ export class SelectorTwoSpawns {
     return { drawn };
   }
 
+  /** CS:0xB095 — sfx 0x446 (ADL draws a random number for it), then a
+   *  record in the DS:0xAC90 flash pool (game/flash.js). Only if one is free
+   *  does the entity's stagger become -5 (CS:0xB0B6): five more ticks, each
+   *  counted up by CS:0xAE11, before it acts. */
+  #flash(e, opts) {
+    if (opts.sfx) opts.sfx(SFX_MATERIALISE);
+    if (opts.flashPool && opts.flashPool.alloc(e.x, e.y)) e.stagger = -5;
+  }
+
   /** CS:0xADAE-0xAE0E. */
   #materialise(slot, opts = {}) {
     const d = slot.desc;
@@ -739,8 +748,8 @@ export class SelectorTwoSpawns {
         stagger, reloadTimer: (16 - d.reloadByte) << 2,
       });
       /* CS:0xADC7-0xADCF — `or cx,cx / jnz / call 0xb095`: an entity whose
-       * stagger is 0 flashes at once, playing sfx 0x446 (a random draw). */
-      if (stagger === 0 && opts.sfx) opts.sfx(SFX_MATERIALISE);
+       * stagger is 0 flashes at once. */
+      if (stagger === 0) this.#flash(slot.entities[slot.entities.length - 1], opts);
       stagger += d.staggerStep;
     }
     slot.materialised = true;
@@ -751,12 +760,10 @@ export class SelectorTwoSpawns {
   #stepAlive(slot, e, cam, hero, freezeTimer, health, grid, decodeTag, tock, fire, spawnHazard, drawn, opts) {
     if (e.stagger > 0) {                                    // CS:0xAE41/0xAE44
       e.stagger -= 1;
-      if (e.stagger === 0 && opts.sfx) opts.sfx(SFX_MATERIALISE);   // CS:0xAE46 call 0xb095
+      if (e.stagger === 0) this.#flash(e, opts);            // CS:0xAE46 call 0xb095
       return;
     }
-    if (e.stagger < 0) { e.stagger += 1; return; }         // CS:0xAE3F/0xAE11 — reachable only if
-                                                            // something else drives it negative;
-                                                            // materialise never does, kept for parity
+    if (e.stagger < 0) { e.stagger += 1; return; }         // CS:0xAE3F/0xAE11 — after a flash (-5)
 
     this.#cacheScratchX(e, cam);                            // CS:0xAE50, DS:0x200
 

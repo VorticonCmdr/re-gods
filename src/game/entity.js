@@ -333,9 +333,8 @@ export class EntityB {
     this.hp = hp;               // descriptor +0x01
     this.timer = delay;         // +0x06, the per-entity stagger
     /* CS:0xECA4-0xECAB — `mov [di+6],dx / or dx,dx / jnz / call 0xff59`: a
-     * zero stagger materialises AT SPAWN rather than on the first tick. */
-    this.flash = false;
-    if (delay === 0) this.materialise();
+     * zero stagger asks for the flash AT SPAWN rather than on the first tick. */
+    this.wantsFlash = delay === 0;
     this.reloadTimer = 0;       // +0xe — CS:0xe659's per-entity fire/reload timer
     this.deathCacheX = null;    // CS:0xF03A-F042, +8 baked in — see the note above EntityB
     this.deathCacheY = null;
@@ -361,15 +360,14 @@ export class EntityB {
 
   get animBase() { return MODE_TABLE[this.mode].animBase; }
 
-  /** CS:0xFF59 — enter MATERIALISING (`[di+8]=-3`, `[di+6]=5`). It also
-   *  plays sfx 0x446 (CS:0xFF5A) and starts a flash in the DS:0xAC90 pool.
-   *  The flash is not drawn here, but the SOUND matters: ADL draws a random
-   *  number for it (audio/adl-random.js). `flash` asks the caller to play
-   *  it at once, so the draw lands in the original's order. */
+  /** CS:0xFF59's success arm: MATERIALISING (`[di+8]=-3`, `[di+6]=5`). The
+   *  entity only raises `wantsFlash`; the caller plays sfx 0x446 (ADL draws a
+   *  random number for it), asks the DS:0xAC90 pool (game/flash.js) for a
+   *  record, and calls this only if it got one. A full pool leaves the entity
+   *  WAITING with its counter at 0, so the next `dec` wraps to 0xFFFF. */
   materialise() {
     this.state = EST.MATERIALISING;
     this.timer = MATERIALISE_TICKS;
-    this.flash = true;
   }
 
   /**
@@ -397,7 +395,8 @@ export class EntityB {
      *   materialising (-3): 5 ticks, then become alive with the descriptor HP
      * The materialise effect itself (CS:0xff59) is not ported. */
     if (this.state === EST.WAITING) {
-      if (--this.timer <= 0) this.materialise();            // CS:0xFF4B-0xFF53
+      this.timer = (this.timer - 1) & 0xffff;              // CS:0xFF4B `dec` / `jz`
+      if (this.timer === 0) this.wantsFlash = true;         // CS:0xFF53 call 0xff59
       return null;
     }
     if (this.state === EST.MATERIALISING) {

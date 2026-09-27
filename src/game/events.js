@@ -80,6 +80,7 @@ export const SELECTOR_TABLE = [
   { sel: 11, handler: 0xc49c, name: 'install per-world scripted routine' },
 ];
 export const SELECTOR_CHECKPOINT = 6;   // CS:0x38F5 — game/progress.js
+export const SELECTOR_GUARDIAN = 11;    // CS:0xC49C — game/guardian.js
 export const SELECTOR_TRIGGER = 3;   // CS:0x603A `dec ax` — see the header
 export const selectorName = (sel) =>
   (SELECTOR_TABLE[sel - 1] && SELECTOR_TABLE[sel - 1].name) || `out of range (${sel})`;
@@ -323,6 +324,17 @@ export class EventRunner {
      * once. */
     if (ev.selector === SELECTOR_CHECKPOINT) {
       if (this.onCheckpoint) this.onCheckpoint();
+      return null;
+    }
+
+    /* Selector 11 — CS:0xC49C `mov word [si],0xffff` consumes the event, then
+     * installs the world's guardian. `onGuardian` returns false for a world
+     * whose guardian is not ported, and the event is counted as unhandled. */
+    if (ev.selector === SELECTOR_GUARDIAN && this.onGuardian) {
+      this.consumedEvents.add(id);
+      if (!this.onGuardian(ev.param)) {
+        this.unhandled.set(ev.selector, (this.unhandled.get(ev.selector) || 0) + 1);
+      }
       return null;
     }
 

@@ -6,8 +6,8 @@
 --   0x192, lives 0x224, death counter 0x24C, script mode 0x34, respawn X
 --   0x16E), as cursor:name=value.
 -- gd: while DS:0x34 ~= 0 (a guardian is installed, selector 11), one entry
---   per tick: cursor:health 0x28A,x 0x28C,y 0x28E,frame 0x290,script 0x292,
---   then the 15 x 10-byte projectile pool DS:0xD030 as hex.
+--   per tick: cursor:health 0x28A,x 0x28C,frame 0x290,script 0x292, then the
+--   15 x 10-byte projectile pool DS:0xD030 summarised as live-count,checksum.
 -- rnd: the 512-byte random table DS:0x7E14 (hex) with the tape cursor and
 --   DS:0x160 at the moment it was seen — at playback start and again
 --   whenever its first word changes (a level load regenerates it).
@@ -32,12 +32,18 @@ rnd[1] = cur .. ':' .. rw(S, 0x160) .. ':' .. tablehex()
 local a, b2, c, d, e, f, g, r = 0, 0, 0, 0, 0, 0, -1, 0
 local hp, lv, dt, m34, rx = -1, -1, -1, -1, -1
 local gd, gnow = {}, nil
--- The pool is read raw every frame and only hexed once per tick (at the
--- cursor change), to stay inside the Lua step budget.
+-- The pool is read raw every frame and only summarised once per tick (at
+-- the cursor change), to stay inside the Lua step budget.
 local function gdhex(g)
-  local out = {}
-  for i = 1, 150 do out[i] = HEX[string.byte(g[6], i)] end
-  return g[1] .. ',' .. g[2] .. ',' .. g[3] .. ',' .. g[4] .. ',' .. g[5] .. ',' .. table.concat(out)
+  -- The pool summarised, to stay under the 64 KB script output: the number
+  -- of live records (+6 >= 0) and the sum of their x+y+vy+vx words.
+  local n, sum, p = 0, 0, g[6]
+  local function w(i) local v = string.byte(p, i) + 256 * string.byte(p, i + 1); if v >= 32768 then v = v - 65536 end; return v end
+  for k = 0, 14 do
+    local o = k * 10 + 1
+    if w(o + 6) >= 0 then n = n + 1; sum = sum + w(o) + w(o + 2) + w(o + 4) + w(o + 8) end
+  end
+  return g[1] .. ',' .. g[2] .. ',' .. g[4] .. ',' .. g[5] .. ',' .. n .. ',' .. sum
 end
 while rb(S, 0x3BD) ~= 0 do
   local k = rw(S, 0x282)

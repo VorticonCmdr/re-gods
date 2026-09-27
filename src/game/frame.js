@@ -100,7 +100,8 @@ export function stepHeroFrame({ input, arsenal, grid, player, map, cam,
                                blocks = null, debris = null, tock = 1,
                                inventory = null, levers = null,
                                leverToggle = null, invuln = false,
-                               zoneScan = null, beforePlayer = null }) {
+                               zoneScan = null, beforePlayer = null,
+                               objectPass = true }) {
   arsenal.latchTick(input.fire);                                    // 019D
   /* CS:0x49F9 — the SAME "one action per press" shape as the weapon latch
    * above, cleared every tick fire is not held. Unconditional, regardless
@@ -110,13 +111,15 @@ export function stepHeroFrame({ input, arsenal, grid, player, map, cam,
   /* CS:0x0206 -> CS:0x1432, the object pass. Weapon pickup lives here, and it
    * runs BEFORE the projectile step — so a weapon collected this tick has its
    * slot cleared before anything could have moved in it. */
-  const picked = objects
+  /* `objectPass` false: DS:0x34's CS:0x01FC skip (a guardian outside world
+   * 2) — no pickups and no chest burst this tick. */
+  const picked = objects && objectPass
     ? stepPickups(objects, player, arsenal, bar, { cats, health, treasure })
     : { taken: [], consumed: [], treasures: [] };
   /* CS:0x132D, the chest burst. It sits in the same object pass, and it runs
    * AFTER the pickup walk that can spawn it — so an item thrown out of a chest
    * this tick does not move until the next one. */
-  const loot = burst ? burst.step(alloc) : { drawn: [], settled: [] };
+  const loot = burst && objectPass ? burst.step(alloc) : { drawn: [], settled: [] };
   /* CS:0x01DF — the destructible-block updater runs EARLY, before the mode
    * dispatch at CS:0x01E5 and so before the object pass, the projectiles and
    * the player. A block queued by a shot this tick therefore does not begin

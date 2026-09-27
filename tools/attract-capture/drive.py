@@ -31,6 +31,8 @@ while want:
         except Exception as e: print('status retry', e, flush=True); continue
         if st.get('state') in ('completed', 'error'): break
     if st.get('state') == 'error': print('ERR', st, flush=True); continue
+    if st.get('output_truncated'):
+        print('TRUNCATED output (64 KB script limit) - not saved', flush=True); continue
     name = NAMES[st['output']['cycler']]
     if name not in want: print('skip', name, flush=True); continue
     json.dump(st, open(name + '.raw.json', 'w'))

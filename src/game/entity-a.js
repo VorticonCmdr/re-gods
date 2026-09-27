@@ -1028,9 +1028,8 @@ export class EntityA {
     this.timer = delay;
     /* CS:0xDED9-0xDEE0 — the same `or dx,dx / jnz / call 0xff59` as System
      * B, and DX is always 0 in System A's spawn loop, so every System-A
-     * entity materialises AT SPAWN, with the 0x446 flash sound. */
-    this.flash = false;
-    if (delay === 0) this.materialise();
+     * entity asks for its flash AT SPAWN. */
+    this.wantsFlash = delay === 0;
     /* strategy1's own bookkeeping (CS:0xe9da): which zone the last goal was
      * picked in, and whether that goal is still "fresh" (i.e. not yet
      * superseded by a later re-roll). -1 is this file's own existing
@@ -1078,12 +1077,11 @@ export class EntityA {
 
   get alive() { return this.state > 0; }
 
-  /** CS:0xFF59, shared with System B (entity.js's `materialise`): -3, a
-   *  5-tick countdown, and the 0x446 sound the caller plays via `flash`. */
+  /** CS:0xFF59's success arm, shared with System B (entity.js's
+   *  `materialise`, which documents the `wantsFlash` handshake). */
   materialise() {
     this.state = EST.MATERIALISING;
     this.timer = MATERIALISE_TICKS;
-    this.flash = true;
   }
 
   /**
@@ -1118,7 +1116,8 @@ export class EntityA {
   tick(hero, desc, draw, frozen = false, camera = null, markers = null, grid = null, objects = null) {
     /* Pre-life FSM — see UNKNOWN_sysA_prelife_driver in the file header. */
     if (this.state === EST.WAITING) {
-      if (--this.timer <= 0) this.materialise();            // CS:0xE31A-0xE322
+      this.timer = (this.timer - 1) & 0xffff;              // CS:0xE31A `dec` / `jz`
+      if (this.timer === 0) this.wantsFlash = true;         // CS:0xE322 call 0xff59
       return null;
     }
     if (this.state === EST.MATERIALISING) {

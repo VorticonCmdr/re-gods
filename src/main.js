@@ -24,6 +24,8 @@ import { runAllChecks, checkDescriptorAnchors, checkHeroSprites,
          checkMapWriter,
          checkShop, checkMusic } from './verify/checks.js';
 import { EventRunner, parsePalfils, palfilsNameFor } from './game/events.js';
+import { Guardian } from './game/guardian.js';
+import { FlashPool } from './game/flash.js';
 import { LineBarriers, parseLineBarrierRecords } from './game/line-barriers.js';
 import { makeActionContext, makeGates, DOOR_TILES,
          ACTION_NAMES } from './game/trigger-actions.js';
@@ -1036,7 +1038,23 @@ async function main() {
    * instantiated from this file before this pass — a shot the terrain
    * stopped left no puff behind it. */
   let debris = new Debris();
+  /* Selector 11's guardian (game/guardian.js). Non-null means DS:0x34 = 1:
+   * the main loop swaps the enemy suite for the guardian's driver. A new
+   * level (every wireSpawn) starts without one. */
+  let guardian = null, guardianFx = [];
+  /* DS:0xAC90 — the materialise flash pool (game/flash.js). */
+  const flashPool = new FlashPool();
+  let flashFx = [];
   const wireSpawn = () => {
+    guardian = null; guardianFx = [];
+    flashPool.reset(); flashFx = [];
+    /* Selector 11 — CS:0xC49C. Only world 1's guardian is ported; the other
+     * worlds' events are still counted as unhandled. */
+    events.onGuardian = () => {
+      if (level.world !== 1) return false;
+      guardian = new Guardian(1);
+      return true;
+    };
     events.onSpawnB = (param) => {
       const d = level.groupsB[param];
       if (!d || !d.live) return;
@@ -1075,7 +1093,12 @@ async function main() {
   let clamped = 0;
   /* CS:0xFF59's sound, played the moment an entity starts materialising
    * (entity.js's `materialise`), so its random draw keeps the original's order. */
-  const playFlash = (e) => { if (e.flash) { e.flash = false; audio.play(SFX_MATERIALISE); } };
+  const playFlash = (e) => {
+    if (!e.wantsFlash) return;
+    e.wantsFlash = false;
+    audio.play(SFX_MATERIALISE);                     // CS:0xFF5A, before the search
+    if (flashPool.alloc(e.x, e.y)) e.materialise();  // CS:0xFF64 `jc` skips it when full
+  };
   const runSpawns = () => {
     for (const slot of slots.slots) {
       if (slot.state !== 2) continue;
@@ -2186,6 +2209,12 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
        * tick, so every consumer ran on the opposite parity; PJOYG3's opening
        * fall (80->85->90 in DOSBox) is what exposed it. */
       tock ^= 1;
+      /* DS:0x34 — a guardian is installed (selector 11). CS:0x01FC skips the
+       * object pass (activation, walk, popup, chest burst) outside world 2;
+       * CS:0x0223/0x0226/0x0272 skip the turrets, rock pools, kill smoke and
+       * the enemy suite, which the guardian replaces. */
+      const gm = guardian !== null;
+      const objPass = !(gm && level.world !== 2);
       /* Per-tick order is the original's: snapshot the scroll origin, run the
        * state machine, probe plane B, then update the camera (CS:0x023f ->
        * 0x4993 -> 0x5ea0 -> 0x5ea4). Everything drawn this frame uses the
@@ -2208,45 +2237,47 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
        * CS:0x1187 (`activationDue`): the pass only runs when the camera
        * reaches a new 32 px column or moves 32 px in Y. A fresh level gets a
        * forced gate; respawn/teleport set `force` (their direct 0x1196 calls). */
-      level.activationGate ??= newActivationGate();
-      if (activationDue(level.activationGate, cam.snapX, cam.snapY)) {
-        activateObjects(level.drawObjects, activationBox(cam.snapX, cam.snapY), level.cats);
-      }
-      /* "in the DOS version the items don't stay up in the air but fall down
-       * once they come into view" — CS:0x1511-0x1631, one object per call,
-       * BEFORE the pickup contact test below (same order as the original's
-       * single per-object walk: fall/bounce first, CS:0x168E's pickup call
-       * second, same object, same tick). Only objects `activateObjects` just
-       * armed (weapons, or category < 3) carry `fallDirty` at all. */
-      for (const o of level.drawObjects) {
-        if (o.dead || !(o.flag6 & 1)) continue;
-        stepObjectFall(level.map, o);
-      }
-      /* CS:0x160D, the SAME per-object body as the fall physics above (one
-       * function, one gate) — every on-screen category<3 object appends a
-       * marker every frame. See game/markers.js. */
-      stepMarkers(level.drawObjects, level.cats, markerList,
-                  { x: cam.snapX, y: cam.snapY });
-      /* CS:0x1C91 `call 0x8611` — the world-2 nest creature's spawn, reached
-       * from the object walk's category-4/sprite-0x11d dispatch arm, NOT
-       * from the activation pass itself (a different per-frame walk over the
-       * same array). Reproduces the documented shipped bug faithfully: the
-       * object is marked dead here whether or not the spawn actually
-       * succeeded (wrong world, or all 10 nest slots already busy). */
-      for (const o of level.drawObjects) {
-        if (o.dead || o.type !== 115 || !(o.flag6 & 1)) continue;
-        nests.spawn(o.x - cam.snapX, o.y, cam.snapX);
-        o.dead = true;
-      }
-      /* CS:0x1C7D `call 0x7f0d` — the world-3 DS:0xce64 creature's own spawn,
-       * reached the same way as the nest's (object-walk, category-4 arm).
-       * ⚠️ UNLIKE THE NEST, this object is only marked dead on a SUCCESSFUL
-       * spawn — ce64.js's own header: "the sole caller CS:0x1C7D correctly
-       * retries a full pool rather than consuming the object", the opposite
-       * of the nest's own documented shipped bug just above. */
-      for (const o of level.drawObjects) {
-        if (o.dead || o.type !== CE64_OBJECT_TYPE || !(o.flag6 & 1)) continue;
-        if (ce64Creatures.spawn(o.x - cam.snapX, o.y, cam.snapX)) o.dead = true;
+      if (objPass) {                                   // CS:0x01FC
+        level.activationGate ??= newActivationGate();
+        if (activationDue(level.activationGate, cam.snapX, cam.snapY)) {
+          activateObjects(level.drawObjects, activationBox(cam.snapX, cam.snapY), level.cats);
+        }
+        /* "in the DOS version the items don't stay up in the air but fall down
+         * once they come into view" — CS:0x1511-0x1631, one object per call,
+         * BEFORE the pickup contact test below (same order as the original's
+         * single per-object walk: fall/bounce first, CS:0x168E's pickup call
+         * second, same object, same tick). Only objects `activateObjects` just
+         * armed (weapons, or category < 3) carry `fallDirty` at all. */
+        for (const o of level.drawObjects) {
+          if (o.dead || !(o.flag6 & 1)) continue;
+          stepObjectFall(level.map, o);
+        }
+        /* CS:0x160D, the SAME per-object body as the fall physics above (one
+         * function, one gate) — every on-screen category<3 object appends a
+         * marker every frame. See game/markers.js. */
+        stepMarkers(level.drawObjects, level.cats, markerList,
+                    { x: cam.snapX, y: cam.snapY });
+        /* CS:0x1C91 `call 0x8611` — the world-2 nest creature's spawn, reached
+         * from the object walk's category-4/sprite-0x11d dispatch arm, NOT
+         * from the activation pass itself (a different per-frame walk over the
+         * same array). Reproduces the documented shipped bug faithfully: the
+         * object is marked dead here whether or not the spawn actually
+         * succeeded (wrong world, or all 10 nest slots already busy). */
+        for (const o of level.drawObjects) {
+          if (o.dead || o.type !== 115 || !(o.flag6 & 1)) continue;
+          nests.spawn(o.x - cam.snapX, o.y, cam.snapX);
+          o.dead = true;
+        }
+        /* CS:0x1C7D `call 0x7f0d` — the world-3 DS:0xce64 creature's own spawn,
+         * reached the same way as the nest's (object-walk, category-4 arm).
+         * ⚠️ UNLIKE THE NEST, this object is only marked dead on a SUCCESSFUL
+         * spawn — ce64.js's own header: "the sole caller CS:0x1C7D correctly
+         * retries a full pool rather than consuming the object", the opposite
+         * of the nest's own documented shipped bug just above. */
+        for (const o of level.drawObjects) {
+          if (o.dead || o.type !== CE64_OBJECT_TYPE || !(o.flag6 & 1)) continue;
+          if (ce64Creatures.spawn(o.x - cam.snapX, o.y, cam.snapX)) o.dead = true;
+        }
       }
       /* CS:0x01F2 — the line-barrier rescan (game/line-barriers.js's own
        * `tick()`), advancing every CYCLING selector-7-10 barrier one
@@ -2286,7 +2317,7 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
           (wx, wy, vx, cam) => shots.fire(wx, wy, vx, cam),
           (wx, wy, n, cam) => lineHazards.spawn(wx, wy, player.x + 8, player.y + 6, n),
           { invuln: fx.invuln > 0, score, debris, planeB: level.map.planeB,
-            sfx: (id) => audio.play(id) }).drawn;
+            sfx: (id) => audio.play(id), flashPool }).drawn;
       };
       let fr = null;
       if (!deathSeq) {
@@ -2307,7 +2338,8 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
          * already reads for COND11/12; `leverToggle` mutates it in place, so
          * a level's own trigger conditions see the flip on the very next tick. */
         levers: level.palfils.levers, leverToggle,
-        beforePlayer: stepSelectorTwo,
+        beforePlayer: gm ? null : stepSelectorTwo,   // CS:0xC4AA patched 0xAD88 to RET
+        objectPass: objPass,
         zoneScan: (x, y) => scanZones(events.actionCtx.zones, x, y),
         /* CS:0x38D7 — first-fit over the 200-slot runtime array. `drawObjects`
          * already excludes the map's dead slots, so the headroom here is
@@ -2557,17 +2589,19 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
         { x: box.x, y: box.y, w: box.w, h: box.h, strength: box.hp },
         { x: player.x, y: player.y, state: player.stateIndex }, health,
         { invuln: fx.invuln > 0, sfx: (id) => audio.play(id) }).strengthOut;
-      const nestResult = nests.step(
-        camNow, { x: player.x }, fx.freeze,
-        nestContact, brood, tock);
-      for (const s of nestResult.shots) {
-        shots.fire(s.x, s.y, s.dir, camNow);
+      if (!gm) {
+        const nestResult = nests.step(
+          camNow, { x: player.x }, fx.freeze,
+          nestContact, brood, tock);
+        for (const s of nestResult.shots) {
+          shots.fire(s.x, s.y, s.dir, camNow);
+        }
+        lastNestFx = nestResult.drawn;
+        /* CS:0x894E — the brood children a nest death just spawned (if any).
+         * Ground-bounce honours "freezes aliens"; ballistic fall ignores it —
+         * see Brood#step's own header for why that asymmetry is real. */
+        lastBroodFx = brood.step(camNow, fx.freeze, nestContact, level.map.planeB).drawn;
       }
-      lastNestFx = nestResult.drawn;
-      /* CS:0x894E — the brood children a nest death just spawned (if any).
-       * Ground-bounce honours "freezes aliens"; ballistic fall ignores it —
-       * see Brood#step's own header for why that asymmetry is real. */
-      lastBroodFx = brood.step(camNow, fx.freeze, nestContact, level.map.planeB).drawn;
 
       /* CS:0x7CBD/0x7B68 — the world-1-sublevel-B awakened statue. `statues`
        * is empty (zero records) outside world 1 sublevel B, so this is a
@@ -2662,15 +2696,18 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
        * An earlier revision queued these landings and drained them at the
        * bottom of the tick; that made a selector-2 divert invisible to the
        * System-B steal probe, which is a divergence, not a simplification. */
-      popup.step(dropCarriedIntoWorld);
+      if (objPass) popup.step(dropCarriedIntoWorld);            // CS:0x0209
 
-      statues.checkTrigger(camNow, level.map.planeA, levelInfo.world, health,
-                            statueTriggerProbe, rng);
-      const statueResult = statues.step(
-        camNow, { x: player.x, y: player.y }, fx.freeze,
-        nestContact, statueScanGrid, tock);
-      score.add(statueResult.score);
-      lastStatueFx = statueResult.drawn;
+      let statueResult = { popups: [], score: 0, drawn: [] };
+      if (!gm) {
+        statues.checkTrigger(camNow, level.map.planeA, levelInfo.world, health,
+                              statueTriggerProbe, rng);
+        statueResult = statues.step(
+          camNow, { x: player.x, y: player.y }, fx.freeze,
+          nestContact, statueScanGrid, tock);
+        score.add(statueResult.score);
+        lastStatueFx = statueResult.drawn;
+      }
       /* The statue's own kill award (CS:0xBF5F) is NOT drained here: its
        * walker is CS:0x029A, the LAST popup channel in the frame. The drain
        * lives at the bottom of this tick, past both entity systems. */
@@ -2679,40 +2716,44 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
        * module needs injected callbacks (see ce64.js's own header for why it
        * calls combat.js directly, unlike nest.js/statue.js), so this just
        * hands them the real objects. */
-      const ce64Opts = { invuln: fx.invuln > 0, difficulty, debris, score,
-                          sfx: (id) => audio.play(id) };
-      lastCe64Fx = ce64Creatures.step(
-        camNow, { x: player.x, y: player.y, state: player.stateIndex }, fx.freeze,
-        health, grid, decodeTag, ce64Spits, ce64Opts).drawn;
-      lastSpitFx = ce64Spits.step(
-        camNow, { x: player.x, y: player.y, state: player.stateIndex }, fx.freeze,
-        health, grid, decodeTag, ce64Opts).drawn;
+      if (!gm) {
+        const ce64Opts = { invuln: fx.invuln > 0, difficulty, debris, score,
+                            sfx: (id) => audio.play(id) };
+        lastCe64Fx = ce64Creatures.step(
+          camNow, { x: player.x, y: player.y, state: player.stateIndex }, fx.freeze,
+          health, grid, decodeTag, ce64Spits, ce64Opts).drawn;
+        lastSpitFx = ce64Spits.step(
+          camNow, { x: player.x, y: player.y, state: player.stateIndex }, fx.freeze,
+          health, grid, decodeTag, ce64Opts).drawn;
+      }
 
       /* CS:0x1447/0x1B72/0x1AF6 — the retracting spike hazard (types
        * 50/117/130, game/spikes.js). Undebounced flat damage, so it does NOT
        * route through the shared attackHero/creatureScansGrid contact path
        * every creature in this file uses — it applies straight to `health`. */
-      spikeClock.step();
-      /* CS:0x148B `inc byte [0x3a0]` / CS:0x148F `and byte [0x3a0],0x7` —
-       * the SAME once-per-frame function (FUN_1000_1432) that advances the
-       * spike counters four instructions earlier, so it steps here. Unlike
-       * DS:0x39c/0x39d/0x39e it is NOT behind CS:0x1450's DS:0x36c gate:
-       * the crystal advances every tick. */
-      objectAnimClock.step();
-      lastSpikeFx = stepSpikes(level.drawObjects, spikeClock,
-        { x: player.x, y: player.y }, health, { invuln: fx.invuln > 0 });
+      if (objPass) {
+        spikeClock.step();
+        /* CS:0x148B `inc byte [0x3a0]` / CS:0x148F `and byte [0x3a0],0x7` —
+         * the SAME once-per-frame function (FUN_1000_1432) that advances the
+         * spike counters four instructions earlier, so it steps here. Unlike
+         * DS:0x39c/0x39d/0x39e it is NOT behind CS:0x1450's DS:0x36c gate:
+         * the crystal advances every tick. */
+        objectAnimClock.step();
+        lastSpikeFx = stepSpikes(level.drawObjects, spikeClock,
+          { x: player.x, y: player.y }, health, { invuln: fx.invuln > 0 });
+      }
 
       /* CS:0x0239 `call 0x3cc7` — ACT6's smoke puffs advance a frame and
        * draw (game/kill-smoke.js). The walker sits in the main loop between
        * the starburst step (CS:0x0212) and the player state machine
        * (CS:0x0254), so a puff draws UNDER the hero and under every entity,
        * which is where the draw loop below puts it. */
-      lastKillSmokeFx = killSmoke.step(camNow);
+      if (!gm) lastKillSmokeFx = killSmoke.step(camNow);        // CS:0x0226 gate
 
       /* The selector-2 walker (below, `stepSelectorTwo`) runs inside
        * stepHeroFrame, before the player (CS:0x0223). On death ticks the
        * death driver calls it here instead (CS:0x09F8). */
-      if (!fr) stepSelectorTwo();
+      if (!fr && !gm) stepSelectorTwo();
       /* CS:0x0223 / CS:0xAED0-0xAF0F — drain selector2.js's own group-
        * elimination rewards into the SAME single-slot popup. FIRST of the
        * six channels (the walker is CS:0xAD88, earlier in the frame than
@@ -2733,144 +2774,160 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
        * ce64Creatures.step() call already use), so a PAT object can now be
        * killed by the hero's touch or by a weapon hit, and awards score on
        * death via pat-objects.js's own `scoreForKey`. */
-      lastPatFx = patGroups.step(
-        camNow, fx.freeze, shots, lineHazards,
-        { x: player.x, y: player.y, state: player.stateIndex }, () => rng.next(), tock, null,
-        health, grid, decodeTag,
-        { invuln: fx.invuln > 0, difficulty, rng: () => rng.next(), debris, score,
-          sfx: (id) => audio.play(id) });
-
-      runSpawns();
-      /* THE HUNT. CS:0xf11f/0xf1e5 run the pathfinder only from the two walk
-       * modes, only on a tile crossing, and only when standing on ground —
-       * so the verdict is sticky for a whole tile and an airborne or falling
-       * enemy never searches. Applying a verdict outside that gate re-seeds
-       * the hop cursor every frame and freezes the entity in mid-air. */
-      for (const e of enemies) {
-        let verdict = VERDICT_NONE;
-        const walking = e.mode === MODE.WALK_L || e.mode === MODE.WALK_R;
-        if (e.alive && walking && (e.x & 0x1c) === 0
-            && groundBelow(level.map.planeB, e.x, e.y)) {
-          verdict = runSearch(e, {
-            planeB: level.map.planeB,
-            camX: cam.snapX, camY: cam.snapY,
-            heroX: player.x, heroY: player.y,
-            desc: e.desc,
-            rnd: rng.next(),        // the single randomness input, CS:0x3836
-            world: level.world,     // strategy 3's per-world waypoint list
-            markers: markerList.entries,       // DS:0xb5dc
-            markersOverride: markerList.override,   // DS:0x399
-          }).verdict;
-        }
-        /* CS:0xE659, called BEFORE the mode dispatch for System B (see
-         * entity.js's fireB header) — the muzzle/hazard it returns is routed
-         * exactly like System A's own stage 6, below. */
-        const muzzleB = e.tick(level.map.planeB, verdict, e.desc);
-        playFlash(e);                                    // CS:0xFF53
-
-        if (muzzleB && muzzleB.hazard) {
-          firedHazardsByB++;
-          if (muzzleB.attackBits === 1) {
-            lineHazards.spawnJittered(muzzleB.x, muzzleB.y, player.x, player.y,
-                                       muzzleB.n, () => rng.next());
-          } else {
-            lineHazards.spawnAtHero(muzzleB.x, muzzleB.y, player.x, player.y, muzzleB.n);
-          }
-        } else if (muzzleB) {
-          firedByB++;
-          shots.fire(muzzleB.x, muzzleB.y, muzzleB.dir, { x: cam.snapX, y: cam.snapY });
-        }
-        /* Steal-and-carry, System B — CS:0xEF01/0xEE06-0xEEB1. Unlike System
-         * A, this runs for every ALIVE entity every tick regardless of its
-         * own current mode/strategy (entity.js's own file header, point 1) —
-         * the gate is the global `stealGate`, not this entity's strategy.
-         *
-         * ORDERING (load-bearing, invisible from either function alone):
-         * this runs AFTER e.tick() above, which already ran the mode
-         * dispatch (walk/fall/hop) — matching the original, where CS:0xEDDA
-         * sits between the mode handler (CS:0xEDD3) and the contact test
-         * (CS:0xEDF4), so a steal attempt sees the entity's POST-MOVE
-         * position for this tick. stepCreatureDamage (contact) runs later,
-         * after the whole `enemies` loop below, so the steal also sees
-         * PRE-CONTACT state — an entity that is about to take damage this
-         * tick still steals normally. */
-        if (e.alive) {
-          stealAttemptB(e, markerList.entries, e.desc, { x: cam.snapX, y: cam.snapY },
-                         level.drawObjects);
-          const carriedB = stepCarriedItemB(e, e.desc, level.world, () => rng.next());
-          if (carriedB) dropCarriedIntoWorld(carriedB.id, carriedB.x, carriedB.y);
-        }
-        if (e.deathDropId !== null) {
-          popup.spawn(e.deathDropX, e.deathDropY, e.deathDropId, dropCarriedIntoWorld);
-          e.deathDropId = null;
-        }
+      if (!gm) {
+        lastPatFx = patGroups.step(
+          camNow, fx.freeze, shots, lineHazards,
+          { x: player.x, y: player.y, state: player.stateIndex }, () => rng.next(), tock, null,
+          health, grid, decodeTag,
+          { invuln: fx.invuln > 0, difficulty, rng: () => rng.next(), debris, score,
+            sfx: (id) => audio.play(id) });
       }
-      runSpawnsA();
-      /* System A's own pipeline, CS:0xe001 — all six stages, per entity.
-       * camera/markers unlock strategies 1/2 (CS:0xe9da/0xe88c); grid unlocks
-       * stage 3's attack/leap (CS:0xe487); the object array unlocks strategy
-       * 2's own theft attempt (CS:0xE90E). All four are optional on tick()'s
-       * own signature, so this call is the only thing that actually arms
-       * them — see entity-a.js's header for what each one does. */
-      for (const e of enemiesA) {
-        const muzzle = e.tick(
-          { x: player.x, y: player.y }, e.desc,
-          () => rng.next(), fx.freeze > 0,
-          { x: cam.snapX, y: cam.snapY }, markerList.entries, grid, level.drawObjects);
-        playFlash(e);                                    // CS:0xE322
-        if (muzzle && muzzle.hazard) {
-          /* CS:0xE5E4 — attackBits 1 throws at a jittered point near the
-           * hero; 2 or 3 throw at the hero's exact position, muzzle +0x10 X. */
-          firedHazardsByA++;
-          if (muzzle.attackBits === 1) {
-            lineHazards.spawnJittered(muzzle.x, muzzle.y, player.x, player.y,
-                                       muzzle.n, () => rng.next());
-          } else {
-            lineHazards.spawnAtHero(muzzle.x, muzzle.y, player.x, player.y, muzzle.n);
+
+      if (!gm) {
+        runSpawns();
+        /* THE HUNT. CS:0xf11f/0xf1e5 run the pathfinder only from the two walk
+         * modes, only on a tile crossing, and only when standing on ground —
+         * so the verdict is sticky for a whole tile and an airborne or falling
+         * enemy never searches. Applying a verdict outside that gate re-seeds
+         * the hop cursor every frame and freezes the entity in mid-air. */
+        for (const e of enemies) {
+          let verdict = VERDICT_NONE;
+          const walking = e.mode === MODE.WALK_L || e.mode === MODE.WALK_R;
+          if (e.alive && walking && (e.x & 0x1c) === 0
+              && groundBelow(level.map.planeB, e.x, e.y)) {
+            verdict = runSearch(e, {
+              planeB: level.map.planeB,
+              camX: cam.snapX, camY: cam.snapY,
+              heroX: player.x, heroY: player.y,
+              desc: e.desc,
+              rnd: rng.next(),        // the single randomness input, CS:0x3836
+              world: level.world,     // strategy 3's per-world waypoint list
+              markers: markerList.entries,       // DS:0xb5dc
+              markersOverride: markerList.override,   // DS:0x399
+            }).verdict;
           }
-        } else if (muzzle) {
-          firedByA++;
-          shots.fire(muzzle.x, muzzle.y, muzzle.dir, { x: cam.snapX, y: cam.snapY });
+          /* CS:0xE659, called BEFORE the mode dispatch for System B (see
+           * entity.js's fireB header) — the muzzle/hazard it returns is routed
+           * exactly like System A's own stage 6, below. */
+          const muzzleB = e.tick(level.map.planeB, verdict, e.desc);
+          playFlash(e);                                    // CS:0xFF53
+
+          if (muzzleB && muzzleB.hazard) {
+            firedHazardsByB++;
+            if (muzzleB.attackBits === 1) {
+              lineHazards.spawnJittered(muzzleB.x, muzzleB.y, player.x, player.y,
+                                         muzzleB.n, () => rng.next());
+            } else {
+              lineHazards.spawnAtHero(muzzleB.x, muzzleB.y, player.x, player.y, muzzleB.n);
+            }
+          } else if (muzzleB) {
+            firedByB++;
+            shots.fire(muzzleB.x, muzzleB.y, muzzleB.dir, { x: cam.snapX, y: cam.snapY });
+          }
+          /* Steal-and-carry, System B — CS:0xEF01/0xEE06-0xEEB1. Unlike System
+           * A, this runs for every ALIVE entity every tick regardless of its
+           * own current mode/strategy (entity.js's own file header, point 1) —
+           * the gate is the global `stealGate`, not this entity's strategy.
+           *
+           * ORDERING (load-bearing, invisible from either function alone):
+           * this runs AFTER e.tick() above, which already ran the mode
+           * dispatch (walk/fall/hop) — matching the original, where CS:0xEDDA
+           * sits between the mode handler (CS:0xEDD3) and the contact test
+           * (CS:0xEDF4), so a steal attempt sees the entity's POST-MOVE
+           * position for this tick. stepCreatureDamage (contact) runs later,
+           * after the whole `enemies` loop below, so the steal also sees
+           * PRE-CONTACT state — an entity that is about to take damage this
+           * tick still steals normally. */
+          if (e.alive) {
+            stealAttemptB(e, markerList.entries, e.desc, { x: cam.snapX, y: cam.snapY },
+                           level.drawObjects);
+            const carriedB = stepCarriedItemB(e, e.desc, level.world, () => rng.next());
+            if (carriedB) dropCarriedIntoWorld(carriedB.id, carriedB.x, carriedB.y);
+          }
+          if (e.deathDropId !== null) {
+            popup.spawn(e.deathDropX, e.deathDropY, e.deathDropId, dropCarriedIntoWorld);
+            e.deathDropId = null;
+          }
         }
-        /* CS:0xE0C1-E198 — the carried-icon ease + probabilistic periodic
-         * drop, a separate call site from tick()'s own six-stage pipeline
-         * (entity-a.js's file header explains why) — only for a genuinely
-         * ALIVE entity, matching the original's own alive-branch placement. */
-        if (e.alive) {
-          const carried = stepCarriedItem(e, e.desc, () => rng.next());
-          if (carried) dropCarriedIntoWorld(carried.id, carried.x, carried.y);
+        runSpawnsA();
+        /* System A's own pipeline, CS:0xe001 — all six stages, per entity.
+         * camera/markers unlock strategies 1/2 (CS:0xe9da/0xe88c); grid unlocks
+         * stage 3's attack/leap (CS:0xe487); the object array unlocks strategy
+         * 2's own theft attempt (CS:0xE90E). All four are optional on tick()'s
+         * own signature, so this call is the only thing that actually arms
+         * them — see entity-a.js's header for what each one does. */
+        for (const e of enemiesA) {
+          const muzzle = e.tick(
+            { x: player.x, y: player.y }, e.desc,
+            () => rng.next(), fx.freeze > 0,
+            { x: cam.snapX, y: cam.snapY }, markerList.entries, grid, level.drawObjects);
+          playFlash(e);                                    // CS:0xE322
+          if (muzzle && muzzle.hazard) {
+            /* CS:0xE5E4 — attackBits 1 throws at a jittered point near the
+             * hero; 2 or 3 throw at the hero's exact position, muzzle +0x10 X. */
+            firedHazardsByA++;
+            if (muzzle.attackBits === 1) {
+              lineHazards.spawnJittered(muzzle.x, muzzle.y, player.x, player.y,
+                                         muzzle.n, () => rng.next());
+            } else {
+              lineHazards.spawnAtHero(muzzle.x, muzzle.y, player.x, player.y, muzzle.n);
+            }
+          } else if (muzzle) {
+            firedByA++;
+            shots.fire(muzzle.x, muzzle.y, muzzle.dir, { x: cam.snapX, y: cam.snapY });
+          }
+          /* CS:0xE0C1-E198 — the carried-icon ease + probabilistic periodic
+           * drop, a separate call site from tick()'s own six-stage pipeline
+           * (entity-a.js's file header explains why) — only for a genuinely
+           * ALIVE entity, matching the original's own alive-branch placement. */
+          if (e.alive) {
+            const carried = stepCarriedItem(e, e.desc, () => rng.next());
+            if (carried) dropCarriedIntoWorld(carried.id, carried.x, carried.y);
+          }
+          /* CS:0xE25C-E282 — the one-shot death-time drop, recorded by tick()'s
+           * own DYING branch (once, on the frame===-1 tick) and drained here
+           * via popup.js (CS:0xBF5F), NOT dropCarriedIntoWorld/C041 — the
+           * original genuinely calls the two different routines from these two
+           * different sites. `level.drawObjects` arms popup's own busy-slot
+           * divert to C041, closing that module's previously-disclosed gap. */
+          if (e.deathDropId !== null) {
+            popup.spawn(e.deathDropX, e.deathDropY, e.deathDropId, dropCarriedIntoWorld);
+            e.deathDropId = null;
+          }
         }
-        /* CS:0xE25C-E282 — the one-shot death-time drop, recorded by tick()'s
-         * own DYING branch (once, on the frame===-1 tick) and drained here
-         * via popup.js (CS:0xBF5F), NOT dropCarriedIntoWorld/C041 — the
-         * original genuinely calls the two different routines from these two
-         * different sites. `level.drawObjects` arms popup's own busy-slot
-         * divert to C041, closing that module's previously-disclosed gap. */
-        if (e.deathDropId !== null) {
-          popup.spawn(e.deathDropX, e.deathDropY, e.deathDropId, dropCarriedIntoWorld);
-          e.deathDropId = null;
-        }
+        /* CS:0x028E — the materialise flash pool's walker (game/flash.js). */
+        flashFx = flashPool.step({ x: cam.snapX, y: cam.snapY });
+        /* CS:0x0285 — contact, then the damage-grid scan, with contact winning.
+         * Also in game/frame.js, for the same reason. Both entity arrays flow
+         * through the SAME shared routine (CS:0xff93/0xac59 are proven common
+         * to both systems — see CLAUDE.md's "Entity contact" section) — a
+         * separate call here would silently make System-A creatures unable to
+         * hurt or be hurt by the hero. */
+        creaturesShot += stepCreatureDamage([...enemies, ...enemiesA], {
+          grid, cam: { x: cam.snapX, y: cam.snapY },
+          hero: { x: player.x, y: player.y, state: player.stateIndex },
+          health, decodeTag, difficulty, arsenal,
+          /* CS:0xAC4C — a weapon hit that damages a creature WITHOUT killing it
+           * drops a stationary debris spark inside its own hitbox. Closes the
+           * last of the five CS:0xA633 callers this port's debris pass tracked. */
+          rng: () => rng.next(), debris,
+          /* DS:0x172 — CS:0xACCC's `jnz` skips only the health subtraction, so
+           * while this is set the hero takes no damage AND STILL KILLS what he
+           * touches. Both the shield potion and spawn protection feed it. */
+          invuln: fx.invuln > 0 ? 1 : 0,
+          sfx: (id) => audio.play(id),
+        }).killed;
+      } else {
+        /* CS:0x02A5 `call [0x284]` — the guardian's driver in place of the
+         * whole enemy suite, then CS:0x02AE `call 0xDA62`, its spit mover
+         * (world 1). game/guardian.js. */
+        const gOpts = { tock, cam: { x: cam.snapX, y: cam.snapY },
+          hero: { x: player.x, y: player.y, state: player.stateIndex }, health, grid,
+          decodeTag, difficulty, rng: () => rng.next(), debris,
+          sfx: (id) => audio.play(id), invuln: fx.invuln > 0,
+          planeB: level.map.planeB };
+        guardianFx = guardian.drive(gOpts).concat(guardian.moveSpits(gOpts));
       }
-      /* CS:0x0285 — contact, then the damage-grid scan, with contact winning.
-       * Also in game/frame.js, for the same reason. Both entity arrays flow
-       * through the SAME shared routine (CS:0xff93/0xac59 are proven common
-       * to both systems — see CLAUDE.md's "Entity contact" section) — a
-       * separate call here would silently make System-A creatures unable to
-       * hurt or be hurt by the hero. */
-      creaturesShot += stepCreatureDamage([...enemies, ...enemiesA], {
-        grid, cam: { x: cam.snapX, y: cam.snapY },
-        hero: { x: player.x, y: player.y, state: player.stateIndex },
-        health, decodeTag, difficulty, arsenal,
-        /* CS:0xAC4C — a weapon hit that damages a creature WITHOUT killing it
-         * drops a stationary debris spark inside its own hitbox. Closes the
-         * last of the five CS:0xA633 callers this port's debris pass tracked. */
-        rng: () => rng.next(), debris,
-        /* DS:0x172 — CS:0xACCC's `jnz` skips only the health subtraction, so
-         * while this is set the hero takes no damage AND STILL KILLS what he
-         * touches. Both the shield potion and spawn protection feed it. */
-        invuln: fx.invuln > 0 ? 1 : 0,
-        sfx: (id) => audio.play(id),
-      }).killed;
       /* `UNKNOWN_f030_item_drop` — System-B's own per-GROUP elimination
        * reward. CS:0xED78-ED80 sums `[0x3c3]` (state===0, dead) + `[0x1f4]`
        * (state<0 and NOT -2/-3, i.e. DYING) and compares to the descriptor's
@@ -3128,6 +3185,7 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
             health.respawn();                                       // CS:0x084B/0x0851
             /* CS:0x0845 reads DS:0x16E/0x170 — the last selector-6 checkpoint
              * (game/progress.js), which CS:0x8C34 seeds with the level spawn. */
+            if (guardian) guardian.reset();                          // CS:0x086D call [0x288]
             const pos = findRespawnPosition(progress.respawn.x, progress.respawn.y,
               level.map.planeB);                                      // CS:0x0873-0x08BD
             player.teleportTo(pos.x, pos.y);                         // CS:0x08D6-0x08E6 (state 4)
@@ -3445,6 +3503,18 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
       /* THE WORLD-3 DS:0xce64 CREATURE — CS:0x7F5D, sprite table a
        * deliberate placeholder (see ce64.js's UNKNOWN_ce64_sprite_table) and
        * the 0x6c(108)-base death burst. */
+      /* DS:0xAC90's materialise flashes (game/flash.js). */
+      for (const d of flashFx) {
+        const ff = hero && hero.frames[d.sprite];
+        if (ff) renderer.blitSprite(ff, d.x, d.y);
+      }
+      /* Selector 11's guardian and its spits (game/guardian.js). */
+      for (const d of guardianFx) {
+        const gf = hero && hero.frames[d.sprite];
+        if (gf) renderer.blitSprite(gf, d.x, d.y);
+        else { outOfRange++; renderer.strokeRect(d.x, d.y, 32, 32, 13); }
+      }
+
       for (const d of lastCe64Fx) {
         const cf = hero && hero.frames[d.sprite];
         if (cf) renderer.blitSprite(cf, d.x, d.y);
@@ -3694,6 +3764,20 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
     sfxTrace = [];
     window.__gods = {
       snap,
+      /* The selector-11 guardian, for comparing against DS:0x28A/0x28C/0xD030. */
+      guardian() {
+        return guardian && { hp: guardian.hp, x: guardian.x, frame: guardian.frame, step: guardian.step,
+          pool: guardian.pool.filter((p) => p.frame >= 0).map((p) => `${p.x},${p.y},${p.vy},${p.vx}`).join(' ') };
+      },
+      /* Live enemies of every system, for comparing against DOSBox. */
+      ents() {
+        const f = (e) => `${e.x},${e.y}:${e.state}`;
+        return {
+          A: enemiesA.map(f).join(' '), B: enemies.map(f).join(' '),
+          s2: selectorTwo.slots.filter(Boolean).map((sl) => sl.entities.map(f).join(' ')).join(' | '),
+          shots: arsenal.slots.map((sl) => sl.area.filter((r) => r.tag >= 0).map((r) => `${r.x},${r.y}`).join(' ')).join(' | '),
+        };
+      },
       /* One slot's projectile records, for comparing against DS:0xDD10+. */
       slotDetail(i) {
         const sl = arsenal.slots[i];

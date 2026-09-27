@@ -133,6 +133,7 @@ import { CHEST_MIN, CHEST_MAX, CHEST_KEY_BASE, chestKeyFor, openedType,
          INVENTORY_CLEAR_SITES, INVENTORY_EMPTY, CHEST_KEY_CENSUS, INVENTORY_SLOTS,
          OBJ_NAME_OFF, OBJ_NAME_MAX, OBJ_DESC_OFF, OBJ_DESC_MAX,
          OBJ_RECORD_SIZE } from '../game/treasure.js';
+import { FlashPool } from '../game/flash.js';
 import { expandMapObjects, allocObject, OBJECT_SLOTS, activationBox,
          activateObjects, sortForDraw, insertSpawned, CATEGORY, WEAPON_TYPE_MIN,
          stepObjectFall, isFallEligible, BOUNCE_DELTA, FALL_STEP,
@@ -2124,7 +2125,13 @@ export function checkEntityB() {
    * and differ only in when they appear. */
   const sp = new EntityB({ x: 64, y: 0, hp: 3, delay: 4 });
   const trace = [];
-  for (let i = 0; i < 12; i++) { sp.tick(planeB); trace.push(sp.state); }
+  /* main.js's `playFlash` completes CS:0xFF59: a free flash-pool record
+   * means materialise. */
+  for (let i = 0; i < 12; i++) {
+    sp.tick(planeB);
+    if (sp.wantsFlash) { sp.wantsFlash = false; sp.materialise(); }
+    trace.push(sp.state);
+  }
   check(`spawn runs waiting(delay) -> materialising(5) -> alive with descriptor HP`,
     trace.join() === '-2,-2,-2,-3,-3,-3,-3,-3,3,3,3,3', trace.join(','));
 
@@ -2213,9 +2220,17 @@ export function checkEntityB() {
       + '— the exact trap that made an earlier revision of the group-reward check fire at spawn',
       fresh.state === EST.WAITING && fresh.state <= 0, `state=${fresh.state}`);
     const now = new EntityB({ x: 10, y: 20, mode: MODE.WALK_L, delay: 0 });
-    check('a ZERO stagger materialises at spawn (-3, timer 5) and raises the 0x446 flash',
-      now.state === EST.MATERIALISING && now.timer === 5 && now.flash === true,
-      `CS:0xECA7 or dx,dx / jnz / call 0xff59; state=${now.state} timer=${now.timer}`);
+    const later = new EntityB({ x: 10, y: 20, mode: MODE.WALK_L, delay: 3 });
+    check('a ZERO stagger asks for the 0x446 flash at spawn; a non-zero one does not',
+      now.wantsFlash === true && later.wantsFlash === false && now.state === EST.WAITING,
+      'CS:0xECA7 or dx,dx / jnz / call 0xff59');
+    const full = new FlashPool();
+    let allocs = 0;
+    while (full.alloc(0, 0)) allocs++;
+    check('the flash pool holds 10, and a flash lives 8 ticks (count 7 down to 0)',
+      allocs === 10 && (() => { const p = new FlashPool(); p.alloc(0, 0); let n = 0;
+        while (p.active) { p.step({ x: 0, y: 0 }); n++; } return n === 8; })(),
+      'CS:0xB0D1 mov cx,0xa; CS:0xB0B2 count 7; CS:0xB12B dec / jns');
     check('...and MATERIALISING (-3) also satisfies `state <= 0`',
       EST.MATERIALISING <= 0);
     check('the cache is UNSET before any entity has died',
@@ -2865,10 +2880,10 @@ export function checkEntityA() {
   {
     const desc0 = { seedPair: 0, seedWeight: 0, stepCap: 4, speedCap: 4, fireByte: 0, flags: 0 };
     const fresh = new EntityA({ x: 10, y: 20, hp: 5 });
-    check('a freshly-spawned System-A entity is already MATERIALISING (-3), which satisfies `state <= 0` '
+    check('a freshly-spawned System-A entity is WAITING (-2), which satisfies `state <= 0` '
       + '— the same trap System B\'s own group-reward guard already documents',
-      fresh.state === ESTA.MATERIALISING && fresh.state <= 0 && fresh.flash === true,
-      `CS:0xDEE0: System A's spawn DX is always 0, so every entity calls 0xff59 at once; state=${fresh.state}`);
+      fresh.state === ESTA.WAITING && fresh.state <= 0 && fresh.wantsFlash === true,
+      `CS:0xDEE0: System A's spawn DX is always 0, so every entity asks for the flash at once; state=${fresh.state}`);
     check('the cache is UNSET before any entity has died',
       fresh.deathCacheSeq === -1 && fresh.deathCacheX === null);
 
