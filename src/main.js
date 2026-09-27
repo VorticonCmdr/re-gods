@@ -33,7 +33,7 @@ import { buildDescriptorMap, GROUP_STEMS, HERO_DESCRIPTOR_MAX,
          LEVEL_LOAD_ORDER } from './formats/descriptors.js';
 import { spriteForType, parseObjectCategories, sortForDraw, isDeadType,
          isUnstamped, OBJECT_SLOTS, activationBox, buildDrawSequence,
-         activateObjects, insertSpawned,
+         activateObjects, insertSpawned, newActivationGate, activationDue,
          stepObjectFall, isFallEligible, dropCarriedItem,
          ObjectAnimClock, animatedObjectSprite } from './game/objects.js';
 import { parseObjectRecords, Score, Purse, TreasureBurst,
@@ -1134,6 +1134,15 @@ async function main() {
    * Proven, not guessed — see cameraForSpawn()'s own header in camera.js. */
   const camInit = (s) => cameraForSpawn(s.x, s.y);
   let cam = camInit(spawn);
+  /* The direct CS:0x1196 calls (respawn 0x08EB, teleport 0x1015) recompute
+   * the activation box on the spot, against the camera they just re-centred;
+   * the per-tick pass is gated by CS:0x1187 (see the tick). */
+  function forceActivation() {
+    level.activationGate ??= newActivationGate();
+    level.activationGate.force = true;
+    activationDue(level.activationGate, cam.snapX, cam.snapY);
+    activateObjects(level.drawObjects, activationBox(cam.snapX, cam.snapY), level.cats);
+  }
   let levelInfo = { world: +LEVELS[0][0], sublevel: LEVELS[0][1] === 'A' ? 0 : 1 };
   /* CS:0x7E9B — the statue populator wants a 'a'/'b' string, not levelInfo's
    * own 0/1 encoding; producing zero records outside world 1 sublevel B is
@@ -2184,8 +2193,14 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
        * object walk because the walk's own gate (CS:0x14A1) reads what it
        * writes. The box is recomputed from the SNAPPED camera. Passing `cats`
        * is what arms `fallDirty` on the same inactive->active edge CS:0x120F
-       * marks dirty — see game/objects.js's fall-physics block. */
-      activateObjects(level.drawObjects, activationBox(cam.snapX, cam.snapY), level.cats);
+       * marks dirty — see game/objects.js's fall-physics block. Gated by
+       * CS:0x1187 (`activationDue`): the pass only runs when the camera
+       * reaches a new 32 px column or moves 32 px in Y. A fresh level gets a
+       * forced gate; respawn/teleport set `force` (their direct 0x1196 calls). */
+      level.activationGate ??= newActivationGate();
+      if (activationDue(level.activationGate, cam.snapX, cam.snapY)) {
+        activateObjects(level.drawObjects, activationBox(cam.snapX, cam.snapY), level.cats);
+      }
       /* "in the DOS version the items don't stay up in the air but fall down
        * once they come into view" — CS:0x1511-0x1631, one object per call,
        * BEFORE the pickup contact test below (same order as the original's
@@ -2465,6 +2480,7 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
          * calls at CS:0x1012/0x1015 (destructible-block restore; the third
          * still untraced). */
         cam = cameraForSpawn(dest.x, dest.y);
+        forceActivation();                                       // CS:0x1015 -> 0x1196
         /* CS:0x1012 — FUN_1000_de6f, `rep stosb` 0x8e8 (2280) bytes at
          * SS:0x3768: the System-A entity group-RUNTIME array, 10 slots x
          * 0xe4 bytes, zeroed wholesale. This was a disclosed gap in
@@ -3094,6 +3110,7 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
             player.teleportTo(pos.x, pos.y);                         // CS:0x08D6-0x08E6 (state 4)
             player.fallDamage = 0;                                   // CS:0x08E0, teleportTo doesn't touch this
             cam = cameraForSpawn(pos.x, pos.y);                      // CS:0x08CC-0x08D3
+            forceActivation();                                       // CS:0x08EB -> 0x1196
             fx.invuln = INVULN_TICKS_SPAWN;                          // CS:0x0860
             $('event').textContent = `respawned — ${fx.lives} ${fx.lives === 1 ? 'life' : 'lives'} left`;
           }

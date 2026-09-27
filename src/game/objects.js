@@ -219,6 +219,30 @@ export const ACTIVATION_MARGIN =
  *  the Y remembered in DS:0x164), so it lags the camera by up to a tile. */
 export const ACTIVATION_STEP = 0x20;
 
+/** DS:0x379 (the "already recomputed at this X column" latch) and DS:0x164
+ *  (camera Y at the last recompute). `force` stands for the direct
+ *  `call 0x1196` sites that skip the gate: level entry CS:0x00B7 and
+ *  CS:0x901C, respawn CS:0x08EB, teleport CS:0x1015, sublevel-B switch
+ *  CS:0x4867. */
+export function newActivationGate() { return { armed: 0, lastCamY: 0, force: true }; }
+
+/** CS:0x1187-0x1196 — true when this tick recomputes the box. Between
+ *  recomputes `+6` is left alone: objects stay active after leaving the
+ *  box, and a freshly spawned one waits for the next recompute.
+ *      1187  test [0xa],0x1f / jnz 1171   ; off-column: [0x379]:=0, try Y
+ *      118F  cmp [0x379],0 / jnz 1176     ; already done at this column: try Y
+ *      1176  |[0xc]-[0x164]| / test ax,0x20 / jnz 1196   (a BIT test, not >=) */
+export function activationDue(g, camX, camY) {
+  let due = g.force;
+  if (!due) {
+    if (camX & 0x1f) g.armed = 0;
+    else if (!g.armed) due = true;
+    if (!due) due = (Math.abs(camY - g.lastCamY) & ACTIVATION_STEP) !== 0;
+  }
+  if (due) { g.force = false; g.armed = 1; g.lastCamY = camY; }   // CS:0x1196/0x119E
+  return due;
+}
+
 export function activationBox(camX, camY) {
   const ax = camX & 0xffe0, by = camY & 0xfff0;
   return { xMin: ax + ACTIVATION_MARGIN.xMin, yMin: by + ACTIVATION_MARGIN.yMin,
