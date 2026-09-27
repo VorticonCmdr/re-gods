@@ -503,10 +503,17 @@ export class Brood {
   #bounce(s, planeB) {
     s.x += s.vx;
     const probeX = s.x + (s.vx >= 0 ? BROOD_BOUNCE_PROBE_X : 0);   // the muzzle-style facing offset
-    const cellHere = broodTileCell(probeX, s.y);
+    /* CS:0x8A76 probes at y+4. CS:0x8A83-0x8A8F: a wall at the probe
+     * reverses; otherwise ground one row below keeps going (`jz 0x8a92`
+     * ret), and NO ground below — a ledge — reverses too. [PROVEN] live
+     * against PJOYL2 1902-1904 (DS:0x8014): the landed brood walks on at +-2.
+     * An earlier revision probed at y and reversed ON ground, so a landed
+     * child jittered in place. */
+    const cellHere = broodTileCell(probeX, s.y + 4);
     const cellBelow = cellHere + 128;                                // [di+0x80], one tile row down
-    const solid = (planeB && planeB[cellHere] === 1) || (planeB && planeB[cellBelow] === 1);
-    if (solid) s.vx = -s.vx;                                         // NEG word[si+8] -- the step above is NEVER undone
+    const wall = planeB && planeB[cellHere] === 1;
+    const ground = planeB && planeB[cellBelow] === 1;
+    if (planeB && (wall || !ground)) s.vx = -s.vx;                               // NEG word[si+8] -- the step above is NEVER undone
   }
 
   /** CS:0x8AB1. Gravity-fed, capped, with a lookahead landing probe. */
@@ -519,15 +526,15 @@ export class Brood {
     const solidHere = planeB && planeB[cellHere] === 1;
     const solidAbove = planeB && planeB[cellAbove] === 1;
     if (solidAbove || !solidHere) return;                            // keep falling
-    /* LAND. CLAUDE.md's own gloss for the bytes is "and 0xfff0 / inc" — floor
-     * Y to its own current tile row, then step ONE FULL TILE ROW (not +1
-     * pixel) in the direction of the fall. That is the same "floor into the
-     * tile being penetrated, then add a whole row to clear it" idiom this
-     * project documents for the hero's own jump ceiling-ejection, and it is
-     * how `inc` on a floored 16-pixel row boundary is resolved here. */
-    s.y = Math.floor(s.y / 16) * 16 + 16;
+    /* LAND — CS:0x8AE7-0x8B06: `and [si+2],0xfff0 / inc [si+2]`, i.e. floor
+     * to the tile row and add ONE PIXEL (not a whole row, as an earlier
+     * revision read it); fall and vy cleared; vx forced to +-2 by its sign
+     * (0 counts as +). [PROVEN] live against PJOYL2 cursor 1901 (DS:0x8014):
+     * y 396+5 -> 401, vx 0 -> 2 and -1 -> -2. */
+    s.y = (s.y & ~0xf) + 1;
     s.fallSubstate = 0;
     s.vy = 0;
+    s.vx = s.vx < 0 ? -2 : 2;
   }
 
   /** CS:0x8A33. Draws using the CURRENT (pre-increment) frame, ONE draw. */

@@ -1546,13 +1546,12 @@ export async function checkDescriptorAnchors(fetchRaw) {
          * (row -1) untested/absent — i.e. NOT solid. */
         ground[(BROOD_FALL_PROBE.dy >> 4) * 128 + (BROOD_FALL_PROBE.dx >> 5)] = 1;
         brood.step(camZero, 0, alive(s), ground);
-        check(`landing on solid ground switches fallSubstate back to 0, snapping y to the tile-row-plus-one`,
-          s.fallSubstate === 0 && s.vy === 0 && s.y === 16,
+        check(`landing on solid ground switches fallSubstate back to 0, y to the tile row plus ONE PIXEL, vx to +2`,
+          s.fallSubstate === 0 && s.vy === 0 && s.y === 1 && s.vx === 2,
           `probe (x+${BROOD_FALL_PROBE.dx}, y+${BROOD_FALL_PROBE.dy}) finds ` +
-          `solid ground on the first tick; y snaps from 0 to ${s.y} — floor to ` +
-          `the current tile row then ADD ONE FULL ROW, the same idiom CLAUDE.md ` +
-          `documents for the hero's own jump ceiling-ejection — and the child ` +
-          `returns to ground-bounce movement from the next tick on`);
+          `solid ground on the first tick; y ${s.y}, vx ${s.vx} — CS:0x8AE7 ` +
+          `\`and 0xfff0 / inc\` and CS:0x8AF8-0x8B06 vx := +-2, [PROVEN] live ` +
+          `against PJOYL2 1901 (an earlier revision added a whole tile row)`);
       }
 
       /* ── the hitbox: a THIRD size in this file, not the parent's either box ── */

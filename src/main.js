@@ -3885,6 +3885,15 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
       snap,
       /* The selector-11 guardian, for comparing against DS:0x28A/0x28C/0xD030. */
       guardian() {
+        if (guardian && guardian.world === 2) {
+          const G = guardian;
+          return { arm: G.armHp, body: G.bodyHp, hp: G.hp, x: G.x, y: G.y, hx: G.hx, hy: G.hy,
+            cursor: G.cursor, burst: G.burst, ang: G.ang.join(','), spd: G.spd.join(','),
+            tx: G.tx, ty: G.ty, jaw: G.jaw, cam32: camScript.mode, tip: `${G.tip.x},${G.tip.y}`,
+            recs: (G.lastRecs || []).map((r) => r.join(',')).join(' '),
+            arms: G.armPts.map((p) => `${p.x},${p.y}`).join(' '),
+            pool: G.pool.filter((p) => p.live >= 0).map((p) => `${p.x},${p.y},${p.t}`).join(' ') };
+        }
         return guardian && { hp: guardian.hp, x: guardian.x, frame: guardian.frame, step: guardian.step,
           pool: guardian.pool.filter((p) => p.frame >= 0).map((p) => `${p.x},${p.y},${p.vy},${p.vx}`).join(' ') };
       },

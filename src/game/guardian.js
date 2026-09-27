@@ -297,6 +297,7 @@ export class Guardian {
     recs.push([bsx, bsy, 0x40, 0x40]);             // REC5
     drawn.push({ x: bsx, y: bsy, sprite: 0x1c2 });
     drawn.push({ x: bsx + 0x20, y: bsy, sprite: 0x1c3 });
+    this.lastRecs = recs;
     /* ── CD9D: hit tests (the pre-player camera) and the health rule. */
     for (const [x, y, w, h] of recs) this.bodyHp = this.#a9e4(x + cam.x, y + cam.y, w, h, this.bodyHp, o);
     if (this.armHp >= 0) {                         // CDDC
