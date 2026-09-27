@@ -2917,17 +2917,19 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
           const walking = e.mode === MODE.WALK_L || e.mode === MODE.WALK_R;
           if (e.alive && walking && (e.x & 0x1c) === 0
               && groundBelow(level.map.planeB, e.x, e.y)) {
-            verdict = runSearch(e, {
+            const res = runSearch(e, {
               planeB: level.map.planeB,
               camX: cam.snapX, camY: cam.snapY,
               heroX: player.x, heroY: player.y,
               desc: e.desc,
-              rnd: rng.next(),        // the single randomness input, CS:0x3836
+              rnd: () => rng.next(),  // the single randomness input, CS:0x3836 (drawn after the cull)
               world: level.world,     // strategy 3's per-world waypoint list
               markers: markerList.entries,       // DS:0xb5dc
               markersOverride: markerList.override,   // DS:0x399
-            }).verdict;
+            });
+            verdict = res.verdict;
             e.lastVerdict = verdict;   // ?debug
+            e.lastSearch = res;        // ?debug
           }
           /* CS:0xE659, called BEFORE the mode dispatch for System B (see
            * entity.js's fireB header) — the muzzle/hazard it returns is routed
@@ -3891,6 +3893,7 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
       /* The live guardian object (for seeding carried-over state such as
        * the world-2 jaw counter DS:0x2F0, which no fight initialises). */
       guardianRaw: () => guardian,
+      enemiesB: () => enemies,
       guardian() {
         if (guardian && guardian.world === 2) {
           const G = guardian;

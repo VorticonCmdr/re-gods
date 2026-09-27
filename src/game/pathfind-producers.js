@@ -608,7 +608,11 @@ export function runSearch(entity, ctx) {
   if (!searchable(entity.x, entity.y, ctx.camX, ctx.camY)) {
     return { verdict: VERDICT_NONE, seed: -1, state: st };   // CS:0xf59f — the cull
   }
-  const seed = seedGoals(st, ctx.heroX, ctx.heroY, ctx.rnd | 0);   // f5c0
+  /* The strategy draw happens inside CS:0xF6DB, AFTER the cull above: an
+   * off-screen entity draws nothing. `ctx.rnd` may be the draw function. */
+  const rnd = typeof ctx.rnd === 'function' ? ctx.rnd() : ctx.rnd;
+  const seed = seedGoals(st, ctx.heroX, ctx.heroY, rnd | 0);   // f5c0
+  st.seedGrid = Int8Array.from(st.grid);            // ?debug: SS:0x1c70 as F5C3 sees it
   st.nodeCost = 0;                                  // f5c6 — this is the ROOT
   st.firstMove = 0;
 

@@ -7,6 +7,9 @@ At each hit it records the tape cursor, DS:0x160, the registers, the
 camera, and `DI`-relative words (the entity record for CS:0xF586).
 
   python3 trace.py joyl2 103 2025 2040 f586
+  python3 trace.py joyl2 103 2090 2093 f5c3,f144 2ac:6 s1c70:190
+Several addresses may be comma-separated; extra `off:len` ranges (hex,
+DS, or SS with a leading `s`) are read at every hit.
 Writes NAME.trace.json.
 """
 import json, sys
@@ -14,7 +17,9 @@ from sweep import DS, CS, SS, POLLER, call, mem, word, wait_stop
 
 
 def main():
-    name, inject, lo, hi, addr = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4]), int(sys.argv[5], 16)
+    name, inject, lo, hi, addrs = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4]), [int(a, 16) for a in sys.argv[5].split(',')]
+    extra = [(SS if a[0] == 's' else DS, a) + tuple(int(v, 16) for v in a.lstrip('s').split(':'))
+             for a in sys.argv[6:]]
     here = __file__.rsplit('/', 1)[0]
     cap = json.load(open(f'{here}/{name}.raw.json'))['output']
     snap = [s for s in (e.split(':') for e in cap['rnd'].split(';') if e) if int(s[0]) <= inject][-1]
@@ -36,7 +41,8 @@ def main():
     call('PUT', f'/memory/{DS}/{0x7E14}', table, raw=True)
     run_to(lo)
     call('DELETE', '/debug/breakpoints')
-    call('POST', '/debug/breakpoints', {'type': 'execute', 'segment': CS, 'offset': addr})
+    for addr in addrs:
+        call('POST', '/debug/breakpoints', {'type': 'execute', 'segment': CS, 'offset': addr})
     log = []
     while True:
         call('POST', '/debug/continue')
@@ -47,7 +53,8 @@ def main():
             break
         di = reg['edi'] & 0xFFFF
         rec = mem(DS, di, 16)
-        log.append({'c': cur, 'r': word(DS, 0x160), 'di': hex(di), 'si': hex(reg['esi'] & 0xFFFF),
+        log.append({'c': cur, 'at': hex(reg['eip'] & 0xFFFF), 'r': word(DS, 0x160), 'di': hex(di),
+                    'ranges': {k: mem(g, o, n).hex() for g, k, o, n in extra}, 'si': hex(reg['esi'] & 0xFFFF),
                     'cam': [word(DS, 0xA), word(DS, 0xC)], 'hero': [word(DS, 0x17A), word(DS, 0x17C)],
                     'rec': [int.from_bytes(rec[i:i + 2], 'little', signed=True) for i in range(0, 16, 2)]})
     call('DELETE', '/debug/breakpoints')
