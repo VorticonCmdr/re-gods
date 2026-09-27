@@ -18,8 +18,8 @@
  *     CS:0x15EC  ax=[si] ; bx=[si+2]           ; reload, fall-physics done
  *     CS:0x15F1  ax -= [0xa]                    ; -> SCREEN X
  *     CS:0x15F5  cmp cx,0xc0 / jl               ; type >= 0xC0 (weapon) ->
- *                jumps to 0x1da0, skipping everything below. Weapons never
- *                append markers.
+ *                jumps to 0x1da0, which appends a marker of its own (no
+ *                category test) — an earlier revision said weapons never do.
  *     CS:0x1600  di = 0x2a4e + type*10          ; the runtime descriptor
  *     CS:0x160D  cmp byte [di+4],3 / jl 0x162e  ; CATEGORY < 3 -> marker path
  *     CS:0x162E  bx -= [0xc]                    ; -> SCREEN Y
@@ -169,9 +169,15 @@ export function stepMarkers(objects, cats, markerList, cam) {
   if (!cats) return;
   for (const o of objects) {
     if (o.dead || !(o.flag6 & 1)) continue;             // CS:0x1554-ish gate
-    if (o.type < 0 || o.type >= 0xC0) continue;         // 15F5 — weapons skip
-    const cat = cats[o.type];
-    if (cat === undefined || cat >= 3) continue;        // 160D `jl`
+    if (o.type < 0) continue;
+    /* CS:0x15F5 sends weapons (type >= 0xC0) to CS:0x1DA0, which appends a
+     * marker too — with NO category test (an earlier revision skipped them).
+     * [PROVEN] live against PJOYL3 736: DS:0x398 = 5 with a weapon on screen
+     * where the port had counted 4. */
+    if (o.type < 0xC0) {
+      const cat = cats[o.type];
+      if (cat === undefined || cat >= 3) continue;      // 160D `jl`
+    }
     markerList.append(o.x - cam.x, o.y - cam.y, o.type); // 15F1/162E/1632
   }
   /* CS:0x14B8-0x14BF — after the walk an "attracts monsters" override

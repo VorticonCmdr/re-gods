@@ -10864,12 +10864,12 @@ export function checkMarkers() {
     { x: 500, y: 50, type: 9, flag6: 1, dead: false },     // cat 4, skip
     { x: 600, y: 50, type: 5, flag6: 0, dead: false },     // off-screen, skip
     { x: 700, y: 50, type: 5, flag6: 1, dead: true },      // dead, skip
-    { x: 800, y: 50, type: 0xC5, flag6: 1, dead: false },  // weapon, skip
+    { x: 800, y: 50, type: 0xC5, flag6: 1, dead: false },  // weapon: CS:0x1DA0 appends it too
   ];
   const ml = new MarkerList();
   stepMarkers(objects, cats, ml, { x: 40, y: 10 });
-  check('stepMarkers appends ONLY on-screen category<3 objects (3 of 8)',
-    ml.entries.length === 3, JSON.stringify(ml.entries));
+  check('stepMarkers appends on-screen category<3 objects AND weapons (4 of 8; CS:0x1DA0, proven live at PJOYL3 736)',
+    ml.entries.length === 4 && ml.entries[3].type === 0xC5, JSON.stringify(ml.entries));
   check('stepMarkers stores SCREEN coordinates (world minus the camera)',
     ml.entries[0].x === 100 - 40 && ml.entries[0].y === 50 - 10,
     JSON.stringify(ml.entries[0]));
