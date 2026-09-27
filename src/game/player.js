@@ -1730,6 +1730,27 @@ export class Player {
     }
     if (forced) this.phase = 0;                               // `xor cl,cl`
 
+    /* CS:0x564B-0x5699 (state 13) / CS:0x58A5-0x58E5 (state 14), identical
+     * shape: the phase and the ping-pong flag DS:0x347 advance BEFORE the
+     * step, with the step sound CS:0x5931 at each turn:
+     *     flag clear: inc cl; cl > 3 -> sound, flag on, dec cl, then fall in:
+     *     568A: dec cl; zero -> sound, inc cl, flag off, back to the top
+     * which cycles 2,3,2*,1,2*,3,2*,... — a sound every SECOND step. [PROVEN]
+     * against PJOYL3 899/900 (the sound's ADL draws) and 930 (the ladder-fire
+     * entry's even-phase nudge). An earlier revision ran 1,2,3*,2,1,0*, a
+     * sound every third step. */
+    const phaseBefore = this.phase;                           // DS:0x344 (CS:0x571B)
+    for (;;) {
+      if (!this.ladderPingPong) {
+        this.phase++;
+        if (this.phase <= LADDER_PHASE_MAX) break;
+        this.climbStep = true; this.ladderPingPong = true; this.phase--;
+      }
+      this.phase--;
+      if (this.phase !== 0) break;
+      this.climbStep = true; this.phase++; this.ladderPingPong = !this.ladderPingPong;
+    }
+
     if (!desc) {
       /* CS:0x58c3 `sub word [0x17c],0x6` — see CLIMB_STEP's own note: this
        * used to be 4 px, taken from the wrong (ladder-FIRE) sites. */
@@ -1738,19 +1759,12 @@ export class Player {
         this.y = newY;
       } else {
         /* CS:0x58e7-0x58fa — when neither row around the new spot is still
-         * a ladder, the original REVERTS both the Y step AND the phase
-         * (`mov cl,[0x344]`, the value cached before this tick even ran) and
-         * stays in climb, frozen. There is no auto-exit at the top of a
-         * ladder; dismount (above) or jump-off is how you leave it.
-         *
-         * ⚠️ This is the bug the "still plays the climbing animation while
-         * stuck" report was about: the animation step below used to run
-         * UNCONDITIONALLY, so a hero wedged against a ceiling (or entering
-         * a ladder that's capped one row up) sat still while its arms kept
-         * cycling through the climb frames — motion with no matching
-         * displacement. Bailing out here, before the animation block, keeps
-         * a blocked tick a true no-op: no Y change, no phase change, same as
-         * the original's revert. */
+         * a ladder, the original REVERTS the Y step and the PHASE (`mov cl,
+         * [0x344]`, cached before this tick ran) and stays in climb, frozen.
+         * The flag flip and the sound above are NOT undone. There is no
+         * auto-exit at the top of a ladder; dismount or jump-off is how you
+         * leave it. */
+        this.phase = phaseBefore;
         return;
       }
     } else {
@@ -1772,20 +1786,6 @@ export class Player {
         this._enterFall();
         return;
       }
-    }
-
-    /* CS:0x565c-0x5699 (state 13) / CS:0x58b6-0x58e5 (state 14) — the
-     * climb-cycle animation, identical shape on both: 0..3, reversing at
-     * each end, with the step sound at the two turn-arounds. This is what
-     * was missing entirely — `phase` used to stay pinned at 0 for the whole
-     * climb, so the hero never appeared to move its limbs at all. Only
-     * reached now when the step above actually applied. */
-    if (this.ladderPingPong) {
-      this.phase--;
-      if (this.phase <= 0) { this.phase = 0; this.ladderPingPong = false; this.climbStep = true; }
-    } else {
-      this.phase++;
-      if (this.phase >= LADDER_PHASE_MAX) { this.phase = LADDER_PHASE_MAX; this.ladderPingPong = true; this.climbStep = true; }
     }
   }
 

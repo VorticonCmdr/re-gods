@@ -7187,18 +7187,20 @@ export async function checkWeaponsProjectiles(fetchRaw) {
       `CS:0x54b9/0x5707 \`cmp byte [0x36c],0 / jnz\` — the closed tick is a ` +
       `bare jmp before input is even read; _climb's own tock===0 early ` +
       `return reproduces that`);
-    /* Derived from LADDER_PHASE_MAX rather than hand-typed, so the check
-     * stays correct if that constant ever changes: a turn-around every
-     * LADDER_PHASE_MAX open ticks. */
+    /* CS:0x564B-0x5699: from phase 0 the cycle runs 1,2,3, then 2*,1,2*,3,
+     * 2*,... — the phase moves BEFORE the step and each turn (cl past 3, or
+     * down to 0) sounds and bounces straight back, so after the first three
+     * steps the sound comes every SECOND step. [PROVEN] against PJOYL3 930
+     * (the ladder-fire entry's even-phase nudge only lines up this way). An
+     * earlier revision expected a sound every third step. */
     const expectedOpenSeq = openSeq
-      .map((_, i) => ((i + 1) % LADDER_PHASE_MAX === 0 ? 1 : 0)).join('');
-    check(`climbStep fires exactly at the two ping-pong turn-arounds per ` +
-          `0->${LADDER_PHASE_MAX}->0 cycle — not once, not every step`,
+      .map((_, i) => (i < LADDER_PHASE_MAX ? 0 : (i - LADDER_PHASE_MAX) % 2 === 0 ? 1 : 0)).join('');
+    check(`climbStep fires at every turn of CS:0x564B's cycle — 3 quiet steps, ` +
+          `then every second step`,
       openSeq.join('') === expectedOpenSeq,
       `open-tick climbStep sequence: ${openSeq.join('')}, expected ` +
-      `${expectedOpenSeq} (a turn-around every LADDER_PHASE_MAX=` +
-      `${LADDER_PHASE_MAX} open ticks) — matches FUN_1000_5931's own 4 call ` +
-      `sites (CS:0x5681/0x5690 descend, CS:0x58cd/0x58dc ascend), 2 per cycle`);
+      `${expectedOpenSeq} — FUN_1000_5931's 4 call sites (CS:0x5681/0x5690 ` +
+      `descend, CS:0x58cd/0x58dc ascend)`);
   }
   {
     /* player.js:1319's blocked-step early return (added to fix the "still
