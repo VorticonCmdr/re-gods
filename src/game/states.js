@@ -132,10 +132,14 @@ export const STATE_INFO = [
   /* 24 */ { label: 'ladder fire right',    proof: 'entered from 13/14; calls 0x9734; returns to 14' },
   /* 25 */ { label: 'ladder fire left',     proof: 'entered from 13/14; calls 0x97ce; returns to 14' },
   /* 26 */ { label: 'idle',                 proof: '49CA `sub cl,cl` then dispatches LEFT/RIGHT to 27/28' },
-  /* 27 */ { label: 'stub: idle -> walk left',  proof: '4ACC mov cl,2 / mov [0x377],0 — 3 instructions',
-             sprite: false },
-  /* 28 */ { label: 'stub: idle -> walk right', proof: '4AD6 mov cl,2 / mov [0x377],1 — 3 instructions',
-             sprite: false },
+  /* ⚠️ CORRECTED: 27/28 DO render, for exactly one tick. Their own handler
+   * is three instructions, but the tick that ENTERS them is idle's
+   * (49D3 `mov [0x377],0x1c / jmp 0x5e9b`), and 0x5e9b is the epilogue that
+   * selects the sprite from [0x377] — so that frame draws anim_base+cl
+   * with cl=0 (49CA): sprite 51 (left) / 53 (right). PJOYL1 cursor 279
+   * settles in state 28. */
+  /* 27 */ { label: 'stub: idle -> walk left',  proof: '4ACC mov cl,2 / mov [0x377],0 — 3 instructions; entered from 26 for one rendered tick' },
+  /* 28 */ { label: 'stub: idle -> walk right', proof: '4AD6 mov cl,2 / mov [0x377],1 — 3 instructions; entered from 26 for one rendered tick' },
 ];
 
 /* The three hard remaps applied at CS:0x5f8b AFTER base + sign_extend(cl). */

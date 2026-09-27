@@ -3605,9 +3605,19 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
         length: attract.tape.ticks.length },
       x: player.x, y: player.y, st: player.stateIndex, camX: cam.x, camY: cam.y,
       world: levelInfo.world, sub: levelInfo.sublevel, tick: clock.tick,
+      r: rng.cursor,
     });
     window.__gods = {
       snap,
+      /* Load a captured DS:0x7E14 table (512 bytes as hex, little-endian
+       * words) and DS:0x160 cursor into the shared generator, in place, so
+       * every holder of `rng` sees it. */
+      setRandom(hex, cursor) {
+        for (let i = 0; i < rng.table.length; i++) {
+          rng.table[i] = parseInt(hex.substr(i * 4, 2), 16) | (parseInt(hex.substr(i * 4 + 2, 2), 16) << 8);
+        }
+        rng.cursor = cursor & 0x1ff;
+      },
       async startAttractAt(state) { clock.stop(); await enterAttractState(state); await settle(); return snap(); },
       /* Step until `n` ticks ran, recording a snapshot after each. */
       async stepTicks(n, record = true) {

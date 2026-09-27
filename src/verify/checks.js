@@ -6014,8 +6014,10 @@ export async function checkWeaponsProjectiles(fetchRaw) {
     const p2 = new Player(2 * 32, y0);
     p2.state = ST.JUMP; p2.jumpCursor = JUMP_ARC_EARLY_LAND_CURSOR; p2.facing = 1;
     p2.tick(m, IN(), null);
+    /* The early landing enters the landing pose (CS:0x5157 -> state 16),
+     * not the ground bucket directly — PJOYL1 cursor 192. */
     check(`jumpCursor AT the threshold early-lands on the same ground`,
-      p2.state === ST.GROUND && p2.y === y0,
+      p2.state === ST.LAND && p2.y === y0,
       `state=${p2.state} y=${p2.y} (expected ${y0}) — an off-by-one on ` +
       `JUMP_ARC_EARLY_LAND_CURSOR is invisible any other way`);
   }

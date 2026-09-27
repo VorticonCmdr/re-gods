@@ -199,6 +199,7 @@ export const S = {
   CROUCH_R: 18, CROUCH_L: 19,
   LAND_R: 16, LAND_L: 17,   // the landing pose — CS:0x5042 / 0x5020
   IDLE: 26,
+  IDLE_TO_L: 27, IDLE_TO_R: 28,   // idle -> walk stubs — CS:0x4ACC / 0x4AD6
 };
 
 /* CS:0x4AE0 (state 18, crouch RIGHT) / CS:0x4B55 (state 19, crouch LEFT),
@@ -674,20 +675,20 @@ export class Player {
                        this.savedLadderPhase);
     this.flag356 = false;                      // CS:0x5341 / 0x4DCC — one shot
 
-    /* THE EMIT. CS:0x5D4E / 0x5423 / 0x4E1D / 0x5461 — `call 0x9734`. */
-    if (r.emit && this.pendingAlloc && fire) {
-      fire.emit(this.pendingAlloc, this.x, this.y, st.right);
-      this.emitted = { right: st.right, state: id };
-      this.pendingAlloc = null;
-    }
-    if (chained) this.pendingAlloc = chained;  // the next cycle's reservation
 
     /* ── the family's own movement, which runs regardless of the phase gate ── */
     let override = null;
+    let steerAbort = false;
     if (st.family === 'jump') {
       /* CS:0x536C `add word [0x17a],4`, behind the same three-cell probe the
        * walk uses; then the arc delta from DS:0xd922 at the CURRENT cursor. */
       this._walk(map, st.right ? +1 : -1);
+      /* CS:0x5371-0x5394 — the pre-arc landing test (cursor >= 0x16), into
+       * the landing pose, before the arc delta and before the emit. */
+      if (this.jumpCursor >= JUMP_ARC_EARLY_LAND_CURSOR && solidThreeBelow(map, this.x, this.y)) {
+        this._fireLand(st.right);
+        return;
+      }
       const i = this.jumpCursor >> 1;
       if (i < JUMP_DELTAS.length) {
         const d = JUMP_DELTAS[i];
@@ -703,6 +704,13 @@ export class Player {
         this._leaveFire(st.right ? S.FALL_R : S.FALL_L, 0);
         return;
       }
+      /* CS:0x53DE-0x53EB — the post-arc landing test. ⚠️ Its threshold is
+       * 0x12, NOT the plain jump's 0x16 (CS:0x51B5): a firing jump can land
+       * two arc steps earlier. [PROVEN] live: PJOYL1 cursor 192. */
+      if (this.jumpCursor >= 0x12 && solidThreeBelow(map, this.x, this.y)) {
+        this._fireLand(st.right);
+        return;
+      }
       this.jumpCursor += JUMP_ARC_STEP;        // CS:0x53F9 / 0x542B — BOTH paths
       if (this.jumpCursor >= JUMP_ARC_END) {
         /* ⚠️ The cursor exit WINS over the phase exit — it is tested after. */
@@ -715,6 +723,11 @@ export class Player {
       this._gravity(tock);                               // CS:0x48B0
       this.y += this.fallV;
       this.fallDamage = (this.fallDamage || 0) + 1;      // DS:0x176
+      /* CS:0x4DEE `call 0x48d4` — the fall-fire pair steers too (an earlier
+       * note here said states 22/23 never test the direction bits). A
+       * steering press overwrites [0x377] with 11/12, so the firing state
+       * ends after this tick; see `steerAbort` below. */
+      steerAbort = this._airSteer(map, input);
       if (solidThreeBelow(map, this.x, this.y)) {        // CS:0x4DF1
         this.y &= 0xfff0;
         this.fallV = 0; this.airSteps = 0;
@@ -733,6 +746,31 @@ export class Player {
         return;
       }
     }
+    /* THE EMIT. CS:0x5D4E / 0x5423 / 0x4E1D / 0x5461 — `call 0x9734`. In
+     * the jump and fall families it sits AFTER the movement and the landing
+     * and ceiling tests (CS:0x5423 follows 0x5371-0x53EB; CS:0x4E1D follows
+     * the landing at 0x4DF1), so a tick that lands or bumps never emits. */
+    if (r.emit && this.pendingAlloc && fire) {
+      fire.emit(this.pendingAlloc, this.x, this.y, st.right);
+      this.emitted = { right: st.right, state: id };
+      this.pendingAlloc = null;
+    }
+    if (chained) this.pendingAlloc = chained;  // the next cycle's reservation
+
+    /* The air steer above rewrote [0x377] to a plain fall state; nothing
+     * later in the fall-fire handler writes it back unless the phase exit
+     * fires this same tick, so from the next tick on the hero is falling. */
+    if (steerAbort && !(r.next !== id)) {
+      const right = this.facing > 0;
+      this.fireState = -1;
+      this.pendingAlloc = null;
+      this.state = ST.FALL;
+      this.stateIndex = right ? S.FALL_R : S.FALL_L;
+      this.phase = r.phase;
+      this.renderPhase = r.phase;
+      return;
+    }
+
     /* walk and ladder move nothing: state 5's body is `inc cl`, the emit gate,
      * the chain check and the animation — there is no X step in it at all, so
      * firing while walking HALTS the hero for the whole 5-tick cycle. */
@@ -763,6 +801,18 @@ export class Player {
     this.firePhase = r.phase;
     this.stateIndex = id;
     this.renderPhase = fireAnimOffset(id, r.phase);
+  }
+
+  /** CS:0x5380 (jump-fire right; the left pair mirrors it): landing out of
+   *  a firing jump — `mov [0x377],0x10 / and [0x17c],0xfff0 / xor cl,cl /
+   *  mov [0x357],0`, the same landing pose a plain jump or fall enters. */
+  _fireLand(right) {
+    this.y &= 0xfff0;
+    this.fireState = -1;
+    this.pendingAlloc = null;
+    this.fallV = 0; this.airSteps = 0;
+    this._enterLand(right);
+    this.renderPhase = 0;
   }
 
   /** Hand control back to a normal state, choosing the matching ST bucket. */
@@ -902,6 +952,26 @@ export class Player {
       this._turn(input);
       return;
     }
+    /* CS:0x4ACC (state 27) / CS:0x4AD6 (state 28): `mov cl,2 / mov
+     * [0x377],0 (1) / jmp 0x5e9b` — the whole handler. No input, no ground
+     * test, no step: one tick that just hands over to the walk state. */
+    if (this.stateIndex === S.IDLE_TO_L || this.stateIndex === S.IDLE_TO_R) {
+      const right = this.stateIndex === S.IDLE_TO_R;
+      this.stateIndex = right ? S.WALK_R : S.WALK_L;
+      this.facing = right ? +1 : -1;
+      this.phase = 2;
+      return;
+    }
+    /* CS:0x49CA (state 26, idle): `sub cl,cl`, then RIGHT -> state 28 and
+     * LEFT -> state 27, each ending the tick. So leaving idle costs two
+     * ticks before the first step (idle -> 28 -> 1 -> step). [PROVEN] live:
+     * PJOYL1 cursors 279-281 (st28 at 404, st1 at 404, then 408). */
+    if (this.stateIndex === S.IDLE && (input.right || input.left)) {
+      this.stateIndex = input.right ? S.IDLE_TO_R : S.IDLE_TO_L;
+      this.facing = input.right ? +1 : -1;
+      this.phase = 0;
+      return;
+    }
     /* CS:0x593B (state 0) / CS:0x5B83 (state 1): the walk handlers test the
      * ground under the hero FIRST, at the position he is already at —
      *     call 0x496a ; cmp [si+0x180],1 / jz ok ; (x straddle) [si+0x181]
@@ -958,115 +1028,14 @@ export class Player {
         if (input.left) { this.stateIndex = S.TURN_RL; this.phase = 0; return; }
       }
       this.facing = input.right ? +1 : -1;
-      if (this._tryFire(this.facing > 0 ? 5 : 6, input, fire)) return;
     } else if (this.stateIndex === S.WALK_L || this.stateIndex === S.WALK_R) {
       this.facing = this.stateIndex === S.WALK_L ? -1 : +1;
-      if (this._tryFire(this.facing > 0 ? 5 : 6, input, fire)) return;
     } else if (this.stateIndex === S.IDLE && input.fire &&
                pickup && pickup.leverToggle) {
       pickup.leverToggle.tick(pickup.objects, pickup.cats, pickup.levers,
                                { x: this.x, y: this.y });
       this.leverToggled = pickup.leverToggle.lastToggle;
     }
-    let stepDelta = 0;
-    if (input.left  && this._walk(map, -1)) stepDelta = -WALK_STEP;
-    if (input.right && this._walk(map, +1)) stepDelta = +WALK_STEP;
-
-    if (moving) {
-      this.stateIndex = this.facing < 0 ? S.WALK_L : S.WALK_R;
-      /* CS:0x5ACC-0x5AD3 (state 0) / CS:0x5D17-0x5D1E (state 1), fresh
-       * disassembly this session — a SECOND divergence surfaced as a side
-       * effect of the ARRIVAL fix above, now closed. The "locked stopped
-       * pose" release block below (CS:5B1E/5B26 left, 5B2B/5B33 right)
-       * pins `phase` to a facing-specific sentinel OUTSIDE the 8-frame
-       * cycle — 0x39=57 left, 0x2d=45 right — while leaving stateIndex at
-       * WALK_L/WALK_R. On the very next pressed tick the handler steps
-       * [0x17a] as usual, but THIS SAME clamp — tested against the phase
-       * value from BEFORE this tick's own increment — finds it > 7 and
-       * immediately UNDOES that step (`SUB`/`ADD` mirrors the `ADD`/`SUB`
-       * it just did), pinning `CL:=7` in place BEFORE the SAME shared
-       * `INC CL / AND CL,7` below runs on it — so the undo tick's own
-       * phase lands on 0, not 7; the NEXT tick (phase 0, back in-cycle)
-       * then steps normally. The mechanism above is from fresh
-       * disassembly this session, not a live single-step; the observed
-       * behaviour it explains — PJOYG1.DAT's own SECOND "right" press
-       * (recorded tick 29, the first press after the tick-22 stop): heroX
-       * held at 3448 for one more tick, stepping to 3452 only on tick 30 —
-       * is a prior session's live DOSBox capture, now baked into
-       * `tools/joyg1-live-capture.json`. This port previously stepped
-       * immediately on the resume tick AND (invisibly to
-       * `tools/replay-diff.mjs`, which tracks no phase field) landed on
-       * the wrong post-undo phase, 6 instead of 0, in an earlier revision
-       * of this very fix — caught only by the phase-aware regression
-       * check below, not by any live or replayed hero-position match.
-       *   Gated on `stepDelta !== 0`: a tick where `_walk` returns false
-       * (wall-blocked) never reached the ADD/SUB in the original either
-       * (CS:5A8C-0x5AA5 / 5CD6-5CF0 jump straight past it, see the wall-
-       * probe header above), so there is nothing here to undo. */
-      /* CS:5AAD/0x5ABA (state 0) and CS:0x5CF8/0x5D05 (state 1) both test
-       * the footstep sound against CL exactly as the dispatcher handed it
-       * to this handler — BEFORE the undo-clamp above and BEFORE this
-       * tick's own `INC CL / AND CL,7` below, both of which mutate `phase`.
-       * Captured here, before either runs. Getting this ordering backwards
-       * (testing phase AFTER those, as an earlier revision of this port
-       * did) is invisible on an ordinary ramping tick, where old and new
-       * phase rarely straddle 2/6, but is wrong on principle — only a
-       * direct assertion against this pre-clamp value can catch it. */
-      const preClampPhase = this.phase;
-      if (stepDelta !== 0 && this.phase > 7) { this.x -= stepDelta; this.phase = 7; }
-      /* CS:5AD8 `inc cl` / 5ADA `and cl,7` — an 8-frame cycle. */
-      this.phase = (this.phase + 1) & (WALK_CYCLE - 1);
-      /* CS:5AAD and 5ABA both `mov ax,0x20e / call 0x22ca` — the footstep
-       * sound, twice per cycle at opposite phases. No audio yet; the flag is
-       * exposed so the hook exists and is dated by evidence, not invented. */
-      this.footstep = WALK_FOOTSTEP_PHASES.includes(preClampPhase);
-    } else {
-      /* ⚠️ CORRECTED — an earlier revision of this port had EVERY release enter
-       * state 26 (idle), rendering the single direction-neutral sprite 25
-       * regardless of facing. Live DOSBox testing (both by the maintainer and
-       * by re-reading CS:0x5af2-0x5b35 fresh) shows that is wrong: state 26 is
-       * only reached when UP happens to be held at the exact instant the walk
-       * key is released (CS:0x5af9/0x5afb left, CS:0x5b0f/0x5b11 right). In the
-       * ordinary case — UP not held — the state NEVER changes: the hero stays
-       * in WALK_L/WALK_R forever, and the phase locks to a fixed, facing-
-       * specific sentinel (CS:0x5b1e/0x5b26 left -> cl=0x39=57; CS:0x5b08/0x5b2b
-       * right -> cl=0x2d=45) that renders sprite 0+57=57 or 11+45=56 — a
-       * "stopped, still facing that way" pose, not idle's back-view sprite 25.
-       * Confirmed live: DS:0x377 never became 26 in either direction after a
-       * plain key release, and DS:0x36b landed on exactly these two constants. */
-      if (this.stateIndex === S.ARRIVAL) {
-        /* CS:0x5DFE — state 4 (spawn / arrival) tests ONLY the two direction
-         * bits; with neither held it falls through to `5E16 jmp 0x56CA`,
-         * whose solid-ground arm is a bare `56D4 jmp 0x5e9b` — neither
-         * [0x377] nor CL is written, so the arrival pose HOLDS at
-         * anim_base(4)+0 = sprite 9 for as long as the player presses
-         * nothing. The walk-release block below belongs to states 0/1
-         * (CS:0x5AF2-0x5B35) and must not run here: without this guard the
-         * first UP press at a spawn or teleport arrival set stateIndex =
-         * S.IDLE and flipped the hero to the back view, which state 4 —
-         * having no UP test at all — never does. */
-      } else if (input.up) {
-        /* CS:5AF9/5AFB (left) or CS:5B0F/5B11 (right) — the ONLY way a release
-         * reaches true idle. State 26's own handler (CS:49CA `sub cl,cl`) zeros
-         * the phase again on its very next tick, converging on sprite 25. */
-        this.phase = this.facing < 0 ? 0xff : 0x01;
-        this.stateIndex = S.IDLE;
-      } else if (this.stateIndex === S.IDLE) {
-        /* Already idling (reached via the branch above on a prior tick, or via
-         * a fall/climb-bottom landing) and UP is no longer held: state 26's own
-         * body still runs every tick and keeps zeroing cl. */
-        this.phase = 0;
-      } else if (this.phase !== 0) {
-        /* CS:5B1E/5B26 (left) or 5B2B/5B33 (right): UP not held, and this is
-         * the tick the walk key was just released — lock the facing-specific
-         * stopped pose. stateIndex is deliberately left at WALK_L/WALK_R. */
-        this.phase = this.facing < 0 ? 0x39 : 0x2d;
-      }
-      /* else: phase is already the locked sentinel (or already 0 at true rest)
-       * — CS:5B23/5B30 do nothing at all on this path, so neither field is
-       * touched again until the player moves or presses UP. */
-    }
-
     /* ⚠️ JUMP vs CLIMB priority, re-read from CS:0x5a05-0x5a21 (walk-left),
      * CS:0x5c49-0x5c65 (walk-right) and CS:0x49fe-0x4a6a (idle) — and it used
      * to be backwards. UP alone used to launch a jump whenever the cell
@@ -1206,6 +1175,114 @@ export class Player {
       /* not climbable: UP goes unconsumed, exactly as the original leaves
        * it — fall through to the normal ground continuation below. */
     }
+    /* CS:0x5A64 (state 0) / CS:0x5CA8 (state 1) — the walk states' own fire
+     * test comes AFTER the down (CS:0x598A/0x5BCB) and up (CS:0x5A05/0x5C42)
+     * tests and BEFORE the wall probe and the step (CS:0x5A84/0x5CCB), so a
+     * tick that crouches, descends, jumps or grabs a ladder never steps and
+     * never fires. ⚠️ REORDERED: the port used to fire first and step
+     * before the down/up tests — PJOYL1 cursor 151, a jump take-off, where
+     * the original does not step (184 held) and the port stepped to 188. */
+    if ((moving || this.stateIndex === S.WALK_L || this.stateIndex === S.WALK_R)
+        && this._tryFire(this.facing > 0 ? 5 : 6, input, fire)) return;
+    let stepDelta = 0;
+    if (input.left  && this._walk(map, -1)) stepDelta = -WALK_STEP;
+    if (input.right && this._walk(map, +1)) stepDelta = +WALK_STEP;
+
+    if (moving) {
+      this.stateIndex = this.facing < 0 ? S.WALK_L : S.WALK_R;
+      /* CS:0x5ACC-0x5AD3 (state 0) / CS:0x5D17-0x5D1E (state 1), fresh
+       * disassembly this session — a SECOND divergence surfaced as a side
+       * effect of the ARRIVAL fix above, now closed. The "locked stopped
+       * pose" release block below (CS:5B1E/5B26 left, 5B2B/5B33 right)
+       * pins `phase` to a facing-specific sentinel OUTSIDE the 8-frame
+       * cycle — 0x39=57 left, 0x2d=45 right — while leaving stateIndex at
+       * WALK_L/WALK_R. On the very next pressed tick the handler steps
+       * [0x17a] as usual, but THIS SAME clamp — tested against the phase
+       * value from BEFORE this tick's own increment — finds it > 7 and
+       * immediately UNDOES that step (`SUB`/`ADD` mirrors the `ADD`/`SUB`
+       * it just did), pinning `CL:=7` in place BEFORE the SAME shared
+       * `INC CL / AND CL,7` below runs on it — so the undo tick's own
+       * phase lands on 0, not 7; the NEXT tick (phase 0, back in-cycle)
+       * then steps normally. The mechanism above is from fresh
+       * disassembly this session, not a live single-step; the observed
+       * behaviour it explains — PJOYG1.DAT's own SECOND "right" press
+       * (recorded tick 29, the first press after the tick-22 stop): heroX
+       * held at 3448 for one more tick, stepping to 3452 only on tick 30 —
+       * is a prior session's live DOSBox capture, now baked into
+       * `tools/joyg1-live-capture.json`. This port previously stepped
+       * immediately on the resume tick AND (invisibly to
+       * `tools/replay-diff.mjs`, which tracks no phase field) landed on
+       * the wrong post-undo phase, 6 instead of 0, in an earlier revision
+       * of this very fix — caught only by the phase-aware regression
+       * check below, not by any live or replayed hero-position match.
+       *   Gated on `stepDelta !== 0`: a tick where `_walk` returns false
+       * (wall-blocked) never reached the ADD/SUB in the original either
+       * (CS:5A8C-0x5AA5 / 5CD6-5CF0 jump straight past it, see the wall-
+       * probe header above), so there is nothing here to undo. */
+      /* CS:5AAD/0x5ABA (state 0) and CS:0x5CF8/0x5D05 (state 1) both test
+       * the footstep sound against CL exactly as the dispatcher handed it
+       * to this handler — BEFORE the undo-clamp above and BEFORE this
+       * tick's own `INC CL / AND CL,7` below, both of which mutate `phase`.
+       * Captured here, before either runs. Getting this ordering backwards
+       * (testing phase AFTER those, as an earlier revision of this port
+       * did) is invisible on an ordinary ramping tick, where old and new
+       * phase rarely straddle 2/6, but is wrong on principle — only a
+       * direct assertion against this pre-clamp value can catch it. */
+      const preClampPhase = this.phase;
+      if (stepDelta !== 0 && this.phase > 7) { this.x -= stepDelta; this.phase = 7; }
+      /* CS:5AD8 `inc cl` / 5ADA `and cl,7` — an 8-frame cycle. */
+      this.phase = (this.phase + 1) & (WALK_CYCLE - 1);
+      /* CS:5AAD and 5ABA both `mov ax,0x20e / call 0x22ca` — the footstep
+       * sound, twice per cycle at opposite phases. No audio yet; the flag is
+       * exposed so the hook exists and is dated by evidence, not invented. */
+      this.footstep = WALK_FOOTSTEP_PHASES.includes(preClampPhase);
+    } else {
+      /* ⚠️ CORRECTED — an earlier revision of this port had EVERY release enter
+       * state 26 (idle), rendering the single direction-neutral sprite 25
+       * regardless of facing. Live DOSBox testing (both by the maintainer and
+       * by re-reading CS:0x5af2-0x5b35 fresh) shows that is wrong: state 26 is
+       * only reached when UP happens to be held at the exact instant the walk
+       * key is released (CS:0x5af9/0x5afb left, CS:0x5b0f/0x5b11 right). In the
+       * ordinary case — UP not held — the state NEVER changes: the hero stays
+       * in WALK_L/WALK_R forever, and the phase locks to a fixed, facing-
+       * specific sentinel (CS:0x5b1e/0x5b26 left -> cl=0x39=57; CS:0x5b08/0x5b2b
+       * right -> cl=0x2d=45) that renders sprite 0+57=57 or 11+45=56 — a
+       * "stopped, still facing that way" pose, not idle's back-view sprite 25.
+       * Confirmed live: DS:0x377 never became 26 in either direction after a
+       * plain key release, and DS:0x36b landed on exactly these two constants. */
+      if (this.stateIndex === S.ARRIVAL) {
+        /* CS:0x5DFE — state 4 (spawn / arrival) tests ONLY the two direction
+         * bits; with neither held it falls through to `5E16 jmp 0x56CA`,
+         * whose solid-ground arm is a bare `56D4 jmp 0x5e9b` — neither
+         * [0x377] nor CL is written, so the arrival pose HOLDS at
+         * anim_base(4)+0 = sprite 9 for as long as the player presses
+         * nothing. The walk-release block below belongs to states 0/1
+         * (CS:0x5AF2-0x5B35) and must not run here: without this guard the
+         * first UP press at a spawn or teleport arrival set stateIndex =
+         * S.IDLE and flipped the hero to the back view, which state 4 —
+         * having no UP test at all — never does. */
+      } else if (input.up) {
+        /* CS:5AF9/5AFB (left) or CS:5B0F/5B11 (right) — the ONLY way a release
+         * reaches true idle. State 26's own handler (CS:49CA `sub cl,cl`) zeros
+         * the phase again on its very next tick, converging on sprite 25. */
+        this.phase = this.facing < 0 ? 0xff : 0x01;
+        this.stateIndex = S.IDLE;
+      } else if (this.stateIndex === S.IDLE) {
+        /* Already idling (reached via the branch above on a prior tick, or via
+         * a fall/climb-bottom landing) and UP is no longer held: state 26's own
+         * body still runs every tick and keeps zeroing cl. */
+        this.phase = 0;
+      } else if (this.phase !== 0) {
+        /* CS:5B1E/5B26 (left) or 5B2B/5B33 (right): UP not held, and this is
+         * the tick the walk key was just released — lock the facing-specific
+         * stopped pose. stateIndex is deliberately left at WALK_L/WALK_R. */
+        this.phase = this.facing < 0 ? 0x39 : 0x2d;
+      }
+      /* else: phase is already the locked sentinel (or already 0 at true rest)
+       * — CS:5B23/5B30 do nothing at all on this path, so neither field is
+       * touched again until the player moves or presses UP. */
+    }
+
     /* The walk states tested ground at entry, above; the others still do it
      * here, as before. */
     if (!walkAtEntry && !solidThreeBelow(map, this.x, this.y)) this._enterFall();
@@ -1302,13 +1379,12 @@ export class Player {
      * ground it reaches, same as the original. */
     if (this.jumpCursor >= JUMP_ARC_EARLY_LAND_CURSOR
         && solidThreeBelow(map, this.x, this.y)) {
+      /* CS:0x5157: `mov [0x377],0x10 / and [0x17c],0xfff0 / xor cl,cl /
+       * mov [0x357],0` — the landing POSE (see `_land`), not idle. */
       this.y &= 0xfff0;
-      this.state = ST.GROUND;
       this.fallV = 0;
       this.airSteps = 0;
-      this.fallDamage = 0;
-      this.stateIndex = S.IDLE;
-      this.phase = 0;
+      this._enterLand(this.facing > 0);
       this.renderPhase = 0;
       return;
     }
@@ -1340,6 +1416,23 @@ export class Player {
       this.airSteps = 0;
       this.fallDamage = 0;
       this.phase = 0;
+      return;
+    }
+    /* A SECOND landing test, after the arc delta and the ceiling test, into
+     * the same landing pose. ⚠️ Its threshold is NOT symmetric: state 9
+     * (right) tests >= 0x16 (CS:0x51B5), state 8 (left) tests >= 0x12
+     * (CS:0x4FB6) — the same 0x12 both firing jumps use (CS:0x52C1 /
+     * 0x53DE). The pre-arc test above is 0x16 in all four. [PROVEN] live:
+     * PJOYL1 cursor 518, a left jump landing two arc steps before a right
+     * one would. */
+    const postArcLand = this.facing < 0 ? 0x12 : JUMP_ARC_EARLY_LAND_CURSOR;
+    if (this.jumpCursor >= postArcLand
+        && solidThreeBelow(map, this.x, this.y)) {
+      this.y &= 0xfff0;
+      this.fallV = 0;
+      this.airSteps = 0;
+      this._enterLand(this.facing > 0);
+      this.renderPhase = 0;
       return;
     }
     this.stateIndex = this.facing < 0 ? S.JUMP_L : S.JUMP_R;
@@ -1409,6 +1502,44 @@ export class Player {
     this.phase = 2;
   }
 
+  /**
+   * CS:0x48D4 — air steering, shared by the plain falls (CS:0x4BE3 /
+   * 0x4CE5) and the fall-fire pair (CS:0x4DEE). LEFT and RIGHT are tested
+   * independently (not else-if), each against the DS:0x345 budget of 3:
+   *     LEFT:  [0x377]:=0x0B ; if x&0x1f == 0, blocked by a solid cell at
+   *            SI-1, SI+0x7F, SI+0xFF — and SI+0x17F too when y&0xF != 0 ;
+   *            else x -= 4, [0x345]++
+   *     RIGHT: [0x377]:=0x0C ; if x&0x1c is 0x1c or < 8, blocked by SI+1,
+   *            SI+0x81, SI+0x101 — and SI+0x181 when y&0xF != 0 ; else
+   *            x += 4, [0x345]++
+   * ⚠️ The fourth (feet) row is what the walk probe lacks, and a falling
+   * hero's Y is almost never tile-aligned. [PROVEN] live: PJOYL1 cursor 440,
+   * RIGHT held on the landing tick — the feet row is the floor, so the
+   * original does not steer (x stays 420); the port used to reach 424. A
+   * blocked press still sets the fall state's facing and costs no budget.
+   * @returns {boolean} whether a direction was pressed with budget left
+   *          (i.e. [0x377] was written).
+   */
+  _airSteer(map, input) {
+    let wrote = false;
+    const solid = (o) => cellAt(map, mapCursor(this.x, this.y) + o) === CELL_SOLID;
+    const unaligned = (this.y & 0xf) !== 0;
+    if (input.left && this.airSteps < AIR_STEPS_MAX) {
+      this.stateIndex = S.FALL_L; this.facing = -1; wrote = true;
+      const blocked = (this.x & 0x1f) === 0
+        && (solid(-1) || solid(0x7f) || solid(0xff) || (unaligned && solid(0x17f)));
+      if (!blocked) { this.x -= WALK_STEP; this.airSteps++; }
+    }
+    if (input.right && this.airSteps < AIR_STEPS_MAX) {
+      this.stateIndex = S.FALL_R; this.facing = +1; wrote = true;
+      const sub = this.x & 0x1c;
+      const blocked = (sub === 0x1c || sub < 8)
+        && (solid(1) || solid(0x81) || solid(0x101) || (unaligned && solid(0x181)));
+      if (!blocked) { this.x += WALK_STEP; this.airSteps++; }
+    }
+    return wrote;
+  }
+
   _fall(map, input, fire, health = null, tock = 1) {
     /* CS:0x4DD5 (state 11) / CS:0x4D6B (state 12) — the fall step moves Y
      * FIRST: dY = 4 + fallV (gravity already applied), THEN air-steering may
@@ -1433,10 +1564,7 @@ export class Player {
     this._gravity(tock);                     // CS:0x4CD1 `call 0x48b0`
     this.y += this.fallV;                    // CS:0x4CD7
     this.fallDamage = (this.fallDamage || 0) + 1;      // DS:0x176
-    if (this.airSteps < AIR_STEPS_MAX) {
-      if (input.left)  { this._walk(map, -1); this.airSteps++; }
-      else if (input.right) { this._walk(map, +1); this.airSteps++; }
-    }
+    this._airSteer(map, input);                        // CS:0x4CE5 `call 0x48d4`
     this.stateIndex = this.facing < 0 ? S.FALL_L : S.FALL_R;
     this.phase = 0;
     if (solidThreeBelow(map, this.x, this.y)) {   // CS:0x4BEB / 0x4CED
