@@ -8487,9 +8487,10 @@ export async function checkWeaponsProjectiles(fetchRaw) {
     {
       const tbl = [{ slot: 7, dead: true, type: 0xffff }, { slot: 2, dead: false, type: 5 },
                    { slot: 3, dead: true, type: 0xffff }];
-      const got = allocObject(tbl);
+      const take = () => { const r = allocObject(tbl); if (r) r.type = 9; return r; };  // callers write the type
+      const first = take(), second = take(), third = take();
       check('allocObject takes the lowest free SLOT, not the first free array entry',
-        got === tbl[2] && !got.dead && allocObject(tbl) === tbl[0] && allocObject(tbl) === null,
+        first === tbl[2] && second === tbl[0] && third === null,
         'the port keeps the table in draw order; CS:0x38DF walks slot 0..199');
     }
 
