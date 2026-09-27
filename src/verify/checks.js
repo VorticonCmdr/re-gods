@@ -31,7 +31,7 @@ import { ShopScreen, GRID_COLS, GRID_ROWS, GRID_SLOTS, EXIT_SLOT, DATA_SLOTS,
   WEAPON_ID_BASE, PRICES, BUY_CONFIRM_SFX } from '../game/shop.js';
 import { TallyScreen, timeBonus, healthBonus, moneyBonus, POOL_STEP,
          WAIT_AFTER_SUMMARY_TICKS, WAIT_AFTER_COUNTDOWN_TICKS,
-         SFX_EVERY_N_STEPS, CHA_CHING_SFX, TALLY_FANFARE_SFX, TALLY_FANFARE_SMALL_SFX } from '../game/tally.js';
+         SFX_EVERY_N_STEPS, CHA_CHING_SFX, TALLY_FANFARE_SFX, TALLY_FANFARE_BIG_SFX } from '../game/tally.js';
 import { consumesKey } from '../game/trigger.js';
 import { PI1_SIZE, decodePI1, TILE_COUNT } from '../formats/pi1.js';
 import { decodeStatusPanel, PANEL_W, PANEL_H, PANEL_Y0 } from '../game/status-panel.js';
@@ -16551,7 +16551,7 @@ export async function checkMusic(fetchRaw) {
     KILL_SFX, HURT_SFX, FIRE_SFX,
     0x020e /* FOOTSTEP */, 0x0240 /* CLIMB_STEP */, 0x021d /* TERRAIN */,
     0x0209 /* AXE_BOUNCE */, 0x0609 /* BOMB_THUD */, 0x1022 /* BOMB_DETONATE */,
-    TALLY_FANFARE_SFX, TALLY_FANFARE_SMALL_SFX,
+    TALLY_FANFARE_SFX, TALLY_FANFARE_BIG_SFX,
   ];
   const unplayable = wiredSfxIds.filter((id) => {
     const blob = blobs[id & 0x7f] && expandBlob(blobs[id & 0x7f]);

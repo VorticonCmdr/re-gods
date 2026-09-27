@@ -2317,7 +2317,7 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
             moneyTotal: purse.total,
             password: passwordReveal,
           });
-          audio.play(tallyFanfareSfx(dest.param2));   // CS:0x657B -> FUN_1000_67f5, once on entry
+          audio.play(tallyFanfareSfx(dest.word2));    // CS:0x657B -> FUN_1000_67f5, once on entry
           const finishTallyScreen = () => {
             if (fx2.clearKeys) clearNonPotionInventory(inventory, level.cats);
             if (fx2.poolReset) {

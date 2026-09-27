@@ -219,11 +219,13 @@ export function unpackTeleportDest(arg) {
  * field, read live off the same four addresses; see `EXIT_BIT` below for
  * what each bit does. `param`/`param2` remain unestablished — see the
  * header note above. */
+/* `word2` is the record's +2 word (read at 1ffd:e6ea: `0c 00 | 00 00 | c4 09 | text`),
+ * 0 in all four — the one FUN_1000_67f5 tests for the tally fanfare. */
 export const EXIT_DESTINATIONS = [
-  { param: 12, param2: 2500, text: '    LEVEL  ONE   ', bits: 0x0502 },
-  { param: 16, param2: 2500, text: '    LEVEL  TWO     ', bits: 0x0502 },
-  { param: 100, param2: 2500, text: '   LEVEL  THREE   ', bits: 0x0702 },
-  { param: 20, param2: 25000, text: '        GAME        ', bits: 0x0000 },
+  { param: 12, word2: 0, param2: 2500, text: '    LEVEL  ONE   ', bits: 0x0502 },
+  { param: 16, word2: 0, param2: 2500, text: '    LEVEL  TWO     ', bits: 0x0502 },
+  { param: 100, word2: 0, param2: 2500, text: '   LEVEL  THREE   ', bits: 0x0702 },
+  { param: 20, word2: 0, param2: 25000, text: '        GAME        ', bits: 0x0000 },
 ];
 
 /**

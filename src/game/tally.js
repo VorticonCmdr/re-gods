@@ -113,14 +113,15 @@ export const CHA_CHING_SFX = 0x52f;
  * `FUN_1000_67f5`, called only from `CS:0x657B` (right after `FUN_1000_22d0`
  * and the sound-export far call at `CS:0x6576`, before any tally drawing):
  * `cmp word[si+2],1000 / jl` picks `0x7914` (blob 20) when the destination
- * record's `param2` is >= 1000, else `0x7928` (blob 40). Every real LEVEL
- * record has param2 2500, so a genuine level completion plays blob 20. Both
- * blobs are dictionary-compressed SMF sequences — see mus-container.js's
- * `expandBlob`. */
-export const TALLY_FANFARE_SFX = 0x7914;
-export const TALLY_FANFARE_SMALL_SFX = 0x7928;
-/** CS:0x67F5 — the fanfare id for a destination record's `param2`. */
-export function tallyFanfareSfx(param2) { return param2 >= 1000 ? TALLY_FANFARE_SFX : TALLY_FANFARE_SMALL_SFX; }
+ * record's +2 word is >= 1000, else `0x7928` (blob 40). That word is 0 in
+ * every shipped record (zones.js's `word2`), so a real level completion
+ * plays blob 40 — live-confirmed in DOSBox (AX=0x7928 at CS:0x6809 for a
+ * forced LEVEL ONE tally). Blob 20 is shipped but never selected. Both
+ * blobs are dictionary-compressed SMF — mus-container.js's `expandBlob`. */
+export const TALLY_FANFARE_SFX = 0x7928;
+export const TALLY_FANFARE_BIG_SFX = 0x7914;
+/** CS:0x67F5 — the fanfare id for a destination record's +2 word. */
+export function tallyFanfareSfx(word2) { return word2 >= 1000 ? TALLY_FANFARE_BIG_SFX : TALLY_FANFARE_SFX; }
 
 export const POOL_DIGITS = 6;
 export const POOL_X0 = 172, POOL_Y = 136, POOL_DIGIT_STEP = 16;   // CS:0x67da, live-confirmed layout
