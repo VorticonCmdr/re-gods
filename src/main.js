@@ -68,7 +68,7 @@ import { SpikeClock, stepSpikes, spikeSprites, spike130Sprite,
 /* creatureScansGrid is imported for the world-1B statue's own scan only (it
  * was used there without an import — a ReferenceError the first time an
  * awake statue ran, found by a no-undef lint). */
-import { Health, HEALTH_MAX, attackHero, HURT_SFX, creatureScansGrid } from './game/combat.js';
+import { Health, HEALTH_MAX, attackHero, HURT_SFX, creatureScansGrid, combatHooks } from './game/combat.js';
 import { Nests, Brood } from './game/nest.js';
 import { Statues } from './game/statue.js';
 import { Ce64Creatures, Ce64Spits, OBJECT_TYPE as CE64_OBJECT_TYPE } from './game/ce64.js';
@@ -1093,6 +1093,9 @@ async function main() {
   let clamped = 0;
   /* CS:0xFF59's sound, played the moment an entity starts materialising
    * (entity.js's `materialise`), so its random draw keeps the original's order. */
+  /* CS:0xACEE — the contact hurt sound, played from inside combat.js's
+   * attackHero for every landed hit. */
+  combatHooks.hurtSfx = (id) => audio.play(id);
   const playFlash = (e) => {
     if (!e.wantsFlash) return;
     e.wantsFlash = false;
@@ -2633,7 +2636,7 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
       const statueTriggerProbe = (box) => attackHero(
         { x: box.x, y: box.y, w: box.w, h: box.h, strength: box.hp },
         { x: player.x, y: player.y, state: player.stateIndex }, health,
-        { invuln: fx.invuln > 0 }).strengthOut;
+        { invuln: fx.invuln > 0, muteHurt: true }).strengthOut;   // CS:0x7D60 NOPs 0x071D
       /* CS:0xC041, via objects.js's dropCarriedItem — steal-and-carry's own
        * periodic and death-time drops both land here, for BOTH entity
        * systems (moved above the System-B loop, which now also needs it —

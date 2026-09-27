@@ -324,6 +324,16 @@ export const KILL_SFX = 0x0f22;
  *   loses the reportGate, because a hit with reportGate != 0 damages the hero
  *   and still reads as "no hit" to the caller.
  */
+/** CS:0xACE5-0xACF1 — every hit that LANDS in `ac59` (invulnerable or not,
+ *  reported or not) plays the hurt sound 0x7822, unless the routine at
+ *  CS:0x071D is enabled (its first byte patched from RET to NOP by
+ *  CS:0x063A / 0x7D60). ADL draws a random number for it. It is not the
+ *  bar-descent HURT_SFX above. main.js installs
+ *  the player; `opts.muteHurt` stands for the statue's wake probe, which
+ *  NOPs CS:0x071D around its own call (CS:0x7D5B-0x7D71). */
+export const CONTACT_HURT_SFX = 0x7822;
+export const combatHooks = { hurtSfx: null };
+
 export function attackHero(atk, hero, health, opts = {}) {
   const miss = { hit: false, damage: 0, strengthOut: atk.strength };
 
@@ -345,6 +355,7 @@ export function attackHero(atk, hero, health, opts = {}) {
 
   const dmg = damageFor(atk.strength);                   // acbc..acc9
   if (!opts.invuln) health.damage(dmg);                  // accc `cmp [0x172],0`
+  if (!opts.muteHurt && combatHooks.hurtSfx) combatHooks.hurtSfx(CONTACT_HURT_SFX);   // ace5-acf1
 
   /* The hit is only REPORTED when DS:0x34 is zero (CS:0xacdb / 0xace2). */
   const reported = !opts.reportGate;
