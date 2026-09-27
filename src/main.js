@@ -2707,6 +2707,14 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
         return proxy.state;
       };
       if (!gmLate) {
+        /* CS:0x027F `call 0x894d` — the brood runs BEFORE the nests
+         * (CS:0x0282 `call 0x8687`), so children a nest death spawns this
+         * tick first move next tick. [PROVEN] against a live DS:0x8014 peek
+         * at PJOYL2 1898-1909: the port ran them the other way round and its
+         * brood led DOS by exactly one step.
+         * Ground-bounce honours "freezes aliens"; ballistic fall ignores it —
+         * see Brood#step's own header for why that asymmetry is real. */
+        lastBroodFx = brood.step(camNow, fx.freeze, nestContactScan, level.map.planeB).drawn;
         const nestResult = nests.step(
           camNow, { x: player.x }, fx.freeze,
           nestContactScan, brood, tock);
@@ -2714,10 +2722,6 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
           shots.fire(s.x, s.y, s.dir, camNow);
         }
         lastNestFx = nestResult.drawn;
-        /* CS:0x894E — the brood children a nest death just spawned (if any).
-         * Ground-bounce honours "freezes aliens"; ballistic fall ignores it —
-         * see Brood#step's own header for why that asymmetry is real. */
-        lastBroodFx = brood.step(camNow, fx.freeze, nestContactScan, level.map.planeB).drawn;
       }
 
       /* CS:0x7CBD/0x7B68 — the world-1-sublevel-B awakened statue. `statues`
