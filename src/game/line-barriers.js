@@ -138,6 +138,14 @@ export function settlePoint(targets, type) {
   return -1;
 }
 
+/** CS:0x77E0-0x77E9 — the cell a barrier's footprint is anchored at: the
+ *  displayed position ROUNDED to the nearest cell, column (x + 16) >> 5 and
+ *  row (y + 8) >> 4. The stamp uses it; this port also draws the tiles there
+ *  (the original's draw, CS:0x7779, is pixel-positioned at x, y). */
+export function anchorCell(s) {
+  return { col0: (s.x + 16) >> 5, row0: (s.y + 8) >> 4 };
+}
+
 export const TABLE_OFF = 0x189c;        // -> DS:0xa8a4
 export const RECORD_COUNT = 25;
 export const RECORD_STRIDE = 0x1c;      // 28 bytes, sums to exactly 0x1B58 - 0x189C
@@ -370,7 +378,7 @@ export class LineBarriers {
    *  common case) until one is found. Returns null (nothing drawn, but the
    *  solid stamp below still applies) if no footprint cell borders one. */
   #resolveTile(state) {
-    const col0 = state.x >> 5, row0 = state.y >> 4;
+    const { col0, row0 } = anchorCell(state);
     const probe = (c, r) => {
       if (c < 0 || c >= MAP_COLS || r < 0 || r >= MAP_ROWS) return null;
       const cell = r * MAP_COLS + c;
@@ -397,7 +405,7 @@ export class LineBarriers {
    *  set to 1. */
   #stamp(state) {
     if (state.skipSolid) return;                        // CS:0x77D6
-    const col0 = (state.x + 16) >> 5, row0 = (state.y + 8) >> 4;
+    const { col0, row0 } = anchorCell(state);
     for (let r = 0; r < state.rows; r++) {
       for (let c = 0; c < state.width; c++) {
         const col = col0 + c, row = row0 + r;
@@ -445,7 +453,7 @@ export class LineBarriers {
   *cells() {
     for (const s of this.slots) {
       if (!s || s.tileId === null) continue;
-      const col0 = s.x >> 5, row0 = s.y >> 4;
+      const { col0, row0 } = anchorCell(s);   // the same cells #stamp makes solid
       for (let r = 0; r < s.rows; r++) {
         for (let c = 0; c < s.width; c++) {
           const col = col0 + c, row = row0 + r;
