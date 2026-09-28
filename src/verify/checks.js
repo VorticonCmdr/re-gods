@@ -54,6 +54,7 @@ import { SpikeClock, spikePingpong, heroInSpikeBox, heroInSpike130Box,
          stepSpikes, spikeSprites, spike130Sprite, SPIKE_OVERLAY,
          SPIKE117_OVERLAY, SPIKE130_ANIM, SPIKE_TYPE, SPIKE117_TYPE,
          SPIKE130_TYPE, BASE_SRC_ROW_OFFSET } from '../game/spikes.js';
+import { LoopSfx, spikeOnScreen, barrierOnScreen } from '../game/loop-sfx.js';
 import { HEALTH_EMPTY_SPRITE, HEALTH_FILLED_SPRITE_BASE, HEALTH_FILLED_SPRITE_COUNT,
 HEALTH_BAR_X, HEALTH_BAR_Y_LOCAL, HEALTH_BAR_H, healthBarDraws, drawHealthBar,
 stepHealthBarShimmer } from '../game/health-bar.js';
@@ -14190,6 +14191,61 @@ export function checkSpikes() {
     detail: 'type 50: 13/13/11/11 across worlds 1-2 (48 total). type 117: 4 '
       + '(world 3B only). type 130: 9/8 across world 4 (17 total). type 73 '
       + 'places zero times anywhere and is not modelled.' });
+
+  /* ── the spike / moving-barrier loop sounds (game/loop-sfx.js) ────────── */
+  {
+    const run = (fn) => {
+      const log = [];
+      fn({ play: (id) => log.push(`play ${id.toString(16)}`), stop: (id) => log.push(`stop ${id.toString(16)}`) });
+      return log.join(' | ');
+    };
+    const onScreen = [[0, 0], [0x140, 0xbf], [-0x10, -0x1f]].every(([x, y]) => spikeOnScreen(x, y));
+    const offScreen = [[0x141, 0], [-0x11, 0], [0, -0x20], [0, 0xc0]].every(([x, y]) => !spikeOnScreen(x, y));
+    check('CS:0x1AD6 counts a spike at screen x -16..320 and y -31..191 (JG/JL on x, JLE/JGE on y)',
+      onScreen && offScreen);
+
+    const L = new LoopSfx();
+    const trace = run((o) => {
+      L.spikeTick(1, { ...o, roland: false });   // on screen: start, latch
+      L.spikeTick(2, { ...o, roland: false });   // still on screen: nothing
+      L.spikeTick(0, { ...o, roland: false });   // gone: stop, unlatch
+      L.spikeTick(0, { ...o, roland: false });   // nothing latched: nothing
+    });
+    check('CS:0x14C4-0x1510: spikes on screen play 0x0197 once; leaving the screen stops 0x97 once',
+      trace === 'play 197 | stop 97', trace);
+
+    const S = new LoopSfx();
+    const held = run((o) => {
+      S.spikeTick(1, { ...o, roland: false, heroScripted: true });   // cs:[0x71D] = 0x90: no start
+      S.spikeTick(1, { ...o, roland: false });
+    });
+    check('CS:0x14D3: no spike loop while cs:[0x71D] is not RET; it starts on the next tick it is',
+      held === 'play 197', held);
+
+    const R = new LoopSfx();
+    const rol = run((o) => {
+      R.spikeTick(1, { ...o, roland: true });
+      R.barrier = 0xff;                           // a barrier is sounding
+      R.spikeTick(0, { ...o, roland: true });     // [0x85] == 2 && [0x395]: no stop
+    });
+    check('CS:0x14F8-0x1504: under ROL ([0x85] == 2) with DS:0x395 set, the spike stop is skipped but the latch still clears',
+      rol === 'play 197' && R.spikeLatch === 0, rol);
+
+    const B = new LoopSfx();
+    const bar = run((o) => {
+      B.barrierTick(true, true, { ...o, roland: false });    // moved on screen: start
+      B.barrierTick(true, true, { ...o, roland: false });    // still moving: nothing
+      B.barrierTick(true, false, { ...o, roland: false });   // stopped: stop
+      B.barrierTick(false, false, { ...o, roland: false });  // gate closing: stop again
+    });
+    check('CS:0x76F8-0x771C: a barrier moving on screen plays 0x08C5 on the first tick only; otherwise 0xC5 is stopped',
+      bar === 'play 8c5 | stop c5 | stop c5', bar);
+
+    check('CS:0x772D-0x7773: a barrier on screen, off the right/bottom, and caught by the left/top edge branch',
+      barrierOnScreen(100, 100, 0, 0) && !barrierOnScreen(0x161, 0, 0, 0) && !barrierOnScreen(0, 0xc1, 0, 0)
+      && barrierOnScreen(-0x40, 0, 2, 0) && !barrierOnScreen(-0x40, 0, 1, 0)
+      && barrierOnScreen(0, -0x20, 0, 2) && !barrierOnScreen(0, -0x20, 0, 9));
+  }
 
   return results;
 }

@@ -63,6 +63,7 @@ import { stepHealthBarShimmer, drawHealthBar } from './game/health-bar.js';
 import { sliceDigitFrames, clampMoneyForDisplay, drawScore, drawMoney, drawLives } from './game/hud-digits.js';
 import { LeverToggle, SFX_LEVER_TOGGLE } from './game/levers.js';
 import { KillSmoke } from './game/kill-smoke.js';
+import { LoopSfx, spikeOnScreen } from './game/loop-sfx.js';
 import { SpikeClock, stepSpikes, spikeSprites, spike130Sprite,
          SPIKE_TYPE, SPIKE117_TYPE, SPIKE130_TYPE } from './game/spikes.js';
 /* Contact and the grid scan are reached through game/frame.js, which owns the
@@ -1169,6 +1170,11 @@ const guardianTables = {
    * 0x39f are never reset on level load), so every spike across every level
    * this session visits shares one continuous phase. */
   const spikeClock = new SpikeClock();
+  /* DS:0x395 / DS:0x3DF — the spike and moving-barrier loop sounds
+   * (game/loop-sfx.js). Never reset: nothing clears DS:0x3DF on a level load. */
+  const loopSfx = new LoopSfx();
+  const loopSfxOut = () => ({ roland: audio.driver === 'roland',
+    play: (id) => audio.play(id), stop: (id) => audio.stop(id) });
   /* CS:0x148B/0x148F — DS:0x3a0, the rotating-crystal counter (type 54,
    * game/objects.js). Session-persistent for the same reason spikeClock is:
    * no direct-offset write anywhere in the image resets it. */
@@ -2833,7 +2839,8 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
        * original runs them BEFORE — semantically inert, since this system
        * touches neither the damage grid nor destructible blocks. Settle
        * barriers (the vast majority) are untouched by this call. */
-      lineBarriers.tick();
+      const barrierMoved = lineBarriers.tick({ x: cam.snapX, y: cam.snapY });
+      loopSfx.barrierTick(lineBarriers.active, barrierMoved, loopSfxOut());   // CS:0x76F8
       /* CS:0x01BD's own `jmp 0x9bb` skips the player state machine entirely
        * once the hero is dead (game/death.js) — everything else in this
        * tick (enemies, hazards, projectiles, events) keeps running, matching
@@ -3379,6 +3386,10 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
         objectAnimClock.step();
         lastSpikeFx = stepSpikes(level.drawObjects, spikeClock,
           { x: player.x, y: player.y }, health, { invuln: fx.invuln > 0 });
+        /* CS:0x1AD6 counts on-screen spikes into DS:0x39A; CS:0x14C4 starts
+         * or stops their loop. */
+        const spikesSeen = lastSpikeFx.filter((o) => spikeOnScreen(o.x - cam.snapX, o.y - cam.snapY)).length;
+        loopSfx.spikeTick(spikesSeen, loopSfxOut());
       }
 
       /* CS:0x0239 `call 0x3cc7` — ACT6's smoke puffs advance a frame and

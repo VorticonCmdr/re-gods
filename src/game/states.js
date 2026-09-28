@@ -31,9 +31,11 @@
  *     - CBW sign-extends AL, so CL = 0xFF means -1, not 255.
  *
  *   Dispatcher gates (49AA, 49B5), reproduced for completeness but not
- *   modelled here: a CS-resident self-modifying-code byte [cs:0x71d] must be
- *   0x90 (NOP), and [0x363] must be negative, or the whole state machine is
- *   skipped straight to the epilogue.
+ *   modelled here: a CS-resident self-modifying-code byte [cs:0x71d] must
+ *   NOT be 0x90 (49AA `cmp ..,0x90 / jnz 49B5 / jmp 0x5E9B`: 0x90 skips; it
+ *   is 0xC3 in normal play and 0x90 only while the CS:0x071E walker runs),
+ *   and [0x363] must be negative, or the whole state machine is skipped
+ *   straight to the epilogue.
  *
  * HOW THE LEFT/RIGHT SPLIT WAS PROVEN — without assuming any input bit
  *   Flow closures were computed from each of the 29 entry points (following

@@ -103,6 +103,7 @@
 
 import { MAP_COLS, MAP_ROWS } from '../formats/map.js';
 import { newLine, stepLine } from './line-hazard.js';
+import { barrierOnScreen } from './loop-sfx.js';
 
 /**
  * Obstacle-"type" byte -> behaviour, `2f3d:35ec`'s 11-entry table
@@ -182,6 +183,7 @@ export function parseLineBarrierRecords(buf) {
       width: (wh & 7) + 1,                   // cells -- record's own +0x1a low 3 bits
       skipSolid: (wh & 0x80) !== 0,          // +0x1a bit 7
       rows: dv.getUint8(o + 0x1b) + 1,
+      rawWh: wh, rawRows: dv.getUint8(o + 0x1b),   // as CS:0x7748 reads them
     });
   }
   return records;
@@ -301,9 +303,11 @@ export class LineBarriers {
    * `blocks.step()` run after this call in the port, before it in the
    * original -- semantically inert, since this system touches neither).
    */
-  tick() {
+  tick(cam = null) {
+    let movedOnScreen = false;
     for (const state of this.slots) {
       if (!state || !state.cycling) continue;
+      const x0 = state.x, y0 = state.y;
       const steps = Math.min(state.speed, state.majorRemaining);
       stepLine(state.line, steps);
       state.majorRemaining -= steps;
@@ -321,8 +325,18 @@ export class LineBarriers {
       }
       state.tileId = this.#resolveTile(state);
       this.#restamp(state);
+      /* CS:0x76CE-0x76D7: a slot whose position changed calls 0x7720, which
+       * raises DS:0x395 if it is on screen (game/loop-sfx.js). */
+      if (cam && (state.x !== x0 || state.y !== y0)
+          && barrierOnScreen(state.x - cam.x, state.y - cam.y, state.rec.rawWh, state.rec.rawRows)) {
+        movedOnScreen = true;
+      }
     }
+    return movedOnScreen;
   }
+
+  /** DS:0x364 != 0 — some barrier is armed (the rescan gate is open). */
+  get active() { return this.slots.some((s) => s !== null); }
 
   /** See the file header -- borrow whichever pre-existing, already-solid
    *  neighbour tile touches this barrier's footprint. Checked in the order
