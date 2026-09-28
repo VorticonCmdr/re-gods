@@ -4,9 +4,14 @@
  * them until sound export 5 (CS:0x22D6) stops them. Read from GAME.EXE.
  * The spike loop's starts are [PROVEN]: the port plays 0x0197 at exactly the
  * tape cursors the live sweeps logged it from CS:0x14E6 (PJOYL1 218 and 679,
- * PJOYL2 1712), and at none in the swept PJOYG2 2-470 / PJOYL3 92-1500. Its
- * stop and the whole barrier loop are [STATIC]: no demo moves a cycling
- * barrier on screen, and the sweeps log CS:0x22CA only.
+ * PJOYL2 1712), and at none in the swept PJOYG2 2-470 / PJOYL3 92-1500. The
+ * stops are [PROVEN] too (tools/attract-capture/sound_sweep.py, which breaks
+ * on export 5 as well): PJOYL1 under ROL gives 714 barrier stops and 2
+ * spike stops, and the port the same, cursor for cursor. That run also
+ * exercised the Roland skip (a lever kills the spikes at 269 and 743: no
+ * barrier stop on that tick, the spike stop on the next). The barrier loop's
+ * PLAY is [PROVEN] by barrier_live.py/barrier-compare.mjs (PLEV2B, a
+ * teleport onto records 9 and 11 with the camera pinned).
  *
  * THE SPIKES — FUN_1000_1432, the per-tick object walk (inside the CS:0x01FC
  * object-pass gate). It zeroes DS:0x39A at CS:0x143C; FUN_1000_1AD6, called
@@ -28,7 +33,9 @@
  * it). DS:0x3DF has no other writer, so the latch survives a level change.
  *
  * THE LINE BARRIERS — FUN_1000_767A, the rescan loop (CS:0x01F2, also from
- * the death driver at CS:0x09C7):
+ * the death driver at CS:0x09C7). Its first byte, CS:0x767A, is RET until a
+ * barrier arms (CS:0x7635 writes NOP); the level init puts the RET back.
+ * So a level where nothing has armed makes no sound calls at all:
  *
  *   767B  if ![0x364]: cs:[0x767A] = RET ; [0x395] = 0 ; goto 770C
  *   768F  push [0x395] ; [0x395] = 0
@@ -39,8 +46,9 @@
  *   770C  if !([0x85] == 2 && [0x3DF]): stop 0xC5
  *
  * 0x7720 sets [0x395] = 0xFF when the barrier's screen position overlaps the
- * view — see barrierOnScreen. Settle barriers never move once armed
- * (0x7845 returns at once), so only cycling ones sound.
+ * view — see barrierOnScreen. A settle barrier moves too, from its source
+ * to its point, before it settles (game/line-barriers.js): only a
+ * zero-length one never sounds.
  */
 
 export const SPIKE_LOOP_SFX = 0x0197;     // CS:0x14E3
@@ -71,7 +79,8 @@ export class LoopSfx {
     this.spikeLatch = 0;    // DS:0x3DF
   }
 
-  /** The tail of FUN_1000_767A. `active` is [0x364] != 0. */
+  /** The tail of FUN_1000_767A, on a tick the rescan runs (LineBarriers#tick
+   *  returns null while CS:0x767A is RET). `active` is [0x364] != 0. */
   barrierTick(active, movedOnScreen, { roland, play, stop }) {
     if (active) {
       const old = this.barrier;

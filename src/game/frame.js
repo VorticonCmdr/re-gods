@@ -49,10 +49,13 @@ export const FRAME_ORDER = [
 export const LINE_HAZARDS_AT = 0x02bd;
 
 /** `CS:0x01F2` — `CALL 0x767A`, the line-barrier rescan (game/line-barriers.js's
- *  `tick()`). `[PROVEN]`, found by `get_xrefs_to` on `0x767A`: called from
- *  TWO places, `FUN_1000_006F` at exactly this address and `FUN_1000_09BB`
- *  (the death-sequence driver) at `CS:0x09C7` — so it runs every tick
- *  UNCONDITIONALLY, dead or alive, never gated behind the death check.
+ *  `tick()`). `[PROVEN]`: called from THREE places, `FUN_1000_006F` at
+ *  exactly this address, `FUN_1000_09BB` (the death-sequence driver) at
+ *  `CS:0x09C7` and the respawn tick `FUN_1000_921B` at `CS:0x9260` — so it
+ *  runs every tick UNCONDITIONALLY, dead or alive, never gated behind the
+ *  death check. (`get_xrefs_to` on `0x767A` listed only the first two; a
+ *  `search_instructions` for the call operand found the third, after a live
+ *  rescan with neither entry stop, 2026-09-28.)
  *  Within `FUN_1000_006F` it is reached by BOTH arms of the `CS:0x01E5` mode
  *  branch, before the conditional pickup block (`0x0206`) and before every
  *  unconditional system after it (projectiles `0x020F`, starburst `0x0212`,

@@ -15333,8 +15333,15 @@ export async function checkLineBarriers(fetchRaw) {
     lb.arm(4, 7);
     check('a record with every target point zeroed does not arm', lb.live === 0);
     lb.arm(3, 8);
-    check('a live record arms on the selector it is dispatched with',
-      lb.live === 1 && lb.slots[3].x === 101 && lb.slots[3].y === 201);
+    check('a live record arms on the selector it is dispatched with; its '
+      + 'type (3) picks point 1 (CS:0x794E), and a settle barrier does not '
+      + 'snap there: CS:0x7670 seeds the line from the source and walks it',
+      lb.live === 1 && lb.slots[3].pointIdx === 1 && !lb.slots[3].settled
+        && !(lb.slots[3].x === 101 && lb.slots[3].y === 201));
+    for (let i = 0; i < 5000 && !lb.slots[3].settled; i++) lb.tick();
+    check('...it walks until it arrives, then shows exactly the point and '
+      + 'settles for good (CS:0x7883 / 0x7894)',
+      lb.slots[3].settled && lb.slots[3].x === 101 && lb.slots[3].y === 201);
     check('skipSolid true leaves plane B untouched even though the record armed',
       zeroMap.planeB[0] === 0);
   }
@@ -15398,29 +15405,33 @@ export async function checkLineBarriers(fetchRaw) {
 
     const fwd = new LineBarriers(cycMap, [rec]);
     fwd.arm(0, 7);
-    check('a cycling arm starts travelling FROM the record\'s own source '
-      + 'point, not snapped onto a target the way settle does',
-      fwd.slots[0].x === 0 && fwd.slots[0].y === 0 && fwd.slots[0].cycling === true);
+    check('a cycling arm starts FROM the record\'s own source point and the '
+      + 'seed walks one budget at once (CS:0x7670 -> 0x7A2A falls into the '
+      + 'step loop): displayed x = 16, the remaining count 64 - 16 = 48',
+      fwd.slots[0].x === 16 && fwd.slots[0].y === 0 && fwd.slots[0].cycling === true
+        && fwd.slots[0].walker.rem === 48, `got x=${fwd.slots[0].x} rem=${fwd.slots[0].walker.rem}`);
     check('the first leg heads toward point 0 (targets[0]) -- a fresh arm '
       + 'bumps a zeroed 1-based index (0) forward to 1', fwd.slots[0].pointIdx === 0);
 
     fwd.tick();
     check('one tick advances exactly stepSeed+1 = 16 px along the major axis',
-      fwd.slots[0].x === 16 && fwd.slots[0].y === 0, `got (${fwd.slots[0].x},${fwd.slots[0].y})`);
+      fwd.slots[0].x === 32 && fwd.slots[0].y === 0, `got (${fwd.slots[0].x},${fwd.slots[0].y})`);
     fwd.tick(); fwd.tick();
-    check('three ticks in, still short of the 64px leg (48 < 64)',
-      fwd.slots[0].x === 48);
+    check('the tick that reaches x = 64 leaves the remaining count at 0, '
+      + 'which is not yet an arrival (CS:0x7869 `js`)',
+      fwd.slots[0].x === 64 && fwd.slots[0].walker.rem === 0 && fwd.slots[0].pointIdx === 0);
     fwd.tick();
-    check('the 4th tick (4x16=64) arrives EXACTLY on point 0 and re-seeds '
-      + 'toward the next valid point',
-      fwd.slots[0].x === 64 && fwd.slots[0].y === 0);
+    check('the next tick steps past (rem < 0): the display snaps to point 0 '
+      + 'while the reseed from the walker (65) has already walked on to 81',
+      fwd.slots[0].x === 64 && fwd.slots[0].y === 0 && fwd.slots[0].walker.line.x === 81,
+      `x=${fwd.slots[0].x} walker=${fwd.slots[0].walker.line.x}`);
     check('point 1 (targets[1]) is degenerate (x=0) -- the cascade skips '
       + 'it and lands on point 2 (targets[2]) instead, matching every real '
       + 'shipped 2-of-4-populated cycler', fwd.slots[0].pointIdx === 2);
 
-    for (let i = 0; i < 8; i++) fwd.tick();   // 128px leg, 16px/tick = 8 ticks
-    check('8 more ticks (8x16=128px) crosses from point 0 (64) to point 2 '
-      + '(192) and snaps exactly there',
+    for (let i = 0; i < 7; i++) fwd.tick();   // walker 81 -> 193, rem 111 -> -1
+    check('7 more ticks carry the walker past 192; the 7th arrives and the '
+      + 'display snaps exactly to point 2',
       fwd.slots[0].x === 192 && fwd.slots[0].y === 0, `got x=${fwd.slots[0].x}`);
     check('arriving at point 2 cascades past degenerate point 3 and back to '
       + 'point 0 -- a real, forever ping-pong between only the 2 live points',
@@ -15445,8 +15456,9 @@ export async function checkLineBarriers(fetchRaw) {
     const instant = new LineBarriers(cycMap, [instantRec]);
     instant.arm(0, 7);
     check('arming exactly ON the first target (zero-length first leg) does '
-      + 'not hang -- the arm itself starts the (degenerate) leg',
-      instant.slots[0].majorRemaining === 0);
+      + 'not hang -- the loop steps before it tests, so the arm shows x = 65 '
+      + 'with the remaining count already at -2',
+      instant.slots[0].x === 65 && instant.slots[0].walker.rem === -2);
     instant.tick();
     check('...and the very next tick resolves it: arrives, then re-seeds '
       + 'toward point 2 immediately, same tick',
@@ -15473,18 +15485,18 @@ export async function checkLineBarriers(fetchRaw) {
     check('arm() itself stamps the starting cell (col 0, row 0) solid',
       trailMap.planeB[0] === 1 && lb.stampedCells.size === 1);
 
-    lb.tick();   // x: 0 -> 16, still col 0 -- no cell boundary crossed
-    check('mid-leg tick that stays in the same map cell does not touch '
-      + 'plane B at all', trailMap.planeB[0] === 1 && lb.stampedCells.size === 1);
-
-    lb.tick();   // x: 16 -> 32 (arrival at point 0), col 0 -> col 1
+    lb.tick();   // x: 16 -> 32 (rem 0, not yet arrived), col 0 -> col 1
     check('crossing a cell boundary vacates the old cell (back to 0) and '
       + 'claims the new one (set to 1) -- the previous cell is not left '
       + 'behind as a permanent trail',
       trailMap.planeB[0] === 0 && trailMap.planeB[1] === 1 && lb.stampedCells.size === 1,
       `planeB[0]=${trailMap.planeB[0]} planeB[1]=${trailMap.planeB[1]} size=${lb.stampedCells.size}`);
 
-    for (let i = 0; i < 4; i++) lb.tick();   // 32 -> 96 (64px @ 16px/tick), crossing col 2 then col 3
+    lb.tick();   // arrival: the display stays at 32, the walker reseeds from 33 to 49
+    check('an arrival tick that shows the same position does not touch '
+      + 'plane B at all', trailMap.planeB[1] === 1 && lb.stampedCells.size === 1);
+
+    for (let i = 0; i < 3; i++) lb.tick();   // 49 -> 65 -> 81 -> arrive at 96: col 2 then col 3
     check('after crossing two more cell boundaries on the way to point 2, '
       + 'exactly one cell is stamped (the current one) -- stampedCells '
       + 'never grows across the whole patrol, only ever tracks the live '
@@ -15519,8 +15531,9 @@ export async function checkLineBarriers(fetchRaw) {
     const lineBarriers = new LineBarriers(map, records);
     lineBarriers.arm(ev197.param, ev197.selector);
     const start = { x: lineBarriers.slots[9].x, y: lineBarriers.slots[9].y };
-    check('a fresh arm starts at the record\'s own source point',
-      start.x === rec9.srcX && start.y === rec9.srcY);
+    check('a fresh arm walks from the record\'s own source point (1057,96): '
+      + 'one step reaches point 0 (1056), the budget of 2 steps on to 1055',
+      rec9.srcX === 1057 && start.x === 1055 && start.y === rec9.srcY, `got (${start.x},${start.y})`);
 
     const seen = new Set([`${start.x},${start.y}`]);
     let reachedBothEndpoints = false;
@@ -15586,10 +15599,12 @@ export async function checkLineBarriers(fetchRaw) {
      * confirmed live under DOSBox this session by teleporting the hero '
      * onto (96,624). */
     events.step(96, 624, events.makeState());
+    lineBarriers.tick();   // a zero-length leg arrives on the first rescan
     check('the second PLEV1A entry point (plane B (col3,row39)=77 -> event '
       + '#74 -> record 0) also arms, landing at its own record\'s target '
-      + '(1,480)', lineBarriers.live === 2 && lineBarriers.slots[0]
-        && lineBarriers.slots[0].x === 1 && lineBarriers.slots[0].y === 480);
+      + '(1,480) on the next rescan', lineBarriers.live === 2 && lineBarriers.slots[0]
+        && lineBarriers.slots[0].x === 1 && lineBarriers.slots[0].y === 480
+        && lineBarriers.slots[0].settled);
   }
 
   /* ── every shipped level, walking plane B exactly the way EventRunner.step

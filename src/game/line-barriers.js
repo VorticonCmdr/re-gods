@@ -11,79 +11,49 @@
  * running memory, so it was never a tilemap bug. The graphic (and the solid
  * ground under it) come from this system instead.
  *
- * WHAT THIS PORT REPRODUCES, PROVEN LIVE THIS SESSION:
+ * WHAT THIS PORT REPRODUCES:
  *   - A plane-B event value >=3 whose selector is 7/8/9/10 arms record
  *     [event.param] of this 25-record table (`CS:0x75FC` family), consuming
  *     the event exactly like every other selector (see events.js).
- *   - The armed barrier settles at its OWN selector-indexed target point
- *     (`targets[selector-7]`) — read live from two independently-armed
- *     runtime slots (`PLEV1A` records 0 and 2, one of them predicted from
- *     the tables before it was read), both exactly matching their own
- *     literal target coordinates with zero drift, well after spawn (from a
- *     few dozen to tens of thousands of frames later).
  *   - `FUN_1000_77d6`'s plane-B stamp: a `width x rows` block of cells,
- *     anchored at the target point, forced solid (skipped when the record's
- *     own bit 7 is set) — read live: plane B at the barrier cell is 0 in the
- *     `.MAP` file and 1 in live memory.
- *   - `FUN_1000_7779`'s per-frame sprite draw over the same footprint — a
- *     masonry-textured block was observed at exactly that position, every
- *     frame, starting before the player could send any input.
+ *     anchored at the displayed position, forced solid (skipped when the
+ *     record's own bit 7 is set) — read live: plane B at the barrier cell is
+ *     0 in the `.MAP` file and 1 in live memory.
+ *   - `FUN_1000_7779`'s per-frame sprite draw over the same footprint.
  *
- * THE MOTION MODEL — UPDATED THIS SESSION, cycling is now implemented (both
- * `UNKNOWN_189c_motion` and `UNKNOWN_189c_type_dispatch` were already CLOSED
- * in the doc; this just finishes wiring what that closure described):
- *   - Motion from source toward target IS type-dependent in the original,
- *     not uniform. The obstacle "type" byte (this record's own
- *     `+0x16..+0x19`, one per selector) resolves through `2f3d:35ec`'s
- *     11-entry table into one of three behaviours: types 2-5/7-10 (148 of
- *     183 shipped dispatches) pick ONE target point (with a fixed fallback
- *     search among the record's 4 points, skipping any with x==0) and
- *     SETTLE there forever — this port's pre-existing "settle at target,
- *     hold" model (proven correct live for these) is unchanged. Types 0/1/6
- *     (7 of 183 dispatches, all type 0 in shipped data) instead CYCLE: on
- *     reaching one target point they immediately re-seed toward the next
- *     point in a fixed forward/backward order (wrapping through however
- *     many of the record's 4 points are non-degenerate), forever — a true
- *     patrol, never settling. **Now implemented** (`#armCycle`/`tick`):
- *     the record travels the real Bresenham line from its own source point,
- *     at `stepSeed+1` pixels/tick (`CS:0x765A`'s `n`, parsed but unused
- *     until now), snapping exactly onto each target on arrival (matching
- *     `FUN_1000_7845`'s own literal-coordinate snap, which overrides any
- *     Bresenham rounding drift) before re-seeding toward the next point.
- *     The next point is chosen by bumping the 1-based point index +1
- *     (forward, type 0) or -1 (backward, types 1/6), wrapping 1..4, then
- *     searching in that same direction past any point whose `x==0` —
- *     `findValidPoint` below, matching `FUN_1000_78E9`/`0x790E`'s own
- *     `SS:0x35EE`/`0x35F8`-indexed cascade (the exact cascade table
- *     contents were not disassembled; the OBSERVABLE behaviour — "ping-pong
- *     between only the non-degenerate points, never detour through (0,0)"
- *     — is what's modelled, cross-checked against all 5 real shipped
- *     cyclers below). Cross-checked against all 8 shipped levels'
- *     plane-B/ACT5 dispatch tables: **5 of the 7 shipped cyclers are
- *     genuinely reachable** — real 2-point ping-pong barriers, two each in
- *     PLEV2A/PLEV2B and one in PLEV1B (see the doc for exact cells) —
- *     while the other 2 (an elaborate 4-point patrol, one each in
- *     PLEV4A/PLEV4B) are placed in the static table but never wired to any
- *     reachable plane-B cell or `ACT5` arg in either file, so they are dead
- *     content, same shape as this project's other "authored but
- *     unreachable" findings; this port's cycling code path handles them
- *     correctly too (nothing here is 2-point-specific) but they cannot be
- *     reached by any shipped trigger.
- *     The `DI+5`/1-based-index starting value on a FRESH arm is now CLOSED,
- *     `[PROVEN]` live this session: the arm dispatcher itself (`CS:0x7665`,
- *     `MOV byte[DI+5],0`) unconditionally zeroes it right before dispatching
- *     through the type trampoline, for EVERY arm regardless of type (settle
- *     or cycle) — confirmed both by direct disassembly of `CS:0x75FC..0x7679`
- *     (an unconditional immediate-operand write, not data-dependent) and by
- *     a live DOSBox breakpoint at `CS:0x7669` catching a genuine fresh arm
- *     (`PLEV1A` record 2's runtime slot, `DS:0x1cd6`: `x=y=0xFFFF`, `DI+4=
- *     0xFF` — the true "never-armed" sentinel state — immediately followed
- *     by `DI+5` reading `0x00`). `FUN_1000_78E9`/`0x790E`'s own bump
- *     arithmetic (`0+1=1` forward, `0-1` wraps to `4` backward, both directly
- *     disassembled, pure register ops with no other dependency) then makes
- *     `bump1Based(0, direction)` below the PROVEN starting point, not an
- *     inference — matching `arm()`'s own `bump1Based(0, direction)` call
- *     exactly.
+ * THE MOTION, read from `CS:0x75FC`-`0x7B2C` and [PROVEN] live on 2026-09-28
+ * (tools/attract-capture/barrier_live.py + barrier-compare.mjs: PLEV2B
+ * records 9 and 11, every slot byte, rescan by rescan):
+ *   - The record's type byte for the dispatching selector picks the
+ *     behaviour: 0 cycles forward, 1/6 backward, 2-5/7-10 settle, 0xFF
+ *     disables. A settle type picks its POINT itself (`settlePoint`: type 2
+ *     prefers point 0 and falls forward, type 7 point 0 falling backward,
+ *     and so on, skipping points with x == 0) — not `targets[selector-7]`,
+ *     which an earlier version of this file used; the two differ for 4 of
+ *     the 58 plane-B-reachable settle dispatches (and pointed at (0,0) for
+ *     some unreachable ones).
+ *   - EVERY armed barrier walks a Bresenham line from its source (the
+ *     record's srcX/srcY, or the displayed position when re-armed) at
+ *     stepSeed+1 px per rescan. The walker is not the displayed position:
+ *     it runs past the target by up to a budget, the display snaps to the
+ *     target on the rescan that notices, and a cycler reseeds from where the
+ *     walker is (see `tick`). A settle barrier stops there for good; 36 of
+ *     the 58 reachable settle dispatches start away from their point, so
+ *     they visibly slide in (an earlier version placed them instantly, from
+ *     a live proof on a zero-length record, where the two look the same).
+ *   - Cycle types 0/1/6 step the 1-based point index +1 / -1, wrapping
+ *     1..4, past points with x == 0 (`findValidPoint`; the cascade tables
+ *     `SS:0x35EE`/`0x35F8` themselves were not read, the observable
+ *     ping-pong between the live points was, for record 9).
+ *   - A FRESH arm zeroes DI+5 first (`CS:0x7665`, [PROVEN] live on PLEV1A
+ *     record 2), so a forward cycler starts toward point 1, a backward one
+ *     toward point 4.
+ *   - Not modelled: the 0xFF type frees an armed slot (`CS:0x78DC`: DI+4 =
+ *     0xFF, the rescan skips it, so it is no longer drawn). 15 plane-B-
+ *     reachable dispatches do that to a record another cell arms (six
+ *     records each in PLEV4A and PLEV4B); what becomes of the freed slot's
+ *     plane-B stamp is not established, so the port leaves the barrier as
+ *     it was (UNKNOWN_barrier_disable_free).
  *   - The exact sprite `FUN_1000_7779` draws. It goes through graphics
  *     export 1 (the same masked blit `selector2.js`'s turrets use),
  *     selected by the record's own `+0x16..+0x19` "obstacle type" byte —
@@ -153,6 +123,21 @@ function findValidPoint(targets, start1Based, direction) {
   return -1;
 }
 
+/** `CS:0x7933`-`0x79F0`, the settle types' point choice: types 2-5 prefer
+ *  point (type - 2) and fall FORWARD past any point whose x is 0 (2 -> 3 ->
+ *  4 -> 5 -> 2), types 7-10 prefer point (type - 7) and fall BACKWARD (7 ->
+ *  10 -> 9 -> 8 -> 7). Chosen by the TYPE byte, not by the selector. 0-based,
+ *  or -1 if every point is degenerate (arm()'s liveness test rules that out). */
+export function settlePoint(targets, type) {
+  const forward = type >= 2 && type <= 5;
+  let i = forward ? type - 2 : type - 7;
+  for (let k = 0; k < 4; k++) {
+    if (targets[i].x !== 0) return i;
+    i = (i + (forward ? 1 : 3)) % 4;
+  }
+  return -1;
+}
+
 export const TABLE_OFF = 0x189c;        // -> DS:0xa8a4
 export const RECORD_COUNT = 25;
 export const RECORD_STRIDE = 0x1c;      // 28 bytes, sums to exactly 0x1B58 - 0x189C
@@ -208,7 +193,12 @@ export class LineBarriers {
      * null = free. */
     this.slots = new Array(RECORD_COUNT).fill(null);
     this.stampedCells = new Set();
-    this.unresolvedTile = 0;   // armed barriers whose footprint borrowed no neighbour tile
+    this.unresolvedTile = 0;
+    /* DS:0x364, the arm count, and the rescan's own entry byte CS:0x767A
+     * (RET until an arm writes NOP at CS:0x7635). The level init CS:0x8D11/
+     * 0x8D17 resets both, silently. */
+    this.count = 0;
+    this.gate = false;   // armed barriers whose footprint borrowed no neighbour tile
   }
 
   /**
@@ -216,6 +206,14 @@ export class LineBarriers {
    * Called from `EventRunner`'s `onPathJob` hook; the event is already
    * consumed by the caller before this runs, matching every other
    * selector's shape (`events.js`).
+   *
+   *   7648  source = the slot's DISPLAYED position if it is already armed
+   *         (`[DI+4]` >= 0), else the record's own srcX/srcY
+   *   765A  [0x1F0] = stepSeed + 1 (the step budget n) ; DI+5 = 0
+   *   7669  the type handler (`CS:0x78C2` -> `2f3d:35ec`) picks the target
+   *         point, sets DI+4 (0/1 cycle, 2 settle) and DI+5 (1-based point)
+   *   7670  `CS:0x7A2A` seeds the line AND walks it with the budget at once
+   *   7674  displayed = where the walk ended — no snap at arm time
    */
   arm(recordIndex, selector) {
     const rec = this.records[recordIndex];
@@ -227,116 +225,133 @@ export class LineBarriers {
      * an all-zero record is inert padding (this project's own census found
      * several, e.g. PLEV1A's own records 4-8). */
     if (!rec.targets.some((t) => t.x !== 0)) return;
+    this.count++;                                     // CS:0x7631, every live arm
+    this.gate = true;                                 // CS:0x7635
 
     /* CS:0x7669 -- dispatch through this SELECTOR's own type byte
-     * (table25[+0x16+slotIdx]). CS:0x78DC (type 0xFF, "disabled") consumes
-     * the event but never actually creates a runtime slot -- FUN_1000_78DC
-     * decrements the active-obstacle counter the arm dispatcher had just
-     * incremented, undoing the arm outright. */
-    const behavior = classifyType(rec.types[slotIdx]);
-    if (behavior.kind === 'disabled') return;
+     * (table25[+0x16+slotIdx]). CS:0x78DC (type 0xFF, "disabled") sets
+     * DI+4 = 0xFF, which frees an already-armed slot too, and decrements the
+     * active count. Not modelled: no shipped event disables a record another
+     * event can have armed (see checks.js), and what becomes of a freed
+     * slot's plane-B stamp is not established. */
+    const type = rec.types[slotIdx];
+    const behavior = classifyType(type);
+    if (behavior.kind === 'disabled') { this.count--; return; }   // CS:0x78E4
 
-    const state = behavior.kind === 'cycle'
-      ? this.#armCycle(rec, behavior.direction)
-      : this.#armSettle(rec, rec.targets[slotIdx]);
-
-    state.width = rec.width; state.rows = rec.rows; state.skipSolid = rec.skipSolid;
+    const prev = this.slots[recordIndex];
+    const from = prev ? { x: prev.x, y: prev.y } : { x: rec.srcX, y: rec.srcY };   // CS:0x7648
+    const pointIdx = behavior.kind === 'cycle'
+      ? findValidPoint(rec.targets, bump1Based(0, behavior.direction), behavior.direction)
+      : settlePoint(rec.targets, type);
+    const state = {
+      cycling: behavior.kind === 'cycle', direction: behavior.direction ?? 0,
+      settled: false, pointIdx, rec, speed: rec.stepSeed + 1,
+      x: from.x, y: from.y, walker: null,
+      width: rec.width, rows: rec.rows, skipSolid: rec.skipSolid,
+      footprint: prev ? prev.footprint : undefined,
+    };
+    this.#seed(state, from.x, from.y, rec.targets[pointIdx]);
+    state.x = state.walker.line.x; state.y = state.walker.line.y;   // CS:0x7674
     state.tileId = this.#resolveTile(state);
     if (state.tileId === null) this.unresolvedTile++;
     this.slots[recordIndex] = state;
     this.#restamp(state);
   }
 
-  /** The pre-existing settle model -- snap straight to the selector's own
-   *  target point and hold there forever. Unchanged (still the live-proven
-   *  `targets[selector-7]` shape, not the type ring's own preferred-point
-   *  mapping -- see the file header). */
-  #armSettle(rec, pt) {
-    return { cycling: false, x: pt.x, y: pt.y };
+  /** `CS:0x7A2A`: seed a leg from (x, y) toward `target` — the remaining
+   *  count [0x1EE] starts at the leg's major length — and walk it with a
+   *  fresh budget straight away (the seed falls into the step loop). */
+  #seed(state, x, y, target) {
+    const line = newLine(x, y, target.x, target.y);
+    state.walker = { line, rem: line.xMajor ? line.dx : line.dy };
+    this.#walk(state);
   }
 
-  /** `FUN_1000_78E9`/`0x790E`, the type-0/1/6 arm path: pick the first
-   *  non-degenerate point in `direction` order starting from a fresh (zeroed)
-   *  1-based point index, and start walking the real Bresenham line toward
-   *  it from the record's own source point -- see the file header for the
-   *  `bump1Based(0, direction)` reasoning. */
-  #armCycle(rec, direction) {
-    const start1 = bump1Based(0, direction);
-    const pointIdx = findValidPoint(rec.targets, start1, direction);
-    const target = rec.targets[pointIdx];
-    const state = {
-      cycling: true, direction, pointIdx, rec,
-      x: rec.srcX, y: rec.srcY,
-      speed: rec.stepSeed + 1,
-    };
-    this.#seedLeg(state, target);
-    return state;
-  }
-
-  /** Start (or restart, on arrival) one Bresenham leg from the barrier's
-   *  CURRENT position toward `target` -- `CALL 0x7A2A`. */
-  #seedLeg(state, target) {
-    state.line = newLine(state.x, state.y, target.x, target.y);
-    state.majorRemaining = state.line.xMajor ? state.line.dx : state.line.dy;
+  /** The step loop (`CS:0x7A4D`/`0x7A90`/`0x7AE8`/`0x7B2C`, resumed through
+   *  `CS:0x7A0B`), with its budget [0x1F0] = stepSeed + 1:
+   *      step ; if --budget == 0 { rem-- ; done }
+   *      if --rem >= 0 loop ; rem-- ; done
+   *  so the walk never stops AT the target: arriving leaves rem < 0 and the
+   *  walker up to a budget's worth of steps past it. */
+  #walk(state) {
+    const w = state.walker;
+    let budget = state.speed;
+    for (;;) {
+      stepLine(w.line, 1);
+      if (--budget === 0) { w.rem--; return; }
+      if (--w.rem >= 0) continue;
+      w.rem--;
+      return;
+    }
   }
 
   /**
-   * `CS:0x767B-0x76FF`, the per-frame rescan loop (`FUN_1000_7845` per slot)
-   * -- advance every cycling barrier one tick. Settle barriers never move
-   * once armed and are untouched here, matching the original: `DI+4>1`
-   * (settle/disabled) returns immediately at `FUN_1000_7845`'s own top.
+   * `CS:0x767B-0x76FF`, the per-frame rescan loop — `FUN_1000_7845` per
+   * armed slot:
    *
-   * Placement in `main.js`'s per-tick order is now `[PROVEN]` by disassembly
+   *   7852  DI+5 < 0 (settled): return
+   *   785C  walk (above) ; displayed = the walker
+   *   7869  rem >= 0: return
+   *   7883  arrived: displayed = the target point DI+5 (the snap)
+   *   788E  settle (DI+4 = 2): DI+5 = 0xFF, done for good
+   *   78A5  cycle: the type handler bumps DI+5 to the next point, the
+   *         budget is reloaded, and CS:0x7A2A reseeds from the WALKER's
+   *         position (past the target) and walks at once — so on an
+   *         arrival tick the barrier shows the target while the walker is
+   *         already up to two budgets further on.
+   *
+   * [PROVEN] live (tools/attract-capture/barrier_live.py, PLEV2B record 9):
+   * the slot bytes DS:0x1CA6+9*0x18 tick for tick. A SETTLE barrier walks
+   * the same way until it arrives: only the zero-length ones appear at
+   * their point at once.
+   *
+   * Placement in `main.js`'s per-tick order is `[PROVEN]` by disassembly
    * (`get_xrefs_to` on `CS:0x767A`, this system's own self-modifying gate --
-   * see `frame.js`'s `LINE_BARRIERS_AT`): called from exactly two places,
-   * `FUN_1000_006F` at `CS:0x01F2` and the death driver `FUN_1000_09BB` at
-   * `CS:0x09C7`, BOTH unconditional -- so this must run every tick whether
-   * or not the hero is mid-death, and within the ordinary tick it is one of
-   * the EARLIEST systems, called before pickup/projectiles/starburst/the
-   * player state machine/selector-2/System-B entities/enemy shots/the
-   * line-hazard pool/the health-bar chase. This corrects an earlier pass
-   * that shipped `tick()`'s own call site near the END of `main.js`'s tick
-   * instead, grouped with `lineHazards.step()` and disclosed only as
-   * unproven -- the real site was one `get_xrefs_to` away, and that
-   * placement was backwards, not merely unpinned. See `main.js`'s own call
-   * site for the one small, disclosed residual (`grid.clear()`/
-   * `blocks.step()` run after this call in the port, before it in the
-   * original -- semantically inert, since this system touches neither).
+   * see `frame.js`'s `LINE_BARRIERS_AT`): called from `FUN_1000_006F` at
+   * `CS:0x01F2`, the death driver at `CS:0x09C7` and the respawn tick at
+   * `CS:0x9260`, all unconditional, and
+   * before every other system of the tick.
+   *
+   * @returns {?{active: boolean, moved: boolean}} null while CS:0x767A is
+   *   RET (no arm since the level loaded: the rescan does nothing at all);
+   *   `active` false on the one tick that finds DS:0x364 at 0 and puts the
+   *   RET back (CS:0x767B-0x768D); `moved` = a slot whose displayed position
+   *   changed is on screen (CS:0x76CE-0x76D7 -> 0x7720 -> DS:0x395,
+   *   game/loop-sfx.js)
    */
   tick(cam = null) {
+    if (!this.gate) return null;
+    if (this.count === 0) { this.gate = false; return { active: false, moved: false }; }
     let movedOnScreen = false;
     for (const state of this.slots) {
-      if (!state || !state.cycling) continue;
+      if (!state || state.settled) continue;
       const x0 = state.x, y0 = state.y;
-      const steps = Math.min(state.speed, state.majorRemaining);
-      stepLine(state.line, steps);
-      state.majorRemaining -= steps;
-      if (state.majorRemaining <= 0) {
-        /* `FUN_1000_7845`'s own literal-coordinate snap -- overrides any
-         * Bresenham rounding drift, so the barrier is always EXACTLY on a
-         * target point at the moment it arrives, never one pixel off. */
-        const arrived = state.rec.targets[state.pointIdx];
-        state.x = arrived.x; state.y = arrived.y;
-        const next1 = bump1Based(state.pointIdx + 1, state.direction);
-        state.pointIdx = findValidPoint(state.rec.targets, next1, state.direction);
-        this.#seedLeg(state, state.rec.targets[state.pointIdx]);
-      } else {
-        state.x = state.line.x; state.y = state.line.y;
+      this.#walk(state);
+      const w = state.walker;
+      state.x = w.line.x; state.y = w.line.y;
+      if (w.rem < 0) {
+        const t = state.rec.targets[state.pointIdx];
+        state.x = t.x; state.y = t.y;
+        if (!state.cycling) {
+          state.settled = true;
+        } else {
+          const next1 = bump1Based(state.pointIdx + 1, state.direction);
+          state.pointIdx = findValidPoint(state.rec.targets, next1, state.direction);
+          this.#seed(state, w.line.x, w.line.y, state.rec.targets[state.pointIdx]);
+        }
       }
+      if (state.x === x0 && state.y === y0) continue;
       state.tileId = this.#resolveTile(state);
       this.#restamp(state);
-      /* CS:0x76CE-0x76D7: a slot whose position changed calls 0x7720, which
-       * raises DS:0x395 if it is on screen (game/loop-sfx.js). */
-      if (cam && (state.x !== x0 || state.y !== y0)
-          && barrierOnScreen(state.x - cam.x, state.y - cam.y, state.rec.rawWh, state.rec.rawRows)) {
+      if (cam && barrierOnScreen(state.x - cam.x, state.y - cam.y, state.rec.rawWh, state.rec.rawRows)) {
         movedOnScreen = true;
       }
     }
-    return movedOnScreen;
+    return { active: true, moved: movedOnScreen };
   }
 
-  /** DS:0x364 != 0 — some barrier is armed (the rescan gate is open). */
-  get active() { return this.slots.some((s) => s !== null); }
+  /** DS:0x364 != 0 — some barrier has been armed since the level loaded. */
+  get active() { return this.count !== 0; }
 
   /** See the file header -- borrow whichever pre-existing, already-solid
    *  neighbour tile touches this barrier's footprint. Checked in the order
@@ -416,6 +431,7 @@ export class LineBarriers {
     for (const cell of this.stampedCells) this.map.planeB[cell] = 0;
     this.stampedCells.clear();
     this.slots.fill(null);
+    this.count = 0; this.gate = false;               // CS:0x8D11 / 0x8D17
   }
 
   get live() { return this.slots.reduce((n, s) => n + (s ? 1 : 0), 0); }

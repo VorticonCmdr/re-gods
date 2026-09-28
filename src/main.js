@@ -2832,11 +2832,12 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
         }
       }
       /* CS:0x01F2 — the line-barrier rescan (game/line-barriers.js's own
-       * `tick()`), advancing every CYCLING selector-7-10 barrier one
-       * Bresenham leg. `[PROVEN]` this session (frame.js's own
+       * `tick()`), advancing every selector-7-10 barrier that has not yet
+       * settled by one budget of Bresenham steps. `[PROVEN]` this session (frame.js's own
        * `LINE_BARRIERS_AT`, get_xrefs_to on CS:0x767A): called from BOTH
        * FUN_1000_006f (here, unconditionally, before pickup/projectiles/
-       * the player) AND the death driver FUN_1000_09BB at CS:0x09C7 — so it
+       * the player), the death driver FUN_1000_09BB at CS:0x09C7 and the
+       * respawn tick FUN_1000_921B at CS:0x9260 — so it
        * must run every tick regardless of `deathSeq`, which is why this call
        * sits ABOVE that gate rather than inside it. Corrects an earlier
        * pass that shipped this call near the END of the tick instead,
@@ -2848,8 +2849,8 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
        * original runs them BEFORE — semantically inert, since this system
        * touches neither the damage grid nor destructible blocks. Settle
        * barriers (the vast majority) are untouched by this call. */
-      const barrierMoved = lineBarriers.tick({ x: cam.snapX, y: cam.snapY });
-      loopSfx.barrierTick(lineBarriers.active, barrierMoved, loopSfxOut());   // CS:0x76F8
+      const rescan = lineBarriers.tick({ x: cam.snapX, y: cam.snapY });
+      if (rescan) loopSfx.barrierTick(rescan.active, rescan.moved, loopSfxOut());   // CS:0x76F8
 
       /* CS:0x1447/0x1B72/0x1AF6 — the retracting spike hazard (types
        * 50/117/130, game/spikes.js). Undebounced flat damage, so it does NOT
