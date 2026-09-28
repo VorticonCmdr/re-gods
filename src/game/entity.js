@@ -396,7 +396,8 @@ export class EntityB {
     /* CS:0xff20 — the pre-life states run before any locomotion or fire.
      *   waiting (-2): count the stagger down, then materialise
      *   materialising (-3): 5 ticks, then become alive with the descriptor HP
-     * The materialise effect itself (CS:0xff59) is not ported. */
+     * The materialise effect itself (CS:0xff59) is game/flash.js, reached
+     * through the `wantsFlash` handshake (main.js's playFlash). */
     if (this.state === EST.WAITING) {
       this.timer = (this.timer - 1) & 0xffff;              // CS:0xFF4B `dec` / `jz`
       if (this.timer === 0) this.wantsFlash = true;         // CS:0xFF53 call 0xff59

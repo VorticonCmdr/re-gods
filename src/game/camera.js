@@ -47,10 +47,16 @@
  *
  *   UNKNOWN_camera_alt_path — 5EB3 `cmp byte [0x32],0 / jz 0x5ec0`. Everything
  *   above is the [0x32] == 0 branch. The other branch calls 0x5e22 and jumps
- *   straight to sprite selection, skipping the camera entirely. [0x32] is a
- *   scripted pan-to-target mode, installed by trigger ACTION selector 11 for
- *   per-world cutscenes and reset on every spawn/respawn — not modelled here
- *   since it never fires on shipped-level normal play outside those cutscenes.
+ *   straight to sprite selection, skipping the camera entirely. [0x32] is the
+ *   guardians' scripted pan-to-target mode. It is modelled outside this file,
+ *   as main.js's `camScript` (driven by game/guardian.js and guardian4.js).
+ *   Writers of [0x32] (search_instructions over GAME.EXE and VGA.EXE):
+ *     CS:0x8D53         0, in level init FUN_1000_8c34 (one caller, CS:0x0092)
+ *     CS:0xCBE1/0xCD8E  1, and CS:0xCC07  3: the guardian scripts
+ *     CS:0x5E96         INC, inside the pan itself (FUN_1000_5e22)
+ *     VGA:0x10C7        4, graphics export 18's screen snapshot
+ *   Respawn does NOT reset it: CS:0x08C5 only tests it, to skip the camera
+ *   re-init while a scripted pan is in control.
  *
  * LEVEL-LOAD / RESPAWN / TELEPORT INIT — FUN_1000_2189, CS:0x2189-0x21C1.
  *   Reached, unconditionally or near enough, from three real gameplay sites:

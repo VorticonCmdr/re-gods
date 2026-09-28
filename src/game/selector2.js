@@ -137,11 +137,9 @@
  *     `entityCount` entities at the SAME point, apply the cumulative
  *     stagger, seed the reload timer, mark `bit0` (fully materialised).
  *     CS:0xADCF's own one-shot "spawn flash" call on entity 0
- *     (`CALL 0x1000:b095`, into the ALREADY-DOCUMENTED `DS:0xac90` pool
- *     System-A's own `CS:0xFF59` also uses) is DELIBERATELY NOT PORTED —
- *     matching this project's existing precedent (`entity.js`'s own header:
- *     "The materialise effect itself (CS:0xff59) is not ported") — it is
- *     purely decorative and this port has no consumer for that pool yet.
+ *     (`CALL 0x1000:b095`, into the `DS:0xac90` pool System A/B's own
+ *     `CS:0xFF59` also uses) is ported as `#flash` below, over
+ *     game/flash.js.
  *   - Materialised slot: per entity, dispatch on `state`:
  *       state === 0            -> already fully dead, count it, skip
  *       state < 0               -> DYING: an 8-tick fade (frames 0..6 drawn,
@@ -159,8 +157,6 @@
  *     reward and deactivates.
  *
  * WHAT THIS PORT DOES NOT MODEL:
- *   - The one-shot "spawn flash" visual (see above — matches existing
- *     project precedent for the identical DS:0xac90 pool elsewhere).
  *   - ⚠️ CORRECTION: the popup-rendering gap above is CLOSED. `popup.js`
  *     exists, and `main.js` drains this slot's own `rewards` array into it
  *     every tick (`popup.spawn(r.x, r.y, id, level.drawObjects)`), the same
