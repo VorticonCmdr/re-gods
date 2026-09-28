@@ -42,6 +42,8 @@ The `0x0272` test runs after the player, whose epilogue fires the plane-B event.
 
 Respawn (`CS:0x086D`) calls `[0x288]` while `[0x34]` is set.
 
+**The turret patch outlives the guardian `[STATIC]`.** A byte search of `GAME.EXE` for `88 AD` finds exactly two writers of `cs:[0xAD88]`: `C4AA` (`0xC3`, RET) and `CS:0x8E70` (`0x90`, NOP). `0x8E70` is straight-line code in the per-level init `FUN_1000_8C34`, whose only caller is `CS:0x0092`, the level-entry prologue. The respawn path does not reach it, and neither does the A→B switch at `FUN_1000_484E`. So the selector-2 turrets stop moving, firing and drawing when selector 11 fires, and stay that way after the guardian dies (`[0x34] = 0`) until the next level load. Before this was found, `gods-web` gated its turrets on the guardian being alive and kept drawing their last frame while they were skipped. Both are now fixed (`turretWalkerRet` in `main.js`). This has not been checked live.
+
 ## World 1 `[PROVEN]`
 
 This section is ported as `gods-web/src/game/guardian.js`. Per tick it matches the `PJOYG1` capture in health, x, frame, live-spit count and spit checksum.
