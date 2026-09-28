@@ -51,11 +51,14 @@ export function spikeOnScreen(sx, sy) {
 
 /** FUN_1000_7720, on the barrier's screen position. `rawWh`/`rawRows` are
  *  the record's own +0x1A / +0x1B bytes, used whole (+0x1A) and `& 7`
- *  (+0x1B), without the +1 the plane-B stamp adds — and the edge branch
- *  tests only the far edges, not the right and bottom limits. */
+ *  (+0x1B), without the +1 the plane-B stamp adds. The branch order is the
+ *  original's: x first, and the edge branch tests only the far edges. */
 export function barrierOnScreen(sx, sy, rawWh, rawRows) {
-  if (sx > -0x20 && sy > -0x10) return !(sx > 0x160) && !(sy > 0xc0);
-  return sx + rawWh * 32 > -0x20 && sy + (rawRows & 7) * 16 > -0x10;
+  const edge = () => sx + rawWh * 32 > -0x20 && sy + (rawRows & 7) * 16 > -0x10;   // 0x7748
+  if (sx <= -0x20) return edge();          // 772D `jle 7748`
+  if (sx > 0x160) return false;            // 7732 `jg 7747`
+  if (sy <= -0x10) return edge();          // 7737 `jle 7748`
+  return !(sy > 0xc0);                     // 773C `jg 7747`
 }
 
 export class LoopSfx {

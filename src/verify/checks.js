@@ -14244,7 +14244,11 @@ export function checkSpikes() {
     check('CS:0x772D-0x7773: a barrier on screen, off the right/bottom, and caught by the left/top edge branch',
       barrierOnScreen(100, 100, 0, 0) && !barrierOnScreen(0x161, 0, 0, 0) && !barrierOnScreen(0, 0xc1, 0, 0)
       && barrierOnScreen(-0x40, 0, 2, 0) && !barrierOnScreen(-0x40, 0, 1, 0)
-      && barrierOnScreen(0, -0x20, 0, 2) && !barrierOnScreen(0, -0x20, 0, 9));
+      && barrierOnScreen(0, -0x20, 0, 2) && !barrierOnScreen(0, -0x20, 0, 9)
+      /* 0x7732 rejects x > 0x160 before y is looked at */
+      && !barrierOnScreen(0x200, -0x20, 0, 2)
+      /* the edge branch has no right/bottom limit */
+      && barrierOnScreen(-0x40, 0x300, 2, 0));
   }
 
   return results;
