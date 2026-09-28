@@ -510,3 +510,28 @@ The port (`gods-web/src/game/projectiles.js`) had already worked out the muzzle 
 
 So "the second muzzle position" framing was half right and half a red herring: `DS:0x33d` does gate a muzzle switch in the fire path (already resolved by the port), but the *position it switches to* is not a second emitter offset at all — it is wherever the player's own familiar currently stands. A port that models the familiar as a tracked entity with a world position already has everything needed; one that treats `0x16a`/`0x16c` as a fixed alternate muzzle constant does not.
 
+### The familiar, read in full — `CS:0xC08E`–`0xC49B` `[STATIC]`, ported (2026-09-28)
+
+⚠️ Two corrections to the list above: item 1's `CS:0x8C56` is **level start only** (`FUN_1000_8c34` has one caller, `CS:0x0092`; a respawn after a death does not move the familiar), and item 3's "lowest sprite id" is doubly wrong — the scan takes the **largest** key, and the key is the box's right edge (`docs/combat-and-projectiles.md`, corrected and proven live). The complete writer census of `[0x16a]`/`[0x16c]`: teleport `0x1003`, level start `0x8C5D`, the mover `0xC1B5`, the summon `0xC313`.
+
+**State.** Energy `0x168` (−1 = none), power `0x210`, wings `0x304`; position `0x16A/0x16C`; speed `0x2FC/0x2FE`; facing `0x300` (±1); animation cursor `0x302` (0..0xA step 2); draw record `0x308/0x30A/0x30C` (sprite −1 = hidden).
+
+**The tick, `CS:0xC08E`** — main loop `CS:0x0215` (after the hunter at `0x020F` and the starburst at `0x0212`), also `CS:0x09EA` (death driver) and `CS:0x9283` (respawn tick). Energy < 0 → nothing. Otherwise, with wings saved around it:
+- **Target** via `CS:0x9E36` on the hunter's list. With `[0x33D]` ≥ 0 (a carried slot) the goal is (hero x, pick y or hero y − 0x24); with `[0x33D]` = `0xFF` it is the pick, or with no pick the hero's (x, y − 0x24) with wings = 0 for this tick (`CS:0xC174`).
+- **Mover `CS:0xC17D`**, per axis: speed ±1 toward the goal, capped at 2·wings + 3 (x) / 2·wings + 2 (y), a shrunken cap snapping the speed down; x sets facing. On an exact tie the axis draws a random number (`CS:0x3836`) and bit 0 picks the direction, so a live familiar consumes the game's random table. `CS:0xC20E`/`0xC28B` are two damping variants that nothing calls.
+- **Facing override** within 8 px of the hero's screen x: `DS:0xD7CA[hero state]` (0 = keep the pre-move facing).
+- **Sprite** `0x185 + DS:0xD7AE[cursor]` (0,1,2,3,2,1), +4 facing right; the cursor steps on the tock and wraps at 0xC.
+- **Stamp `CS:0xC2B6`**: tag `0xFF` at `DI+0x31/0x32/0x61/0x62`, `DI = 0x16CA + (x SAR 3) + (y & ~7)·6`, the write window checked on `DI`, no half-band nudge. Drawn at `CS:0x02B7` (`0xC149`).
+
+**Hits.** Tag `0xFF` decodes to damage = power (`CS:0x938E`) with `AL` = 1; `CS:0xAB4D` then subtracts the struck creature's current strength from the familiar's energy, before the (difficulty-scaled) damage, and `CS:0xAB53` calls the death below zero.
+
+**Death `CS:0xC440`**: a starburst at the familiar + 4 unless `[0x391]` (the full-restart flag, set around the restart calls `CS:0x047D`/`0x8DDF`), then energy −1, `[0x33D]` = `0xFF`, sprite hidden, and the list gate `[0x343]` closed unless a slot holds the hunter.
+
+**Summon `CS:0xC308`** (fresh): hero x, hero y − 0xA0, speeds 0, facing right, cursor 0, energy 1000, power 4, wings 0, `[0x343]` = 0, then `C35E`. A live familiar only gains 1000 energy and 1 power (`CS:0xC2FD`).
+
+**The carried slot `CS:0xC35E`** (on a summon and every weapon arm, `CS:0x94D4`): `0xFF` with fewer than two armed slots; otherwise a slot is a candidate only if its weapon **index is 2 (the fireball)** — `cmp word [0xdd10],2` and siblings — with its power as the value; lowest wins, and `CS:0xC422`–`0xC43B` keeps `0xFF` unless the winner is a real candidate. So the familiar only ever carries the fireball, and that slot's shots leave from it (`CS:0x9757`: familiar + (8 when firing right, 0 left), + 0x10). Probably an authoring slip for a per-slot field, but it is what ships.
+
+**The list gate `[0x343]`**: written by the weapon arm (`CS:0x9124`/`0x9146`: open iff energy ≥ 0 or a slot holds the hunter), the summon (open), and the death (closed unless hunter) — all the same condition, so a per-frame test of it is exact.
+
+`gods-web/src/game/familiar.js` implements all of this; no attract demo has a familiar, so it is `[STATIC]`, smoke-tested in the running port (summon, flight toward the hero's head, the fireball slot carried).
+
