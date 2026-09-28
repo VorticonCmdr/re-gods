@@ -6,7 +6,7 @@
  * format claim were wrong, these would go red rather than fail silently.
  */
 
-import { Guardian4 } from '../game/guardian4.js';
+import { Guardian4, export1Bp } from '../game/guardian4.js';
 import { Guardian, convertBezier, getProcessJaw, resetProcessJaw } from '../game/guardian.js';
 import { PayoffScreen, PAYOFF_PAGES, LINE_Y, lineX } from '../game/payoff.js';
 import { dclDecompress } from '../formats/dcl.js';
@@ -523,9 +523,9 @@ export async function runAllChecks(fetchRaw) {
     const o = { cam: { x: 0xb60, y: 0x78 }, hero: { x: 0, y: 0, state: 0 }, health,
       rng: () => { draws++; return 0; }, sfx: () => {}, zap: () => {}, invuln: false };
     const cs = { mode: 0, tx: 0, ty: 0 };
-    const launches = [], firstSteps = [];
+    const launches = [], firstSteps = [], stops = [];
     for (let call = 1; call <= 500; call++) {
-      if (call > 1 && w4.hookOn) { w4.hook({ ...o, camScript: cs }); hooks++; if (!w4.hookOn) riseEnd = hooks; }
+      if (call > 1 && w4.hookOn) { w4.hook({ ...o, camScript: cs, stopSfx: (id) => stops.push([hooks + 1, id]) }); hooks++; if (!w4.hookOn) riseEnd = hooks; }
       const bf = w4.boulder.frame, p0 = w4.recs[0].p;
       w4.drive(o);
       if (bf < 0 && w4.boulder.frame >= 0) launches.push(call);
@@ -533,6 +533,18 @@ export async function runAllChecks(fetchRaw) {
     }
     check('world 4: the rise ends on hook call 105 at y 0xB0, camera mode 4 (export 18)',
       riseEnd === 105 && w4.baseY === 0xb0 && cs.mode === 4 && cs.tx === 0xb60 && cs.ty === 0x78, `${riseEnd}`);
+    check('world 4: the rise end stops the driver\'s start sound once (CS:0xCBFC, '
+      + 'sound export 5, al 0xC5 = sound 0x45)',
+      stops.length === 1 && stops[0][0] === 105 && (stops[0][1] & 0x7f) === 0x45, JSON.stringify(stops));
+    /* Graphics export 1's returned bp (VGA:0x1D07), the boulder's A9E4 strength. */
+    check('export 1 bp: culled draws leave the slot address 0x5256 in bp',
+      export1Bp(-0x20, 0, 24) === 0x5256 && export1Bp(0x140, 0, 24) === 0x5256
+      && export1Bp(0, 0xc0, 24) === 0x5256 && export1Bp(0, -0x30, 24, 0) === 0x5256);
+    check('export 1 bp: with DS:0x34 set there is no top cull, and a sprite wholly '
+      + 'above the top returns its rows', export1Bp(0, -0x30, 24, 1) === 24 && export1Bp(0, -24, 24) === 24);
+    check('export 1 bp: a sprite at or below the 0xA0 clip line returns its rows; '
+      + 'anything drawn returns 0', export1Bp(0, 0xa0, 24) === 24 && export1Bp(0, 0x9f, 24) === 0
+      && export1Bp(-0x1f, -23, 24) === 0);
     check('world 4: boulders launch on driver calls 128, 184, 240 ...',
       launches.slice(0, 3).join() === '128,184,240', launches.join());
     check('world 4: worm record 0 first steps on calls 172 and (after an escape) 486',

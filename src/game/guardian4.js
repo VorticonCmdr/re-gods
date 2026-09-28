@@ -86,10 +86,22 @@ export function wormPath(pat) {
   return { x: (b[2] << 8) | b[3], y: (b[4] << 8) | b[5], steps: b.subarray(10) };   // C918 bswap
 }
 
-/** Graphics export 1's returned bp (VGA:0x1D07): 0x5256 untouched when the
- *  sprite is culled, 0 once anything was blitted. The "clipped off the top or
- *  bottom" case (bp = rows) needs the sprite's height and is not modelled. */
-const export1Bp = (sx, sy) => (sx <= -0x20 || sx >= 0x140 || sy >= 0xc0 ? 0x5256 : 0);
+/** Graphics export 1's returned bp (VGA:0x1D07-0x1EB4). The caller's thunk
+ *  loads BP with the slot address, 0x5256, and the export returns with it
+ *  untouched when it culls: x <= -0x20 or x >= 0x140 (VGA:0x1D12/0x1D1A),
+ *  y >= 0xC0 (0x1D24), or y <= -0x30 while DS:0x34 is 0 (0x1D2C-0x1D38).
+ *  Otherwise BP = the sprite's rows (descriptor +2, +1; VGA:0x1D75-0x1D78);
+ *  a sprite clipped away whole, above the top (rows + y <= 0, 0x1DAB-0x1DB9)
+ *  or below the clip line SS:0x40A (0xA0 in play, 0x1DD9-0x1DEE), returns
+ *  that. Anything drawn counts BP down to 0 (0x1E45 / 0x1EA2). [STATIC]
+ *  @param {number} rows  the sprite's height, or null when unknown */
+export function export1Bp(sx, sy, rows, gm = 1, clip = 0xa0) {
+  if (sx <= -0x20 || sx >= 0x140 || sy >= 0xc0) return 0x5256;
+  if (!gm && sy <= -0x30) return 0x5256;
+  if (rows == null) return 0;                  // the caller knows no height: assume drawn
+  if (sy < 0) return rows + sy <= 0 ? rows : 0;
+  return sy >= clip ? rows : 0;                // [0x406] = rows - (y + rows - clip) = clip - y
+}
 
 export class Guardian4 {
   constructor({ pat, bumlist }) {
@@ -134,7 +146,7 @@ export class Guardian4 {
 
   /** CS:0xCBC8, the rise hook: the parts it draws go under everything else
    *  (they are drawn before the object pass). `camScript` is DS:0x32 + target. */
-  hook({ cam, camScript, sfx }) {
+  hook({ cam, camScript, sfx, stopSfx }) {
     if (!this.hookOn) return [];
     setProcessJaw(this.baseY);                    // CBCB — DS:0x2F0, shared with world 2's jaw
     camScript.tx = W4_CAM_TARGET.x; camScript.ty = W4_CAM_TARGET.y;
@@ -148,8 +160,11 @@ export class Guardian4 {
       bg.push({ x: W4_BODY_X - cam.x + dx, y: y - cam.y + dy, sprite: 0x1c2 + k }));
     this.baseY -= 2;                              // CBEF
     if (this.baseY < W4_BASE_Y) {
-      /* CBFC: sound export 5 (al 0xC5, not modelled), y clamped, [0x32] = 3,
-       * export 18 snapshots the screen and sets [0x32] = 4, hook RET'd. */
+      /* CBFC: sound export 5 with al 0xC5 stops the rise's sound 0x45, the
+       * one the driver started at CS:0xC985 (W4_SFX_START); y clamped,
+       * [0x32] = 3, export 18 snapshots the screen and sets [0x32] = 4, hook
+       * RET'd. */
+      if (stopSfx) stopSfx(W4_SFX_START);
       this.baseY = W4_BASE_Y;
       camScript.mode = 4;
       this.freeze = 'snap';
@@ -220,18 +235,23 @@ export class Guardian4 {
     if (b.y > floor) b.y = floor;                 // CA18
     let sx = ax - cam.x, sy = bx - cam.y;
     drawn.push({ x: sx, y: sy, sprite: 0x1db + cx });
-    let bp = export1Bp(sx, sy);
+    /* [0x34] is 1 for every draw here: the driver only runs while it is set
+     * (CS:0x0272), and the death that clears it (CS:0xD950) runs in the worm
+     * step, after this. */
+    const rows = (id) => (o.spriteRows ? o.spriteRows(id) : null);
+    let bp = export1Bp(sx, sy, rows(0x1db + cx));
     if (s16(ax) <= 0xbbc) {                       // CA42: the launch overlay
       const ox = 0xbb0 - cam.x;
       drawn.push({ x: ox, y: this.baseY + 0x38 - cam.y, sprite: 0x1d1 });
       drawn.push({ x: ox + 0x20, y: this.baseY + 0x38 - cam.y, sprite: 0x1d2 });
       sy = this.baseY + 0x4b - cam.y;
       drawn.push({ x: ox, y: sy, sprite: 0x1d3 });
-      bp = export1Bp(ox, sy);                     // CA95 is the last draw
+      bp = export1Bp(ox, sy, rows(0x1d3));        // CA95 is the last draw
     }
     if (b.hp < 0) return;                         // CA9A: exploding, no hit test
     /* CAB1-CABD: [0x34] forced to 0 around A9E4, and bp is NOT loaded: it is
-     * whatever the last export-1 draw returned (UNKNOWN_w4_boulder_bp). */
+     * whatever the last export-1 draw returned (export1Bp above; 0 in every
+     * reachable case, Gods/docs/guardians.md). */
     const r = this.#a9e4(ax, bx, 0x18, 0x18, bp, 0, o);
     if (ax - cam.x < 0x110) {                     // CAC5
       b.hp = r;

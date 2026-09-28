@@ -259,8 +259,9 @@ export const SFX_VOICES = {
 
 /** Node-testable: records ids instead of making sound. */
 export class RecordingAudioBus {
-  constructor() { this.played = []; }
+  constructor() { this.played = []; this.stopped = []; }
   play(id) { this.played.push(id); }
+  stop(id) { this.stopped.push(id); }
 }
 
 /** Browser-only: real Web Audio playback, lazy-started on the first play(). */
@@ -268,6 +269,7 @@ export class WebAudioBus {
   #ctx = null;
   #pgodsBlobs = null;
   #buffers = new Map();
+  #playing = new Map();          // blob index -> the sources still sounding
 
   #ensureContext() {
     if (!this.#ctx) {
@@ -321,10 +323,28 @@ export class WebAudioBus {
       g.gain.value = SFX_GAIN;
       src.connect(g).connect(ctx.destination);
       src.start(ctx.currentTime);
+      const key = id & 0x7f;
+      if (!this.#playing.has(key)) this.#playing.set(key, new Set());
+      const live = this.#playing.get(key);
+      live.add(src);
+      src.onended = () => live.delete(src);
       return;
     }
     const voice = SFX_VOICES[id];
     if (!voice) return;
     voice(ctx, ctx.destination, ctx.currentTime);
+  }
+
+  /**
+   * Sound export 5 (ADL:0x2FC, `mov ah,4 / and al,0x7f / call far [0xf6]`,
+   * reached from GAME.EXE's CS:0x22D6): stop sound `id & 0x7f`. Only the
+   * decoded-sequence path is tracked; a stylized fallback voice is short and
+   * left to finish.
+   */
+  stop(id) {
+    const live = this.#playing.get(id & 0x7f);
+    if (!live) return;
+    for (const src of live) { try { src.stop(); } catch { /* already ended */ } }
+    live.clear();
   }
 }

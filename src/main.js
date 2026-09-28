@@ -2503,7 +2503,7 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
         }
         if (guardian && guardian.world === 4) {
           guardianBg = guardian.hook({ cam: { x: cam.snapX, y: cam.snapY }, camScript,
-            sfx: (id) => audio.play(id) });
+            sfx: (id) => audio.play(id), stopSfx: (id) => audio.stop(id) });
           if (guardian.freeze) { w4Freeze = guardian.freeze; guardian.freeze = null; }
         }
       }
@@ -3317,6 +3317,8 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
           decodeTag, difficulty, rng: () => rng.next(), debris,
           sfx: (id) => audio.play(id), invuln: fx.invuln > 0,
           planeB: level.map.planeB,
+          /* Descriptor rows for graphics export 1's returned bp (guardian4.js). */
+          spriteRows: (id) => (hero && hero.frames[id] ? hero.frames[id].h : null),
           /* The world-3 script's 0xFD (CS:0xD7E1-0xD7EC): the hero's tick has
            * already run, so he is drawn at the old y this tick. */
           lift: () => { camShake = 8; camNudgeY -= 8; player.y -= 16; },
