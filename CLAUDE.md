@@ -119,5 +119,11 @@ Moved to the `gods-re-tooling` skill (`.claude/skills/gods-re-tooling/SKILL.md`)
 - **Loop sounds.** The export-5 "stops" belong to two looping sounds `GAME.EXE` starts itself: spikes `0x0197` and moving barriers `0x08C5`.
 - **World-4 worm.** Its escape and hits (two kills, with injected grid tags) replay with 0 differences.
 - **Roland.** ROL's SFX path matches the port call for call under `GODS.INI = Roland`.
+- **Found along the way, fixed in `gods-web`:**
+  - the fire sound plays once per weapon slot;
+  - weapon hits during a guardian fight clink `0x21D` (not `0x0F22`, as `combat-and-projectiles.md` had it);
+  - the fireball's and hunter's terrain stops were silent;
+  - the par damage bonus `(DS:0xE66C[world−1] − DS:0x1BA) >> 3` was missing.
+  - After these, the port plays the same sound ids as live DOS at every `PJOYG1` cursor except the level-start sound.
 - **The MT-32 stand-in** gets a bank-driven reverb. Real emulation would need MT-32 ROMs.
 - **New open item.** One unported mechanism was found: `UNKNOWN_shop_walker` (ranked item 53), the `CS:0x071E` walker after a level-start password shop.

@@ -75,17 +75,20 @@ This joins cleanly to what this document already recorded: `0xAB45 mov bx,[0x1ea
 `FUN_1000_9320` (the tag decoder above) does not end at `0x9361`. Read to its actual `RET` at `0x938A`, the fall-through past the damage store contains a second, previously-unwired mechanism:
 
 ```
-9364  ax = [0x198] - [0x1ba] ; jg 0x9399         ; unrelated to this mechanism (an
-9399  ax >>= 3 (sar ×3) ; [0x1ea] += ax ; jmp 936d ; event-gated damage bonus, not traced further here)
-936D  cmp byte [0x34],0 / jz 0x937c              ; sfx gate — NOT "unrelated", see below
-9374  ...play sfx 0xf22 (id 0x22, the same "kill" sound `docs/drivers-and-memory.md`'s
-      "Sound: a 13-slot interface" section documents at CS:0xABA0/0xABC8)...
+9364  ax = [0x198] - [0x1ba] ; jg 0x9399         ; the par bonus, see below
+9399  ax >>= 3 (sar ×3) ; [0x1ea] += ax ; jmp 936d
+936D  cmp byte [0x34],0 / jz 0x937c              ; sfx gate, see below
+9374  push ax / mov ax,0x21d / call 0x22ca / pop ax   ; ⚠️ 0x21D, not 0xF22 (see below)
 937C  cmp byte ptr [di+0x49],0x0                 ; <-- DI is STILL the weapon record from 0x934B-935C
 9380  jz 0x9387                                  ;     (0xe2b6 + weapon*0x50), untouched since the damage read
 9382  mov word ptr [si+0x2],0x0                  ; <-- DESPAWN, but [si] here is NOT the grid pointer
 9387  sub ax,ax                                  ;     — see the SI derivation below
 9389  pop di / ret
 ```
+
+⚠️⚠️ **Corrected again (2026-09-28), on the bytes and live. The sound is `0x21D`, and `DS:0x34` is set for every guardian fight.** `CS:0x9375` is `B8 1D 02`, `mov ax,0x21d`: the same clink as the terrain stop (`CS:0xA7F7`), not the kill sound `0x0F22` the paragraph below says. And `DS:0x34` is 1 for the whole of every guardian fight (selector 11, `docs/guardians.md`), not only in the ending machine and ce64's bracket. So every weapon hit on a guardian clinks: live under ROL in `PJOYG1` the game plays `0x21D` on the guardian-hit ticks. The world-4 boulder brackets `[0x34]` = 0 around its own `A9E4` (`CS:0xCAB1`–`0xCABD`), so a hit on the boulder is silent. `gods-web` now plays it in `main.js`'s `decodeTag` whenever the decode runs with `DS:0x34` set, which covers the guardians and ce64's bracket alike.
+
+**The par bonus, `CS:0x9364`–`0x939F`, ported.** `DS:0x198` is the world's par, `DS:0xE66C[world − 1]` = 0, 14, 22, 34 (read live), written only at level init (`CS:0x8E0E`). `DS:0x1BA` is the weapon total `CS:0x94F5` computes: each armed slot adds its `+6` base, up to two more bases while `count − base` lasts, then the remaining extras. Its only callers are the pickup (`CS:0x94D1`, `0x94F0`) and the power potion (`CS:0x62DD`). So it is one process-wide word that goes stale across a world's weapon reload and a full restart. An ordinary weapon hit gains `(par − total) >> 3` when that is positive. In `gods-web` this is `weapons.js`'s `recomputeWeaponTotal` / `hitBonus`. All six attract demos still replay exactly, including windows where the bonus is 1 or 2.
 
 ⚠️ **Corrected, a later session: this is not "unrelated," and — for one specific creature — it is NOT dead in normal play.** `CS:0x936D` is a THIRD emitter of the same `0x0f22` id the death branch (`CS:0xAB98`) and the hero-contact branch (`CS:0xABC0`) already play, gated on `DS:0x34` rather than those two branches' `DS:0x35e`. This block is fall-through: it runs after EVERY successful tag decode (`FUN_1000_9320` is called once per weapon hit, from `CS:0xAB41`, before the caller even checks whether the target survives), regardless of whether that hit kills. `DS:0x34` is 0 in normal play EXCEPT during the world-ending cutscene machine (where the entity-AI/damage-scan that could reach this is itself frozen, so it can't fire there either) and around exactly one other bracket: `CS:0x7FD4`, inside the world-3 `DS:0xce64` creature's own contact call (see `docs/consumables-and-treasure.md`'s `DS:0x34` section). That bracket wraps the SAME `a9e4` call this tag decode is reached from — so for that one creature specifically, `0x22` plays on **every weapon hit that damages it, lethal or not**, not only on a kill. This is a genuine, narrow exception to the "a non-lethal weapon hit is silent" finding elsewhere in this document — scoped to exactly the one creature type `DS:0x34` ever brackets. `gods-web` does not model this: `ce64.js`'s own `decodeTag(tag, 1)` mode flag carries no `DS:0x34` equivalent, so this port's ce64 creature is silent on a non-lethal hit like every other creature, not distinctively noisier. Disclosed, not fixed — reproducing it needs threading a `DS:0x34`-equivalent through the decode call, which nothing in this port does today.
 
