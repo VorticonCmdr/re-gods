@@ -281,7 +281,9 @@ export class Guardian4 {
     }
     if (acct === -8) {                            // C776
       this.hp -= W4_WORM_KILL_HP;
-      if (this.hp < 0) return;                    // -> C758, the death (host: die)
+      /* -> C758: D923 runs HERE, before C9A5's body test (its kill sound
+       * follows the death's draws). `o.die` is the host's Guardian4#die call. */
+      if (this.hp < 0) { if (o.die) this.deathOut = o.die(this); return; }
       this.destroyed = false;
       this.wormHp = W4_WORM_KILL_HP;
       this.#newWorm(0x46);                        // C8F5

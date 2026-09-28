@@ -399,6 +399,25 @@ async function loadSprites(world) {
            palette: images.PALWAYS1.palette, total: map.length };
 }
 
+/* CS:0x053B-0x055A — the guardian's one-shot load (DS:0x35C, the end of the
+ * selector-11 tick) loads `guard<N>` through export 22 from the cursor
+ * DS:0x130..0x134, which CS:0x2BB1-0x2BC0 saved right after `objects`: the
+ * start of `level<N>`. So the guardian's atlas OVERWRITES the level's
+ * creature sprites from descriptor 0x1C2 on (the ids every guardian draws
+ * with), and the creatures past its end stay. [STATIC]. Its palette words
+ * 2-15 equal the level's in all four worlds and CS:0x055D/0x0563 re-apply
+ * the slot-0/1 override, so the palette does not change. */
+async function overlayGuardSprites(sprites, world) {
+  const lvl = sprites.ranges.find((r) => r.group === `level${world}`);
+  if (!lvl) return;
+  let id = lvl.base;
+  for (const s of GROUP_STEMS[`guard${world}`]) {
+    const atlas = parseAtlas(dclDecompress(await fetchRaw(`game/${s}.DAT`)).data);
+    const img = decodePI1(dclDecompress(await fetchRaw(`game/${s}.PI1`)).data);
+    for (const f of atlas.frames) sprites.frames[id++] = { ...f, pixels: cutAll(img, { frames: [f] })[0].pixels };
+  }
+}
+
 /* The status panel. CS:0x38a's own latch loads PSTAT3 exactly once, the
  * first time the real per-tick game loop runs (game/status-panel.js) — not
  * per level and not per world, so this port loads it once at startup too. */
@@ -1169,6 +1188,7 @@ const guardianTables = {
     events.onGuardian = () => {
       guardian = level.world === 4 ? new Guardian4(guardianTables.w4)
         : new Guardian(level.world, guardianTables);
+      if (hero) overlayGuardSprites(hero, level.world).catch((e) => console.error('guard atlas', e));
       return true;
     };
     events.onSpawnB = (param) => {
@@ -3231,14 +3251,17 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
           /* World 2: DS:0x36D, DS:0x32, the marker list, and CS:0xDBC6
            * (DS:0x1F0 = 6 steps, aimed at the jittered hero +8/+6). */
           tock36d, camScript, markers: markerList,
-          zap: (x, y, tx, ty) => lineHazards.spawn(x, y, tx, ty, 6) };
+          zap: (x, y, tx, ty) => lineHazards.spawn(x, y, tx, ty, 6),
+          die: (w4) => w4.die({ rng: () => rng.next(), starburst, burst,
+            sfx: (id) => audio.play(id) }) };
         const g = guardian;
         guardianFx = g.drive(gOpts);
         if (g.dead) {
           /* CS:0xD923 (and each world's extras) runs inside the driver, so
            * this tick's world gates below still run. [0x34] = 0: the normal
            * enemy suite resumes next tick. game/guardian.js `die`. */
-          const d = g.die({ rng: () => rng.next(), starburst, burst,
+          /* World 4 already ran it mid-driver (CS:0xC758, gOpts.die). */
+          const d = g.deathOut || g.die({ rng: () => rng.next(), starburst, burst,
             sfx: (id) => audio.play(id),
             popup: (p) => popup.spawn(p.x, p.y, p.id, dropCarriedIntoWorld) });
           guardian = null;

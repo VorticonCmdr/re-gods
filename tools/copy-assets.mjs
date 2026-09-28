@@ -42,6 +42,11 @@ const WANTED = [
   // `170 + type` and shipped types reach 191, which lands in POBJ2.
   'POBJ1.PI1','POBJ1.DAT','POBJ2.PI1','POBJ2.DAT',
   'PSMLFNT.PI1','PSMLFNT.DAT',
+  // the `guard<N>` groups, loaded over `level<N>` from descriptor 0x1C2 by
+  // the guardian's one-shot (CS:0x053B; main.js overlayGuardSprites).
+  'PGUARD11.PI1','PGUARD11.DAT','PGUARD12.PI1','PGUARD12.DAT','PAMDRAGN.PI1','PAMDRAGN.DAT',
+  'PGUARD31.PI1','PGUARD31.DAT','PGUARD32.PI1','PGUARD32.DAT',
+  'PGUARD41.PI1','PGUARD41.DAT','PGUARD42.PI1','PGUARD42.DAT',
   // object category codes: record +4 (BE u16). Verified byte-identical to
   // the EXE's own table at DS:0xef78 for all 132 records in all 4 worlds
   // (528/528), so the port reads the shipped asset, not the executable.
