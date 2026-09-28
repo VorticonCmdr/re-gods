@@ -17036,6 +17036,32 @@ export async function checkMusic(fetchRaw) {
     check('story page 1 starts at the live-confirmed counter 1641 and page 2 at 1641+0x180 (FUN_1000_07ae)',
       pages.length === 8 && pages[0][0] === 1641 && pages[1][0] === 1641 + 0x180 && INTRO_HZ === 50);
   }
+  {
+    /* The intro palette: DS:0x73 stepped by 0xDCC / 0xEB8 / 0xE51 (intro.js). */
+    const { introPaletteAt, INTRO_TABLES } = await import('../game/intro.js');
+    const hex = (p) => p.map((w) => w.toString(16)).join(' ');
+    const pintroft = decodePI1(dclDecompress(await fetchRaw('game/PINTROFT.PI1')).data).paletteRaw;
+    const pone = decodePI1(dclDecompress(await fetchRaw('game/PONE.PI1')).data).paletteRaw;
+    check('intro: DS:0xD3 is PINTROFT.PI1\'s own palette, word for word',
+      INTRO_TABLES[0xd3].every((w, i) => w === pintroft[i]));
+    check('intro: an opener card fades in to DS:0xD3 and out to black (DCC 8 steps, E51 7)',
+      hex(introPaletteAt(80)) === hex(INTRO_TABLES[0xd3]) && introPaletteAt(150).every((w) => w === 0));
+    const settled = introPaletteAt(1150);
+    check('intro: the logo settles on DS:0x173 (entry 2 = 0x777, entry 7 = 0x666, unlike PINTROFT)',
+      hex(settled) === hex(INTRO_TABLES[0x173]) && settled[2] === 0x777 && settled[7] === 0x666, hex(settled));
+    const flash = introPaletteAt(967 + 16 * 50 / 70), gold = introPaletteAt(1010);
+    check('intro: the logo glint ramps the wordmark entries to white in 16 retraces (DCC 0xF3, AX 0, two per install), then settles to gold',
+      [2, 8, 9, 10, 11, 12, 14].every((e) => flash[e] === 0x777) && flash[1] === 0x343
+      && hex(gold) === hex(INTRO_TABLES[0x173]), hex(flash));
+    const white = introPaletteAt(1342 + 16 * 50 / 70, pone), story = introPaletteAt(1400, pone);
+    check('intro: the story ramps to white (DCC 0x153, AX 0), then DOWN to PONE.PI1\'s palette',
+      white.slice(1).every((w) => w === 0x777) && story.every((w, i) => w === pone[i]), hex(white));
+    const card = introPaletteAt(6634 + 16 * 50 / 70), card2 = introPaletteAt(6680);
+    check('intro: each credits card flips in, ramps to white and settles to gold (7 x 5 retraces)',
+      card[8] === 0x777 && card2[8] === 0x200 && card2[1] === 0x343, `${hex(card)} / ${hex(card2)}`);
+    check('intro: the tail fades the backdrop entries out before the text (masks 0xDF05, 0xA0FA)',
+      (() => { const p = introPaletteAt(7632 + 200 * 50 / 70 + 25); return p[1] === 0 && p[8] !== 0; })());
+  }
 
   /* PGODSRLB-G.RL (six more files, same letter family) are NOT staged or
    * fetched by this check — GAME.EXE never loads any of them for real play

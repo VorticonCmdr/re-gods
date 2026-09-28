@@ -259,13 +259,11 @@ export const STORY_PAGES = [
  * the credits routine is entered at counter 6434, after the story's last
  * threshold (6400).
  *
- * Fades are the real 8-/7-step palette ramps (`0xDCC`/`0xE51`, AX retrace
- * waits per step), about 0.34 s at AX=3; modelled here as linear ramps of
- * that length. The logo and credits palette-cycle effects between the
- * static tables at DS:0xF3/0x113/0x133/0x173 are not modelled.
+ * Fades: see INTRO_PALETTE_OPS below. The screen's palette is DS:0x73, a
+ * working palette the fade routines step toward static tables, so the port
+ * simulates those routines rather than scaling a fixed palette.
  */
 export const INTRO_HZ = 50;
-const FADE = 17;      // 8 steps x 3 retraces at 70 Hz ~ 0.34 s ~ 17 ticks
 const PAGE_HOLD = 0x180;
 
 /* Each shot: [inTick, outTick, section, index]. `in` = the palette fade-in
@@ -290,6 +288,123 @@ export const INTRO_TIMELINE = [
   [7861, 7900, 'loading', 0],                        // after the fade-outs + 50 retraces
 ];
 export const INTRO_END_TICK = 7900;
+
+/* ── The palette: DS:0x73 and the three fade routines ─────────────────
+ * [STATIC], INTROV.unpacked.exe. Each routine works on 16 words of 3-bit
+ * channels (B bits 0-2, G 4-6, R 8-10), installs the result (CS:0x1635), then
+ * waits AX vertical retraces (CS:0x1901, 70 Hz), per step. The install takes
+ * the VGA path because DS:0x198 = PSP:0x81 - 'a' = the video byte (CS:0x0013-
+ * 0x0019), 1 for the shipped "Colour VGA", and that path waits two retraces
+ * (CS:0x16AC, 0x16F5) before writing the DAC. So step k lands 2 + k * (AX + 2)
+ * retraces after the routine starts, and even an AX 0 flash is a 16-retrace
+ * ramp, not a cut:
+ *   0xDCC  8 steps "up":   a channel different from the target's is RAISED
+ *          by 1 (even if above it); an entry whose target word is negative
+ *          (0xFFFF) is left alone.
+ *   0xEB8  7 steps "down": a channel above the target's is LOWERED by 1;
+ *          0xFFFF entries are left alone.
+ *   0xE51  7 steps "out":  every nonzero channel of the entries selected by
+ *          DX (entry 15 = bit 0 ... entry 0 = bit 15, CS:0x0E70 `rcr dx,1`)
+ *          is lowered by 1.
+ * DS:0x73 is zeroed at entry (CS:0x003B). The tables (DS = 0x1256):
+ *   0xD3  PINTROFT.PI1's own palette, word for word
+ *   0xF3  the wordmark/text entries (2, 8-12, 14) white, the rest 0xFFFF
+ *   0x113 the same entries at their gold values
+ *   0x133 the backdrop entries (1, 3-7, 13, 15)
+ *   0x153 all white (entry 0 black)
+ *   0x173 = 0x113 over 0x133: the logo's settled palette. It differs from
+ *         PINTROFT's at entries 2 (0x777, not 0x111) and 7 (0x666, not 0x777).
+ *   0x393 PONE.PI1's palette, copied by CS:0x05CD
+ * Every card change is a flash: the new page is flipped in (CS:0x1992 swaps
+ * the display start), DCC(0xF3, AX 0) whitens the text at once and
+ * EB8(0x113, 3) settles it to gold. The story fades DOWN from white. */
+const W = 0x777, X = 0xffff;
+export const INTRO_TABLES = Object.freeze({
+  0xd3:  [0, 0x343, 0x111, 0x122, 0x334, 0x444, 0x554, 0x777, 0x200, 0x420, 0x530, 0x641, 0x750, 0x031, 0x762, 0x233],
+  0xf3:  [0, X, W, X, X, X, X, X, W, W, W, W, W, X, W, X],
+  0x113: [X, X, W, X, X, X, X, X, 0x200, 0x420, 0x530, 0x641, 0x750, X, 0x762, X],
+  0x133: [X, 0x343, X, 0x122, 0x334, 0x444, 0x554, 0x666, X, X, X, X, X, 0x031, X, 0x233],
+  0x153: [0, W, W, W, W, W, W, W, W, W, W, W, W, W, W, W],
+  0x173: [0, 0x343, W, 0x122, 0x334, 0x444, 0x554, 0x666, 0x200, 0x420, 0x530, 0x641, 0x750, 0x031, 0x762, 0x233],
+});
+const up = (at, table, ax) => ({ at, kind: 'up', table, ax });
+const down = (at, table, ax) => ({ at, kind: 'down', table, ax });
+const out = (at, mask, ax) => ({ at, kind: 'out', mask, ax });
+const retraces = (n) => ({ at: null, kind: 'wait', ax: n });
+/* The `> 2` column of every threshold (see the timeline header); `at: null`
+ * follows the previous op directly. A routine starts at max(threshold, the
+ * previous op's end), since every wait is `counter < threshold`. */
+export const INTRO_PALETTE_OPS = Object.freeze([
+  /* FUN_1000_0ab3, the opener: each card DCC(0xD3, 3) in, E51(0xFFFF, 3) out */
+  ...[[7, 90], [194, 288], [384, 472], [577, 665]].flatMap(([a, b]) =>
+    [up(a, 0xd3, 3), out(b, 0xffff, 3)]),
+  /* FUN_1000_0870, the logo (CS:0x08BC-0x0A03) */
+  up(768, 0xf3, 1), down(null, 0x113, 3), up(870, 0x133, 4),
+  up(967, 0xf3, 0), down(null, 0x113, 3),
+  out(1161, 0xdf05, 3), out(1256, 0xa0fa, 3),           // backdrop, then wordmark
+  /* FUN_1000_057c, the story (CS:0x05C5-0x07AA) */
+  up(1342, 0x153, 0), down(null, 0x393, 3), out(3368, 0xffff, 3),
+  up(3427, 0x153, 0), down(null, 0x393, 3), out(6400, 0xffff, 5),
+  /* FUN_1000_0143, the credits (CS:0x0152-0x054F) */
+  up(6498, 0x173, 3),
+  ...[6534, 6634, 6729, 6824, 6919, 7014, 7109, 7204].flatMap((t) =>
+    [up(t, 0xf3, 0), down(null, 0x113, 3)]),
+  up(7497, 0xf3, 0), down(null, 0x113, 5),
+  /* entry()'s tail (CS:0x007B-0x0130): LOADING GAME */
+  { at: 7632, kind: 'wait', ax: 200 },
+  out(null, 0xdf05, 5), out(null, 0xa0fa, 5), retraces(50), retraces(5),
+  up(null, 0x133, 3), up(null, 0xf3, 0), down(null, 0x113, 3),
+]);
+const RETRACE = INTRO_HZ / 70;           // one 70 Hz retrace in 50 Hz counter ticks
+
+function fadeStep(pal, op, tables) {
+  for (let e = 0; e < 16; e++) {
+    let v = pal[e];
+    if (op.kind === 'out') {
+      if (!((op.mask >> (15 - e)) & 1)) continue;          // CS:0x0E70
+      for (const sh of [0, 4, 8]) if ((v >> sh) & 7) v -= 1 << sh;
+    } else {
+      const t = tables[op.table][e];
+      if (t & 0x8000) continue;                            // CS:0x0DEF `js`
+      for (const sh of [0, 4, 8]) {
+        const c = (v >> sh) & 7, g = (t >> sh) & 7;
+        if (op.kind === 'up' ? g !== c : g < c) v += (op.kind === 'up' ? 1 : -1) << sh;
+      }
+    }
+    pal[e] = v & 0xffff;
+  }
+}
+
+/** DS:0x73 at counter `t`: every op run from the zeroed palette, each step
+ * visible from its install (see above). `pone` is PONE.PI1's raw palette. */
+export function introPaletteAt(t, pone = null) {
+  const tables = { ...INTRO_TABLES, 0x393: pone ? Array.from(pone) : INTRO_TABLES[0x153] };
+  const pal = new Array(16).fill(0);
+  let end = 0;
+  for (const op of INTRO_PALETTE_OPS) {
+    const start = Math.max(op.at ?? end, end);
+    if (t < start) break;
+    if (op.kind === 'wait') { end = start + op.ax * RETRACE; continue; }
+    const steps = op.kind === 'up' ? 8 : 7;
+    const dur = (op.ax + 2) * RETRACE;                    // AX waits + the install's two
+    const n = Math.max(0, Math.min(steps, Math.floor((t - start - 2 * RETRACE) / dur) + 1));
+    for (let k = 0; k < n; k++) fadeStep(pal, op, tables);
+    end = start + steps * dur;
+  }
+  return pal;
+}
+
+/** ST words -> the RGBA bytes renderer.present() takes (pi1.js's rule). */
+function toRGBA(words) {
+  const rgba = new Uint8Array(64);
+  words.forEach((w, i) => {
+    rgba[i * 4] = Math.round((((w >> 8) & 7) * 255) / 7);
+    rgba[i * 4 + 1] = Math.round((((w >> 4) & 7) * 255) / 7);
+    rgba[i * 4 + 2] = Math.round(((w & 7) * 255) / 7);
+    rgba[i * 4 + 3] = 255;
+  });
+  return rgba;
+}
 
 /** Tick-polled at the game's 15 Hz, but keeps time in INTROV's own 50 Hz
  * counter units so every threshold above is used verbatim. Nothing here
@@ -318,21 +433,8 @@ export class Intro {
     this.#sync();
   }
 
-  /** 0..1 brightness from the fade ramps at the shot's own in/out ticks.
-   * Consecutive story pages and credit cards share one faded-in screen, so
-   * only the section's first/last shot actually ramps. */
-  fadeT() {
-    const [a, b, sec, idx] = this.shot;
-    if (this.t >= b) return 0;
-    const i = INTRO_TIMELINE.indexOf(this.shot);
-    const prev = INTRO_TIMELINE[i - 1], next = INTRO_TIMELINE[i + 1];
-    const contIn = prev && prev[2] === sec && prev[1] === a && sec !== 'opener';
-    const contOut = next && next[2] === sec && next[0] === b && sec !== 'opener';
-    let v = 1;
-    if (!contIn) v = Math.min(v, (this.t - a) / FADE);
-    if (!contOut) v = Math.min(v, (b - this.t) / FADE);
-    return Math.max(0, Math.min(1, v));
-  }
+  /** Kept for renderer.present()'s signature: the fades live in palette(). */
+  fadeT() { return 1; }
 
   draw(renderer, assets) {
     renderer.clear(0);
@@ -371,20 +473,12 @@ export class Intro {
     drawIntroCentered(renderer, assets.creditsGlyphs, LOADING_CARD, 92, CREDITS_ADVANCE);
   }
 
-  /** `UNKNOWN_intro_glyph_palette` — CLOSED. DS:0x73 is a WORKING palette,
-   * zeroed at entry (`CS:0x003B`) and stepped by the fade routines toward a
-   * target table: the static tables at DS:0xD3/0xF3/0x113/0x133/0x153/0x173,
-   * or DS:0x393, which `CS:0x05CD` fills by byte-swapping the 16 words at
-   * `1b51:0002` — the embedded ST palette of PONE.PI1 (loaded there by
-   * `CS:0x0F3F`, filename DS:0x3EB "one.pi1"). Live-confirmed: DS:0x393 read
-   * back word-for-word equal to PONE.PI1's header. So the story pages, text
-   * included, really are shown under PONE's own palette; the salmon-ish
-   * story text is the original's look, not a port error.
-   * 'logo': PSTBACK.PI1 and PINTROFT.PI1 share one palette (checked
-   * directly), and the wordmark rendered red under PSTBACK's own index 2, so
-   * the logo card presents under PINTROFT's palette. */
+  /** `UNKNOWN_intro_glyph_palette` — CLOSED. The screen shows DS:0x73, the
+   * working palette the fade routines step toward the static tables or
+   * toward DS:0x393, which `CS:0x05CD` fills by byte-swapping the 16 words
+   * at `1b51:0002` — PONE.PI1's own palette (loaded by `CS:0x0F3F`, filename
+   * DS:0x3EB "one.pi1"; live-confirmed word for word). See introPaletteAt. */
   palette(assets) {
-    if (this.section === 'story' && assets.portraitBg) return assets.portraitBg.palette;
-    return assets.fontPalette;
+    return toRGBA(introPaletteAt(this.t, assets.portraitBg?.paletteRaw ?? null));
   }
 }
