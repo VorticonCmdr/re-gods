@@ -3483,6 +3483,9 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
         popup.spawn(r.x, r.y, id, dropCarriedIntoWorld);
       }
       selectorTwo.rewards.length = 0;
+      /* CS:0x0254 -> 0x61CA: the crouch drop's item (player.js `_drop`), the
+       * next popup channel after selector 2 and before the nest (0x0282). */
+      if (fr && fr.dropped) popup.spawn(fr.dropped.x, fr.dropped.y, fr.dropped.id, dropCarriedIntoWorld);
       /* CS:0x0282 -> 0x87EF -> 0x8A27: a nest's kill drops its reward through
        * the popup (CS:0xBF5F) and scores 2500 (CS:0x0C8B), game/nest.js. In
        * the original's order this channel sits between selector 2 (0x0223)

@@ -480,8 +480,8 @@ for (const r of await checkMusic(fetchRaw)) {
   const unwired = calls.filter((c) => !c.includes('dropCarriedIntoWorld'));
   popupOrder.push({
     /* 9: the guardian death's CS:0xCE78 / 0xD5FC popup joined the eight;
-     * 10: the nest's kill reward, CS:0x87EF. */
-    pass: calls.length === 10 && unwired.length === 0
+     * 10: the nest's kill reward, CS:0x87EF; 11: the crouch drop, CS:0x61CA. */
+    pass: calls.length === 11 && unwired.length === 0
           && !/for \(const l of popup\.landed\)/.test(code),
     name: 'every popup call lands CS:0xC041 inline, with no deferred drain',
     detail: unwired.length

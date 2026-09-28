@@ -48,7 +48,7 @@
 
 import { armWeapon, pickUpAgain, recomputeWeaponTotal } from './weapons.js';
 import { isDeadType, CATEGORY } from './objects.js';
-import { collectTreasure, INVENTORY_EMPTY, INVENTORY_SLOTS } from './treasure.js';
+import { collectTreasure } from './treasure.js';
 import { CONSUMABLES, WIRED, NOT_WIRED_REASON,
          applyConsumable } from './consumables.js';
 
@@ -344,26 +344,15 @@ export function stepPickups(objects, hero, arsenal, bar = 1,
  * Crouching over a key without holding fire never advances to a second
  * candidate; it just leaves that one exactly as it was.
  *
- * ── THE INVENTORY WRITE — a DELIBERATE SUBSTITUTION, not a bug-for-bug port ─
+ * ── THE INVENTORY WRITE — into the SELECTED slot ─────────────────────────
  * CS:0x6100-0x610D: `di = 0x17e + [0x366]*2 ; [di] = type` — the key is
- * stored into DS:0x366's CURRENT VALUE, the SAME player-controlled slot-
- * selector cursor the (unported) 4-slot inventory panel cycles with
- * CS:0x612F/0x6134/0x615F. There is NO search for an empty slot anywhere in
- * this routine: the original always overwrites whichever slot the cursor is
- * parked on, seeded to 3 at boot (CS:0x048D `mov al,0x3` / CS:0x048F
- * `mov [0x366],al`, confirmed fresh).
- *
- * This port has no slot-selector UI — that panel is the disclosed cosmetic
- * cut this project already lists — so reproducing "always overwrite slot 3"
- * verbatim would mean a SECOND key of ANY kind permanently overwrites the
- * first with no way to move the cursor away first: strictly worse than the
- * bug actually reported ("can't collect and use keys at all"). `collectKey`
- * below substitutes first-empty-slot, falling back to the same slot 3 the
- * original boots into once every slot already holds a key. Because
- * `collectTreasure` (treasure.js) already matches a held key by VALUE across
- * all 4 slots rather than by position, this substitution cannot change
- * whether a key that IS collected later unlocks its chest — only which slot
- * (if any) a full inventory evicts.
+ * stored into the slot the panel shows selected (DS:0x366), overwriting
+ * whatever it held: there is no search for an empty slot. The selection
+ * moves with the crouch FIRE tap (CS:0x615F), and an item comes back out
+ * through the crouch drop (CS:0x61A1, player.js `_drop`), so a player
+ * cycles to an empty slot, or drops, before taking a second key.
+ * (An earlier revision substituted "first empty slot" here while the port
+ * had no selector; the selector and the drop are ported now.)
  */
 
 /** CS:0x6078/0x607B and CS:0x5B3B/0x5B3E — shared by the key scan and the
@@ -434,13 +423,11 @@ export function crouchScan(objects, cats, hero) {
 }
 
 /**
- * CS:0x6100-0x610D, SUBSTITUTED — see the module doc above for why. First
- * empty slot; CS:0x048F's own boot value (3, the last slot) if none is free.
+ * CS:0x6100-0x610D — the key goes into `slot`, the shown selector DS:0x366,
+ * whatever that slot held before.
  * @returns {number} the slot index written.
  */
-export function collectKey(inventory, type) {
-  let slot = inventory.findIndex((v) => v === INVENTORY_EMPTY);
-  if (slot < 0) slot = INVENTORY_SLOTS - 1;
+export function collectKey(inventory, type, slot) {
   inventory[slot] = type;
   return slot;
 }

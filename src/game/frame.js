@@ -226,13 +226,14 @@ export function stepHeroFrame({ input, arsenal, grid, player, map, cam,
   if (heroDead) {
     return { heroDead, projectiles, emitted: null, picked: picked.taken,
              consumed: picked.consumed || [], treasures: picked.treasures || [],
-             loot, burstFx, blockFx, debrisFx, familiarDraw, keyCollected: null, leverToggled: null,
+             loot, burstFx, blockFx, debrisFx, familiarDraw, keyCollected: null, dropped: null, leverToggled: null,
              footstep: false, climbStep: false, landSfx: 0, inventoryCycled: false };
   }
   player.tick(map, input, arsenal, tock, pickupCtx, healthApi, tock36d);   // 0254
   return { projectiles, emitted: player.emitted, picked: picked.taken,
            consumed: picked.consumed || [], treasures: picked.treasures || [],
            loot, burstFx, blockFx, debrisFx, familiarDraw, keyCollected: player.keyCollected,
+           dropped: player.dropped,
            leverToggled: player.leverToggled,
            /* CS:0x5AB3/0x5AC0 (footstep) and the FUN_1000_5931 thunk's four
             * callers (climb step) — see player.js's own FOOTSTEP_SFX/

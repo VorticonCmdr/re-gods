@@ -258,26 +258,11 @@
  *     FUN_1000_1f5a) — irrelevant to a full-redraw canvas renderer, exactly
  *     the same disclosed cut status-panel.js's own header already carries
  *     for its equivalent flag. This module always draws every call.
- *   - THE FIRE-TAP SLOT CYCLE, CS:0x612F-0x619D. Real trigger, read off the
- *     bytes this pass (not up/down, as an earlier design note in this
- *     project guessed): tapping FIRE while crouching with no key under the
- *     hero's hot point advances the selector `(DS:0x366+1) & 3` and shows
- *     the newly-selected item's name via the message system, debounced by a
- *     "handled this press" flag shared with the key-pickup path (a key
- *     pickup this same tick suppresses a cycle so one press can't do both).
- *     Unported — this needs its own input plumbing and message-popup wiring
- *     this project does not yet have for this panel. Consequence: `selector`
- *     never leaves slot 0 in this port.
- *   - CS:0x61A1, "drop whatever the selected slot holds" on crouch exit —
- *     already flagged as unported elsewhere in this project (player.js's own
- *     module comment); unaffected by this pass.
- *   - `collectKey` (pickup.js) is DELIBERATELY LEFT AS ITS EXISTING
- *     first-empty-slot substitution, not reverted to the original's "always
- *     overwrite the current selector" (CS:0x6100-0x610D). Now that the real
- *     trigger for moving the selector is known (FIRE-tap cycling, itself
- *     unported per above), reverting would make every second key permanently
- *     overwrite the first with the selector pinned at slot 0 forever — worse
- *     than the existing substitution, not more faithful to it.
+ *
+ *   Ported since: the FIRE-tap slot cycle (CS:0x612F-0x619D, player.js
+ *   `_inventoryTap`, through `pending`), the crouch drop (CS:0x61A1,
+ *   player.js `_drop`) and the key pickup into the shown slot
+ *   (CS:0x6100-0x610D, pickup.js `collectKey`).
  */
 
 import { INVENTORY_EMPTY, INVENTORY_SLOTS } from './treasure.js';

@@ -9067,18 +9067,10 @@ export async function checkWeaponsProjectiles(fetchRaw) {
         scanForKey([{ ...oneIn, type: 21, dead: true }, { ...oneIn, type: 21, flag6: 0 }],
                    cats, hero) === null);
 
-      /* collectKey — SUBSTITUTED behaviour, see the module doc in pickup.js:
-       * first empty slot, falling back to CS:0x048F's own boot slot (3). */
-      const inv1 = [INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY];
-      check('collectKey fills the FIRST empty slot',
-        collectKey(inv1, 21) === 0 && inv1[0] === 21);
-      const inv2 = [5, INVENTORY_EMPTY, 7, INVENTORY_EMPTY];
-      check('collectKey skips already-occupied slots',
-        collectKey(inv2, 21) === 1 && inv2[1] === 21);
-      const inv3 = [5, 6, 7, 8];
-      check(`collectKey falls back to slot ${INVENTORY_SLOTS - 1} (CS:0x048F's boot value) when full`,
-        collectKey(inv3, 21) === INVENTORY_SLOTS - 1
-          && inv3[INVENTORY_SLOTS - 1] === 21 && inv3[0] === 5);
+      /* collectKey — CS:0x6100-0x610D: the shown slot, overwritten. */
+      const inv1 = [5, INVENTORY_EMPTY, 7, 8];
+      check('collectKey writes the SELECTED slot, not the first empty one (CS:0x6100)',
+        collectKey(inv1, 21, 2) === 2 && inv1[2] === 21 && inv1[1] === INVENTORY_EMPTY);
     }
 
     /* ── A full Player, crouch entry -> scan/collect -> exit, end to end ──── */
@@ -9142,6 +9134,63 @@ export async function checkWeaponsProjectiles(fetchRaw) {
         for (let i = 0; i < 5; i++) p.tick(map, I({ down: true }), null, 1, pickup);
         check('five ticks crouching without FIRE never collects it',
           !key.dead && inventory.every((v) => v === INVENTORY_EMPTY));
+      }
+
+      {
+        /* CS:0x61A1, the drop. DOWN held with no key here and no FIRE
+         * (CS:0x4B31) drops the selected slot's item through the popup
+         * request, at the hero + (8, 0x20), as id item + 0xB; releasing DOWN
+         * (CS:0x4AE7) drops too. The gate reads the SHOWN slot. */
+        const p = freshHero();
+        const inventory = [5, 6, 7, 8];
+        const panel = new InventoryPanel();
+        panel.selector = panel.pending = 1;
+        const pickup = { objects: [], cats, inventory, panel };
+        p.tick(map, I({ right: true, down: true }), null, 1, pickup);   // entry
+        p.tick(map, I({ down: true }), null, 1, pickup);                // the scan: no key
+        check('the scan finds no key and drops nothing yet (CS:0x60B4)',
+          p.noKey === 1 && p.dropped === null && inventory[1] === 6);
+        p.tick(map, I({ down: true }), null, 1, pickup);
+        check('DOWN held, no key, no FIRE: slot 1 drops as id 6 + 0xB at hero + (8, 0x20) (CS:0x4B31 -> 0x61A1)',
+          p.dropped && p.dropped.id === 6 + 0xb && p.dropped.x === p.x + 8
+            && p.dropped.y === p.y + 0x20 && inventory[1] === INVENTORY_EMPTY);
+        p.tick(map, I({ down: true }), null, 1, pickup);
+        check('...and the now-empty slot drops nothing the next tick (the CS:0x4B41 gate)',
+          p.dropped === null);
+        panel.selector = panel.pending = 2;
+        p.tick(map, I(), null, 1, pickup);
+        check('releasing DOWN drops the selected slot too (CS:0x4AE7 -> 0x61A1)',
+          p.dropped && p.dropped.id === 7 + 0xb && inventory[2] === INVENTORY_EMPTY
+            && p.state === ST.CROUCH);
+        const q = freshHero();
+        const inv2 = [INVENTORY_EMPTY, 6, 7, 8];
+        const panel2 = new InventoryPanel();
+        panel2.selector = 0; panel2.pending = 1;
+        q.tick(map, I({ right: true, down: true }), null, 1, { objects: [], cats, inventory: inv2, panel: panel2 });
+        q.tick(map, I(), null, 1, { objects: [], cats, inventory: inv2, panel: panel2 });
+        check('an empty SHOWN slot drops nothing, whatever the pending slot holds (CS:0x4AF4)',
+          q.dropped === null && inv2[1] === 6);
+        /* A key pickup writes the SHOWN slot, and standing up drops the shown
+         * slot: without a FIRE tap in between, the key goes straight back out
+         * ([PROVEN] live in parts: tools/attract-capture/drop_live_natural.json,
+         * PJOYL1 814-816). */
+        const k = freshHero();
+        const hotK = keyHotPoint(k);
+        const keyK = { x: hotK.x, y: hotK.y - 0x10, type: 21, dead: false, flag6: 1 };
+        const inv3 = [INVENTORY_EMPTY, INVENTORY_EMPTY, 9, INVENTORY_EMPTY];
+        const panel3 = new InventoryPanel();
+        panel3.selector = panel3.pending = 2;
+        const ctx3 = { objects: [keyK], cats, inventory: inv3, panel: panel3 };
+        k.tick(map, I({ right: true, down: true }), null, 1, ctx3);
+        k.tick(map, I({ down: true, fire: true }), null, 1, ctx3);
+        check('a key taken with FIRE overwrites the SHOWN slot (CS:0x6100: slot 2\'s 9 is lost)',
+          k.keyCollected && k.keyCollected.slot === 2 && inv3[2] === 21);
+        k.tick(map, I({ down: true }), null, 1, ctx3);
+        check('...holding DOWN afterwards only releases the FIRE latch (CS:0x614D), no drop',
+          k.dropped === null && k.fireLatch === 0 && inv3[2] === 21);
+        k.tick(map, I(), null, 1, ctx3);
+        check('...and standing up drops that key straight back out (CS:0x4AE7 -> 0x61A1)',
+          k.dropped && k.dropped.id === 21 + 0xb && inv3[2] === INVENTORY_EMPTY);
       }
 
       {
@@ -9546,9 +9595,8 @@ export async function checkWeaponsProjectiles(fetchRaw) {
       'items out that land as real objects. KEYS now work too: CROUCH + ' +
       'FIRE (CS:0x6069, player.js\'s `_crouch` -> pickup.js\'s `scanForKey`/ ' +
       '`collectKey`) scans the same hot point the original does and stores ' +
-      'into the first empty inventory slot — a disclosed substitution for ' +
-      'the original\'s single player-controlled slot cursor (DS:0x366), which ' +
-      'this port has no UI for. The inventory boots genuinely empty (CS:0x0495 ' +
+      'into the selected slot (DS:0x366, moved by the crouch FIRE tap); the ' +
+      'crouch drop (CS:0x61A1) puts an item back into the world. The inventory boots genuinely empty (CS:0x0495 ' +
       '-0x04A1), no dev-seed. Still absent: the 40-entry destructible-tile ' +
       'queue at DS:0xd0c6; UNKNOWN_tag_fd; the per-projectile animation ' +
       'frame; and UNKNOWN_DS_0168 — which now has four behaviours and still ' +
@@ -14426,15 +14474,6 @@ export function checkInventoryPanel() {
       JSON.stringify(shifted.map((d) => d.y)));
   }
 
-  /* ── disclosed cuts, recorded as notes rather than left unstated ───────── */
-  results.push({ name: 'NOT PORTED', pass: true, note: true,
-    detail: 'the FIRE-tap slot cycle (CS:0x612F-0x619D) and the crouch-exit '
-      + 'drop (CS:0x61A1) — see this module\'s own header. `selector` is '
-      + 'consequently pinned at slot 0 for the life of this port, and '
-      + '`collectKey` (pickup.js) is deliberately left as its existing '
-      + 'first-empty-slot substitution rather than reverted to the original\'s '
-      + '"always overwrite the current selector", since reverting would be '
-      + 'strictly worse with no way to ever move the selector off slot 0.' });
 
   return results;
 }

@@ -108,6 +108,7 @@ import { FIRE_STATES, ENTRY, fireTick, fireAnimOffset, fireGuardBefore,
          fireGuardAfter, JUMP_ARC_STEP, JUMP_ARC_END,
          JUMP_ARC_EXIT } from './fire-states.js';
 import { objectNearHotPoint, crouchScan, collectKey } from './pickup.js';
+import { INVENTORY_EMPTY } from './treasure.js';
 
 /* DS:0xd922 — the 23-entry jump delta table, verbatim.
  * 4 ticks of wind-up, 32 px rise, apex, 32 px descent; exactly symmetric. */
@@ -216,42 +217,27 @@ export const S = {
  *
  *     4AE0  test [0x382],0x2 (DOWN) / jnz 4B11    ; DOWN held -> keep crouching
  *       [DOWN NOT held -- the release/exit path:]
- *     4AE7  (drop whatever the selected inventory slot holds -- CS:0x61A1;
- *             NOT PORTED, see below)
+ *     4AE7  drop the selected slot's item if it holds one (CS:0x61A1)
  *     4B00  dec cl / js 4B07                       ; count the phase DOWN
  *     4B04    jmp 5e9b                              ; still >= 0 -> stay, render
  *     4B07  cl=2 ; [0x377]=1 (WALK_R) ; jmp 5e9b    ; went negative -> EXIT
  *       [DOWN held, at 4B11:]
  *     4B11  cl=1                                    ; phase PINNED while crouched
  *     4B13  [0x354]==0 -> jmp 6069                  ; the key scan
- *     4B1D  [0x355]==0 -> jmp 6134                  ; slot-cycle preview (UI, cut)
- *     4B27  FIRE -> jmp 612F                        ; drop/cycle UI (cut)
- *     4B31  (the same drop-if-occupied check as 4AE7, mid-handler)
+ *     4B1D  [0x355]==0 -> jmp 6134                  ; the FIRE tap (slot cycle)
+ *     4B27  FIRE -> jmp 612F                        ; arm the tap
+ *     4B31  the same drop-if-occupied check as 4AE7
  *     4B48  [0x354]==0 -> jmp 6069                  ; re-check the scan
  *     4B52  jmp 5e9b
  *
  * State 19 (CS:0x4B55-0x4BC7) is the byte-identical mirror, exit to
  * [0x377]=0 (WALK_L).
  *
- * THREE THINGS THIS PORT DOES NOT MODEL, all already-disclosed cuts:
- *   - `[0x354]`/`[0x355]` are latches that make the original scan at most
- *     once per crouch session rather than every tick. This port re-scans
- *     every tick instead (see pickup.js's `scanForKey`) — idempotent unless
- *     a key is actually collected, so the outcome matches.
- *   - CS:0x612F/0x6134/0x615F, the 4-slot inventory panel's own cycle-preview
- *     UI, is not built at all (this project's own disclosed cosmetic cut).
- *   - CS:0x61A1, "drop whatever the selected slot holds" on crouch exit, is
- *     not ported. Since `collectTreasure` (treasure.js) matches a held key by
- *     VALUE across all 4 slots rather than by position, and this port's own
- *     `collectKey` never evicts a slot the drop-on-exit mechanic would have
- *     emptied anyway, skipping it cannot make a key that WAS collected fail
- *     to open its chest — it only means a key is never involuntarily dropped
- *     back onto the ground.
+ * The flag machine ([0x341]/[0x354]/[0x355]), the FIRE tap and the drop are
+ * all ported: `_keyScan`, `_inventoryTap` and `_drop` below.
  *
- * WHAT IS PORTED: the phase pin while held, the 2-tick exit-delay countdown
- * before standing back up (CS:0x4B00-0x4B07 / 0x4B75-0x4B7C), and the scan
- * itself, gated on FIRE exactly where CS:0x60E4 gates it — at the moment of
- * collection, not before. */
+ * Also: the phase pin while held, and the 2-tick exit-delay countdown
+ * before standing back up (CS:0x4B00-0x4B07 / 0x4B75-0x4B7C). */
 /* The CS:0x4C54 call sites a plain fall's landing runs: left (state 11,
  * CS:0x4C28 -> 0x4C4E), right (state 12 and the fall-fire right landing,
  * CS:0x4D2A -> 0x4D36 and 0x4D53). */
@@ -518,6 +504,7 @@ export class Player {
     this.phase = 0;               // DS:0x36b (CL), sign-extended as a byte
     this.footstep = false;        // set on the ticks the original plays FOOTSTEP_SFX
     this.keyCollected = null;     // {type, slot} on the tick CS:0x60F0 fires
+    this.dropped = null;          // {id, x, y}: the crouch drop's popup request, CS:0x61CA
     this.leverToggled = null;     // the object toggled/armed this tick, CS:0x1045
 
     /* ── The FIRE overlay ───────────────────────────────────────────────
@@ -646,6 +633,7 @@ export class Player {
     this.inventoryCycled = false; // CS:0x615F, the crouch FIRE tap (sound 0x2831) — see _crouch
     this.emitted = null;
     this.keyCollected = null;
+    this.dropped = null;
     this.leverToggled = null;
     this.zoneHit = null;
     if (this.fireState >= 0) { this._fireTick(map, input, fire, health, pickup, tock); return; }
@@ -1867,7 +1855,8 @@ export class Player {
     this.fireLatch = 1;                                     // CS:0x60FB
     key.dead = true;                                        // CS:0x60D8 `[si+4] = 0xffff`
     key.flag6 = 0;                                          // CS:0x60DD `[si+6] = 0`
-    const slot = collectKey(pickup.inventory, key.type);   // CS:0x6100 (substituted, pickup.js)
+    const slot = collectKey(pickup.inventory, key.type,    // CS:0x6100, the shown slot
+                            pickup.panel ? pickup.panel.selector : 0);
     this.keyCollected = { type: key.type, slot };          // CS:0x6128 -> 0x4609, the name
   }
 
@@ -1891,6 +1880,24 @@ export class Player {
     this.scanned = 1;                                       // CS:0x6179
   }
 
+  /** CS:0x61A1, the drop, from CS:0x4B31 (DOWN held, "no key here", no
+   *  FIRE) and CS:0x4AE7 (DOWN released). The caller's gate reads the SHOWN
+   *  slot [0x366]; the drop itself takes the PENDING slot [0x367]'s item,
+   *  empties that slot (CS:0x61C6) and hands `item + 0xB` to the popup
+   *  (CS:0xBF5F) at the hero + (8, 0x20). The two only differ between a FIRE
+   *  tap and the panel's copy (CS:0x1F5A); an empty pending slot would then
+   *  still drop, as id 0xA (0xFFFF + 0xB passes the CS:0x61B7 sign test). */
+  _drop(pickup) {
+    const panel = pickup && pickup.panel;
+    if (!panel) return;
+    const inv = pickup.inventory;
+    if (inv[panel.selector] & 0x8000) return;               // CS:0x4AF7/0x4B41 `js`
+    const id = (inv[panel.pending] + 0xb) & 0xffff;         // CS:0x61B2-0x61B4
+    if (id & 0x8000) return;                                // CS:0x61B7 `js`
+    inv[panel.pending] = INVENTORY_EMPTY;                   // CS:0x61C6
+    this.dropped = { id, x: this.x + 8, y: this.y + 0x20 };  // CS:0x61B9-0x61C3
+  }
+
   _crouch(input, pickup) {
     if (input.down) {
       /* CS:0x4B11/0x4B86 `mov cl,1` — the animation phase is PINNED while
@@ -1907,17 +1914,20 @@ export class Player {
       } else if (input.fire) {                              // CS:0x4B27 -> 0x612F
         this.fireLatch = 1;                                 //   then falls into 0x6134
         this._inventoryTap(input, pickup);
+      } else {
+        /* CS:0x4B31: no key here and no FIRE. Then CS:0x4B48 re-tests
+         * [0x354], which is set on this path, so nothing more happens. */
+        this._drop(pickup);
       }
-      /* else CS:0x4B31: drop the selected slot's item (CS:0x61A1) — NOT
-       * PORTED (see the S.CROUCH_R note). Then CS:0x4B48 re-tests [0x354],
-       * which is set on this path, so nothing more happens. */
       this.stateIndex = this.facing < 0 ? S.CROUCH_L : S.CROUCH_R;
       return;
     }
     /* CS:0x4B00/0x4B02 (right) and CS:0x4B75/0x4B77 (left) — DOWN released:
      * count the phase DOWN from wherever it stood (CROUCH_EXIT_PHASE_START
      * on any tick that was still actively crouching) and only stand up once
-     * it goes negative — a 2-tick delay before the transition, not instant. */
+     * it goes negative — a 2-tick delay before the transition, not instant.
+     * Both release ticks first run the drop (CS:0x4AE7 -> 0x61A1). */
+    this._drop(pickup);
     this.phase -= 1;
     if (this.phase < 0) {
       this.state = ST.GROUND;                                  // CS:0x4B07/0x4B7C
