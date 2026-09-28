@@ -1128,11 +1128,14 @@ const guardianTables = {
   let guardianScoreTicks = 0, guardianCorpse = null;
   /* World 4 (game/guardian4.js): the rise hook's background sprites this
    * tick, the ending gate CS:0xCC67 (the dead guardian), and the frozen
-   * background — `w4Clean` is the export-19 save, `w4Frozen` the export-18
-   * snapshot export 0 blits back once DS:0x32 > 2, `w4Restore` this tick's
-   * export-20 paste (the ending). */
+   * background — `w4Clean` is the export-19 save, `bgSnap` (below) the
+   * export-18 snapshot export 0 blits back once DS:0x32 > 2, `w4Restore`
+   * this tick's export-20 paste (the ending). */
   let guardianBg = [], guardianEnding = null;
-  let w4Clean = null, w4Frozen = null, w4Restore = false, w4Freeze = null;
+  let w4Clean = null, w4Restore = false, w4Freeze = null;
+  /* ADBA:0 — graphics export 18's background snapshot (see export 0 in the
+   * render callback). Level init clears DS:0x32, so a level starts without. */
+  let bgSnap = null;
   /* DS:0x32 — the scripted camera (camera.js scriptedCameraStep) and its
    * target DS:0x2EC/0x2EE. Only the level (re)init clears it (CS:0x8D53);
    * a death keeps it. `camPending` is this tick's scripted result, applied
@@ -1190,7 +1193,7 @@ const guardianTables = {
     guardian = null; guardianFx = []; camShake = 0; camNudgeY = 0;
     guardianScoreTicks = 0; guardianCorpse = null;
     guardianBg = []; guardianEnding = null;
-    w4Clean = null; w4Frozen = null; w4Restore = false; w4Freeze = null;
+    w4Clean = null; w4Restore = false; w4Freeze = null; bgSnap = null;
     camScript = { mode: 0, tx: 0, ty: 0 }; camPending = null; camWasScripted = false;
     flashPool.reset(); flashFx = [];
     /* Selector 11 — CS:0xC49C, the world's guardian (guardian.js for worlds
@@ -3604,28 +3607,43 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
       }
       const camX = cam.snapX, camY = cam.snapY;
       renderer.clear(0);
-      /* Graphics export 0: with DS:0x32 > 2 and a world-4 snapshot taken,
-       * the frozen screen instead of the tiles (VGA:0x10EE). */
-      if (w4Frozen && camScript.mode > 2) renderer.buf.set(w4Frozen);
+      /* Graphics export 0 (VGA:0x10EE). With DS:0x32 > 2 it blits the
+       * snapshot at ADBA:0 instead of rendering tiles. The snapshot is its
+       * own: on the frame the scripted camera has just arrived (mode 2) it
+       * renders the tiles and then falls into export 18 (VGA:0x115F `jmp
+       * 0x10AD`), which saves them and sets mode 4 — the 2 -> 4 jump
+       * [PROVEN] live in the world-4 fight (w4live.json, t 95 -> 96). The
+       * port's camera has already moved that frame to 3, so the first frame
+       * with mode > 2 renders and snapshots. Any scripted camera (worlds 2
+       * and 4) freezes the background this way. */
+      const frozenBg = camScript.mode > 2 && bgSnap;
+      if (frozenBg) renderer.buf.set(bgSnap);
       else renderer.drawTilemap(level.map, level.tiles, camX, camY);
       /* Selectors 7-10 — the line-barrier system's own footprint (game/
        * line-barriers.js), drawn in the same pass/order as the tilemap
        * itself since it fills gaps IN that tilemap (plane A never carries
        * these tiles; this system draws over plane A's own "empty" cells). */
-      if (!(w4Frozen && camScript.mode > 2)) renderer.drawExtraTiles(lineBarriers.cells(), level.tiles, camX, camY);
+      if (!frozenBg) {
+        renderer.drawExtraTiles(lineBarriers.cells(), level.tiles, camX, camY);
+        if (camScript.mode > 2) bgSnap = renderer.buf.slice();
+      }
       /* World 4's rise (game/guardian4.js hook): export 19 saves the clean
        * background, the body parts go on top, and on the last rise tick
        * export 18 snapshots the lot. After the death, export 20 pastes the
-       * clean save back every tick. UNKNOWN_w4_restore_block: the original
-       * saves and restores a 104 x 112 block (VGA:0x0D9D / 0x0DD8); this
-       * uses the whole clean frame, identical wherever the body was not. */
+       * clean save back every tick. The original moves a 104 x 112 block
+       * (VGA:0x0D9D / 0x0DD8: 13 bytes x 112 rows at back-buffer 0x9A4, i.e.
+       * screen x 32-135, y 56-167 with the camera at (0xB60, 0x78)); every
+       * opaque pixel the rise draws lies inside it (checked against the
+       * atlas; the death erased the body completely live), and outside it
+       * the save equals the snapshot, so the whole clean frame is the same
+       * picture. */
       if (w4Freeze) w4Clean = renderer.buf.slice();
       if (w4Restore && w4Clean) renderer.buf.set(w4Clean);
       for (const d of guardianBg) {
         const bf = hero && hero.frames[d.sprite];
         if (bf) renderer.blitSprite(bf, d.x, d.y);
       }
-      if (w4Freeze === 'snap') w4Frozen = renderer.buf.slice();
+      if (w4Freeze === 'snap') bgSnap = renderer.buf.slice();
       w4Freeze = null;
       /* OBJECTS, with real sprites: `170 + type`, or `302 + (type - 0xC0)` for
        * a weapon pickup. Drawn at (x, y) top-left, in the original's draw
