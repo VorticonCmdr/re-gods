@@ -76,7 +76,7 @@ from the first breakpoint hit's own `code_bytes`, e.g. `53 50 52 51 56` —
 loader, and opens the shop with an intact input poller for its own loop to
 keep using.
 
-## The grid: 18 cells, 3×6, clamped not wrapped, slot 17 is EXIT
+## The grid: 18 cells, 3×6, a flat index clamped only at its ends, slot 17 is EXIT
 
 ```
 6e74  mov al,[0x385] / sub ah,ah / cmp ax,0x11 / jnz +5
@@ -92,13 +92,43 @@ keep using.
 `DS:0x385` is the cursor index, `0..17`. Direction bits are the project's own
 already-established convention (`docs/player-state-machine.md:17`: bit0 up,
 bit1 down, bit2 left, bit3 right) — UP/DOWN move by row (±6), LEFT/RIGHT by
-column (±1), and **every one of the four clamps at the grid edge rather than
-wrapping**: moving left from column 0, or up from row 0, simply does nothing
-that tick (the post-move `dec`/`sub` is undone), and likewise moving past the
-last populated column or past row 2. This is `[PROVEN]` both on paper and live:
-the DOSBox capture below shows a 3-row × 6-column grid with the bottom-right
-cell reading `EXIT` — cursor value `17`, checked and dispatched *before* any
-grid-table lookup, `[PROVEN]` — matching the disassembly exactly.
+column (±1) on the **flat** index. Only the flat index's two ends clamp: `RIGHT`
+undoes a step past `0x11`, `LEFT` a step below 0, `UP`/`DOWN` a step that leaves
+`0..0x11`. So `RIGHT` from a row's last column lands on the next row's first
+cell, and `LEFT` from a row's first column on the previous row's last cell.
+The 3-row × 6-column grid with `EXIT` in the last cell is `[PROVEN]` live
+(capture below), and cursor `17` is checked and dispatched *before* any
+grid-table lookup, `[PROVEN]`.
+
+⚠️ **Correction, 2026-09-28** `[STATIC]`: this section used to say every
+direction clamps at the grid *edge* ("moving past the last populated column …
+does nothing") and called that `[PROVEN]` live. The live capture only showed
+the grid's shape; the listing above has no per-row test, and `gods-web`'s
+`ShopScreen` had shipped the row clamp. Both are corrected.
+
+**Held-direction auto-repeat, `CS:0x6CAA`–`0x6CEA`** `[STATIC]`, ported.
+`DS:0x339` latches the input byte, `DS:0x33A` counts held passes:
+
+```
+6caa  [0x382]==0      -> [0x339]:=0, [0x33a]:=0            (then the move block, no bits)
+6cb1  [0x339]==0      -> [0x33a]:=1, [0x339]:=[0x382], move (a new press)
+6cc6  [0x382]==[0x339]-> inc [0x33a]; <8 skip; else [0x33a]:=6, move
+6cde  otherwise       -> [0x33a]:=0, skip                   ([0x339] is NOT updated)
+```
+
+A new press moves at once, the 7th held pass after it moves again, then every
+2nd pass. Passes run at 20 Hz (`CS:0x6D72`'s 2-tick wait), so a held direction
+repeats at 10 Hz after 0.35 s. Changing direction without releasing never moves.
+FIRE is handled by `CS:0x6E62`, which polls until FIRE is released, acts, and
+jumps back to `CS:0x6C90` without clearing `[0x339]`. So the first direction
+pass after a FIRE doesn't move unless a neutral pass cleared it. A pass whose
+cursor changed plays sfx `0x232` (`CS:0x6D42`–`0x6D4F`, against `[0x25a]`, the
+pass-start cursor).
+
+**The inventory-full refusal text** is `DS:0xEC8B`: `11 " Inventory Full - You
+cannot buy that " 11 00` (`CS:0x6F67`, priority `0x19`). `CS:0x6F5E` first adds
+the price back to `DS:0x194` (`add [0x194],bp / adc [0x196],0`), so the net
+money change is zero, the same as the port's check-before-charge.
 
 Live DOSBox capture of the world-2 shop (screenshot taken this session, not
 attached to this file): 5 icons in the top row, an apparently-full second row
