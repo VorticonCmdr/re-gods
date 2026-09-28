@@ -9,7 +9,11 @@
  *   1 0x2C1 / 2 0x2F8 timer install / remove (PIT 0x4DAE = 60 Hz, 5 of 6 ticks
  *                     run PPLAYER AH=2, so the sequencer runs at 50 Hz)
  *   3 0x376 play SFX  (below)
- *   4 0x55D stop the three looping sounds, wait up to 200 ticks for quiet
+ *   4 0x55D stop the three looping sounds (0x80, 0x97, 0xC5), then wait until
+ *           slots 1-4 are silent. Its 200-pass counter (CS:0x746) never runs
+ *           out: the retry `jnz 0x55D` jumps above the line that reloads it.
+ *           ADL.EXE's export 4 (ADL:0x33D) does the same over all 5 slots,
+ *           with no counter at all. The game waits either way.
  *   5 0x519 stop SFX  AH=4 with the remapped blob index
  *   6 0x0FC music on  if idle: PPLAYER AH=1 AL=0x80 BL=0 (blob 0, looping),
  *                     volume := AL, CS:0x32 := 0xFF
@@ -57,6 +61,11 @@ export const ROL_SFX_RECORDS = [
   [1, 0, 0x6e], [1, 1, 0x80], [1, 0, 0x80], [1, 4, 0x96], [1, 0, 0x96], [1, 0, 0x96], [1, 0, 0x96], [1, 0, 0x96],
   [1, 0, 0x80], [1, 0, 0xb4], [1, 0, 0x80], [1, 0, 0x80], [1, 0, 0xdc], [1, 0, 0x80], [1, 1, 0x80], [1, 0, 0x80],
 ];
+
+/** Export 4's stops (ROL:0x572-0x581, ADL:0x34B-0x35A): the looping sounds. */
+export const EXPORT4_LOOP_IDS = [0x80, 0x97, 0xc5];
+/** ROL export 4 checks slots 1..4 only (ROL:0x58E `mov si,0xAA / add si,2`, cl = [0xA8]-1). */
+export const ROL_WAIT_SLOTS = [1, 2, 3, 4];
 
 /** DS:0xA8 := 5 (ROL:0x95) — SFX slots, and so MIDI channels 1..5. */
 export const ROL_SFX_SLOTS = 5;
@@ -201,7 +210,7 @@ export class RolSfxDriver {
   }
 
   /** Export 4 (CS:0x55D): the blobs it stops before its wait (0x80, 0x97, 0xC5). */
-  static loopBlobs() { return [0x80, 0x97, 0xc5].map((id) => rolRemap(id) & 0x7f); }
+  static loopBlobs() { return EXPORT4_LOOP_IDS.map((id) => rolRemap(id) & 0x7f); }
 }
 
 /**
@@ -274,17 +283,19 @@ export class RolMusic {
   }
 
   /**
-   * Export 12. The driver busy-waits (up to 300 retraces, ~4.3 s, the game
-   * stalled) while CS:0x32 is nonzero. After a fade-out (CS:0x0533, 0x2C82,
-   * 0x6C0E, 0x6D8F, 0xD9DE) that is the fade, heard to silence. The port does
-   * not stall the game: `pending` defers the reload to the fade's end. Music
-   * that is simply playing (CS:0x32 = 0xFF, e.g. the title's at BEGIN QUEST,
-   * CS:0x00D8) holds the original for the full 300 retraces and then stops;
-   * the port stops it at once instead of playing on into the next scene.
+   * Export 12. The driver busy-waits (ROL:0xB2-0xC4: up to 300 retraces,
+   * ~4.3 s) while CS:0x32 is nonzero, and the game waits with it. After a
+   * fade-out (CS:0x0533, 0x2C82, 0x6C0E, 0x6D8F, 0xD9DE) that is the fade,
+   * heard to silence. Music that is simply playing (CS:0x32 = 0xFF, e.g. the
+   * title's at BEGIN QUEST, CS:0x00D8) plays on for the whole 300 retraces,
+   * then stops. `pending` defers the reload the same way; `load` returns how
+   * many 50 Hz ticks the game should stall for it (main.js `soundStall`).
    */
   load(ctx) {
-    if (this.mode === 1) { this.pending = { ctx, ticksLeft: Math.round(300 * 50 / 70) }; return; }
-    this.#doLoad(ctx);
+    if (this.mode === 0) { this.#doLoad(ctx); return 0; }
+    const ticksLeft = RETRACE_WAIT_TICKS;
+    this.pending = { ctx, ticksLeft };
+    return this.mode === 1 ? Math.min(ticksLeft, Math.ceil(this.volume / 2) + 1) : ticksLeft;
   }
 
   #doLoad(ctx) {
@@ -324,6 +335,29 @@ export class RolMusic {
 
   /** Drain the events for the player. */
   take() { const e = this.events; this.events = []; return e; }
+}
+
+/** ROL:0xB2 `mov ax,0x12c`: export 12's wait, 300 retraces (70 Hz), in 50 Hz ticks. */
+export const RETRACE_WAIT_TICKS = Math.round(300 * 50 / 70);
+
+/**
+ * Every driver's export 3 (ADL:0x15A, ROL:0x376, TDY:0x185, BPR:0x187, all
+ * the same bytes): `cmp al,0x28 / jnz / cmp word [0xEA],0 / jz / mov byte
+ * [0x11A],5`. The drivers run with GAME.EXE's DS, so this writes GAME's own
+ * DS:0x11A — the DOS exit code (CS:0x22FD `mov ah,0x4C / mov al,[0x11A] /
+ * int 21h`) — and GODS.EXE answers 5 with "Protection failure." (its
+ * AH=4Dh dispatch at 1000:0168). Id 0x28 has one producer, the tally
+ * fanfare 0x7928 (CS:0x6806). So it is a copy-protection trap keyed on
+ * DS:0xEA. It cannot fire in the shipped game: DS:0xEA is 0 in the image, no
+ * instruction in GAME.EXE or any driver names it, and live in DOSBox a
+ * write watch on both bytes stayed silent through boot, menu and a minute of
+ * attract play while the driver tick word below it (DS:0xE8) counted on.
+ * And the one exit the menu offers (CS:0x2D87) sets the code to 1 first.
+ * @returns {?number} the exit code the driver would store, or null
+ */
+export const DS_00EA = 0;
+export function protectionExitCode(id, ds00ea = DS_00EA) {
+  return (id & 0xff) === 0x28 && ds00ea !== 0 ? 5 : null;
 }
 
 /** CS:0x0370: level music volume, 0x80 less 0x14 in world 2. */

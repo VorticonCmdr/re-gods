@@ -18,7 +18,8 @@ import { parseMusContainer, isSmf, expandBlob } from '../audio/mus-container.js'
 import { parseMt32Bank, bankOffset, MT32_BANK_BYTES, MT32_RHYTHM_NAMES } from '../audio/mt32-bank.js';
 import { ROL_SFX_REMAP, ROL_SFX_RECORDS, RolSfxDriver, RolRandom, RolMusic, rolRemap,
          rolVariantOffset, worldMusicContext, rlFileForContext, levelMusicVolume,
-         MUSIC_CONTEXT } from '../audio/rol-driver.js';
+         MUSIC_CONTEXT, RETRACE_WAIT_TICKS, EXPORT4_LOOP_IDS,
+         protectionExitCode } from '../audio/rol-driver.js';
 import { RolandSequencer, parseRolandTrack } from '../audio/roland-sequencer.js';
 import { adlVariantOffset, ADL_SFX_VARIANT } from '../audio/adl-random.js';
 import { parseSmf, notesFromEvents, buildTempoMap, ticksToSeconds } from '../audio/smf-parser.js';
@@ -16514,6 +16515,16 @@ export function checkShop() {
     check('a completed purchase locks its own rank in DS:0x319\'s own '
       + 'once-per-visit sense', s2.purchasedCategories.has(0));
 
+    /* The shield bought in the shop goes through the SAME handler table as
+     * a pickup (DS:0xD8B8: CS:0x6F32 / CS:0x1822; entry 6 = CS:0x62C8), so its
+     * timer and loop sound must reach the caller (main.js takeTimedEffect). */
+    const got = [];
+    const s4 = new ShopScreen({ roster: [38], inventory: [INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY],
+      state: {}, onConsumable: (effect, result) => got.push([effect, result && result.ticks]) });
+    s4.step(fire); s4.step(release); s4.step(fire); s4.step(release);
+    check('buying the shield (type 38) hands its 255-tick timer to onConsumable, as a pickup does',
+      got.length === 1 && got[0][0] === 'invulnerable' && got[0][1] === 0xff, JSON.stringify(got));
+
     /* An empty CELL, not an empty roster: with no survivors at all the
      * original forces the cursor onto EXIT (CS:0x730D), so fire would leave. */
     const s3 = new ShopScreen({ roster: [0], inventory: [INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY] });
@@ -17326,6 +17337,30 @@ export async function checkMusic(fetchRaw) {
     check('PPLAYER MPU path: channel + BL, velocity * vol / 128, pressure never sent, channel 11+ dropped, CC 123 on stop',
       out.map((x) => x.status.toString(16)).join() === 'c3,93,83'
       && out[1].b === 50 && !sq.isPlaying(2), out.map((x) => `${x.status.toString(16)}:${x.b}`).join());
+    /* The drivers' waits and the 0x28 trap. */
+    const m4 = new RolMusic(); m4.start(0x80); m4.take();
+    const held = m4.load(4);
+    let t4 = 0; while (t4 < 400 && !m4.take().some((x) => x.type === 'load')) { m4.tick(); t4++; }
+    check('export 12 with the music simply playing holds for the full 300 retraces (214 ticks), then loads',
+      held === RETRACE_WAIT_TICKS && RETRACE_WAIT_TICKS === 214 && t4 === 214, `returned ${held}, loaded after ${t4}`);
+    const m5 = new RolMusic(); m5.start(0x80); m5.take(); m5.fadeOut();
+    check('export 12 during a fade-out holds for the fade (0x80 / 2 + 1 ticks)', m5.load(4) === 65);
+    check('ROL export 4\'s 200-pass counter never runs out: the retry jnz (CS:0x5B6) lands on the reload (CS:0x55D)',
+      at(0x5b6) === 0x75 && ((0x5b8 + (at(0x5b7) << 24 >> 24)) & 0xffff) === 0x55d
+      && [0x2e, 0xc7, 0x06, 0x46, 0x07, 0xc8, 0x00].every((v, i) => at(0x55d + i) === v));
+    const adl = await fetchRaw('game/ADL.EXE');
+    const adlAt = (o) => adl[0x200 + o];
+    check('ADL export 4 loops back to its own entry (ADL:0x37A jnz 0x33D) with no counter, over all [0xA8] slots',
+      adlAt(0x37a) === 0x75 && ((0x37c + (adlAt(0x37b) << 24 >> 24)) & 0xffff) === 0x33d
+      && adlAt(0x365) === 0x8a && adlAt(0x366) === 0x0e && adlAt(0x367) === 0xa8);
+    const rb = new RecordingAudioBus();
+    check('export 4 stops the three looping sounds first (0x80, 0x97, 0xC5)',
+      rb.waitSfx() === 0 && rb.stopped.join() === EXPORT4_LOOP_IDS.join() && EXPORT4_LOOP_IDS.join() === '128,151,197');
+    check('all four drivers\' id-0x28 trap: exit code 5 ("Protection failure.") only when DS:0xEA != 0, which '
+      + 'nothing sets; 0x28 is only the tally fanfare 0x7928',
+      protectionExitCode(0x7928) === null && protectionExitCode(0x7928, 1) === 5 && protectionExitCode(0x7914, 1) === null
+      && [0x15a, 0x15e, 0x165].every((o, i) => [0x3c, 0x83, 0xc6][i] === adlAt(o))
+      && [0x376, 0x37a, 0x381].every((o, i) => [0x3c, 0x83, 0xc6][i] === at(o)));
     check('ADL.EXE picks variants too, from the GAME\'s random word: 0x22 -> +0..2, 0x0E -> +0..1',
       ADL_SFX_VARIANT.get(0x22) === 2 && adlVariantOffset(0x1022, 0x0101) === 2
       && adlVariantOffset(0x020e, 0x0003) === 1 && adlVariantOffset(0x0f19, 0xffff) === 0);

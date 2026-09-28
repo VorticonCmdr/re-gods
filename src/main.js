@@ -797,13 +797,54 @@ const guardianTables = {
   let titleLoopOnMenu = false;    // game over: CS:0x0993 jumps to CS:0x2C82 after the table
   const LEVEL_START_SFX = 0x7f12; // CS:0x00F7 (level load) and CS:0x0902 (respawn)
   const GAME_OVER_SFX = 0x6413;   // CS:0x0953
+  /* The invulnerability aura's loop (bit 7: PPLAYER repeats it). Started with
+   * the aura by the shield potion (CS:0x62CC) and at respawn (CS:0x0907), and
+   * by the loop head (CS:0x012E) whenever it is re-entered with DS:0x172 set;
+   * stopped (export 5, id 0x80) when the countdown runs out (CS:0xA9AA) or
+   * the loop head finds none (CS:0x0137), and by every export 4. */
+  const INVULN_LOOP_SFX = 0x0280, INVULN_LOOP_STOP = 0x80;
+  /* ⚠️ BUG FIX, the same trap as the extra-life potion below: the shield,
+   * freeze and giant-jump potions wrote their timers into the SPREAD COPY of
+   * `fx` that applyConsumable is handed, so none of the three ever took
+   * effect. Copied back here, from a pickup and from the shop alike (both
+   * dispatch through DS:0xD8B8, CS:0x1822 / CS:0x6F32). The shield also
+   * starts the aura's loop (CS:0x62C8 -> 0xA90B, then CS:0x62CC). */
+  const takeTimedEffect = (effect, result) => {
+    if (!result || typeof result.ticks !== 'number') return;
+    if (effect === 'invulnerable') { fx.invuln = result.ticks; audio.play(INVULN_LOOP_SFX); }
+    else if (effect === 'freeze') fx.freeze = result.ticks;
+    else if (effect === 'giantJump') fx.giantJump = result.ticks;
+  };
   const TITLE_MUSIC_VOLUME = 0x80, GUARDIAN_MUSIC_VOLUME = 0x96, SHOP_MUSIC_VOLUME = 0x80;
   /* CS:0x0116-0x011B: 0x1E, then `inc` on the way into the loop; CS:0x013C
    * decrements it once a pass, so the music starts on the 31st tick. */
   const LEVEL_MUSIC_DELAY = 0x1f;
+  /* ── The sound drivers' waits ────────────────────────────────────────────
+   * Two exports make GAME.EXE wait inside the driver, with nothing else
+   * running: export 4 (CS:0x22D0, both drivers) until the sound effects
+   * have finished, and ROL's export 12 while a fade runs down or, with the
+   * music simply playing, for 300 retraces. The port freezes its ticks (and
+   * with them an attract tape) for the time the bus reports, then runs what
+   * followed the call in the original. */
+  let soundStallUntil = 0;
+  const afterStall = [];
+  const soundStall = (ms, then) => {
+    const now = performance.now();
+    if (ms > 0) soundStallUntil = Math.max(soundStallUntil, now + ms);
+    if (!then) return;
+    if (soundStallUntil > now) afterStall.push(then); else then();
+  };
+  const soundStalled = () => {
+    /* A deferred step may stall again; what it queues then waits its turn. */
+    while (afterStall.length && performance.now() >= soundStallUntil) afterStall.shift()();
+    return performance.now() < soundStallUntil;
+  };
+  const waitSfx = (then) => soundStall(audio.waitSfx(), then);              // export 4
+  const loadMusic = (ctx) => soundStall(audio.music('load', ctx));         // export 12
   const enterTitleLoopMusic = () => {                              // CS:0x2C82-0x2CAA
     audio.music('fadeOut');
-    audio.music('load', MUSIC_CONTEXT.TITLE);
+    waitSfx();                                                     // CS:0x2C87
+    loadMusic(MUSIC_CONTEXT.TITLE);
     audio.music('start', TITLE_MUSIC_VOLUME);
   };
   if (soundSel) {
@@ -907,7 +948,7 @@ const guardianTables = {
    * DS:0x2fa (freeze), DS:0x174 (giant jump), DS:0x224 (lives) — each ticks
    * down once per frame the way the original does. Spawn protection is the
    * SHORT one: CS:0x085D calls the same helper then subtracts 170. */
-  let fx = { invuln: INVULN_TICKS_SPAWN, freeze: 0, giantJump: 0, lives: 2,
+  let fx = { invuln: 0, freeze: 0, giantJump: 0, lives: 2,
              arc: 0, shop: false, stateMachineSuspended: false };
   /* CS:0x3b4 — the health bar's own filled-segment shimmer phase (game/
    * health-bar.js). A genuine persistent global in the original (no writer
@@ -1263,6 +1304,11 @@ const guardianTables = {
             };
             audio.music('mute');                                    // CS:0x094D, export 10
             audio.play(GAME_OVER_SFX);                              // CS:0x0953
+            /* CS:0x095A: export 4 waits for the jingle to end; only then
+             * does the fade (CS:0x095D) start. */
+            const jingleMs = audio.waitSfx();
+            soundStall(jingleMs);
+            gameOverFade.start += jingleMs;
             titleLoopOnMenu = true;                                 // CS:0x0993 jmp 0x2C82
             uiState = 'game-over-fade';
             $('event').textContent = 'GAME OVER';
@@ -1282,8 +1328,12 @@ const guardianTables = {
              * level-start sound plays, and it fades back up (export 9) to the
              * level volume (CS:0x0370) — also inside a guardian fight. */
             audio.music('setVolume', 1);
-            audio.play(LEVEL_START_SFX);                             // CS:0x0902
-            audio.music('fadeTo', levelMusicVolume(level.world));    // CS:0x091C-0x0921
+            const respawnWorld = level.world;
+            waitSfx(() => {                                          // CS:0x08FB, export 4
+              audio.play(LEVEL_START_SFX);                           // CS:0x0902
+              audio.play(INVULN_LOOP_SFX);                           // CS:0x0907, the aura's loop
+              audio.music('fadeTo', levelMusicVolume(respawnWorld)); // CS:0x091C-0x0921
+            });
             musicStartTicks = 0;                                     // CS:0x0917 [0x3E8] = 0xFE
             respawnTick = true;                                      // CS:0x08F5 call 0x921B
             $('event').textContent = `respawned — ${fx.lives} ${fx.lives === 1 ? 'life' : 'lives'} left`;
@@ -1307,8 +1357,10 @@ const guardianTables = {
       if (!guardianMusic) {
         guardianMusic = true;
         audio.music('fadeOut');
-        audio.music('load', MUSIC_CONTEXT.GUARDIAN);
+        loadMusic(MUSIC_CONTEXT.GUARDIAN);
         audio.music('start', GUARDIAN_MUSIC_VOLUME);
+        /* CS:0x05B7 jmp 0x011B -> 0x0126: the loop head's aura check. */
+        if (fx.invuln > 0) audio.play(INVULN_LOOP_SFX); else audio.stop(INVULN_LOOP_STOP);
       }
       if (hero) overlayGuardSprites(hero, level.world).catch((e) => console.error('guard atlas', e));
       return true;
@@ -1552,9 +1604,13 @@ const guardianTables = {
       /* CS:0x8EC2 and its three siblings free all four DS:0x8c3c slots on a
        * level load, so a puff never survives into the next level. */
       killSmoke.clear(); lastKillSmokeFx = [];
-      /* A level change is not a restart, so lives carry; the timers do not
-       * (the level-start block re-grants the short spawn invulnerability). */
-      fx = { ...fx, invuln: INVULN_TICKS_SPAWN, freeze: 0, giantJump: 0,
+      /* A level change is not a restart, so lives carry; the timers do not.
+       * ⚠️ CORRECTED: no invulnerability at level start. The loader clears
+       * DS:0x172 (CS:0x8CC7) and parks the countdown DS:0x19C at 0xFFFF
+       * (CS:0x8E22); only the respawn (CS:0x085D) and the shield potion
+       * (CS:0x62C8) call the aura's start, CS:0xA90B. [PROVEN] live: at a
+       * world-2 level entry's CS:0x0126, DS:0x172 = 0, DS:0x19C = 0xFFFF. */
+      fx = { ...fx, invuln: 0, freeze: 0, giantJump: 0,
              arc: 0, shop: false, stateMachineSuspended: false };
       /* Not the original's own state (there is no "mid-death-sequence level
        * exit" in the shipped game — the death test and a level-exit trigger
@@ -1572,10 +1628,11 @@ const guardianTables = {
        * level-start sound; the music itself waits for CS:0x013C. The loader
        * clears DS:0x38A (CS:0x2BFB), so the next guardian loads afresh. */
       guardianMusic = false;
+      waitSfx();                                              // CS:0x8E76, inside the loader
       if (levelMusicOnLoad) {
-        audio.music('load', worldMusicContext(levelInfo.world));
+        loadMusic(worldMusicContext(levelInfo.world));        // CS:0x00D8
         musicStartTicks = LEVEL_MUSIC_DELAY;
-        audio.play(LEVEL_START_SFX);
+        waitSfx(() => audio.play(LEVEL_START_SFX));           // CS:0x00F3-0x00FA
       }
       $('event').textContent = '–';
     } finally {
@@ -1677,12 +1734,17 @@ const guardianTables = {
       moneyTotal: purse.total,
       password: passwordReveal,
     });
-    audio.music('mute');                       // CS:0x6576, export 10
-    audio.play(tallyFanfareSfx(rec.word2));    // CS:0x657B -> FUN_1000_67f5, once on entry
+    /* CS:0x6573-0x65AA: wait for the sounds, mute the music (export 10), the
+     * fanfare, wait for IT to finish, then the music back (export 11) while
+     * the counting runs. At the end (CS:0x67A5) another wait, then the bits. */
+    waitSfx(() => {
+      audio.music('mute');
+      audio.play(tallyFanfareSfx(rec.word2));  // CS:0x657B -> FUN_1000_67f5, once on entry
+      waitSfx(() => audio.music('unmute'));
+    });
     tallyScreen.onDone = () => {
       tallyScreen = null;
-      audio.music('unmute');                   // CS:0x65AA, export 11
-      runProgressBits(rec);
+      waitSfx(() => runProgressBits(rec));
     };
   }
 
@@ -1874,7 +1936,7 @@ const guardianTables = {
     if (matchWorld === 1) { uiState = 'game'; return; }          // CS:0x00C4
     /* CS:0x0693 -> 0x6C19: the shop's music (context 6, PGODSRLG.RL), no
      * fade first (the fade at CS:0x6C0E is on the mid-level entry only). */
-    audio.music('load', MUSIC_CONTEXT.SHOP);
+    loadMusic(MUSIC_CONTEXT.SHOP);
     audio.music('start', SHOP_MUSIC_VOLUME);
     purse = new Purse();
     purse.add(SHOP_STARTING_MONEY);                             // CS:0x0643 sets it, not adds
@@ -1886,13 +1948,18 @@ const guardianTables = {
       inventory,
       state: { health, arsenal },
       purse,
+      onConsumable: (effect, result) => takeTimedEffect(effect, result),
       onDone: () => {
         uiState = 'game'; shopScreen = null; paused = false;
         /* CS:0x6D8F-0x6DA8 fade out and load the world's music; CS:0x0696
          * -> 0x06A9 the level-start sound; -> 0x0111 re-arms DS:0x3E8. */
         audio.music('fadeOut');
-        audio.music('load', worldMusicContext(matchWorld));
-        audio.play(LEVEL_START_SFX);
+        loadMusic(worldMusicContext(matchWorld));
+        waitSfx(() => {                                      // CS:0x06A2-0x06A9
+          audio.play(LEVEL_START_SFX);
+          /* -> CS:0x0111 ... 0x0126: a shield bought in the shop plays its loop. */
+          if (fx.invuln > 0) audio.play(INVULN_LOOP_SFX);
+        });
         musicStartTicks = LEVEL_MUSIC_DELAY;
       },
     });
@@ -2362,6 +2429,9 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
         if (intro.done) leaveIntro();
         return;
       }
+      /* The sound drivers' waits (export 4, ROL's export 12): GAME.EXE sits in
+       * the driver, so nothing ticks — not the menus, not an attract tape. */
+      if (soundStalled()) return;
       /* Attract-mode playback (game/attract.js) overrides `input` from the
        * decoded recording, BEFORE anything below reads it — a `joyl` tick
        * feeds the menu/password widgets exactly like a real keypress would
@@ -2934,6 +3004,7 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
          * new total (consumables.js's own `state.lives = (state.lives??0)+1`
          * seeds from that same spread copy), so apply it to the REAL fx. */
         if (c.result && typeof c.result.lives === 'number') fx.lives = c.result.lives;
+        takeTimedEffect(c.effect, c.result);
         /* ⚠️ The tablet reaches this loop through the `notWired` branch, since
          * its effect is not an `applyConsumable` state change. Left alone, the
          * debug HUD read `"tablet" (reveals clues) — hint: ...` while the panel
@@ -3526,7 +3597,7 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
          * (export 12), started at the level volume (CS:0x0370). */
         if (guardianScoreTicks === 0) {
           audio.music('fadeOut');
-          audio.music('load', worldMusicContext(level.world));
+          loadMusic(worldMusicContext(level.world));
           audio.music('start', levelMusicVolume(level.world));
         }
       }
@@ -3733,7 +3804,9 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
        * `dec word [0x19c]` clearing DS:0x172 at zero, and the giant-jump word
        * on the same shape. One tick each, once per frame. */
       if (fx.freeze > 0 && !rt) fx.freeze--;
-      if (fx.invuln > 0) fx.invuln--;
+      /* CS:0xA99B-0xA9AA: when the countdown runs out, DS:0x172 := 0 and the
+       * aura's loop stops (export 5, id 0x80). */
+      if (fx.invuln > 0 && --fx.invuln === 0) audio.stop(INVULN_LOOP_STOP);
       if (fx.giantJump > 0 && !rt) fx.giantJump--;
       health.chase();
       /* CS:0x0e15-0x0e24 — one HURT_SFX per bar-descent-start, latched so a
@@ -3779,14 +3852,14 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
       if (uiState === 'game-over-fade' && gameOverFade) {
         renderer.buf.set(gameOverFade.snapshot);
         const elapsed = performance.now() - gameOverFade.start;
-        const fadeT = Math.max(0, 1 - elapsed / GAME_OVER_FADE_MS);
+        const fadeT = Math.min(1, Math.max(0, 1 - elapsed / GAME_OVER_FADE_MS));   // start may lie ahead (the jingle's wait)
         const menuGlyphs = hero && hero.menuGlyphs;
         drawCentered(renderer, menuGlyphs, 'GAME OVER', 92, MENU_ADVANCE);
         renderer.present(gameOverFade.palette, fadeT);
         if (elapsed >= GAME_OVER_FADE_MS) {
           /* CS:0x0978-0x0982: the title's music (context 4) under the name
            * entry and the table. */
-          audio.music('load', MUSIC_CONTEXT.TITLE);
+          loadMusic(MUSIC_CONTEXT.TITLE);
           audio.music('start', TITLE_MUSIC_VOLUME);
           if (gameOverFade.next === 'name-entry') { uiState = 'name-entry'; nameEntry = new NameEntry(); }
           else { uiState = 'hiscore-table'; hiscoreTable = new HiscoreTable(hiscoreEntries); }
@@ -4357,7 +4430,7 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
    * synchronous and consume no ticks. */
   if (new URLSearchParams(location.search).has('debug')) {
     const settle = async () => {
-      while (transitioning || attractLoading) await new Promise((r) => setTimeout(r, 5));
+      while (transitioning || attractLoading || soundStalled()) await new Promise((r) => setTimeout(r, 5));
     };
     const snap = () => ({
       ui: uiState, attract: attract && { state: attract.state, cursor: attract.tape.cursor,
@@ -4482,6 +4555,10 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
       sel2: () => selectorTwo,
       async switchLevel(key) { await switchLevel(key); await settle(); return snap(); },
       levers: () => level.palfils.levers.map((l, i) => `${i}:${l.x},${l.y},${l.type}`).join(' '),
+      fx: () => ({ ...fx }),
+      takeTimedEffect: (effect, result) => takeTimedEffect(effect, result),
+      stalledMs: () => Math.max(0, soundStallUntil - performance.now()),
+      soundStall: (ms, then) => soundStall(ms, then),
       async startAttractAt(state) { clock.stop(); await enterAttractState(state); await settle(); return snap(); },
       /* Step until `n` ticks ran, recording a snapshot after each. */
       async stepTicks(n, record = true) {

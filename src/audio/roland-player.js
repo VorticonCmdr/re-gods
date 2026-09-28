@@ -17,12 +17,16 @@ import { dclDecompress } from '../formats/dcl.js';
 import { parseMusContainer, expandBlob } from './mus-container.js';
 import { parseMt32Bank } from './mt32-bank.js';
 import { Mt32Synth } from './mt32-synth.js';
-import { RolSfxDriver, RolMusic, RolRandom, MUSIC_VOLUME_SLOTS, rlFileForContext } from './rol-driver.js';
+import { RolSfxDriver, RolMusic, RolRandom, MUSIC_VOLUME_SLOTS, ROL_WAIT_SLOTS,
+         rlFileForContext } from './rol-driver.js';
 import { RolandSequencer, parseRolandTrack } from './roland-sequencer.js';
 
 const TICK_S = 1 / 50;
 const LOOKAHEAD_S = 0.06;
 const TIMER_MS = 20;
+/* Port-only cap on export 4's wait: the original has none, so a sound that
+ * never ends (a looping id it does not stop) would hang it for good. */
+const MAX_WAIT_TICKS = 500;
 
 export class RolandPlayer {
   /**
@@ -104,7 +108,27 @@ export class RolandPlayer {
     const track = this.sfxTracks[r.blob];
     if (!track) return;                              // blob 63+: PPLAYER AH=1 refuses it
     if (!this.seq.play(r.blob, track, r.firstSlot, r.loop)) return;
+    this.seq.tracks[this.seq.tracks.length - 1].slots = r.voices;
     for (let i = 0; i < r.voices; i++) this.seq.setVolume(r.firstSlot + i, r.volume);
+  }
+
+  /**
+   * Export 4 (ROL:0x55D): stop the looping sounds, then the game waits until
+   * no sound holds slots 1-4. Returns that wait in ms (0 while the
+   * AudioContext is not running: nothing is audibly playing then).
+   */
+  waitSfx() {
+    if (!this.synth) return 0;
+    for (const blob of RolSfxDriver.loopBlobs()) this.seq.stopBlob(blob, this.#emit);
+    if (this.getContext().state !== 'running') return 0;
+    let ticks = 0;
+    for (const t of this.seq.tracks) {
+      if (!t.slots) continue;                                        // the music (BL = 0, no slots)
+      const holds = ROL_WAIT_SLOTS.some((s) => s >= t.offset && s < t.offset + t.slots);
+      if (!holds) continue;
+      ticks = Math.max(ticks, t.loop ? MAX_WAIT_TICKS : t.origin + t.track.endTick - this.seq.now + 1);
+    }
+    return Math.min(ticks, MAX_WAIT_TICKS) * TICK_S * 1000;
   }
 
   /** Export 5. */
@@ -114,9 +138,12 @@ export class RolandPlayer {
     if (blob >= 0) this.seq.stopBlob(blob, this.#emit);
   }
 
-  /** Exports 6-12, by name. */
+  /**
+   * Exports 6-12, by name. 'load' returns the ms export 12 holds the game
+   * (rol-driver.js `RolMusic.load`); 0 while the AudioContext is not running.
+   */
   musicOp(op, arg) {
-    if (!this.#ensureRunning()) { this.ready.then(() => this.musicOp(op, arg)); return; }
+    if (!this.#ensureRunning()) { this.ready.then(() => this.musicOp(op, arg)); return 0; }
     switch (op) {
       case 'start': this.music.start(arg); break;
       case 'fadeOut': this.music.fadeOut(); break;
@@ -124,9 +151,13 @@ export class RolandPlayer {
       case 'fadeTo': this.music.fadeTo(arg); break;
       case 'mute': this.music.mute(); break;
       case 'unmute': this.music.unmute(); break;
-      case 'load': this.music.load(arg); break;
+      case 'load': {
+        const ticks = this.music.load(arg);
+        return this.getContext().state === 'running' ? ticks * TICK_S * 1000 : 0;
+      }
       default:
     }
+    return 0;
   }
 
   /**

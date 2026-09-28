@@ -127,6 +127,7 @@
 import { buildSfxSequence } from './sfx-sequence.js';
 import { renderSequence, OPL_RATE } from './opl2-core.js';
 import { adlVariantOffset } from './adl-random.js';
+import { EXPORT4_LOOP_IDS } from './rol-driver.js';
 
 function scheduleTone(ctx, dest, t0, { freq, dur, type = 'square', gain = 0.2, slideTo, delay = 0 }) {
   const osc = ctx.createOscillator();
@@ -260,10 +261,11 @@ export const SFX_VOICES = {
 
 /** Node-testable: records ids instead of making sound. */
 export class RecordingAudioBus {
-  constructor() { this.played = []; this.stopped = []; this.musicOps = []; }
+  constructor() { this.played = []; this.stopped = []; this.musicOps = []; this.waits = 0; }
   play(id) { this.played.push(id); }
   stop(id) { this.stopped.push(id); }
-  music(op, arg) { this.musicOps.push(arg === undefined ? [op] : [op, arg]); }
+  music(op, arg) { this.musicOps.push(arg === undefined ? [op] : [op, arg]); return 0; }
+  waitSfx() { this.waits++; for (const id of EXPORT4_LOOP_IDS) this.stopped.push(id); return 0; }
 }
 
 /**
@@ -305,7 +307,9 @@ export class WebAudioBus {
    * shipped AdLib/Sound Blaster game has no in-game music at all.
    */
   music(op, arg) {
-    if (this.#rolandOn()) { this.#ensureContext(); this.#roland.musicOp(op, arg); }
+    if (!this.#rolandOn()) return 0;
+    this.#ensureContext();
+    return this.#roland.musicOp(op, arg) || 0;   // 'load': ms export 12 holds the game
   }
 
   #ensureContext() {
@@ -360,14 +364,20 @@ export class WebAudioBus {
     if (this.#rolandOn()) { this.#roland.play(id); return; }
     if (!adlAccepts(id)) return;
     const blob = (id + adlVariantOffset(id, rnd)) & 0x7f;
+    /* Bit 7: PPLAYER loops the blob (`0000:0CEA`), and ADL:0x296-0x2B5 refuses
+     * it while a slot already holds the same byte. */
+    const loop = (id & 0x80) !== 0;
+    if (loop && this.#playing.get(blob)?.size) return;
     const buffer = this.#bufferFor(ctx, blob);
     if (buffer) {
       const src = ctx.createBufferSource();
       src.buffer = buffer;
+      src.loop = loop;
       const g = ctx.createGain();
       g.gain.value = SFX_GAIN;
       src.connect(g).connect(ctx.destination);
       src.start(ctx.currentTime);
+      src.endAt = loop ? Infinity : ctx.currentTime + buffer.duration;
       const key = blob;                  // export 5 stops by blob: a variant is not the base
       if (!this.#playing.has(key)) this.#playing.set(key, new Set());
       const live = this.#playing.get(key);
@@ -392,5 +402,22 @@ export class WebAudioBus {
     if (!live) return;
     for (const src of live) { try { src.stop(); } catch { /* already ended */ } }
     live.clear();
+  }
+
+  /**
+   * Sound export 4, reached from GAME.EXE's CS:0x22D0. ADL:0x33D stops the
+   * three looping sounds (0x80, 0x97, 0xC5), then loops until all five SFX
+   * slots are free: the game waits for every sound still playing. Returns
+   * that wait in ms — 0 while the AudioContext is not running, when nothing
+   * is audibly playing. Capped (port-only) at 10 s; the original has no cap.
+   */
+  waitSfx() {
+    if (this.#rolandOn()) return this.#roland.waitSfx();
+    for (const id of EXPORT4_LOOP_IDS) this.stop(id);
+    const ctx = this.#ctx;
+    if (!ctx || ctx.state !== 'running') return 0;
+    let end = ctx.currentTime;
+    for (const live of this.#playing.values()) for (const src of live) end = Math.max(end, src.endAt ?? 0);
+    return Math.min(10, end - ctx.currentTime) * 1000;
   }
 }

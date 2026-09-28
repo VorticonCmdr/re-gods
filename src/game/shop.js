@@ -192,9 +192,13 @@ export class ShopScreen {
    *   give-to-inventory purchase finds no eligible empty slot, with
    *   REFUSAL_TEXT (DS:0xEC8B) and priority 0x19
    * @param {()=>void} [onDone] called once, when the EXIT cell is confirmed
+   * @param {(effect:string, result:?object)=>void} [onConsumable] called after
+   *   a consumable is applied. The shop dispatches through the SAME handler
+   *   table as a pickup (DS:0xD8B8: CS:0x6F32 here, CS:0x1822 there), so a
+   *   bought potion's timer, and the shield's loop sound, are the caller's.
    */
   constructor({ roster, inventory, selectedSlot = -1, state = {}, purse = null, onRefused, onDone,
-                prices = null }) {
+                prices = null, onConsumable = null }) {
     this.prices = prices;          // per-world POBJECTS +6 values, or null for PRICES
     this.candidates = roster ? roster.slice() : [];   // the FULL raw list, SS:0x51aa
     this.roster = new Array(DATA_SLOTS).fill(null);   // the visible grid — #rebuildVisible fills this
@@ -204,6 +208,7 @@ export class ShopScreen {
     this.purse = purse;
     this.onRefused = onRefused;
     this.onDone = onDone;
+    this.onConsumable = onConsumable;
 
     this.cursor = 0;              // DS:0x385
     /* DS:0x258. Positive = an ordinary preview. Negative = a weapon-purchase
@@ -339,6 +344,7 @@ export class ShopScreen {
       this.purchasedCategories.add(rank);
       if (this.purse) this.purse.add(-cost);         // CS:0x6ef7 — deduct on confirm
       const result = safeApplyConsumable(CONSUMABLES[rank], this.state);
+      if (this.onConsumable) this.onConsumable(CONSUMABLES[rank].effect, result);
       this.#rebuildVisible();
       return this.lastPurchase = { id, rank, cost, effect: CONSUMABLES[rank].effect, result };
     }

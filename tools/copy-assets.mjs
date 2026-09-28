@@ -108,7 +108,7 @@ const WANTED = [
   // sound bank (audio/mt32-bank.js) the game's program changes rely on.
   // ROL.EXE is staged so the checks can compare its tables with the port's.
   'PGODSRLA.RL', 'PGODSRLB.RL', 'PGODSRLC.RL', 'PGODSRLD.RL',
-  'PGODSRLE.RL', 'PGODSRLF.RL', 'PGODSRLG.RL', 'PTITLE.RL', 'ROL.EXE',
+  'PGODSRLE.RL', 'PGODSRLF.RL', 'PGODSRLG.RL', 'PTITLE.RL', 'ROL.EXE', 'ADL.EXE',
   // Recorded attract-mode joystick input (game/formats/joy.js). `joyg`
   // decodes into real GAMEPLAY ticks — used both by the replay-diff harness
   // (tools/replay-diff.mjs, checking the port's physics against a live
