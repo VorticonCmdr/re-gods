@@ -335,9 +335,10 @@ export function activateObjects(objects, box, cats) {
  * never actually moves. ⚠️ Not silently, though: the cycle PLAYS the
  * landing and bounce sounds (below), so a lever coming into view thuds.
  * An earlier version applied the gate up front (`isFallEligible`, not
- * arming such objects at all) and lost those sounds ([PROVEN] live: PJOYL2
- * 1905-1927). Every activated object is armed now; the restore does the
- * rest.
+ * arming such objects at all) and lost those sounds. [STATIC]: CS:0x120F
+ * and the walk's gate at CS:0x14A1 test no category; no swept demo shows a
+ * category >= 3 object landing. Every activated object is armed now; the
+ * restore does the rest.
  *
  * ⚠️ Weapon pickups (type >= 0xC0) skip the category test entirely
  * (CS:0x15F5 `cmp cx,0xc0 / jl ... / jmp 0x1da0`), so they always fall.
