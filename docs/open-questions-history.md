@@ -162,6 +162,17 @@
     - ~~How `PJOYL3`'s password entry reaches world 3~~ — **CLOSED `[PROVEN]` live.** It types the attract shortcut `"L3"`: at `CS:0x2E4A` `DS:0x3004` holds `0C 20`, and `CS:0x2E51`–`0x2E6A` turns that into world 3.
     - ~~`UNKNOWN_sysA_fire_timer_carry`~~ — **modelled, `[STATIC]` + a live read.** `gods-web`'s `entity-a.js` `sysAFireTimers` keeps a per-slot table (`DS:0xE96 + g·0x190 + k·0x28 + 0x0E`) for the whole process. Not replay-checked: no demo has a System-A shooter. Originally: System A's materialise (`CS:0xDE8D`) never writes the fire timer `+0x0E`, and the entity array `DS:0xE96` is never bulk-cleared. So a slot's timer carries over from whatever last used it (BSS 0 on first use, which waits 65535 ticks under `CS:0xE66B`'s exact-zero `dec/jnz`). `gods-web` starts every System-A entity at 0 and does not model the carry. No attract demo contains a System-A shooter, so this is unchecked by replay.
 
+49. The port's disclosed "not modelled" gaps (2026-09-28) — **all eight closed**, with four corrections to earlier claims:
+    - ~~`UNKNOWN_ds33_bit2_setter`~~ — **CLOSED `[PROVEN]` live.** `DS:0x33` is the fine-scroll phase `[0xa] & 0x1c`, written by graphics export 0 (`VGA:0x10FB`), not by `GAME.EXE`. It picks the pre-shifted panel copy; the status band is pixel-identical at phases 0/4/8/28 (`docs/message-line.md`).
+    - **The camera's `[0x32]`** resets at level load only, not on respawn (`docs/camera-and-world-nav.md`).
+    - **The shop**: the auto-repeat (`CS:0x6CAA`), fire acting on release, the flat cursor (the "row clamp" claimed `[PROVEN]` was wrong on the bytes) and the refusal text `DS:0xEC8B` (`docs/shop.md`).
+    - **The time bomb**: the mover splits on vx; the row-crossing branch is a thrown bomb's only landing; `SS:0x5450` is in the image (`docs/combat-and-projectiles.md`).
+    - **Graphics export 1's `bp`** read in full; **sound exports 4/5 are stops** (`ADL:0x33D`/`0x2FC`), and the world-4 rise stops its own sound (`docs/guardians.md`, `docs/drivers-and-memory.md`).
+    - **The intro fades**: the three routines and six tables, live-sampled at four points (`docs/dynamic-trace-and-runtime-data.md`).
+    - **The hunter's target key is the box's right edge**, not the sprite id (`CX` is overwritten by the clip), `[PROVEN]` live. `gods-web`'s hunter had never homed (no key on its list); fixed.
+    - **The familiar**, read in full and ported (`docs/consumables-and-treasure.md`); `[STATIC]`, no demo covers it. It carries only the fireball slot (`CS:0xC35E`'s index-2 test).
+    - The materialise flash was already ported; only comments were stale.
+
 ⚠️ `UNKNOWN_openlist_field4` was listed here *and* in the resolved list below. It is **closed** — the resolved entry is correct.
 
 ### Resolved by static (Ghidra + `ndisasm`) passes
