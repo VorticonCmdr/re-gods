@@ -209,7 +209,7 @@ DOWN released (4AE7):     drop the selected item if its slot holds one (61A1),
 
 The panel draw copies `[0x367]` into `[0x366]` every frame (`CS:0x1F5A`), so a tap's new slot shows the same tick. The level init zeroes both (`CS:0x8D73`/`0x8D78`); the payoff restart's `3` (`CS:0x048F`) is overwritten by it.
 
-**The drop, `CS:0x61A1`**: the item in slot `[0x367]` is removed from the inventory and handed to `CS:0xBF5F` as id `type + 0xB` at the hero + (8, 0x20). It pops up out of the hero (the reward popup, vy −6) and lands as a world object, or becomes one at once if the popup slot is busy. So crouching where there is no key, without pressing FIRE, drops the selected item; tapping FIRE instead cycles the selection, and standing up drops whatever is selected then.
+**The drop, `CS:0x61A1`** `[STATIC]` (the demos' inventory is empty, so no live run reached it): the item in slot `[0x367]` is removed from the inventory and handed to `CS:0xBF5F` as id `type + 0xB` at the hero + (8, 0x20). It pops up out of the hero (the reward popup, vy −6) and lands as a world object, or becomes one at once if the popup slot is busy. So crouching where there is no key, without pressing FIRE, drops the selected item; tapping FIRE instead cycles the selection, and standing up drops whatever is selected then.
 
 Live proof: `PJOYL1` cursors 790–843 peeked (`[0x341]`, `[0x354]`, `[0x355]`, `[0x366]`, `[0x367]`; `gods-web/tools/attract-capture/joyl1.inventory.peek.json`): the scan at 801, the arming press, its release at 803, and the tap at 809 that moves the selector to 1 and plays `0x2831`. `gods-web` reproduces all 53 rows. **Not ported: the drop** (`CS:0x61A1`, and with it the "overwrite the selected slot" pickup at `CS:0x6100`, which the port replaces with a first-empty slot). The joyl1 inventory is empty, so no shipped demo exercises it (ranked item 57).
 
@@ -477,7 +477,7 @@ Not yet confirmed live in DOSBox for this specific mechanic (the port fix rests 
 
 ### Every landing sounds `0x318` — `[PROVEN]` live (2026-09-28)
 
-`CS:0x4C54` (`mov ax,0x318 / call 0x22ca`) has eight callers, one per landing: the plain falls (state 11 `CS:0x4C4E`; state 12 and the fall-fire right landing both reach `CS:0x4D2A`, which calls it **twice**, at `0x4D36` and `0x4D53`), the ladder-foot fall (`CS:0x4CC5`), the jumps (`CS:0x4F69`, `0x5168`) and the firing jumps (`CS:0x5274`, `0x5391`). `gods-web` had only the ladder one; it now counts the plays per landing. Checked per cursor against the live AdLib sweeps of `PJOYL1`, `PJOYL2` and `PJOYL3`.
+`CS:0x4C54` (`mov ax,0x318 / call 0x22ca`) has eight callers, one per landing: the plain falls (state 11 `CS:0x4C4E`; state 12 and the fall-fire right landing both reach `CS:0x4D2A`, which calls it **twice**, at `0x4D36` and `0x4D53`), the ladder-foot fall (`CS:0x4CC5`), the jumps (`CS:0x4F69`, `0x5168`) and the firing jumps (`CS:0x5274`, `0x5391`). `gods-web` had only the ladder one; it now counts the plays per landing. Matched per cursor against the live AdLib sweeps of `PJOYL1`, `PJOYL2` and `PJOYL3`. Which caller fired is `[STATIC]`: every play returns through `0x4C5B`, so the sweeps cannot tell the eight apart (a double play on one tick, as `0x4D2A` makes, was seen live in `PJOYG2` at cursor 67).
 
 ## `UNKNOWN_DS_0192` — CLOSED: health, and a bar that lags it `[PROVEN]`
 
