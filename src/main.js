@@ -2850,6 +2850,35 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
        * barriers (the vast majority) are untouched by this call. */
       const barrierMoved = lineBarriers.tick({ x: cam.snapX, y: cam.snapY });
       loopSfx.barrierTick(lineBarriers.active, barrierMoved, loopSfxOut());   // CS:0x76F8
+
+      /* CS:0x1447/0x1B72/0x1AF6 — the retracting spike hazard (types
+       * 50/117/130, game/spikes.js). Undebounced flat damage, so it does NOT
+       * route through the shared attackHero/creatureScansGrid contact path
+       * every creature in this file uses — it applies straight to `health`.
+       * It is part of FUN_1000_1432, the object walk, which CS:0x0206 calls
+       * right after the barrier rescan above (CS:0x01F2) and before the
+       * projectiles, the familiar and the player state machine (CS:0x0254) —
+       * also from the death driver (CS:0x09DB) and the respawn tick
+       * (CS:0x9274), so only the object-pass gate applies. [PROVEN] live
+       * (tools/attract-capture/sound_sweep.py, PJOYL1 under ROL): on the
+       * tick a lever's ACT6 kills the spikes (269, 743) the walk has already
+       * counted them, and their loop stops on the NEXT tick. This block used
+       * to sit after the player and stopped the loop a tick early. */
+      if (objPass) {
+        spikeClock.step();
+        /* CS:0x148B `inc byte [0x3a0]` / CS:0x148F `and byte [0x3a0],0x7` —
+         * the SAME once-per-frame function (FUN_1000_1432) that advances the
+         * spike counters four instructions earlier, so it steps here. Unlike
+         * DS:0x39c/0x39d/0x39e it is NOT behind CS:0x1450's DS:0x36c gate:
+         * the crystal advances every tick. */
+        objectAnimClock.step();
+        lastSpikeFx = stepSpikes(level.drawObjects, spikeClock,
+          { x: player.x, y: player.y }, health, { invuln: fx.invuln > 0 });
+        /* CS:0x1AD6 counts on-screen spikes into DS:0x39A; CS:0x14C4 starts
+         * or stops their loop. */
+        const spikesSeen = lastSpikeFx.filter((o) => spikeOnScreen(o.x - cam.snapX, o.y - cam.snapY)).length;
+        loopSfx.spikeTick(spikesSeen, loopSfxOut());
+      }
       /* CS:0x01BD's own `jmp 0x9bb` skips the player state machine entirely
        * once the hero is dead (game/death.js) — everything else in this
        * tick (enemies, hazards, projectiles, events) keeps running, matching
@@ -3382,26 +3411,6 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
         lastSpitFx = ce64Spits.step(
           camNow, { x: player.x, y: player.y, state: player.stateIndex }, fx.freeze,
           health, grid, decodeTag, ce64Opts).drawn;
-      }
-
-      /* CS:0x1447/0x1B72/0x1AF6 — the retracting spike hazard (types
-       * 50/117/130, game/spikes.js). Undebounced flat damage, so it does NOT
-       * route through the shared attackHero/creatureScansGrid contact path
-       * every creature in this file uses — it applies straight to `health`. */
-      if (objPass) {
-        spikeClock.step();
-        /* CS:0x148B `inc byte [0x3a0]` / CS:0x148F `and byte [0x3a0],0x7` —
-         * the SAME once-per-frame function (FUN_1000_1432) that advances the
-         * spike counters four instructions earlier, so it steps here. Unlike
-         * DS:0x39c/0x39d/0x39e it is NOT behind CS:0x1450's DS:0x36c gate:
-         * the crystal advances every tick. */
-        objectAnimClock.step();
-        lastSpikeFx = stepSpikes(level.drawObjects, spikeClock,
-          { x: player.x, y: player.y }, health, { invuln: fx.invuln > 0 });
-        /* CS:0x1AD6 counts on-screen spikes into DS:0x39A; CS:0x14C4 starts
-         * or stops their loop. */
-        const spikesSeen = lastSpikeFx.filter((o) => spikeOnScreen(o.x - cam.snapX, o.y - cam.snapY)).length;
-        loopSfx.spikeTick(spikesSeen, loopSfxOut());
       }
 
       /* CS:0x0239 `call 0x3cc7` — ACT6's smoke puffs advance a frame and
@@ -4496,7 +4505,7 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
        * the world-2 jaw counter DS:0x2F0, which no fight initialises). */
       guardianRaw: () => guardian,
       /* game/familiar.js, with the Health that holds its energy/power/wings. */
-      familiar: () => ({ entity: familiar, health, arsenal }),
+      familiar: () => ({ entity: familiar, health, arsenal, gateOpen: targetGateOpen(health, arsenal) }),
       /* DS:0x1BA and the hit bonus it gives this world (game/weapons.js). */
       weaponTotal: () => ({ total: dsWeaponTotal.value, bonus: hitBonus(level.world) }),
       /* DS:0x2F0 lives for the process; the diff harness resets it to the

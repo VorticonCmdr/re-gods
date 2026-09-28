@@ -522,6 +522,21 @@ for (const r of await checkMusic(fetchRaw)) {
     if (!r.pass && !r.note) bad++;
     console.log(line(r));
   }
+
+  /* CS:0x01F2 (the barrier rescan and its loop-sound tail) -> CS:0x0206
+   * (FUN_1000_1432, the object walk: spikes and their loop tail) ->
+   * CS:0x0254 (the player). Under ROL each loop tail reads the other's latch
+   * (game/loop-sfx.js), and a lever's ACT6 in the player tick must not
+   * remove spikes before the walk counts them — [PROVEN] live, PJOYL1. */
+  console.log('\n  the two loop sounds and the object walk (CS:0x01F2 / 0x0206 / 0x0254):');
+  for (const [a, b] of [['loopSfx.barrierTick', 'loopSfx.spikeTick'], ['loopSfx.spikeTick', 'stepHeroFrame'],
+                        ['stepSpikes', 'stepHeroFrame']]) {
+    for (const r of await checkCallOrder(join(here, '..', 'src', 'main.js'),
+      { calleeSrc: a, beforeSrc: b, notInsideIfTest: '!deathSeq' })) {
+      if (!r.pass && !r.note) bad++;
+      console.log(line(r));
+    }
+  }
 }
 
 /* The enemy suite's head, CS:0x0279 -> 0x027F -> 0x0282: the DS:0xCF40

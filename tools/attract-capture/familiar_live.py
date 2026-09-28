@@ -13,14 +13,19 @@ at the start of the demo (armwait.py 5). The script:
      the call's target becomes CS:0xC308 (C308 falls into C35E) and C35E's
      RET at CS:0xC43F becomes `jmp 0xC08E`, so the one call is
      summon + slot choice + the tick — the order the port uses;
-  4. restores both patches at CS:0x0218, then logs the familiar at every
-     CS:0x0218 (right after its tick) until the tape cursor passes `end`.
-Writes familiar_live.json.
+  4. restores both patches at CS:0x0218 (and, given `energy`, writes it
+     over the summon's 1000 there), then logs the familiar at every
+     CS:0x0218 (right after its tick) until the tape cursor passes `end`;
+  5. also breaks on CS:0xAB4D (a creature hit by the familiar's tag drains
+     BP from DS:0x168) and CS:0xC440 (the familiar's death), logging them
+     as `events`.
+Writes familiar_live.json (or `out`).
 
   python3 armwait.py 5 && python3 familiar_live.py joyl3 92 760 1100
+  python3 armwait.py 5 && python3 familiar_live.py joyl3 92 760 3000 40 familiar_hits.json
 """
 import json, sys
-from sweep import DS, CS, POLLER, call, mem, word, wait_stop
+from sweep import DS, CS, SS, POLLER, RND, call, mem, word, wait_stop
 
 FIELDS = {'x': 0x16A, 'y': 0x16C, 'vx': 0x2FC, 'vy': 0x2FE, 'face': 0x300, 'anim': 0x302,
           'dx': 0x308, 'dy': 0x30A, 'spr': 0x30C, 'energy': 0x168, 'power': 0x210,
@@ -34,6 +39,11 @@ def s16(v):
 
 def main():
     name, inject, at, end = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4])
+    energy = int(sys.argv[5]) if len(sys.argv) > 5 else None
+    out = sys.argv[6] if len(sys.argv) > 6 else 'familiar_live.json'
+    # optional `a:b`: also log every random read (CS:0x3836) and its caller
+    # while the tape cursor is in [a, b]
+    rwin = tuple(int(v) for v in sys.argv[7].split(':')) if len(sys.argv) > 7 else None
     here = __file__.rsplit('/', 1)[0]
     cap = json.load(open(f'{here}/{name}.raw.json'))['output']
     snap = [s for s in (e.split(':') for e in cap['rnd'].split(';') if e) if int(s[0]) <= inject][-1]
@@ -68,8 +78,12 @@ def main():
     go([{'type': 'execute', 'segment': CS, 'offset': 0x218}])
     call('PUT', f'/memory/{CS}/{0x215}', orig_call, raw=True)
     call('PUT', f'/memory/{CS}/{0xC43F}', orig_ret, raw=True)
+    if energy is not None:
+        call('PUT', f'/memory/{DS}/{0x168}', energy.to_bytes(2, 'little'), raw=True)
 
-    log = []
+    log, events = [], []
+    watch = [{'type': 'execute', 'segment': CS, 'offset': o} for o in (0x218, 0xAB4D, 0xC440)]
+    wrnd = watch + [{'type': 'execute', 'segment': CS, 'offset': RND}]
     while True:
         row = {k: s16(word(DS, o)) for k, o in FIELDS.items()}
         row['alt'] = mem(DS, 0x33D, 1)[0]
@@ -77,12 +91,25 @@ def main():
         log.append(row)
         if row['cur'] > end or mem(DS, 0x3E6, 1)[0] != cycler:
             break
-        go([{'type': 'execute', 'segment': CS, 'offset': 0x218}])
+        while True:
+            st = go(wrnd if rwin and rwin[0] <= row['cur'] <= rwin[1] else watch)
+            ip = st['registers']['eip']
+            if ip == 0x218:
+                break
+            if ip == RND:
+                events.append({'at': 'rnd', 'cur': word(DS, 0x282), 'r': word(DS, 0x160),
+                               'ret': hex(word(SS, st['registers']['esp'] & 0xFFFF))})
+                continue
+            ev = {'at': hex(ip), 'cur': word(DS, 0x282), 'energy': s16(word(DS, 0x168)),
+                  'bp': s16(st['registers']['ebp'] & 0xFFFF), 'fx': s16(word(DS, 0x16A)),
+                  'fy': s16(word(DS, 0x16C)), 'f391': mem(DS, 0x391, 1)[0]}
+            events.append(ev)
+            print(ev, flush=True)
     call('DELETE', '/debug/breakpoints')
     call('POST', '/debug/continue')
-    json.dump({'seeds': seeds, 'inject': inject, 'at': at, 'rows': log},
-              open(f'{here}/familiar_live.json', 'w'), indent=0)
-    print(len(log), 'rows; seeds', seeds, 'first', log[0], flush=True)
+    json.dump({'seeds': seeds, 'inject': inject, 'at': at, 'energy': energy, 'rows': log, 'events': events},
+              open(f'{here}/{out}', 'w'), indent=0)
+    print(len(log), 'rows;', len(events), 'events; seeds', seeds, 'first', log[0], 'last', log[-1], flush=True)
 
 
 if __name__ == '__main__':
