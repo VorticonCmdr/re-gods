@@ -6,6 +6,13 @@
 
 GODS is widely described as having "adaptive difficulty". That is **true in effect but not in mechanism** — there is no global evaluator anywhere in `GAME.EXE`. Two real systems produce the effect:
 
+⚠️ **Correction (2026-09-28), `[STATIC]`: when `DS:0x365` changes.** The two claims below that it is "incremented on level completion" and that `CS:0xD5F7` is unreachable are both wrong:
+- **The `CS:0x0445` increment is the GAME-COMPLETION loop.** It waits for fire, raises the scalar (clamped 2..4), then sets world 1 sublevel A and restarts. It runs once per full completion, not per level.
+- **Every new-game start resets it.** BEGIN QUEST, a password match, the attract path and program start all set `[0x391]` (`CS:0x2D94` / `0x2EA8` / `0x2E09` / `0x0025`), and the level init then sets `[0x365]` = 0, or 1 when starting in world 4 (`CS:0x8D62`–`0x8D6E`).
+- **`CS:0xD5F7` is reached by fall-through, not by a jump.** `CS:0xD5F4 call 0xD5FC` returns into it. It is the tail of the world-3 guardian's death, so killing that guardian takes the scalar from 0 to 1 for world 4, the same value a world-4 password start gets. No `CALL`/`JMP` targets it, which is why the xref sweep found nothing, but straight-line flow does reach it.
+
+So a normal playthrough runs worlds 1–3 at 0 and world 4 at 1, and only a completed game goes higher. `gods-web` implements the resets (`fullRestart`, the attract start) and the world-3 death bump.
+
 **1. A progression-driven difficulty scalar `DS:0x365`.** Exactly 10 references. Initialised to 0 (1 when `[0x42]==4`), incremented on level completion (`1000:0445`, clamped to `[2,4]`), and **consumed** as a difficulty multiplier at only two adjacent instructions inside damage resolution (`1000:ab56`/`ab63`) — though it is also read by its own clamp logic at `0x449`/`0x455`, so "two reads in the whole binary" (an earlier claim here) was wrong; there are four reads across ten reference sites. Net damage multiplier by value: **1.00, 0.75, 0.50, 0.25, 0.25** — i.e. **the hero deals less damage as the scalar rises**; see the correction below for why the shift is the amount *forgiven* rather than the amount dealt, ⚠️ and why those figures are the **asymptotic** ratio rather than what a creature touch actually costs. Its inputs are **level progression only** — never health, lives, deaths, time or score. Corroborated by the game's own hint text: `"and the game gets more difficult too"`.
 
 **2. Performance conditions authored into individual trigger records.** The section-4 trigger table genuinely gates spawns on how the player is doing — as level data, per trigger. Decoded examples:
