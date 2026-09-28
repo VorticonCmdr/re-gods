@@ -209,9 +209,26 @@ DOWN released (4AE7):     drop the selected item if its slot holds one (61A1),
 
 The panel draw copies `[0x367]` into `[0x366]` every frame (`CS:0x1F5A`), so a tap's new slot shows the same tick. The level init zeroes both (`CS:0x8D73`/`0x8D78`), but only inside its new-game block (`CS:0x8D58`, gated on `[0x391]`, together with the score and inventory reset), so the selection survives an ordinary level change. Whether the payoff restart's `3` (`CS:0x048F`) is zeroed by it is not established: the same block zeroes the score, which that restart is proven to keep.
 
-**The drop, `CS:0x61A1`** `[STATIC]` (the demos' inventory is empty, so no live run reached it): the item in slot `[0x367]` is removed from the inventory and handed to `CS:0xBF5F` as id `type + 0xB` at the hero + (8, 0x20). It pops up out of the hero (the reward popup, vy −6) and lands as a world object, or becomes one at once if the popup slot is busy. So crouching where there is no key, without pressing FIRE, drops the selected item; tapping FIRE instead cycles the selection, and standing up drops whatever is selected then.
+Live proof of the flag machine: `PJOYL1` cursors 790–843 peeked (`[0x341]`, `[0x354]`, `[0x355]`, `[0x366]`, `[0x367]`; `gods-web/tools/attract-capture/joyl1.inventory.peek.json`): the scan at 801, the arming press, its release at 803, and the tap at 809 that moves the selector to 1 and plays `0x2831`. `gods-web` reproduces all 53 rows.
 
-Live proof: `PJOYL1` cursors 790–843 peeked (`[0x341]`, `[0x354]`, `[0x355]`, `[0x366]`, `[0x367]`; `gods-web/tools/attract-capture/joyl1.inventory.peek.json`): the scan at 801, the arming press, its release at 803, and the tap at 809 that moves the selector to 1 and plays `0x2831`. `gods-web` reproduces all 53 rows. **Not ported: the drop** (`CS:0x61A1`, and with it the "overwrite the selected slot" pickup at `CS:0x6100`, which the port replaces with a first-empty slot). The joyl1 inventory is empty, so no shipped demo exercises it (ranked item 57).
+**The drop, `CS:0x61A1`** `[PROVEN]` live (2026-09-28): both callers gate on the SHOWN slot `[0x366]` holding an item (`CS:0x4AF4`/`0x4B3E`, `js`). The drop itself then reads the PENDING slot `[0x367]`: it adds `0xB` to the item, tests the sign (`CS:0x61B7`), empties the slot (`CS:0x61C6`, `0xFFFF`) and calls `CS:0xBF5F` with `CX = item + 0xB`, `AX = [0x17A] + 8`, `BX = [0x17C] + 0x20`. The item pops up out of the hero like a kill reward, or lands at once when the popup slot is busy (`CS:0xBF6B`). The two selectors differ only between a FIRE tap and the panel's copy (`CS:0x1F5A`); an empty pending slot would then still drop, as id `0xA` (`0xFFFF + 0xB` is positive), a weapon.
+
+The key pickup writes the SHOWN slot too (`CS:0x6100`–`0x610D`), overwriting what it held; there is no search for an empty slot. Together:
+- crouching where there is no key, without pressing FIRE, drops the selected item on the next tick (`CS:0x4B31`);
+- tapping FIRE instead cycles the selection;
+- standing up drops whatever is selected then (`CS:0x4AE7`, on each release tick; only the first finds an item).
+
+So a key taken with FIRE goes straight back out when the hero stands up, unless FIRE is tapped first to move the selection. Both halves are proven live below; the combined sequence, a pickup followed by a stand-up with the same slot still shown, was not run as one.
+
+Live proof: `gods-web/tools/attract-capture/drop_live.py` stages it in `PJOYL1`'s crouch (a left crouch, state 19, so the calls return to the mirrors `0x4BBC` and `0x4B73`). It fills the four slots and overrides `[0x382]` and the flags per cursor:
+- 812 (no key, no FIRE): slot 1's item 4 drops, `CX = 0x0F`, `AX = 52`, `BX = 736`, the slot reads `FFFF`, and the popup slot `[0x1A0]` takes id 15;
+- 813: nothing, since the shown slot is now empty;
+- 814 (slot 3 shown, a type-20 key placed in the hot-point box, FIRE): slot 3's 19 is replaced by 20, and the object is killed;
+- 815: with the natural flags (`[0x355] = 0`) the FIRE tap only releases its latch and nothing drops;
+- 816 (slot 2 shown, DOWN released): slot 2's 18 drops. The popup is still busy, so it lands at once at (52, 736);
+- 817: the second release tick drops nothing, and the hero stands up.
+
+Captures: `drop_live.json` and `drop_live_natural.json`. `gods-web` ports the drop (`player.js` `_drop`) and the pickup into the shown slot (`pickup.js` `collectKey`). Its suite checks each step above, and the combined pickup-then-stand sequence, on a synthetic map (ranked item 57).
 
 ### The wall probes and the map cursor `[PROVEN]`
 

@@ -227,10 +227,11 @@
     - `0x2831`: the crouch FIRE tap, with the whole crouch flag machine (`[0x341]`, `[0x354]`, `[0x355]`, `[0x366]`, `[0x367]`) matched live for `PJOYL1` 790–843.
     - **Found on the way:** the world-2 nest's kill reward (`CS:0x87EF`: popup `0x2D` and 2500 points) was never dropped by the port. `PJOYL2`'s nest reward now falls, bounces and is picked up at DOS's cursors.
     - The same ids match per cursor in the `PJOYL2` and `PJOYL3` sweeps. `PJOYL3`'s sweep needs the gravity-5 seed, not the capture's 1: its random stream matches only with 5.
-57. **The crouch drop, `CS:0x61A1`** — open, not ported.
-    - Standing up from a crouch (`CS:0x4AE7`), or a crouch tick with no key found and no FIRE (`CS:0x4B31`), drops the selected inventory item. The item goes out through `CS:0xBF5F`, popping up from the hero + (8, 0x20).
-    - The DOS key pickup also writes into the selected slot (`CS:0x6100`); `gods-web` uses the first empty slot instead.
-    - Porting the drop means reverting that too, as one gameplay change. No demo exercises it, because the attract inventory is empty.
+57. ~~The crouch drop, `CS:0x61A1`~~ — **CLOSED `[PROVEN]`** live and ported (2026-09-28).
+    - Standing up from a crouch (`CS:0x4AE7`), or a crouch tick with no key found and no FIRE (`CS:0x4B31`), drops the item in the selected slot. Both callers gate on the shown slot `[0x366]`; the drop takes the pending slot `[0x367]`. The item goes out through `CS:0xBF5F` as `item + 0xB` from the hero + (8, 0x20), and the slot reads `0xFFFF`.
+    - The key pickup writes into the shown slot as well (`CS:0x6100`), overwriting it. A key taken with FIRE therefore drops again on stand-up unless FIRE is tapped first. Both halves are proven live; the combined sequence was not run as one.
+    - Live: `gods-web/tools/attract-capture/drop_live.py` stages every path in `PJOYL1`'s crouch (cursors 812–817, `drop_live.json`, `drop_live_natural.json`); see `docs/player-state-machine.md`.
+    - `gods-web` ports both (`player.js` `_drop`, `pickup.js` `collectKey`), replacing its first-empty-slot substitution. No attract demo carries an item, so demo parity is unaffected.
 58. ~~Sounds `gods-web` misses outside `PJOYL1`~~ — **CLOSED `[PROVEN]`** (2026-09-28). All four AdLib sweeps (`PJOYL1`, `PJOYL2`, `PJOYG2`, `PJOYL3`) now match `gods-web` on every play at the same tape cursor, 1615 plays (`gods-web/tools/attract-capture/sweep-compare.js`; the sweeps need their own cross-cycle seeds, `PJOYL3` gravity 5 and `PJOYG2` jaw 2).
     - `0x0111`: the shop's money counter, `CS:0x718B`, which steps the shown money 750 toward the real money every non-FIRE pass (`docs/shop.md`).
     - The consumable handlers' own sounds: health `0x3720` (only while `[0x19A]` ≥ 0), power `0x0A3E`, extra life `0x6416`, teleport stone `0x193A`.

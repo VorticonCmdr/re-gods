@@ -160,3 +160,5 @@ Moved to the `gods-re-tooling` skill (`.claude/skills/gods-re-tooling/SKILL.md`)
 - **Evidence limits closed live.** The landing call sites (25 traced calls) and the nest's 2500 points both match.
 - **A correction to item 56.** The inventory selector is zeroed only by a new game (`[0x391]` block `CS:0x8D58`), not every level entry.
 - **New open item 59.** `PJOYL2`'s score total differs: DOS has at least 10,700 at cursor 1888, the port 7,977.
+
+**Item 57 is closed (`[PROVEN]` live, ported): the crouch drop, `CS:0x61A1`.** Standing up, or crouching with no key found and no FIRE, drops the selected slot's item through the reward popup (`item + 0xB`, from the hero + (8, 0x20)). The key pickup writes into that same selected slot (`CS:0x6100`), so a key taken with FIRE drops again on stand-up unless FIRE is tapped first to move the selection. `gods-web` ports both, replacing its first-empty-slot substitution. Staged live in `PJOYL1`'s crouch by `tools/attract-capture/drop_live.py`; see `docs/player-state-machine.md`.
