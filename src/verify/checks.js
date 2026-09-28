@@ -7,6 +7,7 @@
  */
 
 import { Guardian4 } from '../game/guardian4.js';
+import { Guardian, convertBezier, getProcessJaw, resetProcessJaw } from '../game/guardian.js';
 import { PayoffScreen, PAYOFF_PAGES, LINE_Y, lineX } from '../game/payoff.js';
 import { dclDecompress } from '../formats/dcl.js';
 import { DOOR_TILES, ZONE_TELEPORT, ZONE_EXIT, makeGates, makeActionContext,
@@ -556,6 +557,22 @@ export async function runAllChecks(fetchRaw) {
       lineX(PAYOFF_PAGES[0][0]) === 68 && LINE_Y[0] === 12 && Math.abs(ms - 250000 / 60) <= 10, `${ms} ms`);
     for (let k = 0; k < 7; k++) while (pay.page < k + 2) pay.step(10, false);
     check('payoff: after the 8th page only fire ends it', !pay.step(1000, false) && pay.step(10, true));
+    /* DS:0x2F0 is one word for both guardians: the rise leaves it at 0xB0,
+     * and world 2's jaw (CS:0xD115) reads it unmasked on a non-stepping
+     * tick — Table 2's "xtra" bytes, dy 0x6172 — then steps it to 1. */
+    check('world 4: the rise leaves DS:0x2F0 = 0xB0 (shared with world 2)', getProcessJaw() === 0xb0,
+      getProcessJaw().toString(16));
+    const w2 = new Guardian(2, { sincos: await fetchRaw('game/SINCOS.DAT'),
+      bezier: convertBezier(await fetchRaw('game/BEZIER.DAT')) });
+    const w2o = { cam: { x: 0x80, y: 0x300 }, hero: { x: 0, y: 0, state: 0 }, health,
+      rng: () => 0, sfx: () => {}, camScript: { mode: 0, tx: 0, ty: 0 }, tock: 0 };
+    const drawnA = w2.drive2({ ...w2o, tock36d: 1 });
+    const jawA = w2.lastRecs[4];
+    w2.drive2({ ...w2o, tock36d: 0 });
+    check('world 2 after world 4: the jaw reads entry 0xB0 (dy 0x6172, not drawn), then steps to 1',
+      jawA[1] === w2.y - w2o.cam.y - 0x1a + 0x6172 && !drawnA.some((d) => d.sprite >= 0x1c2 + 0x7000)
+      && w2.jaw === 1 && getProcessJaw() === 1, `${jawA} jaw ${w2.jaw}`);
+    resetProcessJaw();
     check('world 4: each destroyed worm costs 1000 health; the 7th kills (6000 -> -1000)',
       hps.join() === '5000,4000,3000,2000,1000,0,-1000' && k.dead, hps.join());
   }

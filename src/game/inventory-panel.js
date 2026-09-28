@@ -337,7 +337,8 @@ export function panelIconSprite(type) {
 export class InventoryPanel {
   constructor() {
     /** DS:0x366 — which slot draws highlighted. FIRE-tap cycling (CS:0x615F)
-     *  is unported (see header), so this never leaves 0 in this port. */
+     *  is unported (see header), so this stays 0 in this port, except that
+     *  the game-completion restart sets 3 (CS:0x048F; main.js). */
     this.selector = 0;
     this.counter = 0;   // DS:0x350
     this.delta = 0;     // DS:0x352

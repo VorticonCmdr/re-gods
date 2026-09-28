@@ -27,6 +27,7 @@
 import { attackHero, creatureScansGrid, db4eHit, KILL_SFX } from './combat.js';
 import { W1_SCRIPT, W3_SCRIPT, W2_SCRIPT, W2_JAW, W2_CLAW_POS, W2_CLAW_NEG,
          W2_CLAW_OFF } from './guardian-data.js';
+import { W2_JAW_OOB } from './guardian-jaw-oob.js';
 
 export const POOL_SLOTS = 15;                 // CS:0xC508 `mov cx,0xf`
 export const BODY_SPRITE = 0x1c2;             // CS:0xD8D7 `add cx,0x1c2` (+2*frame, and +1 for the right half)
@@ -79,6 +80,10 @@ export const W2_REC6_XY = [0, 0];
  * cycles started from different jaw phases (Gods/docs/guardians.md). */
 let processJaw = 0;
 export const resetProcessJaw = () => { processJaw = 0; };
+/* World 4 shares the word: its rise hook writes its base y there every call
+ * (CS:0xCBCB) and its worm gate reads it (CS:0xC70B). guardian4.js. */
+export const getProcessJaw = () => processJaw;
+export const setProcessJaw = (v) => { processJaw = v & 0xffff; };
 
 /** BEZIER.DAT as CS:0xD489 leaves it: each word byte-swapped and `shr 1`. */
 export function convertBezier(raw) {
@@ -311,10 +316,17 @@ export class Guardian {
       processJaw = this.jaw;
       if (this.jaw === 0) sfx(W2_SFX_JAW);         // DS:0x85 != 2 (it reads 1 live)
     }
-    const [jadd, jdy] = W2_JAW[this.jaw];
+    /* CS:0xD115 indexes SS:0x57D0 + 4*[0x2F0] unmasked: the `and 3` runs only
+     * on a stepping tick, so the first tick after world 4's rise left
+     * [0x2F0] = its base y reads Table 2's filename records instead
+     * (guardian-jaw-oob.js). Most of those land far off-screen; the few
+     * on-screen ones name descriptors past the loaded atlases, whose garbage
+     * the original blits and the port does not draw. The hit box moves
+     * with them either way. */
+    const [jadd, jdy] = this.jaw < 4 ? W2_JAW[this.jaw] : (W2_JAW_OOB.get(this.jaw) || [0, 0]);
     jy += jdy;
     recs.push([jx, jy, 0x10, 0x10]);               // REC4
-    drawn.push({ x: jx, y: jy, sprite: 0x1c2 + jadd });
+    if (this.jaw < 4) drawn.push({ x: jx, y: jy, sprite: 0x1c2 + jadd });
     /* ── D152: P0 and the control points from the angles, then advance them. */
     const P0 = [this.x + 0x3c, this.y + 0x1f];     // DS:0x106 / 0x108
     const S = (o2) => this.#S(o2);

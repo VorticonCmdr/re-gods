@@ -32,7 +32,7 @@
  * banked all ten, [0x34A] = 1 — the game-completion path CS:0x037A.
  */
 import { attackHero, creatureScansGrid, KILL_SFX } from './combat.js';
-import { sharedDeath } from './guardian.js';
+import { sharedDeath, getProcessJaw, setProcessJaw } from './guardian.js';
 
 export const W4_HP = 6000;                     // CS:0xC601
 export const W4_WORM_HP = 750;                 // CS:0xC630
@@ -100,7 +100,6 @@ export class Guardian4 {
     this.hp = W4_HP;                              // DS:0x28A
     this.hookOn = true;                           // cs:[0xCBC7] = 0x90
     this.started = false;                         // DS:0x3D9
-    this.riseGate = 0;                            // DS:0x2F0 — stale on the install tick (<= 0xB0)
     this.destroyed = false;                       // DS:0x3DB — NOT reset by the respawn
     this.anchor = { x: 0, y: 0 };                 // DS:0x2F2 / 0x2F4
     this.freeze = null;                           // render side: 'clean' / 'snap' requests
@@ -137,7 +136,7 @@ export class Guardian4 {
    *  (they are drawn before the object pass). `camScript` is DS:0x32 + target. */
   hook({ cam, camScript, sfx }) {
     if (!this.hookOn) return [];
-    this.riseGate = this.baseY;                   // CBCB — also the world-2 jaw's DS:0x2F0 (not mirrored)
+    setProcessJaw(this.baseY);                    // CBCB — DS:0x2F0, shared with world 2's jaw
     camScript.tx = W4_CAM_TARGET.x; camScript.ty = W4_CAM_TARGET.y;
     if (camScript.mode === 0) camScript.mode = 1; // CBDA
     this.freeze = 'clean';                        // CC1D, export 19: save the clean block
@@ -290,7 +289,7 @@ export class Guardian4 {
       return;
     }
     if (acct === 8) { this.#newWorm(0x46); return; }   // C700: escaped, same health
-    if (this.riseGate > 0xb0) return;             // C70B
+    if (s16(getProcessJaw()) > 0xb0) return;      // C70B — on the install tick, whatever world 2 left
     drawn.push({ x: 0xba0 - cam.x, y: this.baseY + 3 - cam.y, sprite: 0x1d4 });
     drawn.push({ x: 0xbc0 - cam.x, y: this.baseY + 8 - cam.y, sprite: 0x1d5 });
   }

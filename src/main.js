@@ -1661,8 +1661,12 @@ const guardianTables = {
    *   0445  difficulty + 1, clamped to 2..4
    *   0473  CS:0x914C clears the weapon slots, 0x95B5 restores the standard
    *         arc, 0xC440 (with [0x391] set) dismisses the familiar
+   *   048F  the inventory selector [0x366] and its pending copy [0x367] = 3
+   *         (the image holds 0 and nothing else resets them, so only a
+   *         completed game starts with the highlight on slot 3)
    *   04A4  CS:0x228E ([0x3BB]/[0x3BC] = 0xFF), CC67 RET, jmp 0x2A37
-   * Not modelled: [0x70]/[0x71] = 0xFF and the key-slot cursor [0x366]. */
+   * [0x70]/[0x71] = 0xFF (CS:0x046B) are the score's HUD dirty flags; the port
+   * redraws the HUD every frame, so there is nothing to mirror. */
   async function completionRestart() {
     difficulty = Math.min(4, Math.max(2, difficulty + 1));
     purse = new Purse();
@@ -1670,6 +1674,7 @@ const guardianTables = {
     arsenal = new Arsenal(level.weapons);
     resetWeaponArc();                                             // CS:0x95B5
     health.familiarEnergy = -1; health.familiarPower = 0; health.familiarWings = 0;
+    inventoryPanel.selector = 3;                                  // CS:0x048F / 0x0492
     deathSeq = null; lastDeathBurstFx = []; paused = false;
     uiState = 'game';
     await switchLevel('1A');
