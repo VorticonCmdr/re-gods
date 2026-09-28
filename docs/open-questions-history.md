@@ -182,7 +182,7 @@
     - **The MT-32 sound bank.** PTITLE.RL ends in the full bank INTROV uploads: 64 custom timbres ("xplo1", "Heartbeat", ...), 128 patches and the rhythm setup. The in-game .RL files carry none and rely on it.
     - **The fade speed.** A fade moves 2 volume steps per 50 Hz tick. The toggle that looks like it halves that is a NOT, which sets no flags.
     - **PPLAYER's volume table `0x1634`** is `0x80` in the image, not zero.
-    - **Blob 19's id `0x6413` is the game-over sound** (`CS:0x0953`), not only a disk prompt.
+    - **Blob 19's id `0x6413` is the game-over sound** (`CS:0x0953`, its only site), not a disk-swap prompt.
     - **`gods-web` ports all of it** with an MT-32 stand-in synth, plus the `DS:0x35E` alternate kill layer, the intro's Roland waits, and the level-start/game-over sounds.
 
 ⚠️ `UNKNOWN_openlist_field4` was listed here *and* in the resolved list below. It is **closed** — the resolved entry is correct.
