@@ -103,7 +103,7 @@ import { TitleMenu, PasswordEntry, NameEntry, HiscoreTable, HISCORE_TABLE_TICKS,
 import { DEFAULT_TABLE, encodeScoreBytes, rankOf, insertAt, bcdToNumber } from './formats/hiscores.js';
 import { decodeJoyRecording } from './formats/joy.js';
 import { CYCLE, JOYG_SHOWCASE_SPAWN, JOYG_SHOWCASE_LOADOUT, fileNameFor, nextState } from './game/attract.js';
-import { ShopScreen, BUY_CONFIRM_SFX } from './game/shop.js';
+import { ShopScreen, BUY_CONFIRM_SFX, MOVE_SFX as SHOP_MOVE_SFX } from './game/shop.js';
 import { Intro, buildIntroAssets } from './game/intro.js';
 import { TallyScreen, CHA_CHING_SFX, tallyFanfareSfx } from './game/tally.js';
 import { WebAudioBus } from './audio/audio-bus.js';
@@ -2281,6 +2281,7 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
           do {
             const purchase = shopScreen.iterate(t.ticks[t.cursor].bits);
             t.cursor++;
+            if (shopScreen?.moved) audio.play(SHOP_MOVE_SFX);   // EXIT's onDone nulls it
             if (purchase && !purchase.refused) audio.play(BUY_CONFIRM_SFX);
           } while (shopScreen && shopScreen.fireWait && t.cursor < t.ticks.length);
           if (shopTrace) shopTrace.push(`${t.cursor}:${tock}`);   // ?debug
@@ -2331,9 +2332,23 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
          * documents a message priority for them), so they stay silent.
          * During a demo the tape block above already drove the shop. */
         if (!attract) {
-          const purchase = shopScreen.step(input);
-          if (purchase && !purchase.refused) audio.play(BUY_CONFIRM_SFX);
-          tock ^= 1;                                             // CS:0x6C9E, every pass
+          /* The same pass units as the tape block above. Inside CS:0x6E62's
+           * fire-release wait there is no frame wait and no tock toggle, so
+           * it polls once per tick until FIRE is let go. */
+          const pass = (toggle) => {
+            if (toggle) tock ^= 1;                               // CS:0x6C9E, every pass
+            const purchase = shopScreen.step(input);
+            if (shopScreen?.moved) audio.play(SHOP_MOVE_SFX);   // EXIT's onDone nulls it
+            if (purchase && !purchase.refused) audio.play(BUY_CONFIRM_SFX);
+          };
+          if (shopScreen.fireWait) pass(false);
+          else {
+            shopIterAcc += 4 / 3;
+            while (shopIterAcc >= 1 && shopScreen && !shopScreen.done && !shopScreen.fireWait) {
+              shopIterAcc -= 1;
+              pass(true);
+            }
+          }
         }
         return;
       }

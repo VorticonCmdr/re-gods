@@ -71,22 +71,24 @@
  *     WEAPON_ID_BASE` — `pickup.js`'s own header explains why a bare
  *     comparison is unsafe (a dead/unused roster slot's `0xFFFF` sentinel
  *     also passes it).
- *   - Navigation is EDGE-triggered (one grid step per press). The original's
- *     own held-direction auto-repeat (`DS:0x339`/`0x33a`: an initial move,
- *     then a repeat every tick once a held direction crosses an 8-tick
- *     threshold, `CS:0x6cb1`-`0x6cdc`) is not ported — a played-with, not
- *     measured-against, simplification, same spirit as this project's other
- *     disclosed input-timing simplifications (e.g. the turn-cancel branch
- *     `docs/player-state-machine.md` notes as unported).
+ *   - Navigation is the original's own pass loop for keyboard and tape alike:
+ *     `step(input)` packs the held keys into a DS:0x382 byte and runs one
+ *     `iterate()` pass. Held-direction auto-repeat (`DS:0x339`/`0x33a`,
+ *     `CS:0x6cb1`-`0x6cdc`): a new press moves at once, the 7th held pass
+ *     after it moves again, and every 2nd pass after that; changing direction
+ *     without releasing never moves. main.js runs passes at the original's
+ *     20 Hz (CS:0x6D72's 2-tick wait), so a held key repeats at 10 Hz.
+ *     FIRE acts on release (CS:0x6E62's poll loop), not on press.
  *
  * THE GRID: 18 cells, 3 rows x 6 columns, index 0-16 are data cells and 17 is
  * always EXIT — checked before any roster lookup (`CS:0x6e74`-`0x6e7e`), so
  * an empty roster still lets the player leave. UP/DOWN move by row (+-6),
- * LEFT/RIGHT by column (+-1), and EVERY direction CLAMPS at the grid edge
- * rather than wrapping (`CS:0x6cef`-`0x6d42`) — moving left from column 0, or
- * up from row 0, is a no-op that tick, and likewise past the last populated
- * column or past row 2. `[PROVEN]`, live-confirmed under DOSBox for the
- * 3x6-plus-EXIT shape.
+ * LEFT/RIGHT by one (+-1) on the FLAT index (`CS:0x6cef`-`0x6d42`): only the
+ * two ends clamp (left of 0, right of EXIT), so RIGHT from a row's last
+ * column lands on the next row's first cell. UP/DOWN undo a step that would
+ * leave [0, EXIT]. ⚠️ Corrected 2026-09-28: this header used to say every
+ * direction clamps at the grid edge "[PROVEN] live"; the bytes say otherwise
+ * for LEFT/RIGHT, and the live check only ever covered the grid's shape.
  *
  * BUY/SWAP is a TWO-PRESS confirm in the common case (`CS:0x6e91`-`0x6ea2`):
  * the first FIRE press on a slot only previews it (caches its id); a second
@@ -136,7 +138,13 @@ export const DATA_SLOTS = EXIT_SLOT;                   // 17 addressable grid ce
  * output); there is no path anywhere that sells for cash without also
  * arming a new weapon. */
 export const WEAPON_ID_BASE = 0xc0;                    // CS:0x6ead/0x6ed7
+export const MOVE_SFX = 0x232;                         // CS:0x6D4C, the cursor changed cell
 export const BUY_CONFIRM_SFX = 0x333;                  // CS:0x6ee1, CS:0x22ca's own SFX primitive
+/* DS:0xEC8B, CS:0x6F67 `mov [0x212],0xec8b`: 11 " Inventory Full - You cannot
+ * buy that " 11 00. The 0x11 framing glyphs are left out, as the weapon
+ * warning's are (both go to the status-panel message line in the original;
+ * this port's shop shows them on its own screen). */
+export const REFUSAL_TEXT = 'Inventory Full - You cannot buy that';
 export const REFUSAL_MESSAGE_PRIORITY = 0x19;          // matches message-line.md's own table (25)
 
 /* `FUN_1000_7392`'s table, DS:0x2a4e + id*10, price word at +6/+7 (byte-
@@ -181,9 +189,8 @@ export class ShopScreen {
    *   (as a synthetic test might) to skip pricing entirely: every item is
    *   then free and always eligible, the pre-pricing behavior.
    * @param {(text:string, priority:number)=>void} [onRefused] called when a
-   *   give-to-inventory purchase finds no eligible empty slot; the reference
-   *   text is not ported (`CS:0xec8b` was never read this session) so the
-   *   caller decides what to show, if anything
+   *   give-to-inventory purchase finds no eligible empty slot, with
+   *   REFUSAL_TEXT (DS:0xEC8B) and priority 0x19
    * @param {()=>void} [onDone] called once, when the EXIT cell is confirmed
    */
   constructor({ roster, inventory, selectedSlot = -1, state = {}, purse = null, onRefused, onDone,
@@ -208,8 +215,7 @@ export class ShopScreen {
     this.purchasedCategories = new Set();   // DS:0x319, cleared fresh each shop visit
     this.lastPurchase = null;     // surfaced for draw()/tests, not itself game state
     this.done = false;
-    this.firePrev = false;
-    this.dirPrev = { up: false, down: false, left: false, right: false };
+    this.moved = false;           // the last pass changed the cursor (CS:0x6D45)
     /* `iterate()` state — the original's own per-pass bookkeeping. */
     this.repeatBits = 0;          // DS:0x339, the input byte being held
     this.repeatCount = 0;         // DS:0x33A
@@ -224,23 +230,15 @@ export class ShopScreen {
   }
 
   /**
-   * One tick. `input` is the same held-state shape `main.js` already reads
-   * every tick (`{up,down,left,right,fire}`) — edges are computed here.
-   * @returns {object|null} the purchase made THIS tick, if any (also kept on
-   *   `this.lastPurchase` for a caller that renders a tick or two later)
+   * One shop pass from held keys (`{up,down,left,right,fire}`), packed into
+   * the DS:0x382 byte `iterate()` takes. main.js calls it at the pass rate.
+   * @returns {object|null} the purchase made on THIS pass, if any (also kept
+   *   on `this.lastPurchase` for a caller that renders a tick or two later)
    */
   step(input) {
-    if (this.done) return null;
-
-    for (const dir of ['up', 'down', 'left', 'right']) {
-      const held = !!input[dir];
-      if (held && !this.dirPrev[dir]) this.#move(dir);
-      this.dirPrev[dir] = held;
-    }
-
-    const firePressed = !!input.fire && !this.firePrev;
-    this.firePrev = !!input.fire;
-    return firePressed ? this.#fire() : null;
+    return this.iterate((input.up ? 0x01 : 0) | (input.down ? 0x02 : 0)
+                      | (input.left ? 0x04 : 0) | (input.right ? 0x08 : 0)
+                      | (input.fire ? 0x80 : 0));
   }
 
   /**
@@ -266,6 +264,7 @@ export class ShopScreen {
   iterate(bits) {
     if (this.done) return null;
     if (this.fireWait) {
+      this.moved = false;
       if (bits & 0x80) return null;              // CS:0x6E6D `jnz 0x6e62`
       this.fireWait = false;
       return this.#fire();                        // CS:0x6E74
@@ -278,28 +277,16 @@ export class ShopScreen {
       if (this.repeatCount < 8) move = false;
       else { this.repeatCount = 6; move = true; }
     } else { this.repeatCount = 0; move = false; }
+    const before = this.cursor;                   // CS:0x6CA2 [0x25a] = [0x385]
     if (move) {
       if (bits & 0x08) { this.cursor++; if (this.cursor > EXIT_SLOT) this.cursor--; }
       if (bits & 0x04) { this.cursor--; if (this.cursor < 0) this.cursor++; }
       if (bits & 0x01) { this.cursor -= GRID_COLS; if (this.cursor < 0) this.cursor += GRID_COLS; }
       if (bits & 0x02) { this.cursor += GRID_COLS; if (this.cursor > EXIT_SLOT) this.cursor -= GRID_COLS; }
     }
+    this.moved = this.cursor !== before;          // CS:0x6D42 -> sfx MOVE_SFX
     if (bits & 0x80) this.fireWait = true;       // CS:0x6D53 -> 0x6E62
     return null;
-  }
-
-  #move(dir) {
-    const delta = dir === 'up' ? -GRID_COLS : dir === 'down' ? GRID_COLS
-                : dir === 'left' ? -1 : 1;
-    const next = this.cursor + delta;
-    /* CS:0x6cf2-0x6d42 — clamp at the grid edge, never wrap. Off the top/
-     * bottom edge is caught by the resulting index leaving [0, EXIT_SLOT];
-     * off the left/right edge by the row changing, which a plain +-1 on a
-     * flat index would otherwise do silently. */
-    if (next < 0 || next > EXIT_SLOT) return;
-    if ((dir === 'left' || dir === 'right')
-        && Math.floor(next / GRID_COLS) !== Math.floor(this.cursor / GRID_COLS)) return;
-    this.cursor = next;
   }
 
   #fire() {
@@ -329,7 +316,7 @@ export class ShopScreen {
        * later first press on a cell that shows the same id buys at once.
        * An earlier revision reset it to null here. [PROVEN] live: PJOYL2's
        * shop keeps [0x258]=197 after buying 197. */
-      this.pendingWarning = null;
+      if (!purchase?.refused) this.pendingWarning = null;   // #buy set REFUSAL_TEXT
       return purchase;
     }
     this.previewId = id;                        // CS:0x6ea4 — preview only, no purchase yet
@@ -361,7 +348,8 @@ export class ShopScreen {
     this.purchasedCategories.add(id);
     const slot = this.inventory.findIndex((v, i) => v === INVENTORY_EMPTY && i !== this.selectedSlot);
     if (slot < 0) {
-      if (this.onRefused) this.onRefused('', REFUSAL_MESSAGE_PRIORITY);
+      this.pendingWarning = REFUSAL_TEXT;         // CS:0x6F67-0x6F74
+      if (this.onRefused) this.onRefused(REFUSAL_TEXT, REFUSAL_MESSAGE_PRIORITY);
       return this.lastPurchase = { id, cost, refused: true };
     }
     if (this.purse) this.purse.add(-cost);

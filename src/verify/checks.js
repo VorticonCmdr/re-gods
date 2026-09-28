@@ -16240,13 +16240,16 @@ export function checkShop() {
     s.step(held('up')); check('UP moves -6 (one row)', s.cursor === 0);
     s.step(release);
 
-    /* Walk all the way to the last column, then confirm one more RIGHT
-     * doesn't cross into the next row (CS:0x6cf7-0x6d07's own AL=0x11
-     * compare only bounds the ABSOLUTE index, not the row — a plain +1
-     * would silently wrap column 5 of row 0 into column 0 of row 1). */
+    /* CS:0x6cf9-0x6d03's AL=0x11 compare bounds only the ABSOLUTE index,
+     * not the row, so RIGHT from column 5 of row 0 lands on column 0 of
+     * row 1 (and LEFT back again). ⚠️ This check used to assert the
+     * opposite, a per-row clamp the bytes do not contain. */
     for (let i = 0; i < 6; i++) { s.step(held('right')); s.step(release); }
-    check('RIGHT clamps at the row\'s own last column, does not spill into '
-      + 'the next row', s.cursor === 5);
+    check('RIGHT from a row\'s last column moves on to the next row\'s first '
+      + 'cell (a flat index, CS:0x6cf9)', s.cursor === 6);
+    s.step(held('left')); s.step(release);
+    check('LEFT from a row\'s first column moves back to the previous row\'s '
+      + 'last cell (CS:0x6d0e only undoes a step below 0)', s.cursor === 5);
 
     const s2 = new ShopScreen({ roster: [0], inventory: [INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY] });
     s2.cursor = 17;   // EXIT, reached by DOWN+DOWN+RIGHT*5 in real play
@@ -16264,14 +16267,23 @@ export function checkShop() {
      * far as +6 steps reach; only RIGHT moves from there to EXIT (17). */
 
     const s4 = new ShopScreen({ roster: [0], inventory: [INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY] });
-    s4.step(held('right'));   // the press itself — the one edge in this test
-    check('a single press moves exactly once (edge-triggered, no auto-'
-      + 'repeat — a disclosed simplification, see shop.js\'s own header)',
-      s4.cursor === 1);
-    for (let i = 0; i < 5; i++) s4.step(held('right'));   // held WITHOUT releasing
-    check('holding the SAME direction without releasing does not repeat '
-      + 'the move — the original\'s own 8-tick auto-repeat is not ported',
-      s4.cursor === 1);
+    /* CS:0x6cb1-0x6cdc: a new press moves and sets [0x33A] = 1; each held
+     * pass bumps it, and the pass that reaches 8 moves and resets it to 6. */
+    s4.step(held('right'));
+    check('a new press moves at once', s4.cursor === 1);
+    for (let i = 0; i < 6; i++) s4.step(held('right'));   // [0x33A] 2..7
+    check('six more held passes do not move', s4.cursor === 1);
+    s4.step(held('right'));                                 // [0x33A] 8 -> 6
+    check('the 7th held pass after the press repeats the move', s4.cursor === 2);
+    s4.step(held('right'));                                 // 7
+    const between = s4.cursor;
+    s4.step(held('right'));                                 // 8 -> 6
+    check('after that it repeats every 2nd pass', between === 2 && s4.cursor === 3);
+    for (let i = 0; i < 4; i++) s4.step(held('down'));
+    check('switching direction without releasing never moves (CS:0x6cde; '
+      + '[0x339] keeps the old byte)', s4.cursor === 3);
+    s4.step(release); s4.step(held('down'));
+    check('after a release the new direction moves', s4.cursor === 9);
   }
 
   /* ── empty slots and the two-press buy confirm, CS:0x6e8f-0x6ea2 ──────── */
@@ -16649,8 +16661,8 @@ export function checkShop() {
     s.previewId = null;
     s.cursor = s.roster.indexOf(idFor(4));
     s.step(fire); s.step(release);          // preview
-    const afterSecondPress = s.step(fire);  // CONFIRM press -> should warn, not buy
-    s.step(release);
+    s.step(fire);                           // CONFIRM press; FIRE acts on release (CS:0x6E62)
+    const afterSecondPress = s.step(release);   // -> should warn, not buy
     check('buying weapon 4 displaces weapon 1 out of slot B (lower pickup '
       + 'count than slot C\'s weapon 3) — this needs a THIRD press',
       afterSecondPress === null && s.pendingWarning !== null
@@ -16658,8 +16670,8 @@ export function checkShop() {
     check('the warning names the weapon actually being displaced ("bow"), '
       + 'not the new one', s.pendingWarning.toLowerCase().includes('bow'));
 
-    const thirdPress = s.step(fire);        // same cell, previewId now negative -> EXECUTE
-    s.step(release);
+    s.step(fire);                           // same cell, previewId now negative -> EXECUTE
+    const thirdPress = s.step(release);
     /* refund = (count 3 - base 2) * (value 2000 + 1) >> 1 = 1 * 2001 >> 1 = 1000 */
     check('the third press executes: weapon 1\'s displacement refunds '
       + 'exactly (extras) * (its own price + 1) / 2, THEN weapon 4\'s own '
@@ -16736,6 +16748,13 @@ export function checkShop() {
     check('reaches the pending-warning state before testing persistence',
       s.pendingWarning !== null && s.previewId === -idFor(4));
 
+    /* CS:0x6E62 acts on the release poll and jumps back to CS:0x6C90 without
+     * clearing [0x339] (still 0x80), so a direction only moves after a
+     * neutral pass has cleared it. */
+    s.step(right);
+    check('the first direction pass right after a FIRE does not move '
+      + '([0x339] still holds the FIRE byte)', s.cursor === targetCol);
+    s.step(release);
     s.step(right); s.step(release);         // move away — no fire anywhere
     s.step(left); s.step(release);          // move back to the same cell
     check('moving the cursor away and back does NOT clear the pending '
@@ -16744,8 +16763,8 @@ export function checkShop() {
       s.cursor === targetCol && s.previewId === -idFor(4)
       && s.pendingWarning !== null);
 
-    const result = s.step(fire);            // this IS the third press, not a fresh first press
-    s.step(release);
+    s.step(fire);                           // this IS the third press, not a fresh first press
+    const result = s.step(release);
     check('so the very next press on that cell executes immediately with '
       + 'no second warning — the one-press-swap case genuinely does not '
       + 'exist, but only because it needs a fire press elsewhere to arm '
@@ -16761,6 +16780,9 @@ export function checkShop() {
     s.cursor = EXIT_SLOT;
     const fire = { up: false, down: false, left: false, right: false, fire: true };
     s.step(fire);
+    check('FIRE on EXIT waits for the release (CS:0x6E62 polls until FIRE is '
+      + 'let go)', !s.done && s.fireWait);
+    s.step({ up: false, down: false, left: false, right: false, fire: false });
     check('firing on EXIT sets done and calls onDone, before any roster '
       + 'lookup', s.done && exited);
     const cursorBefore = s.cursor;
