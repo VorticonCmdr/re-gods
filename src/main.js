@@ -835,6 +835,15 @@ const guardianTables = {
    * to track here any more (an earlier pass's own `gameOverState`,
    * superseded now that the screens it stood in for are real). */
   let deathSeq = null, lastDeathBurstFx = [];
+  /* The tick after a respawn is the original's CS:0x921B, the alternate tick
+   * body CS:0x08F5 calls (drawn behind the blanked palette, then faded in).
+   * It is a whole tick (tape poller, player, guardian hook and driver ...)
+   * minus what only the main loop runs: the level timer CS:0x0154, the
+   * freeze/giant-jump countdowns CS:0x0186/0x0199, the camera shake
+   * CS:0x01CF, the ending gate CS:0x01E2, the brood CS:0x027F, the statue
+   * CS:0x0297/0x029A, the score gate CS:0x02D5, the message countdown
+   * CS:0x02DB and the tally check CS:0x02F0. [STATIC], read side by side. */
+  let respawnTick = false;
   /* CS:0xA461 — the starburst potion's 80-slot particle array. It is a real
    * damage source (tag 0xFC), so it lives beside the projectiles rather than
    * with the cosmetics. */
@@ -1173,6 +1182,7 @@ const guardianTables = {
             if (camScript.mode === 0) cam = cameraForSpawn(pos.x, pos.y);   // CS:0x08C5 skips it while DS:0x32 is set
             forceActivation();                                       // CS:0x08EB -> 0x1196
             fx.invuln = INVULN_TICKS_SPAWN;                          // CS:0x0860
+            respawnTick = true;                                      // CS:0x08F5 call 0x921B
             $('event').textContent = `respawned — ${fx.lives} ${fx.lives === 1 ? 'life' : 'lives'} left`;
           }
   };
@@ -2392,7 +2402,8 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
        * shop never calls it); zeroed at level init (CS:0x8EDE), at the shop
        * entry (CS:0x6B21) and by ACT14. It used to be the app's global tick
        * count, which failed PLEV2A's trigger 61 (`timer/17 < 50`) in PJOYL2. */
-      events.actionCtx.timer = (events.actionCtx.timer + 1) >>> 0;
+      const rt = respawnTick; respawnTick = false;           // CS:0x921B, see respawnTick
+      if (!rt) events.actionCtx.timer = (events.actionCtx.timer + 1) >>> 0;
       /* DS:0x34 — a guardian is installed (selector 11). CS:0x01FC skips the
        * object pass (activation, walk, popup, chest burst) outside world 2;
        * CS:0x0223/0x0226/0x0272 skip the turrets, rock pools, kill smoke and
@@ -2405,7 +2416,7 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
        * snapshot, so the hero and the background never skew apart. */
       /* CS:0x01CF -> 0x050C: while DS:0x2D2 counts down, the camera x moves
        * -4 when DS:0x36C is set and +4 otherwise, before this tick's snapshot. */
-      if (camShake > 0) { cam.x += tock ? -4 : 4; camShake--; }
+      if (camShake > 0 && !rt) { cam.x += tock ? -4 : 4; camShake--; }
       cam.snapshot();
       /* CS:0x01E2 `call 0xCC67` and CS:0x01E5 `call [0x286]` — world 4's
        * ending gate (after its guardian died) and rise hook, both before the
@@ -2414,7 +2425,7 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
       if (w4Freeze !== 'snap') guardianBg = [];   // a pending snapshot keeps its tick's parts
       w4Restore = false;
       if (!deathSeq && !health.dead) {
-        if (guardianEnding) {
+        if (guardianEnding && !rt) {
           w4Restore = guardianEnding.stepEnding(events.actionCtx.timer, {
             messages, lives: fx.lives,
             tally: () => { progress.pending = true; },            // [0x36A] = 1
@@ -2760,7 +2771,7 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
         respawnOrGameOver();
         return;
       }
-      messages.step();
+      if (!rt) messages.step();                               // CS:0x02DB, not in CS:0x921B
       /* Re-sync ACT6's kill target: level.drawObjects is reassigned (not
        * mutated) by insertSpawned above on a loot settle / carried-item drop,
        * which would otherwise leave events.actionCtx.objects pointing at a
@@ -2849,7 +2860,7 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
         }
       }
       /* CS:0x02F0 — `cmp byte [0x36a],0 / call 0x6553`. */
-      if (progress.pending && !transitioning && !tallyScreen) startProgressTally();
+      if (progress.pending && !transitioning && !tallyScreen && !rt) startProgressTally();
 
       /* CS:0x0282 — the nest walker, BEFORE the System-B entity step at
        * 0x0285 (below) and after the CS:0x027F brood gate (game/nest.js's
@@ -2907,7 +2918,7 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
             if (!slot) return;
             slot.x = x; slot.y = y; slot.type = type; slot.flag6 = 0;
           } });
-        lastBroodFx = brood.step(camNow, fx.freeze, nestContactScan, level.map.planeB).drawn;
+        if (!rt) lastBroodFx = brood.step(camNow, fx.freeze, nestContactScan, level.map.planeB).drawn;
         const nestResult = nests.step(
           camNow, { x: player.x }, fx.freeze,
           nestContactScan, brood, tock);
@@ -3013,7 +3024,7 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
       if (objPass) popup.step(dropCarriedIntoWorld);            // CS:0x0209
 
       let statueResult = { popups: [], score: 0, drawn: [] };
-      if (!gmLate) {
+      if (!gmLate && !rt) {
         statues.checkTrigger(camNow, level.map.planeA, levelInfo.world, health,
                               statueTriggerProbe, rng);
         statueResult = statues.step(
@@ -3285,7 +3296,7 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
        * by the guardian, so there is nothing to restore). [PROVEN] live by a
        * forced world-1 death (forcedeath.py): DS:0x3BE 19 and +500 on the
        * death tick. */
-      if (guardianScoreTicks > 0) { score.add(500); guardianScoreTicks--; }
+      if (guardianScoreTicks > 0 && !rt) { score.add(500); guardianScoreTicks--; }
       /* `UNKNOWN_f030_item_drop` — System-B's own per-GROUP elimination
        * reward. CS:0xED78-ED80 sums `[0x3c3]` (state===0, dead) + `[0x1f4]`
        * (state<0 and NOT -2/-3, i.e. DYING) and compares to the descriptor's
@@ -3488,9 +3499,9 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
       /* CS:0x0186 `dec word [0x2fa]` floored at CS:0x018C, CS:0xA99B
        * `dec word [0x19c]` clearing DS:0x172 at zero, and the giant-jump word
        * on the same shape. One tick each, once per frame. */
-      if (fx.freeze > 0) fx.freeze--;
+      if (fx.freeze > 0 && !rt) fx.freeze--;
       if (fx.invuln > 0) fx.invuln--;
-      if (fx.giantJump > 0) fx.giantJump--;
+      if (fx.giantJump > 0 && !rt) fx.giantJump--;
       health.chase();
       /* CS:0x0e15-0x0e24 — one HURT_SFX per bar-descent-start, latched so a
        * multi-frame descent from one hit plays it once, matching tally.js's
