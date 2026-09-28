@@ -122,8 +122,8 @@
  *     score) — irrelevant to this port's full-redraw-every-frame renderer,
  *     the same disclosed simplification `inventory-panel.js`'s own header
  *     already carries for its equivalent flags.
- *   - `DS:0x33` bit 2 / the ES segment choice — see health-bar.js's
- *     identical note; defaulted to the bit-clear arm here too.
+ *   - `DS:0x33` bit 2 / the ES segment choice — the scroll-phase panel
+ *     copies; see message.js's DS:0x33 note (the panel does not move).
  */
 
 import { SCORE_BYTES } from './treasure.js';

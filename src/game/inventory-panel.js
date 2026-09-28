@@ -249,14 +249,11 @@
  *
  *   NOT PORTED (disclosed, not silently dropped):
  *
- *   - DS:0x33 bit 2 — an unidentified UI-mode flag that would shift the
- *     panel 4px right (screenX0 0x64 instead of 0x60) and swap which of two
- *     dirty flags (DS:0x3bb/0x3bc) gates the panel's own early-out. This
- *     port always draws (see below), so the dirty-flag half is moot; the 4px
- *     shift is skipped, defaulting to the bit-clear (0x60) position, since
- *     the flag's real meaning was never established anywhere in this
- *     project and 0x60 is what ordinary gameplay uses on the evidence in
- *     hand (bit2 clear is the fallthrough path, not a special-cased branch).
+ *   - DS:0x33 bit 2 — the 4px shift (screenX0 0x64 instead of 0x60) and the
+ *     dirty-flag swap (DS:0x3bb/0x3bc). DS:0x33 is the display's fine-scroll
+ *     phase (VGA:0x10FB), and the shift only compensates for the pre-shifted
+ *     panel copy that phase selects; on screen the panel does not move
+ *     ([PROVEN] live, message.js's DS:0x33 note). So 0x60 is simply right.
  *   - DS:0x3bb/DS:0x3bc, the panel's own dirty-repaint flags (FUN_1000_228e,
  *     FUN_1000_1f5a) — irrelevant to a full-redraw canvas renderer, exactly
  *     the same disclosed cut status-panel.js's own header already carries

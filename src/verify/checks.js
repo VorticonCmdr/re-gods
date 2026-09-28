@@ -14335,7 +14335,8 @@ export function checkHealthBar() {
   }
 
   results.push({ name: 'NOT PORTED', pass: true, note: true,
-    detail: 'DS:0x33 bit 2 (the ES-segment/font-mode choice) and the '
+    detail: 'DS:0x33 (the scroll-phase panel copy; the panel does not move on '
+      + 'screen, proven live — see message.js) and the '
       + 'original\'s own lack-of-a-dirty-flag for this routine specifically '
       + '— both irrelevant to a full-redraw-every-frame canvas renderer. '
       + 'The exact VRAM segment arithmetic behind the +160 panel-Y offset '
@@ -14492,8 +14493,8 @@ export function checkHudDigits() {
       + 'dirty-flag pairs (0x6c/0x6d, 0x6e/0x6f, 0x70/0x71) — irrelevant to '
       + 'this port\'s full-redraw-every-frame renderer, same disclosed '
       + 'simplification inventory-panel.js already carries. DS:0x33 bit 2 '
-      + '(the ES-segment/font-mode choice) is likewise defaulted to the '
-      + 'bit-clear arm — see the module header.' });
+      + '(the scroll-phase panel copy) needs no port: the panel does not move '
+      + 'on screen — see message.js.' });
 
   return results;
 }

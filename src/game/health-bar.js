@@ -113,11 +113,9 @@
  *   (0xacde-0xac7a = 1600 = 40x40; 0xad4c-0xacde = 1760 = 44x40).
  *
  * NOT PORTED (disclosed, not silently dropped):
- *   - `DS:0x33` bit 2 / the DS:[0x0] segment choice (0xacde vs 0xad4c) — the SAME
- *     unidentified UI-mode flag `inventory-panel.js`'s own header already
- *     discloses skipping (that module's equivalent 4px X shift). Defaulted
- *     to the bit-clear arm here too, for the same reason: ordinary gameplay
- *     is the fallthrough path, not a specially-branched one.
+ *   - `DS:0x33` / the DS:[0x0] segment choice (0xacde vs 0xad4c): the
+ *     scroll-phase panel copies, which land on the same screen pixels
+ *     ([PROVEN] live, message.js's DS:0x33 note). One panel is right.
  *   - The dirty-flag pair the original gates this on (none named in the
  *     disassembly above — this routine has NO dirty flag of its own,
  *     unlike score/lives/money; it draws unconditionally whenever called,

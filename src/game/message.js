@@ -84,10 +84,17 @@
  *   inside the 160-199 status band, never the playfield. That matches the flat
  *   trough in the shipped PSTAT3 art, which is exactly rows 189-197.
  *
- *   The `+4` arm at `CS:0x4452-0x4455` (and its `DS:0xad4c` pre-shifted panel
- *   page) is NOT modelled: it is selected by bit 2 of `DS:0x33`, and an operand
- *   scan finds no site in `GAME.EXE` that ever SETS that bit — every write is
- *   an explicit zero or a restore of a saved value. `UNKNOWN_ds33_bit2_setter`.
+ *   The `+4` arm at `CS:0x4452-0x4455` (and its `DS:0xad4c` panel page) is
+ *   NOT modelled, correctly. DS:0x33 is the display's fine-scroll phase:
+ *   graphics export 0 sets it every frame, `VGA:0x10F5-0x10FB` `mov ax,[0xa] /
+ *   and ax,0x1c / mov [0x33],al` (GAME.EXE only ever zeroes or restores it,
+ *   which is why a GAME.EXE-only scan found no setter). A nonzero phase picks
+ *   the pre-shifted panel copy 0xad4c, and bit 2 adds the 4 px that copy needs,
+ *   so the panel stays put on screen. [PROVEN] live: with camera x poked to
+ *   0x1C0 / 0x1C4 / 0x1C8 ([0x33] read back 0 / 4 / 8) and at 0x1DC (28), the
+ *   status band's pixels matched at shift 0 in every case (the only
+ *   differences were the health bar's shimmer). This port draws one unshifted
+ *   panel, which is what the screen shows. `UNKNOWN_ds33_bit2_setter` CLOSED.
  *
  * ── THE FONT: PSMLFNT, AND THE MAPPING IS THE IDENTITY ───────────────────
  *     44e3  lodsb / sub ah,ah / add ax,[0x27e] / mov [0x8],ax / call 0x356e
