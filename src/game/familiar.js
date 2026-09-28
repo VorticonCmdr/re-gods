@@ -1,7 +1,16 @@
 /* familiar.js — the familiar, the flying helper summoned by consumable type 39
- * (bought in the world 3/4 shop; it is placed on no map). [STATIC], read from
- * GAME.EXE's CS:0xC08E-0xC49B in full on 2026-09-28; no attract demo has a
- * familiar, so none of this is replay-checked.
+ * (bought in the world 3/4 shop; it is placed on no map). Read from
+ * GAME.EXE's CS:0xC08E-0xC49B in full on 2026-09-28. No attract demo has a
+ * familiar, so one was summoned live into PJOYL3's world-3 gameplay
+ * (tools/attract-capture/familiar_live.py: the CS:0x0215 call made to run
+ * C308 + C35E + C08E at tape cursor 760) and the port given the same inputs
+ * (familiar-compare.js). [PROVEN] for 342 ticks, cursors 760-1101: x, y,
+ * vx, vy, facing and the animation cursor match every tick; the random
+ * cursor, energy and DS:0x33D agree within the sampling lag (DOS reads at
+ * CS:0x0218, the port at the end of the tick). The window covers the
+ * summon's own tie draw, steering to the hero and to picked creatures, and
+ * C35E moving DS:0x33D to the fireball slot after a pickup. It does NOT
+ * cover a hit (energy stayed 1000) or the death, CS:0xC440: [STATIC].
  *
  * STATE. Energy DS:0x168 (-1 = none), power DS:0x210 and wings DS:0x304 stay
  * on combat.js's Health (familiarEnergy / familiarPower / familiarWings),

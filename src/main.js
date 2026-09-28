@@ -787,6 +787,8 @@ const guardianTables = {
       const rnd = audio.driver !== 'roland' && sfxDrawsRandom(id) ? rng.next() : undefined;
       return rawPlay(id, rnd);
     };
+    const rawStop = audio.stop.bind(audio);
+    audio.stop = (id) => { if (sfxTrace) sfxTrace.push(`s${id.toString(16)}`); return rawStop(id); };
   }
   /* ── Music: sound exports 6-12 (audio.music, rol-driver.js) ─────────────
    * Only ROL.EXE implements them; under AdLib every call below is a bare
