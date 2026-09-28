@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """score_cycle.py — the BCD score DS:0x3B5-0x3B8 through one whole attract
 cycle, every demo, with each capture's random table injected two cursors
-after its first snapshot (as sweep.py). Records the cross-cycle seeds DOS
+after its LAST snapshot (as sweep.py: a joyl demo regenerates its table
+when its game starts, so its first snapshot, at cursor 0, is the menu's). Records the cross-cycle seeds DOS
 carries into each demo (DS:0x1D4 gravity, 0x2F0 jaw, 0x357 land flag) so
 the port can be seeded the same way.
 
@@ -19,8 +20,8 @@ def main():
     caps = {}
     for n in NAMES.values():
         snaps = [e.split(':') for e in json.load(open(f'{here}/{n}.raw.json'))['output']['rnd'].split(';') if e]
-        first = snaps[0]
-        caps[n] = {'inject': int(first[0]) + 2, 'table': bytes.fromhex(first[2])}
+        last = snaps[-1]
+        caps[n] = {'inject': int(last[0]) + 2, 'table': bytes.fromhex(last[2])}
     call('POST', '/debug/pause')
     since = call('GET', '/debug/status')['stop']['stop_id']
 
