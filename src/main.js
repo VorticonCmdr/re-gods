@@ -1252,6 +1252,13 @@ const guardianTables = {
    * the main loop swaps the enemy suite for the guardian's driver. A new
    * level (every wireSpawn) starts without one. */
   let guardian = null, guardianFx = [];
+  /* cs:[0xAD88] — the selector-2 turret walker's first byte. Selector 11
+   * writes 0xC3 (RET) at CS:0xC4AA; the only other writer is the per-level
+   * init FUN_1000_8C34 at CS:0x8E70 (0x90, NOP), called once from CS:0x0092.
+   * So the turrets stay frozen and undrawn after the guardian dies, until
+   * the next level load — not only while DS:0x34 is set. [STATIC], an
+   * exhaustive byte search for `88 AD` in GAME.EXE finds only those two. */
+  let turretWalkerRet = false;
   /* DS:0x2D2 — the camera-x shake counter the world-3 guardian's 0xFD sets
    * (CS:0xD7E1), and the committed-camera-y nudge it applies (CS:0xD7E7,
    * `[0x270] -= 8`). The shake runs at CS:0x01CF whatever DS:0x34 holds. */
@@ -1353,6 +1360,7 @@ const guardianTables = {
     /* Selector 11 — CS:0xC49C, the world's guardian (guardian.js for worlds
      * 1-3, guardian4.js for world 4). */
     events.onGuardian = () => {
+      turretWalkerRet = true;                                      // CS:0xC4AA
       guardian = level.world === 4 ? new Guardian4(guardianTables.w4)
         : new Guardian(level.world, guardianTables);
       /* CS:0x0524-0x05B2 (DS:0x35C, the main loop's next pass): unless the
@@ -1556,6 +1564,7 @@ const guardianTables = {
       cf40 = new Cf40(); lastCf40Fx = [];
       ce64Creatures = new Ce64Creatures(rng); ce64Spits = new Ce64Spits(rng);
       selectorTwo = new SelectorTwoSpawns();
+      turretWalkerRet = false; lastSelectorTwoFx = [];   // CS:0x8E70 cs:[0xAD88] = 0x90
       lineBarriers = new LineBarriers(level.map, level.lineBarrierRecords);
       patGroups = new PatGroups(level.patDirectory || []);
       patGroups.blobBytes = level.patBlobBytes || null;
@@ -2848,6 +2857,8 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
             sfx: (id) => audio.play(id), flashPool, rng: () => rng.next(), difficulty,
             tock36d }).drawn;
       };
+      /* With cs:[0xAD88] = RET nothing moves, fires or draws a turret. */
+      const clearSelectorTwo = () => { lastSelectorTwoFx = []; };
       /* CS:0x01BD-0x01C9 (`bar <= 0`, combat.js's `health.dead`) — tested at
        * the TOP of the tick, before the player, against the bar the previous
        * tick's chase (CS:0x02C6) left. On a hit it jumps to the death driver
@@ -2888,7 +2899,7 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
          * already reads for COND11/12; `leverToggle` mutates it in place, so
          * a level's own trigger conditions see the flip on the very next tick. */
         levers: level.palfils.levers, leverToggle,
-        beforePlayer: gm ? null : stepSelectorTwo,   // CS:0xC4AA patched 0xAD88 to RET
+        beforePlayer: turretWalkerRet ? clearSelectorTwo : stepSelectorTwo,   // CS:0xC4AA patched 0xAD88 to RET
         objectPass: objPass,
         zoneScan: (x, y) => scanZones(events.actionCtx.zones, x, y),
         /* CS:0x38D7 — first-fit over the 200-slot runtime array. `drawObjects`
@@ -3380,7 +3391,7 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
       /* The selector-2 walker (below, `stepSelectorTwo`) runs inside
        * stepHeroFrame, before the player (CS:0x0223). On death ticks the
        * death driver calls it here instead (CS:0x09F8). */
-      if (!fr && !gm) stepSelectorTwo();
+      if (!fr) (turretWalkerRet ? clearSelectorTwo : stepSelectorTwo)();
       /* CS:0x0223 / CS:0xAED0-0xAF0F — drain selector2.js's own group-
        * elimination rewards into the SAME single-slot popup. FIRST of the
        * six channels (the walker is CS:0xAD88, earlier in the frame than
