@@ -1,6 +1,11 @@
 /* rol-driver.js — ROL.EXE, the Roland sound driver, as game logic.
  *
- * `[STATIC]`, ROL.EXE (not packed; image = file + 0x200). The driver is a
+ * Read from ROL.EXE (not packed; image = file + 0x200). The SFX path is
+ * [PROVEN] live (tools/attract-capture/rol_trace.py + rol-check.mjs, PJOYG1
+ * under GODS.INI = Roland): 334 export-3 calls, 47 with a variant, all give
+ * the blob and the CS:0x632 random state rolRemap / rolVariantOffset /
+ * RolRandom compute from the state each call began with, and none reads
+ * GAME's random table. The rest is [STATIC]. The driver is a
  * shim over PPLAYER.BIN, the same sequencer the AdLib driver uses, started
  * with only the MPU-401 bit (ROL:0x7F `mov al,4`). Its 13 exports:
  *
