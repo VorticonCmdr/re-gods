@@ -10,6 +10,9 @@
  * port decodes that DOS did not is reported as a difference.
  *
  *   node tools/attract-capture/w4wormcompare.mjs w4escape.json
+ *   node tools/attract-capture/w4wormcompare.mjs w4inject.json --tags
+ * ⚠️ w4fire.json predates the [SI] fix: its `tag` fields are AL at
+ * CS:0xAB41, the scan's row counter, so never pass --tags for it.
  */
 import { readFileSync } from 'fs';
 import { dclDecompress } from '../../src/formats/dcl.js';
