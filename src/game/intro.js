@@ -315,6 +315,15 @@ export const INTRO_END_TICK = 7900;
  *   0x173 = 0x113 over 0x133: the logo's settled palette. It differs from
  *         PINTROFT's at entries 2 (0x777, not 0x111) and 7 (0x666, not 0x777).
  *   0x393 PONE.PI1's palette, copied by CS:0x05CD
+ * [PROVEN] live (DOSBox, 2026-09-28; DS:0x73 and the counter DS:0x93 read
+ * together at a pause, DS:0x195 = 4 and DS:0x198 = 1 read back): at 70 the
+ * opener shows DS:0xD3; the logo's DCC(0xF3, AX 1) is 4 steps in at 775 and
+ * 6 at 779 (3 retraces a step, AX + 2, as modelled; the steps land about one
+ * tick earlier than the model's 768 start); at 1101 the palette is DS:0x173
+ * exactly; at 1359 the story has ramped to white and is two EB8 steps down
+ * toward PONE (0x555 / 0x655 / 0x767), matching introPaletteAt entry for
+ * entry. One early sample, at the return from the opener's first DCC, read a
+ * single step at counter 11 and is unexplained.
  * Every card change is a flash: the new page is flipped in (CS:0x1992 swaps
  * the display start), DCC(0xF3, AX 0) whitens the text at once and
  * EB8(0x113, 3) settles it to gold. The story fades DOWN from white. */
