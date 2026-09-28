@@ -602,6 +602,35 @@ That is exactly the address `VGA.EXE`'s own export-2 consumer computes for the b
 
 Two earlier candidates from the prior pass — `SS:[0x408]`'s inter-bitplane stride (numeric no-op for a naturally-32-tall sprite) and `SS:[0x40a]`'s fixed vertical clip (10 write sites, all constant 160/192/200, none exceeded here) — stay ruled out. The GEOMETRY (`pingpong+1` rows, bottom pinned at `objY+32`) was already `[PROVEN]` by the two-screenshot, multi-phase match; the register wiring producing it is now `[PROVEN]` too, by direct disassembly of the actual consuming code in `VGA.EXE`.
 
+#### A spike that appears when an enemy dies — selector-2 class 30, and why it does not sink `[PROVEN]` live
+
+**Where this came from.** A user report showed a type-50 spike in `PLEV1A` at about (664,368), with its shaft drawn over the floor bricks. No map object, trigger spawn or System A/B reward puts a spike there.
+
+**The source is a selector-2 reward.** `PLEV1A`/`PLEV1B` event 78 (cell 608,352) arms selector-2 class 30. That class's `+0x0E` elimination-reward byte is **61 (0x3D)**.
+- `CS:0xBF5F` special-cases that id: `cmp cx,0x3d / jz 0xBF59`.
+- `0xBF59` does `and bx,0xFFF0` and jumps straight to the `CS:0xC041` landing, with no arc.
+- `CS:0xC041` makes it object type `0x3D − 0xB` = **50**, a live spike, at the last dying position + 8, snapped to its 16-px row. Killing that enemy therefore places a spike trap, by design.
+
+Live in `PLEV1B` (`gods-web/tools/attract-capture/sel2drop.py`, `sel2contact.py`):
+- The allocator ran with `AX = 0x1E`, and slot `+0x1E` = `0x003D`.
+- The hero touched the entity at (704,368) and killed it.
+- The toss was entered with `CX = 0x3D`, `BX = 0x178`, and the landing ran with `BX = 0x170`.
+- The object was `(708, 368, type 50, flag 1)`.
+
+**Why it stays put.** `CS:0xC041` writes `0xFF` to the dirty byte for every landing (`mov bp,0x438 / add bp,dx / mov byte [bp],0xFF`, in **SS**). The per-object walker then really does run the fall for the spike: `CS:0x151B` `js 0x1534`, and live the y reached 372 at `CS:0x15F1`. Two instructions undo it:
+- `CS:0x1516` `mov ss:[0432],bx` saves y before the dirty test.
+- At `CS:0x15F1`, a non-weapon (`cmp cx,0xC0 / jl`) of category ≥ 3 (`cmp byte [di+4],3`) does `mov cx,ss:[0432] / mov [si+2],cx`.
+
+The bounce path ends at the same `0x15F1` (`jmp 0x15F1` at `CS:0x142A`). Live, the spike held y = 368 for 30+ ticks with SS dirty = `0xFF`.
+
+**The port bug.** `gods-web` had modelled this restore only as an up-front gate at activation (`isFallEligible`). `dropCarriedItem` arms the fall regardless of category, so the spike fell to 384 and its pinned base, at `objY+32` = 416, overlapped the 16-px floor tile. That is exactly the reported screenshot. The port now applies the `0x15F1` restore inside `stepObjectFall`.
+
+**Static placement check of every other spike** (types 50/117/130: map objects plus `ACT0` spawns, base at `objY+32`):
+- No spike has solid ground inside its body.
+- Four sit 1 px above the floor because of authored odd y values: `PLEV2A` #2 (3405,415), `PLEV3B` (3305,735) and #25 (3361,655), and `PLEV4A` (2351,623).
+- `PLEV4B`'s type-130 column at (641,400) stands 16 px higher than `PLEV4A`'s at (641,416).
+- None of these move, so the port draws them where the original does.
+
 ### `pobjects-cat-4-5` — category 5 census `[PROVEN]` (membership); meaning closed in the entry below
 
 Decompressed all four `POBJECTS.00{1-4}` (`blast.py`) and read every 48-byte record directly (not via the game's own id-based type formula, which is unsafe for world 4 — see below). **Category 5 has exactly 22 members, identical across all four worlds once the already-documented world-4 `+5` id drift is corrected for**: types `49, 55, 64, 65, 66, 67, 68, 81, 82, 95, 102, 103, 104, 105, 106, 107, 108, 111, 112, 113, 114, 131`. Confirmed self-consistent two ways: worlds 1–3 (base id `170+type`) agree on this set exactly, and world 4's own raw ids (base `175`) read as this same set **minus 5** on every one of the 22 records (`54,60,69,70,71,72,73,86,87,100,107,108,109,110,111,112,113,116,117,118,119,136`), which is precisely the already-documented world-4 `+0x08`/`+0x0c`/`+0x1e`/id authoring-drift pattern applied consistently — not a different, world-specific category-5 roster.

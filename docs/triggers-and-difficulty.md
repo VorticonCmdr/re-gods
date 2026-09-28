@@ -529,3 +529,30 @@ Booted fresh by passing `GODS.EXE`'s own path as the DOSBox launch target (auto-
 
 This closes the loop, but with each leg's confidence kept honest rather than blended: the lever toggle and the `COND11`/`COND12` read (`CS:0x1045`, `0x3F6C`/`0x3F87`) and the reachability of trigger record #1 (the static census above) are `[PROVEN]` **statically** — the forced call skipped over that plumbing rather than exercising it, since it injected a direct `CALL` into `ACT6` instead of waiting on the real lever-toggle-then-walk-over-the-plane-B-cell input sequence. What the DOSBox session adds, and what was not previously confirmed by disassembly alone, is the **action leg**: that `ACT6`, invoked with the real record data from a live, running `PLEV1A`, actually reaches into the real runtime object array and kills the intended object — observed directly, not inferred from the decompile.
 
+### Every lever, all 8 levels — census and a correction `[STATIC]` (data) / `[PROVEN]` (toggle, in `gods-web`)
+
+`gods-web/tools/lever-census.mjs` lists every live lever-table record (`DS:0xa5f8`, skipping `0xFFFF` and all-zero slots), the triggers whose `COND11`/`COND12` read it, and the plane-B cells or `ACT5` records that dispatch those triggers. Results:
+- There are **300** real lever records, and every one sits exactly on a category-3 map object. That exact match is what `CS:0x115B` needs.
+- **54** are read by no trigger at all, so they are decoration.
+- **8** are read only by triggers that nothing dispatches.
+
+A scratch simulation drove each lever through `gods-web`'s `LeverToggle` and each reachable lever-gated trigger through `EventRunner` plus the real action verbs:
+- Every lever toggles.
+- 336 triggers fire and act correctly.
+- The rest need conditions the harness did not model (health, weapon slot, timer), or a dynamically spawned target: `PLEV3A` #61 kills the spike that #58 spawns.
+
+**A lever does nothing on its own.** The toggle only flips bit 0 of the record. The consequence comes from a trigger, which is evaluated only when its cell is probed. So a lever read only by an item-gated trigger is inert without the item.
+- This is `PLEV1A` lever 18 at (836,336). Its sole reachable reader is #31: `has item 127` (trap door key) ∧ lever 18 ON. It opens the trap door at (768,400) and consumes the key (action bit 15).
+- #40 is lever 18 ON as a verb-13 gate at (2016,672), and nothing dispatches it.
+
+**Pulling a lever needs state 26, and a plain stop is not state 26.** `CS:0x1045` runs only from idle, state 26. After a walk key is released without UP held, the hero keeps WALK_L/WALK_R in the locked "stopped" pose (`docs/player-state-machine.md`). FIRE there throws a weapon instead. UP while stopped, or any landing, enters state 26, and FIRE then toggles the lever. Checked in the port: lever 18 went 24 → 25.
+
+⚠️ **Correction to "Trap doors are not lever-driven" above.** That paragraph is right that the level-load patcher `CS:0x40C0` has no lever caller. But trap doors are opened and closed at runtime by `ACT7`/`ACT8`, and many shipped lever-gated triggers use exactly those verbs. `PLEV1A` alone has five:
+- lever 5 → #36;
+- lever 7 → #34;
+- lever 8 → #16;
+- lever 9 → #17;
+- lever 15 (plus item 127) → #27, a close.
+
+So levers do drive trap doors, through the trigger table rather than the patcher.
+
