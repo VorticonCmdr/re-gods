@@ -320,6 +320,18 @@ The weapon is not consumed. The earlier failed refire came from the hand-patched
 
 Four arcs of falling amplitude (4, 3, 2, 1), so the bomb visibly settles rather than stopping dead.
 
+⚠️ **Correction, 2026-09-28 — the mover splits on vx, and the "third branch" is the only landing a thrown bomb has** `[STATIC]`, ported (`gods-web` `stepTimeBomb`). Read in full, `CS:0xA094` branches on `[0x1c8]`:
+
+| vx | `[0x1cc]` | what runs |
+|---|---|---|
+| ≠ 0 (`A09E`) | any | gravity on the `(fuse+2)&3` gate; if `y+vy` crosses a 16-px row, test the cells at the **old** (x, y): two rows below solid and one row below open, or (x & 0x1f ≥ 0x10) the same pair one column right. That lands at once (`A0F1`): y = (y+vy) & ~0xf, x unmoved, vx = vy = `[0x1cc]` = 0, **thud now, no settling bounce**. Otherwise move, decay vx, and run the wall probe. |
+| 0 | < 0 (`A1EC`) | y += vy with **no** gravity step, then the ordinary ground test above: land silently into `0x64` |
+| 0 | 0 | at rest, nothing moves (`A191`) |
+| 0 | `0x64` (`A1D7`) | thud, y −= 4, `[0x1cc]` = 1 |
+| 0 | 1..23 (`A194`) | thud when `SS:0x5450[n]` ≠ 0, y += `DS:0xdf2c[n]`; after n = 23, `[0x1cc]` = 0 (rest) |
+
+So the ordinary ground test never runs while a bomb is still moving sideways, entry 0 of `DS:0xdf2c` is never read, the bounce nets +4 (undoing the landing tick's −4), and the bomb then rests; it does not cycle the table. `SS:0x5450` **is** in the image (file `0x249B0`; the SS base is file `0x1F560`, the same base `SS:0x5024`'s world-4 body-part table was read from): 24 bytes, nonzero only at 9, 16 and 21, the first step of arcs 2–4. The statements above that the row-crossing branch is a rare edge case, and that `SS:0x5450` can't be read from the EXE, were both wrong.
+
 **All six movers are now decoded.** `UNKNOWN_projectile_movers` is CLOSED.
 
 ### `UNKNOWN_hunter_turn` — CLOSED: the steering, the spawn handlers, the stamp, and why the tag is born negative `[PROVEN]`
