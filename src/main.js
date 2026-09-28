@@ -1251,7 +1251,7 @@ const guardianTables = {
    * System B's is (the original has no bound either). */
   let clampedA = 0;
   const runSpawnsA = () => {
-    for (const slot of slotsA.slots) {
+    for (const [g, slot] of slotsA.slots.entries()) {
       if (slot.state !== 2) continue;
       const d = slot.desc;
       if (d.count === 0) continue;
@@ -1262,7 +1262,9 @@ const guardianTables = {
       for (let i = 0; i < n; i++) {
         const e = Object.assign(
           new EntityA({ x, y, cls: d.cls, hp: d.hp || 1, delay: 0 }),
-          { desc: d });
+          /* DS:0xE96 + g*0x190 + i*0x28 — the entity's slot, whose fire timer
+           * +0x0E carries over (entity-a.js sysAFireTimers). */
+          { desc: d, slot: g * 10 + i });
         playFlash(e);        // CS:0xDEE0 — every System-A entity materialises at spawn
         e.spawnTick = true;  // CS:0xDF37 `jmp 0xdf62` — not ticked until the next tick
         enemiesA.push(e);

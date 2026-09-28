@@ -70,7 +70,7 @@ import { MODE, MODE_TABLE, EntityB, hopDelta, hopCursorNext, EST,
 import { parseGroupsB, parseGroupsA, GroupSlots, spriteForEntity, CLASS_TABLES_B,
          CREATURE_DESCRIPTOR_BASE, MAX_ENTITIES, groupSlotReleasable } from '../game/spawn.js';
 import { EntityA, CLASS_TABLES_A, spriteForEntityA, rollStrategy,
-         stageAccelerate, stageApply, stageFacingAndFire,
+         stageAccelerate, stageApply, stageFacingAndFire, sysAFireTimers,
          SPRITE_BASE_8FRAME, SPRITE_BASE_6FRAME,
          stageAttack, REACH_OFFSETS, DISPLACEMENT_TABLE,
          ZONES, ZONE_SCRATCH, currentZone, strategy1, strategy2,
@@ -2629,6 +2629,21 @@ export function checkEntityA() {
   const hazard2 = stageFacingAndFire(f5, { fireByte: 0x21, flags: 0x20 }); // (0x20>>4)&3 = 2
   check(`attackBits==2 also diverts (only 0 fires an ordinary shot)`,
     hazard2 && hazard2.hazard === true && hazard2.attackBits === 2, JSON.stringify(hazard2));
+  /* DS:0xE96's fire timers carry over per slot (sysAFireTimers). */
+  {
+    const saved = Uint16Array.from(sysAFireTimers);
+    sysAFireTimers.fill(0);
+    sysAFireTimers[5] = 1;                                  // a slot one tick from firing
+    const c1 = new EntityA({ x: 0, y: 0 }); c1.slot = 5; c1.vx = 4;
+    const c2 = new EntityA({ x: 0, y: 0 }); c2.slot = 6; c2.vx = 4;   // fresh slot: BSS 0
+    const shot1 = stageFacingAndFire(c1, { fireByte: 0x31, flags: 0 });
+    const shot2 = stageFacingAndFire(c2, { fireByte: 0x31, flags: 0 });
+    check('a System-A entity inherits its slot\'s fire timer (DS:0xE96 +0x0E is never re-armed)',
+      shot1 !== null && sysAFireTimers[5] === 60, `timer ${sysAFireTimers[5]}`);
+    check('a never-used slot starts at 0 and wraps to 0xFFFF instead of firing',
+      shot2 === null && sysAFireTimers[6] === 0xffff, `timer ${sysAFireTimers[6]}`);
+    sysAFireTimers.set(saved);
+  }
 
   /* CS:0xe748 — the low nibble wins with probability (weight+1)/128. Extreme
    * weights should never/always swap, matching the doc's own closed-form

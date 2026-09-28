@@ -874,6 +874,16 @@ export function stageApply(e, frozen) {
  * reached when attackBits != 0. A hazard-throwing entity keeps throwing even
  * after it has arrived and its own velocity has decayed to zero.
  */
+/* DS:0xE96 + group*0x190 + member*0x28 + 0x0E — System A's fire timers.
+ * Nothing but CS:0xE66B/0xE67A writes them (the materialise at CS:0xDE8D
+ * does not), and the array is never cleared, so each of the 100 slots keeps
+ * its timer across spawns and levels for the whole process (BSS 0 at boot).
+ * An entity reads and writes its own slot through `e.slot` (set at spawn by
+ * the host). [STATIC] + a live read (DS:0xE96: 0 in almost every slot, a
+ * few far-counted-down values such as 31309 — a wrapped timer). */
+export const sysAFireTimers = new Uint16Array(100);
+export const resetSysAFireTimers = () => sysAFireTimers.fill(0);
+
 export function stageFacingAndFire(e, desc) {
   const fireByte = desc.fireByte;
   const loNibble = fireByte & 0xf;
@@ -887,10 +897,15 @@ export function stageFacingAndFire(e, desc) {
    * read live: +0x0E is 0 in nearly every slot — and the first shot waits
    * 65535 ticks unless the slot fired before. [STATIC] + a live memory read;
    * no attract demo has a System-A shooter, so it is not replay-checked.
-   * The per-slot carry-over is not modelled: UNKNOWN_sysA_fire_timer_carry. */
+   * The per-slot carry-over is modelled through `sysAFireTimers` below. */
+  if (e.slot !== undefined) e.reloadTimer = sysAFireTimers[e.slot];   // the slot's carried +0x0E
   e.reloadTimer = (e.reloadTimer - 1) & 0xffff;
-  if (e.reloadTimer !== 0) return null;
+  if (e.reloadTimer !== 0) {
+    if (e.slot !== undefined) sysAFireTimers[e.slot] = e.reloadTimer;
+    return null;
+  }
   e.reloadTimer = (0x10 - loNibble) << 2;         // CS:0xe670-e67a
+  if (e.slot !== undefined) sysAFireTimers[e.slot] = e.reloadTimer;
 
   const attackBits = (desc.flags >> 4) & 3;        // CS:0xe67d
   if (attackBits !== 0) {
