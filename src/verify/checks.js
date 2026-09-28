@@ -9415,6 +9415,23 @@ export async function checkWeaponsProjectiles(fetchRaw) {
         `the fix the user actually reported`);
     }
 
+    /* The activation gate above is not the only way in: CS:0xC041 arms the
+     * 0xFF sentinel on EVERY landing (dropCarriedItem), including the id-0x3D
+     * spike snap. The CS:0x15F1 restore must still hold it — [PROVEN] live,
+     * a PLEV1B class-30 spike stayed at y=368 with SS:0x438+slot = 0xFF. */
+    {
+      const map = flatMap();
+      const cats4 = new Uint8Array(STAMPED_TYPES);
+      cats4[50] = 4;
+      const slots = [{ x: 0, y: 0, type: 0xffff, flag6: 0, dead: true, slot: 0 }];
+      const spike = dropCarriedItem(slots, 0x3d, 708, 368);
+      for (let t = 0; t < 30; t++) stepObjectFall(map, spike, cats4);
+      check(`a dropped category-4 spike (id 0x3D) keeps its snapped row despite the armed fall sentinel`,
+        spike.type === 50 && spike.fallDirty === -1 && spike.y === 368,
+        `type ${spike.type}, fallDirty ${spike.fallDirty}, y ${spike.y} after 30 ticks over open air ` +
+        `(CS:0x15F1 restores ss:[0432] for a non-weapon category >= 3)`);
+    }
+
     {
       check(`isFallEligible gates on category, not on a hardcoded type list`,
         isFallEligible(WEAPON_TYPE_MIN, null) === true

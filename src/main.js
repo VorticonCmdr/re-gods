@@ -2522,7 +2522,7 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
          * armed (weapons, or category < 3) carry `fallDirty` at all. */
         for (const o of level.drawObjects) {
           if (o.dead || !(o.flag6 & 1)) continue;
-          stepObjectFall(level.map, o);
+          stepObjectFall(level.map, o, level.cats);
         }
         /* CS:0x160D, the SAME per-object body as the fall physics above (one
          * function, one gate) — every on-screen category<3 object appends a
@@ -4272,6 +4272,17 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
       },
       /* The damage grid as left by the last tick, and the camera it used. */
       grid: () => ({ grid, cam: { x: cam.snapX, y: cam.snapY } }),
+      /* Put the hero (and a spawn-style camera) at a world position, for
+       * reproducing a reported scene. Not an original mechanism. */
+      teleport(x, y) {
+        uiState = 'game'; player.x = x; player.y = y; cam = cameraForSpawn(x, y);
+        level.activationGate = null;          // forced pass, as a real teleport's direct 0x1196 call
+        return snap();
+      },
+      render: () => clock.onRender(0),
+      sel2: () => selectorTwo,
+      async switchLevel(key) { await switchLevel(key); await settle(); return snap(); },
+      levers: () => level.palfils.levers.map((l, i) => `${i}:${l.x},${l.y},${l.type}`).join(' '),
       async startAttractAt(state) { clock.stop(); await enterAttractState(state); await settle(); return snap(); },
       /* Step until `n` ticks ran, recording a snapshot after each. */
       async stepTicks(n, record = true) {

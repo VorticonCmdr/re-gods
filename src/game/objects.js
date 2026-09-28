@@ -388,9 +388,31 @@ function isGrounded(map, x, y) {
  * Must run before the pickup contact test each tick, matching CS:0x0206's
  * per-object walk (fall/bounce, THEN CS:0x168E's pickup call, same object,
  * same frame) — see main.js.
+ *
+ * ⚠️ CATEGORY >= 3 NEVER MOVES, EVEN WITH THE SENTINEL ARMED. `[PROVEN]` live.
+ * The walker saves y at CS:0x1516 (`mov ss:[0432],bx`) BEFORE the dirty
+ * test, and both motion paths — the fall (CS:0x1587) and the bounce
+ * (CS:0x1416, `jmp 0x15F1` at CS:0x142A) — end at CS:0x15F1, which reads
+ * the POBJECTS category (`cmp byte [di+4],3 / jl`) and for a non-weapon
+ * category >= 3 does `mov cx,ss:[0432] / mov [si+2],cx`: the move is undone.
+ * CS:0xC041 arms 0xFF for EVERY landing, so this is what keeps a dropped
+ * category-4 spike (the id-0x3D snap, selector-2 class 30 in PLEV1A/1B) at
+ * its snapped row: live, y went 368 -> 372 at CS:0x15F1 and was 368 again
+ * next tick, dirty still 0xFF (tools/attract-capture/sel2contact.py). The
+ * port used to let it fall 16px into the floor. The world-height kill
+ * (CS:0x1598) runs before the restore, so it is kept.
+ * @param {Object<number,number>} [cats]  POBJECTS categories by type
  */
-export function stepObjectFall(map, o) {
+export function stepObjectFall(map, o, cats) {
   if (o.fallDirty === undefined || o.dead) return;
+  const y0 = o.y;
+  stepMotion(map, o);
+  if (!o.dead && o.type < WEAPON_TYPE_MIN && cats && (cats[o.type] ?? -1) >= CATEGORY.LEVER) {
+    o.y = y0;                                          // CS:0x15F1-0x15F8
+  }
+}
+
+function stepMotion(map, o) {
   if (o.fallDirty === -1 || o.fallDirty === BOUNCE_TERMINAL) {
     if (isGrounded(map, o.x, o.y)) {
       if (o.fallDirty !== BOUNCE_TERMINAL) o.fallDirty = 0;   // CS:0x15E0 — start the bounce (else stays 24, CS:0x15DE)
