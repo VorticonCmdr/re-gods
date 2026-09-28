@@ -1565,6 +1565,7 @@ const guardianTables = {
       player = new Player(spawn.x, spawn.y);
       player.spawnAtLevelStart(spawn.x, spawn.y);   // CS:0x8C34 — the level-load seed
       progress.reset(level.world, spawn.x, spawn.y); // CS:0x8C34 — chain, counters, ring, respawn
+      inventoryPanel.selector = inventoryPanel.pending = 0;   // CS:0x8D73 / 0x8D78
       events = new EventRunner(level.map, level.palfils);
       slots = new GroupSlots(); enemies = []; clamped = 0; firedByB = 0;
       slotsA = new GroupSlots(); enemiesA = []; clampedA = 0; firedByA = 0;
@@ -1869,8 +1870,9 @@ const guardianTables = {
    *   0473  CS:0x914C clears the weapon slots, 0x95B5 restores the standard
    *         arc, 0xC440 (with [0x391] set) dismisses the familiar
    *   048F  the inventory selector [0x366] and its pending copy [0x367] = 3
-   *         (the image holds 0 and nothing else resets them, so only a
-   *         completed game starts with the highlight on slot 3)
+   *         (⚠️ an earlier note said nothing else resets them: the level
+   *         init CS:0x8D73/0x8D78 zeroes both on every level entry, this
+   *         one included, so the 3 never reaches play)
    *   04A4  CS:0x228E ([0x3BB]/[0x3BC] = 0xFF), CC67 RET, jmp 0x2A37
    * [0x70]/[0x71] = 0xFF (CS:0x046B) are the score's HUD dirty flags; the port
    * redraws the HUD every frame, so there is nothing to mirror. */
@@ -1882,7 +1884,7 @@ const guardianTables = {
     resetWeaponArc();                                             // CS:0x95B5
     health.familiarEnergy = -1; health.familiarPower = 0; health.familiarWings = 0;
     familiar.reset();                                            // CS:0xC440, no burst ([0x391])
-    inventoryPanel.selector = 3;                                  // CS:0x048F / 0x0492
+    inventoryPanel.selector = inventoryPanel.pending = 3;         // CS:0x048F / 0x0492 (the level init zeroes both again)
     deathSeq = null; lastDeathBurstFx = []; paused = false;
     uiState = 'game';
     await switchLevel('1A');
@@ -2792,7 +2794,8 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
          * armed (weapons, or category < 3) carry `fallDirty` at all. */
         for (const o of level.drawObjects) {
           if (o.dead || !(o.flag6 & 1)) continue;
-          stepObjectFall(level.map, o, level.cats);
+          const thud = stepObjectFall(level.map, o, level.cats);   // 0x504 land, 0x505-0x507 bounce
+          if (thud) audio.play(thud);
         }
         /* CS:0x160D, the SAME per-object body as the fall physics above (one
          * function, one gate) — every on-screen category<3 object appends a
@@ -2945,6 +2948,7 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
          * already reads for COND11/12; `leverToggle` mutates it in place, so
          * a level's own trigger conditions see the flip on the very next tick. */
         levers: level.palfils.levers, leverToggle,
+        panel: inventoryPanel,                     // DS:0x366/0x367, the crouch FIRE tap
         beforePlayer: turretWalkerRet ? clearSelectorTwo : stepSelectorTwo,   // CS:0xC4AA patched 0xAD88 to RET
         objectPass: objPass,
         zoneScan: (x, y) => scanZones(events.actionCtx.zones, x, y),
@@ -3001,6 +3005,15 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
       if (fr.keyCollected) {
         $('event').textContent =
           `key ${fr.keyCollected.type} collected (slot ${fr.keyCollected.slot})`;
+        postObjectMessage(fr.keyCollected.type);               // CS:0x6128 -> 0x4609
+      }
+      /* CS:0x615F-0x6197 — the crouch FIRE tap: 0x2831, then the newly
+       * selected slot's item is named (CS:0x618E skips an empty slot). The
+       * selector itself moves in player.js/inventory-panel.js. */
+      if (fr.inventoryCycled) {
+        audio.play(0x2831);
+        const item = inventory[inventoryPanel.pending];
+        if (item !== INVENTORY_EMPTY) postObjectMessage(item);
       }
       /* IDLE + FIRE, CS:0x1045 -> game/levers.js's `LeverToggle`. */
       if (fr.leverToggled) {
@@ -3039,7 +3052,7 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
       /* The FUN_1000_5931 thunk's four callers — the climb ping-pong's two
        * turn-arounds, already gated behind _climb's own tock===0 return. */
       if (fr.climbStep) audio.play(CLIMB_STEP_SFX);
-      if (fr.ladderLand) audio.play(0x318);           // CS:0x4C54, the state-10 landing
+      for (let i = 0; i < fr.landSfx; i++) audio.play(0x318);   // CS:0x4C54, every landing (player.js _enterLand)
       /* CS:0xA7F6 — one play per projectile the terrain stops this tick,
        * not one per tick: `fr.projectiles.hits` already carries one entry
        * per stop (Arsenal.step collects it from every slot's own
@@ -4497,6 +4510,7 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
       slots: arsenal.slots.map((sl) => `${sl.weapon}:${sl.live}`).join(' '),
       hp: health.target, ph: player.phase, pst: player.state, freeze: fx.freeze, tock,
       sfx: sfxTrace.splice(0).map((id) => id.toString(16)).join(','),
+      inv: `${player.fireLatch | 0},${player.scanned | 0},${player.noKey | 0},${inventoryPanel.selector},${inventoryPanel.pending}`,   // [0x341],[0x354],[0x355],[0x366],[0x367]
     });
     sfxTrace = [];
     window.__gods = {
@@ -4582,6 +4596,8 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
           && o.x >= x0 && o.x <= x1 && o.y >= y0 && o.y <= y1)
           .map((o) => `slot${o.slot} t${o.type} ${o.x},${o.y} f${o.flag6}`).join(' ');
       },
+      /* The live object table itself (fall state included), for tracing. */
+      objects: () => level.drawObjects,
       /* The object table: size, distinct slots, free (dead) slots. */
       objs() {
         const o = level.drawObjects;

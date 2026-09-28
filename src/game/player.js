@@ -107,7 +107,7 @@ import { WALK_CYCLE, WALK_FOOTSTEP_PHASES, jumpPhase,
 import { FIRE_STATES, ENTRY, fireTick, fireAnimOffset, fireGuardBefore,
          fireGuardAfter, JUMP_ARC_STEP, JUMP_ARC_END,
          JUMP_ARC_EXIT } from './fire-states.js';
-import { objectNearHotPoint, scanForKey, collectKey } from './pickup.js';
+import { objectNearHotPoint, crouchScan, collectKey } from './pickup.js';
 
 /* DS:0xd922 — the 23-entry jump delta table, verbatim.
  * 4 ticks of wind-up, 32 px rise, apex, 32 px descent; exactly symmetric. */
@@ -635,7 +635,8 @@ export class Player {
     this.tock36d = tock36d;
     this.footstep = false;
     this.climbStep = false;
-    this.ladderLand = false;     // CS:0x4CC5 -> 0x4C54: sfx 0x318 on a state-10 landing
+    this.landSfx = 0;            // plays of 0x318 (CS:0x4C54) this tick — see _enterLand
+    this.inventoryCycled = false; // CS:0x615F, the crouch FIRE tap (sound 0x2831) — see _crouch
     this.emitted = null;
     this.keyCollected = null;
     this.leverToggled = null;
@@ -771,7 +772,7 @@ export class Player {
         }
         /* CS:0x4DF8/0x4E0D -> 0x4D2A (right) and the left mirror -> 0x4C28:
          * the SAME landing the plain fall uses, into the landing pose. */
-        this._enterLand(st.right);
+        this._enterLand(st.right, false, st.right ? 2 : 1);
         this.renderPhase = 0;
         return;
       }
@@ -1182,6 +1183,9 @@ export class Player {
       this.state = ST.CROUCH;
       this.stateIndex = this.facing < 0 ? S.CROUCH_L : S.CROUCH_R;
       this.phase = 0;
+      /* CS:0x59EA-0x59F6 / 0x5C2E-0x5C3A — a fresh crouch clears the FIRE
+       * latch [0x341], "scanned" [0x354] and "no key here" [0x355]. */
+      this.fireLatch = 0; this.scanned = 0; this.noKey = 0;
       return;
     }
     if (input.up) {
@@ -1528,7 +1532,12 @@ export class Player {
    * pose, state 17 (left) / 16 (right), with [0x357] := 0 and CL := 0. The
    * fall-damage accumulator DS:0x176 is NOT cleared — the pose drains it.
    */
-  _enterLand(right, fromLadderFall = false) {
+  _enterLand(right, fromLadderFall = false, sounds = 1) {
+    /* CS:0x4C54 plays 0x318, and EVERY landing calls it: the falls (state 11
+     * CS:0x4C4E; state 12 / fall-fire right CS:0x4D2A calls it TWICE, at
+     * 0x4D36 and 0x4D53; the ladder fall CS:0x4CC5), the jumps (CS:0x4F69,
+     * 0x5168) and the firing jumps (CS:0x5274, 0x5391). */
+    this.landSfx += sounds;
     this.state = ST.LAND;
     this.stateIndex = right ? S.LAND_R : S.LAND_L;
     this.facing = right ? +1 : -1;
@@ -1645,8 +1654,8 @@ export class Player {
        * and the state dispatcher runs CS:0x5020 / 0x5042 on later ticks,
        * which hold one tick and then drain DS:0x176 by 4 per tick before
        * handing back to walk (see `_land`). Live-confirmed by PJOYG3. */
-      if (ladderFall) this.ladderLand = true;    // CS:0x4CC5 `call 0x4c54` (sfx 0x318) [PROVEN] PJOYL3 1164
-      this._enterLand(ladderFall ? this.ladderFacing >= 0 : this.stateIndex === S.FALL_R, ladderFall);
+      const right = ladderFall ? this.ladderFacing >= 0 : this.stateIndex === S.FALL_R;
+      this._enterLand(right, ladderFall, ladderFall || !right ? 1 : 2);
       return;
     }
     if (ladderFall) return;                        // CS:0x4C8E / 0x4C98: no fire test
@@ -1835,6 +1844,45 @@ export class Player {
    * @param {{down,left,right,fire}} input
    * @param {?{objects:Array, cats:Array, inventory:Array}} pickup
    */
+  /** CS:0x6069-0x612C, the key scan: [0x354] := 1 ; the first key in the
+   *  hot-point box is taken with FIRE (CS:0x60FB [0x341] := 1, the slot
+   *  write, the object message) or put back without it (CS:0x60EB
+   *  [0x354] := 0, so the next tick scans again); a weapon in the box aborts
+   *  the scan; no key at all sets [0x355] (CS:0x60B4). */
+  _keyScan(input, pickup) {
+    this.scanned = 1;                                       // CS:0x6069
+    if (!pickup) return;
+    const { key, abort } = crouchScan(pickup.objects, pickup.cats, this);
+    if (abort) return;                                      // CS:0x60C9
+    if (!key) { this.noKey = 1; return; }                   // CS:0x60B4
+    if (!input.fire) { this.scanned = 0; return; }          // CS:0x60EB, put back
+    this.fireLatch = 1;                                     // CS:0x60FB
+    key.dead = true;                                        // CS:0x60D8 `[si+4] = 0xffff`
+    key.flag6 = 0;                                          // CS:0x60DD `[si+6] = 0`
+    const slot = collectKey(pickup.inventory, key.type);   // CS:0x6100 (substituted, pickup.js)
+    this.keyCollected = { type: key.type, slot };          // CS:0x6128 -> 0x4609, the name
+  }
+
+  /** CS:0x6134-0x619D, the FIRE tap: [0x355] := 0, and on a fresh press
+   *  (the [0x341] latch clear) `0x2831`, [0x367] := ([0x366] + 1) & 3,
+   *  [0x341] := 1, [0x354] := 1 and the new slot's item named (CS:0x6192,
+   *  skipped for an empty slot). A held press releases the latch only once
+   *  FIRE is let go (CS:0x614D). [PROVEN] live: PJOYL1 801-811 (DS:0x341/
+   *  0x354/0x366 peeked, tools/attract-capture/joyl1.inventory.peek.json). */
+  _inventoryTap(input, pickup) {
+    this.noKey = 0;                                         // CS:0x6134
+    if (this.fireLatch) {                                   // CS:0x613C
+      if (!input.fire) this.fireLatch = 0;                  // CS:0x614D
+      return;
+    }
+    if (!input.fire) return;                                // CS:0x6155
+    this.inventoryCycled = true;                            // CS:0x6160 0x2831
+    const panel = pickup && pickup.panel;
+    if (panel) panel.pending = (panel.selector + 1) & 3;    // CS:0x616A-0x6171
+    this.fireLatch = 1;                                     // CS:0x6174
+    this.scanned = 1;                                       // CS:0x6179
+  }
+
   _crouch(input, pickup) {
     if (input.down) {
       /* CS:0x4B11/0x4B86 `mov cl,1` — the animation phase is PINNED while
@@ -1844,15 +1892,17 @@ export class Player {
        * collection (CS:0x60E4), exactly like the scan itself — not before,
        * so crouching over a key with fire released still finds it (and
        * silently leaves it) every tick, matching CS:0x60EB's "put it back". */
-      if (pickup) {
-        const key = scanForKey(pickup.objects, pickup.cats, this);
-        if (key && input.fire) {
-          key.dead = true;                 // CS:0x60D8 `[si+4] = 0xffff`
-          key.flag6 = 0;                   // CS:0x60DD `[si+6] = 0`
-          const slot = collectKey(pickup.inventory, key.type);
-          this.keyCollected = { type: key.type, slot };
-        }
+      if (!this.scanned) {                                  // CS:0x4B13 -> 0x6069
+        this._keyScan(input, pickup);
+      } else if (!this.noKey) {                             // CS:0x4B1D -> 0x6134
+        this._inventoryTap(input, pickup);
+      } else if (input.fire) {                              // CS:0x4B27 -> 0x612F
+        this.fireLatch = 1;                                 //   then falls into 0x6134
+        this._inventoryTap(input, pickup);
       }
+      /* else CS:0x4B31: drop the selected slot's item (CS:0x61A1) — NOT
+       * PORTED (see the S.CROUCH_R note). Then CS:0x4B48 re-tests [0x354],
+       * which is set on this path, so nothing more happens. */
       this.stateIndex = this.facing < 0 ? S.CROUCH_L : S.CROUCH_R;
       return;
     }

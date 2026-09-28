@@ -20,6 +20,8 @@ measure is. Writes barrier_live.json (or `--out FILE`).
 
   python3 armwait.py 4 && python3 barrier_live.py 300 60:800:64:640:0
   python3 armwait.py 4 && python3 barrier_live.py 400 60:480:96:320:0 140:800:64:640:0 --out barrier_live2.json
+  python3 armwait.py 0 && python3 barrier_live.py 120 60:3008:656:3100:560 110:320:672:3100:560 \
+      --cells '100,39;100,40;100,41;100,42' --hold --out barrier_disable.json
 """
 import json, sys
 from sweep import DS, CS, SS, call, mem, word, wait_stop
@@ -49,9 +51,15 @@ def poke(off, v):
 
 def main():
     args = sys.argv[1:]
-    out = 'barrier_live.json'
+    out, cells, hold = 'barrier_live.json', [], '--hold' in args
+    if hold:
+        args.remove('--hold')
     if '--out' in args:
         i = args.index('--out'); out = args[i + 1]; del args[i:i + 2]
+    if '--cells' in args:                       # col,row;col,row — plane B logged each rescan
+        i = args.index('--cells')
+        cells = [tuple(int(v) for v in c.split(',')) for c in args[i + 1].split(';')]
+        del args[i:i + 2]
     ticks = int(args[0])
     steps = [dict(zip(('c', 'hx', 'hy', 'cx', 'cy'), (int(v) for v in a.split(':')))) for a in args[1:]]
     here = __file__.rsplit('/', 1)[0]
@@ -86,13 +94,16 @@ def main():
                         'hx': s16(word(DS, 0x17A)), 'hy': s16(word(DS, 0x17C)), 'slots': slots()})
         elif ip in POST:
             log.append({'c': cur, 'ev': 'post', 'b395': mem(DS, 0x395, 1)[0],
-                        'n364': mem(DS, 0x364, 1)[0], 'slots': slots()})
+                        'n364': mem(DS, 0x364, 1)[0], 'slots': slots(),
+                        'planeB': {f'{c},{r}': mem(DS, 0x5004 + r * 0x80 + c, 1)[0] for c, r in cells},
+                        'raw': mem(DS, SLOTS, STRIDE * 25).hex() if cells else None})
             n += 1
         else:
             log.append({'c': cur, 'ev': 'play' if ip == 0x22CA else 'stop',
                         'id': hex(reg['eax'] & 0xFFFF), 'ret': hex(word(SS, reg['esp'] & 0xFFFF))})
     call('DELETE', '/debug/breakpoints')
-    call('POST', '/debug/continue')
+    if not hold:
+        call('POST', '/debug/continue')
     json.dump({'steps': steps, 'world': world, 'cycler': cycler, 'roland': mem(DS, 0x85, 1)[0] == 2, 'log': log},
               open(f'{here}/{out}', 'w'), indent=0)
     print(len(log), 'events; world', world, 'rescans', n, flush=True)

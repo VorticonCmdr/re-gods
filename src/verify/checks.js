@@ -9594,24 +9594,19 @@ export async function checkWeaponsProjectiles(fetchRaw) {
       const lever = { x: 0, y: startY, type: 24, flag6: 0 };   // "lever off", category 3
       const cats3 = new Uint8Array(STAMPED_TYPES);
       cats3[24] = CATEGORY.LEVER;
-      // Drive it through the REAL entry point, not a hand-set `fallDirty` —
-      // the port's own gate is in `isFallEligible`/`activateObjects`, not in
-      // `stepObjectFall` itself (which mirrors CS:0x1511-0x1631 and, like
-      // the original, never re-checks category on its own).
+      // Drive it through the REAL entry point, not a hand-set `fallDirty`:
+      // CS:0x120F arms EVERY newly active object, and CS:0x15F1-0x15F8 undoes
+      // the move for type<0xC0 && category>=3, so the lever runs the cycle
+      // (and plays its sounds) without moving.
       activateObjects([weapon, lever], activationBox(0, 0), cats3);
-      for (let t = 0; t < 30; t++) { stepObjectFall(map, weapon); stepObjectFall(map, lever); }
-      check(`a weapon over open air falls; a lever placed identically never even enters the fall system`,
+      for (let t = 0; t < 30; t++) { stepObjectFall(map, weapon, cats3); stepObjectFall(map, lever, cats3); }
+      check(`a weapon over open air falls; a lever placed identically is armed too but never moves`,
         weapon.fallDirty !== undefined && weapon.y > startY
-          && lever.fallDirty === undefined && lever.y === startY,
+          && lever.fallDirty === -1 && lever.y === startY,
         `after activation + 30 ticks over solid-free ground: weapon ` +
         `fallDirty=${weapon.fallDirty} y=${weapon.y} (fell ${weapon.y - startY}px); ` +
-        `lever fallDirty=${lever.fallDirty} y=${lever.y} (unchanged, and ` +
-        `never armed at all). CS:0x1613 restores a category>=3 object's Y ` +
-        `every tick regardless of what the fall/bounce state machine ` +
-        `computed, so this port gates UP FRONT (isFallEligible, applied at ` +
-        `the same CS:0x120F activation edge) instead of computing motion it ` +
-        `would only have to discard — this is the discriminating half of ` +
-        `the fix the user actually reported`);
+        `lever fallDirty=${lever.fallDirty} y=${lever.y} (armed, Y restored ` +
+        `every tick by CS:0x1613)`);
     }
 
     /* The activation gate above is not the only way in: CS:0xC041 arms the
@@ -15482,27 +15477,46 @@ export async function checkLineBarriers(fetchRaw) {
     };
     const lb = new LineBarriers(trailMap, [rec]);
     lb.arm(0, 7);
-    check('arm() itself stamps the starting cell (col 0, row 0) solid',
-      trailMap.planeB[0] === 1 && lb.stampedCells.size === 1);
+    check('arm() stamps nothing: CS:0x77D6 runs only in the rescan',
+      trailMap.planeB[0] === 0 && trailMap.planeB[1] === 0 && lb.stampedCells.size === 0);
 
-    lb.tick();   // x: 16 -> 32 (rem 0, not yet arrived), col 0 -> col 1
-    check('crossing a cell boundary vacates the old cell (back to 0) and '
-      + 'claims the new one (set to 1) -- the previous cell is not left '
-      + 'behind as a permanent trail',
+    lb.tick();   // x: 16 -> 32 (rem 0): the rounded anchor (32+16)>>5 is col 1
+    check('the rescan stamps the ROUNDED cell of the displayed position, '
+      + 'column (x+16)>>5 (CS:0x77E0) — col 1 at x = 32',
       trailMap.planeB[0] === 0 && trailMap.planeB[1] === 1 && lb.stampedCells.size === 1,
       `planeB[0]=${trailMap.planeB[0]} planeB[1]=${trailMap.planeB[1]} size=${lb.stampedCells.size}`);
 
     lb.tick();   // arrival: the display stays at 32, the walker reseeds from 33 to 49
-    check('an arrival tick that shows the same position does not touch '
-      + 'plane B at all', trailMap.planeB[1] === 1 && lb.stampedCells.size === 1);
+    check('the next rescan restores the saved value first (CS:0x75C7) and '
+      + 're-stamps the same cell: still exactly one',
+      trailMap.planeB[1] === 1 && lb.stampedCells.size === 1);
 
     for (let i = 0; i < 3; i++) lb.tick();   // 49 -> 65 -> 81 -> arrive at 96: col 2 then col 3
     check('after crossing two more cell boundaries on the way to point 2, '
-      + 'exactly one cell is stamped (the current one) -- stampedCells '
-      + 'never grows across the whole patrol, only ever tracks the live '
-      + 'footprint', trailMap.planeB[0] === 0 && trailMap.planeB[1] === 0
+      + 'exactly one cell is stamped (the current one) and every cell it '
+      + 'left has its old value back',
+      trailMap.planeB[0] === 0 && trailMap.planeB[1] === 0 && trailMap.planeB[2] === 0
         && trailMap.planeB[3] === 1 && lb.stampedCells.size === 1,
       `planeB=[${trailMap.planeB[0]},${trailMap.planeB[1]},${trailMap.planeB[2]},${trailMap.planeB[3]}] size=${lb.stampedCells.size}`);
+
+    /* A cell that held something else (an event value, 19) gets it back,
+     * and a type-0xFF dispatch frees the slot so its cells clear too
+     * ([PROVEN] live, PLEV3B record 3: DS:0x5004 cells 100,41/42). */
+    const evMap = { planeA: new Uint8Array(n), planeB: new Uint8Array(n) };
+    evMap.planeB[1] = 19;
+    const evRec = { ...rec, types: [0, -1, -1, -1] };
+    const ev = new LineBarriers(evMap, [evRec]);
+    ev.arm(0, 7); ev.tick();
+    const stamped = evMap.planeB[1];
+    for (let i = 0; i < 3; i++) ev.tick();
+    check('a cell the barrier leaves gets its own value back (19), not 0',
+      stamped === 1 && evMap.planeB[1] === 19, `stamped=${stamped} after=${evMap.planeB[1]}`);
+    ev.arm(0, 8);                                  // types[1] = -1: the disable
+    const freed = ev.slots[0] === null;
+    ev.tick();
+    check('a type-0xFF dispatch frees an armed slot (CS:0x78DC) and the next '
+      + 'rescan leaves none of its cells stamped',
+      freed && evMap.planeB.every((v, i) => v === (i === 1 ? 19 : 0)) && ev.stampedCells.size === 0);
   }
 
   /* ── cycling against real shipped data — PALFILS.0A2/PLEV2A record 9, one
@@ -15585,8 +15599,9 @@ export async function checkLineBarriers(fetchRaw) {
     check('the spawn-point probe dispatches (consumes an event, returns '
       + 'null — every armed selector returns null, matching selectors '
       + '1/2/4/5)', dispatched === null);
+    lineBarriers.tick();   // CS:0x77D6 stamps in the rescan, not at the arm
     check('arming the barrier flips plane B at the missing-platform cell to '
-      + '1 (solid) — the collision half of the fix',
+      + '1 (solid) at the next rescan — the collision half of the fix',
       map.planeB[cell] === 1);
     const cells = [...lineBarriers.cells()];
     const filled = cells.find((c) => c.col === 5 && c.row === 52);

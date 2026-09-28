@@ -192,13 +192,14 @@ export class LineBarriers {
      * live-tested records this session read back at exactly this offset).
      * null = free. */
     this.slots = new Array(RECORD_COUNT).fill(null);
-    this.stampedCells = new Set();
-    this.unresolvedTile = 0;
+    this.stampedCells = new Set();   // the cells stamped by the last rescan
+    this.saved = [];                 // [cell, old value], the list at DS:0x1EFE
+    this.unresolvedTile = 0;   // armed barriers whose footprint borrowed no neighbour tile
     /* DS:0x364, the arm count, and the rescan's own entry byte CS:0x767A
      * (RET until an arm writes NOP at CS:0x7635). The level init CS:0x8D11/
      * 0x8D17 resets both, silently. */
     this.count = 0;
-    this.gate = false;   // armed barriers whose footprint borrowed no neighbour tile
+    this.gate = false;
   }
 
   /**
@@ -230,13 +231,18 @@ export class LineBarriers {
 
     /* CS:0x7669 -- dispatch through this SELECTOR's own type byte
      * (table25[+0x16+slotIdx]). CS:0x78DC (type 0xFF, "disabled") sets
-     * DI+4 = 0xFF, which frees an already-armed slot too, and decrements the
-     * active count. Not modelled: no shipped event disables a record another
-     * event can have armed (see checks.js), and what becomes of a freed
-     * slot's plane-B stamp is not established. */
+     * DI+4 = 0xFF, which FREES an already-armed slot, and decrements the
+     * count the arm just raised. The next rescan neither draws nor stamps a
+     * freed slot, so the barrier vanishes and its cells go back to what they
+     * held. [PROVEN] live (tools/attract-capture/barrier_live.py, PLEV3B
+     * record 3 armed by event 38 and freed by event 70). */
     const type = rec.types[slotIdx];
     const behavior = classifyType(type);
-    if (behavior.kind === 'disabled') { this.count--; return; }   // CS:0x78E4
+    if (behavior.kind === 'disabled') {                // CS:0x78DC
+      this.count--;                                    // CS:0x78E4
+      this.slots[recordIndex] = null;                  // DI+4 = 0xFF
+      return;
+    }
 
     const prev = this.slots[recordIndex];
     const from = prev ? { x: prev.x, y: prev.y } : { x: rec.srcX, y: rec.srcY };   // CS:0x7648
@@ -248,14 +254,14 @@ export class LineBarriers {
       settled: false, pointIdx, rec, speed: rec.stepSeed + 1,
       x: from.x, y: from.y, walker: null,
       width: rec.width, rows: rec.rows, skipSolid: rec.skipSolid,
-      footprint: prev ? prev.footprint : undefined,
     };
     this.#seed(state, from.x, from.y, rec.targets[pointIdx]);
     state.x = state.walker.line.x; state.y = state.walker.line.y;   // CS:0x7674
     state.tileId = this.#resolveTile(state);
     if (state.tileId === null) this.unresolvedTile++;
     this.slots[recordIndex] = state;
-    this.#restamp(state);
+    /* No stamp here: CS:0x77D6 runs only in the rescan, so plane B changes
+     * at the next one. */
   }
 
   /** `CS:0x7A2A`: seed a leg from (x, y) toward `target` — the remaining
@@ -322,9 +328,11 @@ export class LineBarriers {
   tick(cam = null) {
     if (!this.gate) return null;
     if (this.count === 0) { this.gate = false; return { active: false, moved: false }; }
+    this.#restoreStamps();                              // CS:0x769B-0x76A2 -> 0x75C7
     let movedOnScreen = false;
     for (const state of this.slots) {
-      if (!state || state.settled) continue;
+      if (!state) continue;                             // CS:0x76BB `js`: free
+      if (state.settled) { this.#stamp(state); continue; }   // 7845 returns at once; 77D6 still stamps
       const x0 = state.x, y0 = state.y;
       this.#walk(state);
       const w = state.walker;
@@ -340,12 +348,13 @@ export class LineBarriers {
           this.#seed(state, w.line.x, w.line.y, state.rec.targets[state.pointIdx]);
         }
       }
-      if (state.x === x0 && state.y === y0) continue;
-      state.tileId = this.#resolveTile(state);
-      this.#restamp(state);
-      if (cam && barrierOnScreen(state.x - cam.x, state.y - cam.y, state.rec.rawWh, state.rec.rawRows)) {
-        movedOnScreen = true;
+      if (state.x !== x0 || state.y !== y0) {
+        state.tileId = this.#resolveTile(state);
+        if (cam && barrierOnScreen(state.x - cam.x, state.y - cam.y, state.rec.rawWh, state.rec.rawRows)) {
+          movedOnScreen = true;                         // CS:0x76D7 -> 0x7720
+        }
       }
+      this.#stamp(state);                               // CS:0x76DF -> 0x77D6
     }
     return { active: true, moved: movedOnScreen };
   }
@@ -380,45 +389,35 @@ export class LineBarriers {
     return null;
   }
 
-  /** `width x rows` map cells anchored at the barrier's current `(x, y)`. */
-  #footprintCells(state) {
-    const col0 = state.x >> 5, row0 = state.y >> 4;
-    const cells = [];
+  /** `FUN_1000_77d6` — every rescan, for every armed slot (settled ones
+   *  too) unless the record's +0x1A bit 7 is set: a `width x rows` block of
+   *  plane-B cells anchored at the ROUNDED cell of the displayed position,
+   *  column (x + 16) >> 5, row (y + 8) >> 4 (CS:0x77E0-0x77E9), each cell's
+   *  old value saved to the list at [0x22C] (from DS:0x1EFE) and the cell
+   *  set to 1. */
+  #stamp(state) {
+    if (state.skipSolid) return;                        // CS:0x77D6
+    const col0 = (state.x + 16) >> 5, row0 = (state.y + 8) >> 4;
     for (let r = 0; r < state.rows; r++) {
       for (let c = 0; c < state.width; c++) {
         const col = col0 + c, row = row0 + r;
         if (col < 0 || col >= MAP_COLS || row < 0 || row >= MAP_ROWS) continue;
-        cells.push(row * MAP_COLS + col);
+        const cell = row * MAP_COLS + col;
+        this.saved.push([cell, this.map.planeB[cell]]);   // CS:0x7820-0x7827
+        this.map.planeB[cell] = 1;                        // CS:0x782C
+        this.stampedCells.add(cell);
       }
     }
-    return cells;
   }
 
-  /** `FUN_1000_77d6` — stamp `width x rows` plane-B cells solid, anchored at
-   *  the barrier's own current `(x, y)`, unless the record's own skip bit is
-   *  set. For a settle barrier this runs once, at arm time, and the
-   *  footprint never changes again. For a CYCLING barrier `tick()` calls
-   *  this every frame, so any cell the footprint just vacated is released
-   *  first (back to 0, unless some OTHER live slot's own footprint still
-   *  covers it — checked so two barriers can never un-solid each other's
-   *  shared ground) before the new footprint is stamped. */
-  #restamp(state) {
-    const next = state.skipSolid ? [] : this.#footprintCells(state);
-    const nextSet = new Set(next);
-    const prev = state.footprint;
-    if (prev) {
-      for (const cell of prev) {
-        if (nextSet.has(cell)) continue;
-        this.stampedCells.delete(cell);
-        const stillHeld = this.slots.some((s) => s && s !== state && s.footprint && s.footprint.has(cell));
-        if (!stillHeld) this.map.planeB[cell] = 0;
-      }
-    }
-    for (const cell of next) {
-      this.map.planeB[cell] = 1;
-      this.stampedCells.add(cell);
-    }
-    state.footprint = nextSet;
+  /** `CS:0x75C7`, at the top of every rescan: write each saved old value
+   *  back, in the order saved, and empty the list. So a stamp lasts one
+   *  rescan, a cell a barrier has left gets its own value back (live: an
+   *  event cell, 19, in PLEV3B), and a freed slot's cells clear. */
+  #restoreStamps() {
+    for (const [cell, old] of this.saved) this.map.planeB[cell] = old;
+    this.saved = [];
+    this.stampedCells.clear();
   }
 
   /** Undo every stamp this system made and free every slot — level
@@ -428,8 +427,7 @@ export class LineBarriers {
    *  writes plane B outside a level's own trigger-action verbs, which run
    *  after this and are reset by the ordinary level-reload path anyway). */
   clear() {
-    for (const cell of this.stampedCells) this.map.planeB[cell] = 0;
-    this.stampedCells.clear();
+    this.#restoreStamps();
     this.slots.fill(null);
     this.count = 0; this.gate = false;               // CS:0x8D11 / 0x8D17
   }
@@ -438,7 +436,7 @@ export class LineBarriers {
 
   /** `FUN_1000_7779` — every armed barrier's own footprint, in map cells.
    *  World/screen-independent; the caller applies the camera. Clipped to the
-   *  128x64 map exactly like `#restamp`'s own solid-fill — a handful of
+   *  128x64 map exactly like `#stamp`'s own solid-fill — a handful of
    *  shipped `rows`/`width` values on levels 4A/4B run one cell past the
    *  map's own last row (the world is exactly 1024px tall; a footprint
    *  anchored at row 63 with rows >= 2 reaches row 64, which does not

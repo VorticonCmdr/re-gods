@@ -105,7 +105,7 @@ export function stepHeroFrame({ input, arsenal, grid, player, map, cam,
                                burst = null, alloc = null, starburst = null,
                                blocks = null, debris = null, tock = 1, tock36d = tock,
                                inventory = null, levers = null,
-                               leverToggle = null, invuln = false,
+                               leverToggle = null, invuln = false, panel = null,
                                zoneScan = null, beforePlayer = null,
                                objectPass = true, effects = null,
                                heroDead = false, familiar = null }) {
@@ -192,7 +192,7 @@ export function stepHeroFrame({ input, arsenal, grid, player, map, cam,
    * the 4-slot inventory (DS:0x17e). `pickup.js` documents why the scan is
    * cheap to re-run every tick unconditionally. `levers`/`leverToggle` feed
    * IDLE+FIRE's own lever scan (CS:0x1045, game/levers.js) the same way. */
-  const pickupCtx = objects ? { objects, cats, inventory, levers, leverToggle, zoneScan } : null;
+  const pickupCtx = objects ? { objects, cats, inventory, levers, leverToggle, zoneScan, panel } : null;
   /* ⚠️ ORDER MATTERS. CS:0x0206's object-draw pass (where CS:0x1D67's own
    * `inc [0x3a2]` lives) runs BEFORE CS:0x0254's player dispatch (where
    * CS:0x10BE's `[0x3a2]:=0` arms it) in the ORIGINAL's own per-tick order —
@@ -227,7 +227,7 @@ export function stepHeroFrame({ input, arsenal, grid, player, map, cam,
     return { heroDead, projectiles, emitted: null, picked: picked.taken,
              consumed: picked.consumed || [], treasures: picked.treasures || [],
              loot, burstFx, blockFx, debrisFx, familiarDraw, keyCollected: null, leverToggled: null,
-             footstep: false, climbStep: false, ladderLand: false };
+             footstep: false, climbStep: false, landSfx: 0, inventoryCycled: false };
   }
   player.tick(map, input, arsenal, tock, pickupCtx, healthApi, tock36d);   // 0254
   return { projectiles, emitted: player.emitted, picked: picked.taken,
@@ -241,7 +241,7 @@ export function stepHeroFrame({ input, arsenal, grid, player, map, cam,
             * WALK_FOOTSTEP_PHASES, climbStep only at the ping-pong
             * turn-arounds behind the tock===0 early return) — surfacing them
             * here is not a "per tick" trigger, it is the tuned one. */
-           footstep: player.footstep, climbStep: player.climbStep, ladderLand: player.ladderLand };
+           footstep: player.footstep, climbStep: player.climbStep, landSfx: player.landSfx, inventoryCycled: player.inventoryCycled };
 }
 
 /**

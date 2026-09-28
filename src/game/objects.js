@@ -262,7 +262,7 @@ export function activateObjects(objects, box, cats) {
     if (out) { o.flag6 = 0; continue; }            // CS:0x1215 — NOT sticky
     if (!(o.flag6 & 1)) {
       newly++;                                     // CS:0x120F marks it dirty
-      if (cats && isFallEligible(o.type, cats)) o.fallDirty = -1;   // SS:0x438 := 0xFF, same instant
+      if (cats) o.fallDirty = -1;                  // SS:0x438 := 0xFF, same instant, EVERY category
     }
     o.flag6 |= 1;                                  // CS:0x1208
   }
@@ -306,9 +306,15 @@ export function activateObjects(objects, box, cats) {
  * DS:0xdf2c is walked, ADDING each entry to the object's real Y once per
  * tick. Read live via `read_memory("1ffd:df2c", 24)` — note 1ffd, not 1000,
  * per this project's own DS-segment warning — and confirmed BYTE-IDENTICAL
- * to the already-documented time-bomb settling-bounce table. There is no
- * shipped audio engine, so the accompanying sound-cue table at SS:0x5450
- * (which only gates whether a thud plays, never motion) is dropped.
+ * to the already-documented time-bomb settling-bounce table.
+ *
+ * THE SOUNDS (an earlier version dropped them). Landing from a fall
+ * (CS:0x15E0-0x15EB, not from the terminal 24) plays 0x504. Each bounce
+ * step first reads SS:0x5450[n] (the time bomb's table, image file
+ * 0x249B0: 1, 2, 3 at n = 9, 16, 21, the first step of arcs 2-4) and, when
+ * it is non-zero, plays 0x500 | (entry + 4) (CS:0x13E6-0x13EF, `mov ah,5`):
+ * 0x505, 0x506, 0x507. They sound for every object in the fall system,
+ * levers included, since the category restore comes after (CS:0x15F1).
  *
  * THE TERMINAL STATE — once the dirty byte clamps at 24 (0x18), CS:0x142D
  * jumps straight back into the ground probe every tick forever, bypassing
@@ -324,10 +330,14 @@ export function activateObjects(objects, box, cats) {
  * categories 4/5). Every sub-path above — the fall step, the bounce-delta
  * add, and the terminal re-probe — funnels through the SAME shared tail at
  * CS:0x15F1 before this restore is reached, so the undo is unconditional: a
- * lever's dirty byte silently ticks through its whole fall/bounce cycle
- * every time it is (re)activated, but its Y is pinned back every single
- * tick and it never actually moves. So this port applies the gate UP FRONT
- * (`isFallEligible`) instead of computing motion it would only discard.
+ * lever's dirty byte ticks through its whole fall/bounce cycle every time
+ * it is (re)activated, but its Y is pinned back every single tick and it
+ * never actually moves. ⚠️ Not silently, though: the cycle PLAYS the
+ * landing and bounce sounds (below), so a lever coming into view thuds.
+ * An earlier version applied the gate up front (`isFallEligible`, not
+ * arming such objects at all) and lost those sounds ([PROVEN] live: PJOYL2
+ * 1905-1927). Every activated object is armed now; the restore does the
+ * rest.
  *
  * ⚠️ Weapon pickups (type >= 0xC0) skip the category test entirely
  * (CS:0x15F5 `cmp cx,0xc0 / jl ... / jmp 0x1da0`), so they always fall.
@@ -404,29 +414,42 @@ function isGrounded(map, x, y) {
  * @param {Object<number,number>} [cats]  POBJECTS categories by type
  */
 export function stepObjectFall(map, o, cats) {
-  if (o.fallDirty === undefined || o.dead) return;
+  if (o.fallDirty === undefined || o.dead) return 0;
   const y0 = o.y;
-  stepMotion(map, o);
+  const sfx = stepMotion(map, o);
   if (!o.dead && o.type < WEAPON_TYPE_MIN && cats && (cats[o.type] ?? -1) >= CATEGORY.LEVER) {
     o.y = y0;                                          // CS:0x15F1-0x15F8
   }
+  return sfx;
 }
 
+/** CS:0x15E8 — an object lands. */
+export const OBJECT_LAND_SFX = 0x504;
+/** SS:0x5450 (image file 0x249B0), read at CS:0x140F: per bounce index, 0 or
+ *  the low nibble of the sound CS:0x13E6 plays (+4, | 0x500). */
+export const BOUNCE_SFX_AT = Object.freeze([
+  0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 3, 0, 0,
+]);
+
+/** @returns {number} the sound id this step plays, or 0 */
 function stepMotion(map, o) {
   if (o.fallDirty === -1 || o.fallDirty === BOUNCE_TERMINAL) {
     if (isGrounded(map, o.x, o.y)) {
-      if (o.fallDirty !== BOUNCE_TERMINAL) o.fallDirty = 0;   // CS:0x15E0 — start the bounce (else stays 24, CS:0x15DE)
-      return;
+      if (o.fallDirty === BOUNCE_TERMINAL) return 0;   // CS:0x15DA-0x15DE — stays 24, silent
+      o.fallDirty = 0;                                 // CS:0x15E0 — start the bounce
+      return OBJECT_LAND_SFX;                          // CS:0x15E4-0x15E8
     }
     o.y = (o.y + FALL_STEP) & 0xFFFC;                  // CS:0x1587-0x158F
     o.fallDirty = -1;                                  // CS:0x158B — re-arm the sentinel
     if (o.y >= WORLD_HEIGHT) {                          // CS:0x1598-0x15A3
       o.dead = true; o.type = 0xffff; o.flag6 = 0;
     }
-    return;
+    return 0;
   }
+  const cue = BOUNCE_SFX_AT[o.fallDirty];               // CS:0x140F
   o.y += BOUNCE_DELTA[o.fallDirty];                     // CS:0x1416
   o.fallDirty = Math.min(o.fallDirty + 1, BOUNCE_TERMINAL);   // CS:0x1419-0x1420
+  return cue ? 0x500 | (cue + 4) : 0;                   // CS:0x13E6-0x13EF
 }
 
 /** CS:0x8FEF — map records -> the 200-slot runtime array. */

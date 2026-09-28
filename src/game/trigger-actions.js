@@ -249,8 +249,7 @@ function act0(t, ctx) {
    * never set, so the item hung where the trigger placed it. [PROVEN]
    * against PJOYL2 cursors 1807-1813 (trigger 61, 317 -> 340). ACT1
    * (CS:0x3E08) writes no dirty byte and stays put. */
-  const cat = ctx.categoryOf ? ctx.categoryOf(type) : undefined;
-  if (type >= WEAPON_TYPE_MIN || (cat !== undefined && cat < CATEGORY.LEVER)) slot.fallDirty = -1;
+  slot.fallDirty = -1;   // every category: the walk restores y for category >= 3 (objects.js)
   ctx.spawned.push(slot);
 
   if (type >= 0x40 && type <= 0x44) return { verb: 0, ok: true, type, quiet: true };

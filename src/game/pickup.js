@@ -281,13 +281,16 @@ export function stepPickups(objects, hero, arsenal, bar = 1,
     o.dead = true;
     const rank = consumableRank(o.type, cats);
     const h = CONSUMABLES[rank];
-    if (!h) { consumed.push({ type: o.type, x: o.x, y: o.y, rank, unknownRank: true }); continue; }
+    /* CS:0x17EF and CS:0x181B both play 0x638 BEFORE the handler call at
+     * CS:0x1829, so every category-0 pickup sounds, whatever its handler
+     * does ([PROVEN] live: PJOYL1 cursor 56, the tablet). */
+    if (!h) { consumed.push({ type: o.type, x: o.x, y: o.y, rank, unknownRank: true, sfx: PICKUP_SFX }); continue; }
     /* Every handler is decoded now, but only the WIRED ones have an effect
      * this port can apply — the rest are reported with the reason. */
     if (!WIRED.includes(h.effect)) {
       consumed.push({ type: o.type, x: o.x, y: o.y, rank, at: h.at, effect: h.effect,
                       name: h.name, desc: h.desc,
-                      notWired: NOT_WIRED_REASON[h.effect] || 'not modelled' });
+                      notWired: NOT_WIRED_REASON[h.effect] || 'not modelled', sfx: PICKUP_SFX });
       continue;
     }
     const r = applyConsumable(h, { health, arsenal, ...(effects || {}) });
@@ -410,16 +413,24 @@ export function objectNearHotPoint(objects, hero) {
  * @returns {?object} the first matching key object, or null.
  */
 export function scanForKey(objects, cats, hero) {
+  return crouchScan(objects, cats, hero).key;
+}
+
+/** The same scan, telling its two empty outcomes apart: a weapon in the box
+ *  ABORTS it (`abort`, CS:0x60C9 `jmp 0x5e9b`), while running off the end of
+ *  the table is "no key here" (CS:0x60B4 `[0x355] = 1`), which the crouch
+ *  state machine needs. @returns {{key: ?object, abort: boolean}} */
+export function crouchScan(objects, cats, hero) {
   const hot = keyHotPoint(hero);
   for (const o of objects) {
     if (o.dead || isDeadType(o.type)) continue;   // CS:0x6086 `js`
     if (!o.flag6) continue;                       // CS:0x608c `jz`
     if (!hotPointHitsBox(o, hot, true)) continue;
-    if (o.type >= WEAPON_CMP) return null;     // CS:0x60C7 — ABORT, not skip
+    if (o.type >= WEAPON_CMP) return { key: null, abort: true };   // CS:0x60C7 — ABORT, not skip
     if (cats[o.type] !== CATEGORY.KEY) continue;   // CS:0x60CF `jnz next`
-    return o;
+    return { key: o, abort: false };
   }
-  return null;
+  return { key: null, abort: false };
 }
 
 /**

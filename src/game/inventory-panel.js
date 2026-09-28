@@ -333,10 +333,13 @@ export function panelIconSprite(type) {
  */
 export class InventoryPanel {
   constructor() {
-    /** DS:0x366 — which slot draws highlighted. FIRE-tap cycling (CS:0x615F)
-     *  is unported (see header), so this stays 0 in this port, except that
-     *  the game-completion restart sets 3 (CS:0x048F; main.js). */
+    /** DS:0x366 — which slot draws highlighted. Moved by the crouch FIRE
+     *  tap (player.js `_crouch`, CS:0x615F) through `pending`; zeroed at
+     *  every level entry (CS:0x8D73/0x8D78). */
     this.selector = 0;
+    /** DS:0x367 — the pending selector the FIRE tap writes (CS:0x6171);
+     *  the panel draw copies it into DS:0x366 (CS:0x1F5A). */
+    this.pending = 0;
     this.counter = 0;   // DS:0x350
     this.delta = 0;     // DS:0x352
   }
@@ -377,6 +380,9 @@ export class InventoryPanel {
   step(crouching) {
     if (crouching) this._extend(); else this._retract();
     this._chaseStep();
+    /* CS:0x1F5A, from the panel draw every frame: [0x366] := [0x367]. The
+     * FIRE tap's new slot shows the same tick ([PROVEN] live, PJOYL1 809). */
+    if (this.pending !== this.selector) this.selector = this.pending;
   }
 
   /** CS:0x1e88-0x1e9a — is `slot` drawn with the highlighted frame right now? */

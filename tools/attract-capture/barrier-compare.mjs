@@ -34,7 +34,10 @@ import { LoopSfx } from '../../src/game/loop-sfx.js';
 const here = dirname(fileURLToPath(import.meta.url));
 const raw = (n) => new Uint8Array(readFileSync(join(resolve(here, '..', '..', 'public', 'game'), n)));
 const [key = '2B', file = 'barrier_live.json', ...pairs] = process.argv.slice(2);
-const arms = (pairs.length ? pairs : ['9:7']).map((p) => p.split(':').map(Number));
+/* `rec:sel` arms at the first post showing the slot; `rec:sel:free` is a
+ * type-0xFF dispatch, applied before the first post where an armed slot is
+ * gone again. */
+const arms = (pairs.length ? pairs : ['9:7']).map((p) => p.split(':')).map(([r, s, f]) => [+r, +s, f === 'free']);
 
 const live = JSON.parse(readFileSync(join(here, file), 'utf8'));
 const map = parseMap(dclDecompress(raw(`PLEV${key}.MAP`)).data);
@@ -59,9 +62,10 @@ for (const e of live.log) {
 }
 /* Arm each record after the rescan before the first post that shows it. */
 const armAt = new Map();
-for (const [rec, sel] of arms) {
-  const k = rescans.findIndex((t) => t.post && t.post.slots[rec]);
-  if (k < 1) { console.log(`record ${rec} never armed live`); process.exit(1); }
+for (const [rec, sel, free] of arms) {
+  const on = rescans.findIndex((t) => t.post && t.post.slots[rec]);
+  const k = free ? rescans.findIndex((t, i) => i > on && t.post && !t.post.slots[rec]) : on;
+  if (k < 1) { console.log(`record ${rec} never ${free ? 'freed' : 'armed'} live`); process.exit(1); }
   armAt.set(k - 1, (armAt.get(k - 1) || []).concat([[rec, sel]]));
 }
 const first = Math.min(...armAt.keys());
@@ -76,7 +80,7 @@ for (let k = first; k < rescans.length; k++) {
   const r = lb.tick({ x: t.pre.camX, y: t.pre.camY });
   if (r) sfx.barrierTick(r.active, r.moved, out);
   if (t.post) {
-    for (const [rec] of arms) {
+    for (const rec of new Set(arms.map(([r]) => r))) {
       const s = lb.slots[rec], L = t.post.slots[rec];
       if (!s && !L) continue;
       if (!s || !L) { diffs.push({ k, c: t.pre.c, rec, f: 'armed', port: !!s, dos: !!L }); continue; }
@@ -88,6 +92,10 @@ for (let k = first; k < rescans.length; k++) {
       for (const f of Object.keys(got)) if (got[f] !== want[f]) diffs.push({ k, c: t.pre.c, rec, f, port: got[f], dos: want[f] });
     }
     if (sfx.barrier !== t.post.b395) diffs.push({ k, c: t.pre.c, f: 'b395', port: sfx.barrier, dos: t.post.b395 });
+    for (const [cr, v] of Object.entries(t.post.planeB || {})) {   // DS:0x5004 + row*0x80 + col
+      const [col, row] = cr.split(',').map(Number);
+      if (map.planeB[row * 128 + col] !== v) diffs.push({ k, c: t.pre.c, f: `planeB ${cr}`, port: map.planeB[row * 128 + col], dos: v });
+    }
     if (t.post.b395) onScreen++;
     compared++;
   }
@@ -102,4 +110,5 @@ console.log(JSON.stringify({ key, file, arms, roland: !!live.roland, rescans: re
   deathRescans: rescans.slice(first).filter((t) => t.pre.death).length,
   livePlays: plays, liveStops: stops, onScreenRescans: onScreen,
   range: Object.fromEntries(arms.map(([rec]) => [rec, [Math.min(...xs(rec)), Math.max(...xs(rec))]])),
+  planeBCells: Object.keys(rescans.find((t) => t.post?.planeB)?.post.planeB || {}),
   diffs: diffs.length, first: diffs.slice(0, 10) }));
