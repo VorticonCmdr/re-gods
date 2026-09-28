@@ -439,6 +439,7 @@ export function applyConsumable(entry, state) {
     case 'shop':                                     // CS:0x61E9
       state.shop = true;
       state.stateMachineSuspended = true;            // [0x363] = 0x41, a POSITIVE
+      if (state.shopkeeper) state.shopkeeper.summon();   // game/shopkeeper.js
       return { dx: MSG_CLEAR_394 };
     case 'starburst':                                // CS:0x61F7 -> CS:0xA461
       /* The potion bursts at the hero's CENTRE, not his anchor. */

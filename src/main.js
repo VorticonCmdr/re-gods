@@ -83,6 +83,7 @@ import { PatGroups, parsePatDirectory, parsePatSpawnDescriptor } from './game/pa
 import { MarkerList, stepMarkers } from './game/markers.js';
 import { Debris } from './game/debris.js';
 import { Popup } from './game/popup.js';
+import { Shopkeeper, HEAL_BACK } from './game/shopkeeper.js';
 import { MessageEngine, drawMessage, PRIORITY } from './game/message.js';
 import { SeenBitmap, messageGate, composeObjectMessage,
          composeHint, HINT_TABLET_TYPE } from './game/message-compose.js';
@@ -413,10 +414,18 @@ async function loadSprites(world) {
  * 2-15 equal the level's in all four worlds and CS:0x055D/0x0563 re-apply
  * the slot-0/1 override, so the palette does not change. */
 async function overlayGuardSprites(sprites, world) {
+  return overlayGroupSprites(sprites, world, `guard${world}`);
+}
+
+/* The same export-22 load for any group: the shop potion's `shop` group
+ * (CS:0x05D7, PSHOPSPR + PSHOPFNT: 173 frames, which run past level<N> into
+ * the small font behind it) and CS:0x21C2's restore of `level<N>` at the
+ * shop exit and the level entry. */
+async function overlayGroupSprites(sprites, world, group) {
   const lvl = sprites.ranges.find((r) => r.group === `level${world}`);
   if (!lvl) return;
   let id = lvl.base;
-  for (const s of GROUP_STEMS[`guard${world}`]) {
+  for (const s of GROUP_STEMS[group]) {
     const atlas = parseAtlas(dclDecompress(await fetchRaw(`game/${s}.DAT`)).data);
     const img = decodePI1(dclDecompress(await fetchRaw(`game/${s}.PI1`)).data);
     for (const f of atlas.frames) sprites.frames[id++] = { ...f, pixels: cutAll(img, { frames: [f] })[0].pixels };
@@ -826,6 +835,9 @@ const guardianTables = {
   /* CS:0x0116-0x011B: 0x1E, then `inc` on the way into the loop; CS:0x013C
    * decrements it once a pass, so the music starts on the 31st tick. */
   const LEVEL_MUSIC_DELAY = 0x1f;
+/* CS:0x6DAD — the shop exit's own [0x3E8]; only the password path re-arms
+ * it with LEVEL_MUSIC_DELAY at CS:0x0111. */
+const SHOP_EXIT_MUSIC_DELAY = 5;
   /* ── The sound drivers' waits ────────────────────────────────────────────
    * Two exports make GAME.EXE wait inside the driver, with nothing else
    * running: export 4 (CS:0x22D0, both drivers) until the sound effects
@@ -1054,6 +1066,12 @@ const guardianTables = {
    * +0x10, spawn.js's `rewardId`) — both were fully decoded but had no
    * rendering module before this pass. */
   let popup = new Popup();
+  /* CS:0x05BA/0x06B0/0x071E — the shop potion's shopkeeper (game/
+   * shopkeeper.js). `shopSpritesIn` is DS:0x38A == 1: the shop group sits
+   * over level<N> (CS:0x0608), until CS:0x21C2 puts the level back. */
+  const shopkeeper = new Shopkeeper();
+  let shopSpritesIn = false;
+  let lastShopkeeperFx = null;
   /* CS:0x434e — the status-panel message line (game/message.js) and the
    * once-per-type "already shown" bitmap at DS:0x8cea (CS:0x462e). The bitmap
    * is cleared on a FULL level entry and not on the light re-entry path, so it
@@ -1446,7 +1464,7 @@ const guardianTables = {
    * (entity.js's `materialise`), so its random draw keeps the original's order. */
   /* CS:0xACEE — the contact hurt sound, played from inside combat.js's
    * attackHero for every landed hit. */
-  combatHooks.hurtSfx = (id) => audio.play(id);
+  combatHooks.hurtSfx = (id) => { if (!shopkeeper.active) audio.play(id); };   // CS:0xACE5: muted while cs:[0x71D] is NOP
   const playFlash = (e) => {
     if (!e.wantsFlash) return;
     e.wantsFlash = false;
@@ -1654,6 +1672,9 @@ const guardianTables = {
        * world-2 level entry's CS:0x0126, DS:0x172 = 0, DS:0x19C = 0xFFFF. */
       fx = { ...fx, invuln: 0, freeze: 0, giantJump: 0,
              arc: 0, shop: false, stateMachineSuspended: false };
+      /* CS:0x8CEB/0x8D06/0x8D0C: [0x35D] = 0, the walker off, [0x363] = -1;
+       * the level load itself resets DS:0x38A (CS:0x2BFB). */
+      shopkeeper.reset(); shopSpritesIn = false; lastShopkeeperFx = null;
       /* Not the original's own state (there is no "mid-death-sequence level
        * exit" in the shipped game — the death test and a level-exit trigger
        * are mutually exclusive events), but defensive: a level switch while
@@ -1982,17 +2003,29 @@ const guardianTables = {
     levelMusicOnLoad = matchWorld === 1;
     try { await fullRestart(levelKeyFor(matchWorld, 0)); } finally { levelMusicOnLoad = true; }
     if (matchWorld === 1) { uiState = 'game'; return; }          // CS:0x00C4
-    /* CS:0x0693 -> 0x6C19: the shop's music (context 6, PGODSRLG.RL), no
-     * fade first (the fade at CS:0x6C0E is on the mid-level entry only). */
+    openShop(matchWorld, { midLevel: false });
+  }
+
+  /* The shop screen, from either entry: the password start (CS:0x0643 ->
+   * 0x0693 -> 0x6C19) or the shopkeeper's contact (CS:0x081B -> 0x6BED).
+   * The mid-level entry fades the level's music first (CS:0x6C0E) and keeps
+   * the money; its exit (CS:0x6DF0, CX = 0x11B) goes straight back to the
+   * main loop's head instead of through CS:0x0696's level-start sound. */
+  function openShop(world, { midLevel }) {
+    uiState = 'shop';
+    /* CS:0x0693 -> 0x6C19: the shop's music (context 6, PGODSRLG.RL). */
+    if (midLevel) audio.music('fadeOut');                       // CS:0x6C0E
     loadMusic(MUSIC_CONTEXT.SHOP);
     audio.music('start', SHOP_MUSIC_VOLUME);
-    purse = new Purse();
-    purse.add(SHOP_STARTING_MONEY);                             // CS:0x0643 sets it, not adds
+    if (!midLevel) {
+      purse = new Purse();
+      purse.add(SHOP_STARTING_MONEY);                           // CS:0x0643 sets it, not adds
+    }
     events.actionCtx.timer = 0;                                 // CS:0x6B21, the shop entry
     shopIterAcc = 0;
     shopScreen = new ShopScreen({
       prices: level.objValues,
-      roster: shopRosterForWorld(matchWorld),
+      roster: shopRosterForWorld(world),
       inventory,
       state: { health, arsenal, lives: fx.lives },
       purse,
@@ -2004,20 +2037,34 @@ const guardianTables = {
       },
       onDone: () => {
         uiState = 'game'; shopScreen = null; paused = false;
-        /* CS:0x6D8F-0x6DA8 fade out and load the world's music; CS:0x0696
-         * -> 0x06A9 the level-start sound; -> 0x0111 re-arms DS:0x3E8. */
+        /* CS:0x6D7B-0x6D87: the LEV3A camera latch's nudge is paid back. */
+        if (cam.lev3aLatch) { cam.lev3aLatch = false; cam.y += 0x20; }
+        /* CS:0x6D94 -> 0x21C2: level<N> goes back over the shop sprites. */
+        if (shopSpritesIn) {
+          shopSpritesIn = false;
+          if (hero) overlayGroupSprites(hero, world, `level${world}`).catch((e) => console.error('[shop] level sprites', e));
+        }
+        /* CS:0x6D8F-0x6DA8 fade out and load the world's music. */
         audio.music('fadeOut');
-        loadMusic(worldMusicContext(matchWorld));
-        /* CS:0x6DCB — the exit runs the respawn tick CS:0x921B before it
-         * jumps on to CS:0x0696, so the sound comes after that tick. */
+        loadMusic(worldMusicContext(world));
+        /* CS:0x6DCB — the exit runs the respawn tick CS:0x921B first. */
         respawnTick = true;
+        if (midLevel) {
+          /* CS:0x6DF3 `jmp cx` -> 0x011B -> 0x0126: the shield loop plays or
+           * stops; no level-start sound (that is CS:0x0696's). */
+          afterRespawnTick.push(() => {
+            if (fx.invuln > 0) audio.play(INVULN_LOOP_SFX); else audio.stop(INVULN_LOOP_STOP);
+          });
+          musicStartTicks = SHOP_EXIT_MUSIC_DELAY;               // CS:0x6DAD [0x3E8] = 5
+          return;
+        }
         afterRespawnTick.push(() => waitSfx(() => {          // CS:0x06A2-0x06A9
           audio.play(LEVEL_START_SFX);
           /* -> CS:0x0111 ... 0x0126: a shield bought in the shop plays its
            * loop; otherwise the loop is stopped (CS:0x0137-0x0139). */
           if (fx.invuln > 0) audio.play(INVULN_LOOP_SFX); else audio.stop(INVULN_LOOP_STOP);
         }));
-        musicStartTicks = LEVEL_MUSIC_DELAY;
+        musicStartTicks = LEVEL_MUSIC_DELAY;                  // CS:0x0111 re-arms DS:0x3E8
       },
     });
   }
@@ -2916,7 +2963,7 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
         /* CS:0x1AD6 counts on-screen spikes into DS:0x39A; CS:0x14C4 starts
          * or stops their loop. */
         const spikesSeen = lastSpikeFx.filter((o) => spikeOnScreen(o.x - cam.snapX, o.y - cam.snapY)).length;
-        loopSfx.spikeTick(spikesSeen, loopSfxOut());
+        loopSfx.spikeTick(spikesSeen, { ...loopSfxOut(), heroScripted: shopkeeper.active });   // CS:0x14D3
       }
       /* CS:0x01BD's own `jmp 0x9bb` skips the player state machine entirely
        * once the hero is dead (game/death.js) — everything else in this
@@ -2973,7 +3020,7 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
          * renderer walks, so collecting one removes it from the frame too. */
         objects: level.drawObjects, bar: health.bar,
         cats: level.cats, health, invuln: fx.invuln > 0,
-        effects: { ...fx, starburst,
+        effects: { ...fx, starburst, shopkeeper,
                    hero: { x: player.x, y: player.y } },
         treasure: { values: level.objValues, inventory, purse, score, burst },
         starburst, blocks, debris,
@@ -2984,6 +3031,7 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
          * a level's own trigger conditions see the flip on the very next tick. */
         levers: level.palfils.levers, leverToggle,
         panel: inventoryPanel,                     // DS:0x366/0x367, the crouch FIRE tap
+        shopkeeper,                                // CS:0x0248 / 0x49AA, the turn and the freeze
         beforePlayer: turretWalkerRet ? clearSelectorTwo : stepSelectorTwo,   // CS:0xC4AA patched 0xAD88 to RET
         objectPass: objPass,
         zoneScan: (x, y) => scanZones(events.actionCtx.zones, x, y),
@@ -3653,7 +3701,25 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
           invuln: fx.invuln > 0 ? 1 : 0,
           sfx: (id) => audio.play(id),
           systemA: new Set(enemiesA),        // the DS:0x35E bracket, CS:0xE0A5
+          score,                              // CS:0xEFE7, the kill award
         }).killed;
+        /* CS:0x0288 -> 0x071D — the shopkeeper, between System B (0x0285)
+         * and System A (0x028B). A reported contact gives the 5 back, pops
+         * the main loop's return address and jumps into the mid-level shop
+         * (CS:0x0801-0x081B): the rest of this tick never runs. */
+        lastShopkeeperFx = null;
+        if (shopkeeper.active) {
+          const w = shopkeeper.step(tock, level.map.planeB, { x: cam.snapX, y: cam.snapY },
+            (atk) => attackHero(atk, { x: player.x, y: player.y, state: player.stateIndex }, health,
+                                { invuln: fx.invuln > 0, muteHurt: true }),
+            (id) => audio.play(id));
+          lastShopkeeperFx = w.drawn;
+          if (w.shop) {
+            if (!(fx.invuln > 0)) health.damage(-HEAL_BACK);        // CS:0x0801-0x0808
+            openShop(level.world, { midLevel: true });
+            return;
+          }
+        }
       } else {
         /* CS:0x02A5 `call [0x284]` — the guardian's driver in place of the
          * whole enemy suite, then CS:0x02AE `call 0xDA62`, its spit mover
@@ -3938,6 +4004,22 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
       /* CS:0xD7E7 `[0x270] -= 8` lands on the camera the update just computed,
        * which CS:0x02EA commits. */
       if (camNudgeY) { cam.y += camNudgeY; camNudgeY = 0; }
+      /* CS:0x0310 -> 0x05BA — the shop potion's countdown, at the end of the
+       * main loop's tick (neither the respawn tick nor the death driver
+       * reaches it). */
+      if (!rt && !(fr && fr.heroDead)) {
+        shopkeeper.stepCountdown(level.world, {
+          clearScripts: () => {                                     // CS:0x9026
+            for (const q of patGroups.slots) { q.active = false; q.materialised = false; }   // [0xB6B8 + 0x1C*k + 4] = 0
+            selectorTwo.slots.fill(null);                                                   // [0xAEC0 + 0x20*k + 6] = 0
+          },
+          spritesLoaded: shopSpritesIn,
+          loadSprites: () => {                                      // CS:0x05D7-0x0608
+            shopSpritesIn = true;
+            if (hero) overlayGroupSprites(hero, level.world, 'shop').catch((e) => console.error('[shopkeeper] sprites', e));
+          },
+        });
+      }
       if (rt) for (const f of afterRespawnTick.splice(0)) f();   // CS:0x08FB / 0x0696, after 0x921B
     },
     () => {
@@ -4207,6 +4289,13 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
         const ef = eid !== null && hero && hero.frames[eid];
         if (ef && eid >= CREATURE_DESCRIPTOR_BASE) renderer.blitSprite(ef, sx, sy);
         else { outOfRange++; renderer.strokeRect(sx, sy, 24, 24, 12); }
+      }
+
+      /* CS:0x0288 -> 0x07BB — the shopkeeper, drawn between System B
+       * (0x0285) and System A (0x028B) through the same CS:0x3569. */
+      if (lastShopkeeperFx) {
+        const f = hero && hero.frames[lastShopkeeperFx.sprite];
+        if (f) renderer.blitSprite(f, lastShopkeeperFx.x, lastShopkeeperFx.y);
       }
 
       /* SYSTEM-A ENEMIES — sprite = CS:0xe199, class base + frame (+ a
@@ -4588,6 +4677,12 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
         if (atHit) guardian.forceKill = true; else guardian.hp = -1;
         return true;
       },
+      /* The shop potion's shopkeeper (game/shopkeeper.js): `summonShop` is
+       * CS:0x61E9's [0x363] = 0x41, the twin of walker_live.py's poke. */
+      summonShop: () => shopkeeper.summon(),
+      shopkeeper: () => shopkeeper,
+      heroRaw: () => ({ x: player.x, y: player.y, st: player.stateIndex, ph: player.phase }),
+      uiState: () => uiState,
       deathState: () => ({ guardian: !!guardian, scoreTicks: guardianScoreTicks, chain: starburst.chain,
         sb: starburst.slots.map((q, i) => q.x >= 0 ? `${i}:${q.x},${q.y},${q.vx},${q.vy}` : null).filter(Boolean).join(' '),
         burst: burst.records.map((q) => `${q.x},${q.y},${q.vx},${q.vy},${q.type}`).join(' '),

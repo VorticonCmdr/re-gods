@@ -621,6 +621,22 @@ export class Player {
    *        health on its own. `null` is a valid caller (tests, tools): the
    *        fall physics run identically, landing simply never damages.
    */
+  /** A tick whose dispatch is skipped and only the epilogue (CS:0x5E9B)
+   *  runs: the shopkeeper's turn once facing (CS:0x06D9) and its walk
+   *  (CS:0x49AA). Nothing moves; the per-tick outputs are cleared. */
+  hold() {
+    this.footstep = false;
+    this.climbStep = false;
+    this.landSfx = 0;
+    this.landSites = [];
+    this.inventoryCycled = false;
+    this.emitted = null;
+    this.keyCollected = null;
+    this.dropped = null;
+    this.leverToggled = null;
+    this.zoneHit = null;
+  }
+
   tick(map, input, fire = null, tock = 1, pickup = null, health = null, tock36d = tock) {
     /* DS:0x36D — gravity's own every-other-tick gate (CS:0x48BB). It runs in
      * step with DS:0x36C except after a shop, whose loop toggles 0x36C alone

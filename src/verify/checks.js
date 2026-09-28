@@ -144,7 +144,9 @@ import { CHEST_MIN, CHEST_MAX, CHEST_KEY_BASE, chestKeyFor, openedType,
          BURST_COUNT, BURST_VY_CAP, CHEST_SFX, TREASURE_SFX,
          INVENTORY_CLEAR_SITES, INVENTORY_EMPTY, CHEST_KEY_CENSUS, INVENTORY_SLOTS,
          OBJ_NAME_OFF, OBJ_NAME_MAX, OBJ_DESC_OFF, OBJ_DESC_MAX,
-         OBJ_RECORD_SIZE } from '../game/treasure.js';
+         OBJ_RECORD_SIZE, awardKill, adcDaa } from '../game/treasure.js';
+import { Shopkeeper, SHOPKEEPER_PATHS, pathFor, SPRITE_BASE as SHOPKEEPER_SPRITE,
+         FOOTSTEP_SFX as SHOPKEEPER_STEP_SFX } from '../game/shopkeeper.js';
 import { FlashPool } from '../game/flash.js';
 import { expandMapObjects, allocObject, OBJECT_SLOTS, activationBox,
          activateObjects, sortForDraw, insertSpawned, CATEGORY, WEAPON_TYPE_MIN,
@@ -8928,6 +8930,64 @@ export async function checkWeaponsProjectiles(fetchRaw) {
         'CS:0x1950 converts the addend with eight `div 10` and adds byte by ' +
         'byte with `daa`. 375 x 4 = 1500 stores as bytes 00 15 00 00, and ' +
         'eight digits wrap — which is the field, not a clamp I invented');
+    }
+
+    /* ── A System-A/B kill's score, CS:0xEFE7 -> CS:0x0C8B. */
+    {
+      const at = (hp, base = 0) => { const s = new Score(); if (base) s.add(base); return awardKill(s, hp).value; };
+      check('a creature kill scores ((hp >> 1) + 1) hundreds (CS:0xEFE7)',
+        at(4) === 300 && at(5) === 300 && at(20) === 1100 && at(41) === 2100 && at(197) === 9900,
+        '[PROVEN] live: PJOYL2 1638/1640 add DL 0x11 and 1743/1758 DL 0x03 from CS:0xF014 ' +
+        '(joyl2.score_callers.json), the four awards the port had missed');
+      check('...and above 99 hundreds the first byte\'s DAA carries AND the split adds 1000 more',
+        at(198) === 11000 && at(255) === 15800,
+        'q = 10..12 packs 0xA0..0xC0 into DL; DAA turns it into a carry, and ' +
+        'CS:0xF023 adds (q - 9) << 4 on top');
+      check('the hundreds add carries through the upper bytes (CS:0x0C8B adc/daa chain)',
+        at(20, 99950) === 101050 && adcDaa(0x99, 0x01, 0)[0] === 0x00 && adcDaa(0x99, 0x01, 0)[1] === 1);
+    }
+
+    /* ── The shop potion's shopkeeper, CS:0x05BA / 0x06B0 / 0x071E. */
+    {
+      const MAP_COLS = 128;
+      const planeB = new Uint8Array(MAP_COLS * 64);
+      for (let c = 0; c < MAP_COLS; c++) planeB[62 * MAP_COLS + c] = 1;   // a floor under row 59
+      const k = new Shopkeeper();
+      check('the world-1 first visit starts at (1664, 944) walking left (DS:0xE91A)',
+        pathFor(1, 0).join() === '1664,944,-1' && SHOPKEEPER_PATHS.length === 10);
+      k.summon();
+      check('the potion writes a 0x41-tick countdown and the hero turns toward the walker',
+        k.countdown === 0x41 && k.turning && k.faceFor(1).dir === 'right' && k.faceFor(2).dir === 'left');
+      let cleared = 0, loaded = 0, started = -1;
+      for (let t = 0; t < 70 && started < 0; t++) {
+        if (k.stepCountdown(1, { clearScripts: () => cleared++, spritesLoaded: false, loadSprites: () => loaded++ })) started = t;
+      }
+      check('the countdown clears the scripts once at 0x19 and starts the walker when it passes 0 (CS:0x05BA)',
+        cleared === 1 && loaded === 1 && started === 0x41 && k.active && k.visits === 1
+          && k.x === 1664 && k.y === 944 && k.dx === -1);
+      const sounds = [];
+      const miss = () => ({ strengthOut: 5 });
+      const r1 = k.step(1, planeB, { x: 0, y: 0 }, miss, (id) => sounds.push(id));
+      const r2 = k.step(0, planeB, { x: 0, y: 0 }, miss, (id) => sounds.push(id));
+      check('it moves 6 px on DS:0x36C ticks and animates on the others (CS:0x071E / 0x07C5)',
+        r1.drawn.x === 1658 && r1.drawn.sprite === SHOPKEEPER_SPRITE && k.x === 1658 && k.phase === 1
+          && r2.drawn.x === 1658 && sounds.length === 0);
+      k.step(0, planeB, { x: 0, y: 0 }, miss, (id) => sounds.push(id));
+      check('footstep 0x20E on phases 2 and 6', sounds.join() === String(SHOPKEEPER_STEP_SFX));
+      const wall = new Uint8Array(planeB); for (let r = 59; r < 62; r++) wall[r * MAP_COLS + 52] = 1;
+      const w = new Shopkeeper(); w.active = true; w.x = 1628; w.y = 944; w.dx = 1;
+      w.step(1, wall, { x: 0, y: 0 }, miss, () => {});
+      check('a wall in the next column turns it, and the move still stands (CS:0x076E-0x0788)',
+        w.x === 1634 && w.dx === -1);
+      const ledge = new Uint8Array(planeB); ledge[62 * MAP_COLS + 52] = 0;
+      const l = new Shopkeeper(); l.active = true; l.x = 1628; l.y = 944; l.dx = 1;
+      l.step(1, ledge, { x: 0, y: 0 }, miss, () => {});
+      check('...and so does a missing floor: the fourth row\'s jz is the only way past the NEG (CS:0x0786)',
+        l.dx === -1);
+      const t = new Shopkeeper(); t.active = true; t.x = 100; t.y = 944; t.dx = -1;
+      const hit = t.step(1, planeB, { x: 0, y: 0 }, () => ({ strengthOut: -1 }), () => {});
+      check('a reported contact switches it off and asks for the shop (CS:0x0801-0x081B)',
+        hit.shop && !t.active);
     }
 
     {

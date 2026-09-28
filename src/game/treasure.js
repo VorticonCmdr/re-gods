@@ -186,6 +186,36 @@ export const SCORE_BYTES  = 4;
 export const SCORE_DS     = 0x3b5;
 export const SCORE_MODULO = 100000000;
 
+/** `adc al,dl` then `daa`: the 8086's own rules (AF from the low nibbles,
+ *  DAA reading the pre-adjust AL and CF). @returns {[number, number]} */
+export function adcDaa(al, dl, cf) {
+  const sum = al + dl + cf;
+  const af = ((al & 0xf) + (dl & 0xf) + cf) > 0xf;
+  let r = sum & 0xff, c = sum > 0xff ? 1 : 0;
+  const oldAl = r, oldCf = c;
+  if ((r & 0xf) > 9 || af) { c = oldCf || (r + 6 > 0xff) ? 1 : 0; r = (r + 6) & 0xff; }
+  if (oldAl > 0x99 || oldCf) { r = (r + 0x60) & 0xff; c = 1; } else c = c && 1;
+  return [r, c];
+}
+
+/**
+ * CS:0xEFE7 — a System-A/B creature kill's score, from its group
+ * descriptor's byte +1 (the entity's `hp`): `(hp >> 1) + 1` hundreds, packed
+ * as BCD by `div 10`. A quotient above 9 packs its overflow as `AH = q - 9`
+ * into a second 0C8B call, while the first call's `q << 4` still carries
+ * through DAA, so 100..128 hundreds award 1000 more than the arithmetic
+ * suggests. Reached from System B's kill tick (CS:0xEDFD -> 0xF02A) and
+ * System A's (CS:0xE241).
+ */
+export function awardKill(score, hp) {
+  const al = ((hp & 0xff) >> 1) + 1;
+  const q = Math.floor(al / 10), r = al % 10;
+  const ah = q > 9 ? q - 9 : 0;                                 // CS:0xEFFB-0xF001
+  score.addHundreds(((q << 4) & 0xff) | r);                     // CS:0xF011
+  if (ah) score.addHundreds((ah << 4) & 0xff);                  // CS:0xF023
+  return score;
+}
+
 export class Score {
   constructor() { this.bytes = new Uint8Array(SCORE_BYTES); }
 
@@ -201,6 +231,20 @@ export class Score {
       const hi = (this.bytes[i] >> 4) + digits[i * 2 + 1] + c1;
       const hiD = hi % 10; carry = hi >= 10 ? 1 : 0;
       this.bytes[i] = (hiD << 4) | loD;
+    }
+    return this;
+  }
+
+  /** CS:0x0C8B — `DL` added into the hundreds byte DS:0x3B6 (CF clear, the
+   *  callers' `clc`), then the carry rippled through 0x3B7/0x3B8, each byte
+   *  `adc` + `daa`. DL is taken as the raw byte the caller built, NOT as a
+   *  number: a caller that packs a non-BCD nibble (efe7/af7d with a tens
+   *  digit above 9) gets exactly what DAA makes of it. */
+  addHundreds(dl) {
+    let cf = 0, add = dl & 0xff;
+    for (let i = 1; i < SCORE_BYTES; i++) {
+      [this.bytes[i], cf] = adcDaa(this.bytes[i], add, cf);
+      add = 0;
     }
     return this;
   }

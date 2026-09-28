@@ -24,6 +24,8 @@
 
 import { creatureTouchesHero, creatureScansGrid } from './combat.js';
 import { stepPickups } from './pickup.js';
+import { awardKill } from './treasure.js';
+import { FACE_PHASE } from './shopkeeper.js';
 import { chooseAltSlot } from './familiar.js';
 import { pickTarget } from './projectiles.js';
 
@@ -108,7 +110,8 @@ export function stepHeroFrame({ input, arsenal, grid, player, map, cam,
                                leverToggle = null, invuln = false, panel = null,
                                zoneScan = null, beforePlayer = null,
                                objectPass = true, effects = null,
-                               heroDead = false, familiar = null }) {
+                               heroDead = false, familiar = null,
+                               shopkeeper = null }) {
   /* `heroDead`: the death driver CS:0x09BB runs this same pre-player half of
    * the tick (grid clear, blocks, barriers, object pass, projectiles,
    * starburst, selector 2) WITHOUT the fire latch (CS:0x019D) and without the
@@ -229,7 +232,21 @@ export function stepHeroFrame({ input, arsenal, grid, player, map, cam,
              loot, burstFx, blockFx, debrisFx, familiarDraw, keyCollected: null, dropped: null, leverToggled: null,
              footstep: false, climbStep: false, landSfx: 0, inventoryCycled: false };
   }
-  player.tick(map, input, arsenal, tock, pickupCtx, healthApi, tock36d);   // 0254
+  /* CS:0x0248: while the shop potion's countdown runs, CS:0x06B0 turns the
+   * hero toward the shopkeeper instead of the player dispatch (CS:0x4993);
+   * while the shopkeeper walks, CS:0x49AA runs only the epilogue. The
+   * potion is taken in the object pass above, so it already counts here. */
+  if (shopkeeper && shopkeeper.turning) {
+    const face = shopkeeper.faceFor(world);
+    if (player.stateIndex === face.state && player.phase === FACE_PHASE) player.hold();   // CS:0x06D9/0x06F3
+    else player.tick(map, { up: false, down: false, fire: false,                        // CS:0x06DB-0x0714
+                            left: face.dir === 'left', right: face.dir === 'right' },
+                     arsenal, tock, pickupCtx, healthApi, tock36d);
+  } else if (shopkeeper && shopkeeper.active) {
+    player.hold();                                                    // CS:0x49AA -> 0x5E9B
+  } else {
+    player.tick(map, input, arsenal, tock, pickupCtx, healthApi, tock36d);   // 0254
+  }
   return { projectiles, emitted: player.emitted, picked: picked.taken,
            consumed: picked.consumed || [], treasures: picked.treasures || [],
            loot, burstFx, blockFx, debrisFx, familiarDraw, keyCollected: player.keyCollected,
@@ -261,13 +278,15 @@ export function stepHeroFrame({ input, arsenal, grid, player, map, cam,
  * @param {?Set} systemA      the System-A entities among `enemies`: their
  *   CS:0xFF93 call (CS:0xE0AA) is inside the DS:0x35E bracket CS:0xE0A5-
  *   0xE0AD, System B's (CS:0xEDF4) is not (combat.js KILL_ALT_SFX).
+ * @param {?Score} score     DS:0x3B5 — the kill award, CS:0xEFE7 (treasure.js
+ *   `awardKill`).
  * @returns {{touched:number, killed:number}}
  */
 export function stepCreatureDamage(enemies, { grid, cam, hero, health,
                                               decodeTag, difficulty = 0,
                                               arsenal = null, rng = null,
                                               debris = null, sfx = null,
-                                              systemA = null }) {
+                                              systemA = null, score = null }) {
   /* The scans below append to the shared target list through combat.js's
    * sink (main.js installs it; the gate DS:0x343 is open while the hero
    * carries the hunter or the familiar lives). */
@@ -276,10 +295,20 @@ export function stepCreatureDamage(enemies, { grid, cam, hero, health,
     if (!e.alive || e.justAlive) continue;               // CS:0xFF48 — see entity.js
     const alt35e = !!(systemA && systemA.has(e));
     const c = creatureTouchesHero(e, hero, health, { sfx, alt35e });
-    if (c.strengthOut < 0) { touched++; continue; }     // CS:0xa9ec — contact won
+    if (c.strengthOut < 0) {                             // CS:0xa9ec — contact won
+      touched++;
+      if (score) awardKill(score, e.hp);                 // CS:0xEDF7 -> 0xF02A / CS:0xE241
+      continue;
+    }
     const s = creatureScansGrid(e, grid, cam, decodeTag, difficulty,
                                 undefined, null, { rng, debris, sfx, alt35e });
-    if (s.killed) { killed++; e.frame = -1; e.delay = 0; }
+    if (s.killed) {
+      killed++; e.frame = -1; e.delay = 0;
+      /* The kill tick's score: [di+8] < 0 after the contact call sends
+       * System B to CS:0xF02A and System A to CS:0xE241, both `call 0xEFE7`
+       * (descriptor +1, the entity's hp). */
+      if (score) awardKill(score, e.hp);
+    }
   }
   return { touched, killed };
 }
