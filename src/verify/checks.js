@@ -1745,13 +1745,24 @@ export async function checkDescriptorAnchors(fetchRaw) {
       }
 
       /* ── the sprite table's own contents are genuinely unread ────────────── */
-      check(`BROOD_SPRITE_TABLE is an honest IDENTITY placeholder, not an invented sprite sequence`,
-        BROOD_SPRITE_TABLE.every((v, i) => v === i),
-        `SS:0x360A's own byte contents were never read by any pass over this ` +
-        `project — only the LOOKUP MECHANISM (frame-doubled word index, +-3 ` +
-        `facing variant) was ever proven. Per this task's own instruction not ` +
-        `to fabricate specific numbers, frame is passed straight through ` +
-        `rather than through an invented table. UNKNOWN_brood_sprite_table`);
+      check(`BROOD_SPRITE_TABLE is SS:0x360A as read live: 0x217 0x218 0x219 0x218`,
+        BROOD_SPRITE_TABLE.join() === [0x217, 0x218, 0x219, 0x218].join(),
+        `read live from SS:0x360A and identical in the static image (Ghidra ` +
+        `2F3D:360A); closes UNKNOWN_brood_sprite_table`);
+      {
+        /* CS:0x89E6-0x8A03: a kill scores 1000 on the killing tick and the
+         * frame restarts; an alive child's frame cycles 0..3 every tick. */
+        const b = new Brood();
+        b.slots[0] = { x: 0, y: 0, frame: 2, strength: 5, vx: 1, vy: 0, fallSubstate: 1 };
+        const planeB = new Uint8Array(128 * 64).fill(1);
+        const sc = new Score();
+        const r1 = b.step(camZero, 0, () => 5, planeB, sc);
+        const f1 = b.slots[0].frame;
+        b.step(camZero, 0, () => -1, planeB, sc);
+        check('an alive brood child\'s frame cycles every tick; a kill scores 1000 and restarts it at 1 (CS:0x89E6-0x8A03)',
+          r1.drawn[0].sprite === 0x219 + 3 && f1 === 3 && sc.value === 1000 && b.slots[0].frame === 1,
+          '[PROVEN] live: PJOYL2 1912/1913/1928, +1000 each (UNKNOWN_brood_score closed)');
+      }
 
       /* ── end-to-end: Nests#brood really can drive a live Brood instance ──── */
       {
@@ -1778,17 +1789,11 @@ export async function checkDescriptorAnchors(fetchRaw) {
     }
 
     results.push({
-      name: 'the brood walker is no longer out of scope; two residuals remain',
+      name: 'the brood walker\'s two residuals are closed',
       note: true, pass: true,
-      detail: 'UNKNOWN_brood_score — CS:0x8A33-0x8A65 (the decoded death path) ' +
-        'is draw / inc / free with no call into the shared BCD score entry ' +
-        'this project documents for other kills; whether an award happens off ' +
-        'that path is open, so Brood.score stays at 0 rather than a guess. ' +
-        'UNKNOWN_brood_sprite_table — SS:0x360A is proven to be a frame-' +
-        'doubled lookup with a +-3 facing variant, but its own byte contents ' +
-        'were never read; BROOD_SPRITE_TABLE is an identity placeholder. ' +
-        'UNKNOWN_8014_world1 and UNKNOWN_ce64_pool, named in the note above ' +
-        'this one, are unrelated to the walker and remain untouched by this pass.',
+      detail: 'UNKNOWN_brood_score — the kill award is on the alive path, ' +
+        'CS:0x89E6 -> 0x89F8, 1000 (proven live in PJOYL2). ' +
+        'UNKNOWN_brood_sprite_table — SS:0x360A = 0217 0218 0219 0218, read live.',
     });
   }
 

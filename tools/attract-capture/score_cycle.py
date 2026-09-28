@@ -21,7 +21,7 @@ def main():
     for n in NAMES.values():
         snaps = [e.split(':') for e in json.load(open(f'{here}/{n}.raw.json'))['output']['rnd'].split(';') if e]
         last = snaps[-1]
-        caps[n] = {'inject': int(last[0]) + 2, 'table': bytes.fromhex(last[2])}
+        caps[n] = {'inject': int(last[0]) + 2, 'table': bytes.fromhex(last[2]), 'r': int(last[1])}
     call('POST', '/debug/pause')
     since = call('GET', '/debug/status')['stop']['stop_id']
 
@@ -37,36 +37,45 @@ def main():
 
     tick = [{'type': 'execute', 'segment': CS, 'offset': POLLER}]
     out, done, cur = {}, set(), None
+
+    def save():
+        json.dump({n: {k: v for k, v in d.items() if k != 'last'} for n, d in out.items() if n in done},
+                  open(f'{here}/score_cycle.json', 'w'), indent=1)
+
+    # A demo is logged only from its own inject cursor; one entered later is
+    # skipped for this pass and caught on the next cycle. It counts as done
+    # once it has been logged and the cycler has moved on.
     while len(done) < len(NAMES):
         go(tick)
-        cyc = mem(DS, 0x3E6, 1)[0]
-        name = NAMES.get(cyc)
+        name = NAMES.get(mem(DS, 0x3E6, 1)[0])
         c = word(DS, 0x282)
+        if cur is not None and cur != name:
+            done.add(cur)
+            save()
+            print('done', cur, flush=True)
+            cur = None
         if name is None or name in done:
             continue
         info = out.get(name)
         if info is None:
             if c != caps[name]['inject']:
-                if c > caps[name]['inject']:
-                    done.add(name)          # entered mid-demo: skip it this cycle
                 continue
+            r_live = word(DS, 0x160)
             call('PUT', f'/memory/{DS}/{0x7E14}', caps[name]['table'], raw=True)
+            call('PUT', f'/memory/{DS}/{0x160}', caps[name]['r'].to_bytes(2, 'little'), raw=True)
             info = out[name] = {'inject': c, 'seeds': {'gravity': word(DS, 0x1D4), 'jaw': word(DS, 0x2F0),
-                                                        'land': mem(DS, 0x357, 1)[0]}, 'rows': [], 'last': None}
+                                                        'land': mem(DS, 0x357, 1)[0], 'r_live': r_live},
+                                'rows': [], 'last': None}
             print(name, info['seeds'], flush=True)
+        cur = name
         score = mem(DS, 0x3B5, 4)
         v = int(''.join(f'{b:02x}' for b in reversed(score)))
         if v != info['last']:
             info['rows'].append(f'{c}:{v}')
             info['last'] = v
-        if cur is not None and cur != name:
-            done.add(cur)
-        cur = name
     call('DELETE', '/debug/breakpoints')
     call('POST', '/debug/continue')
-    for v in out.values():
-        v.pop('last', None)
-    json.dump(out, open(f'{here}/score_cycle.json', 'w'), indent=1)
+    save()
 
 
 if __name__ == '__main__':

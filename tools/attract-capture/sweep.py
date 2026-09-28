@@ -70,7 +70,11 @@ def main():
     assert mem(DS, 0x7E14, 512) == table
     for off, data in pokes:
         call('PUT', f'/memory/{DS}/{off}', data, raw=True)
-    log = [{'inject': inject, 'snap': int(snap[0]), 'r_live': word(DS, 0x160), 'r_cap': int(snap[1])}]
+    log = [{'inject': inject, 'snap': int(snap[0]), 'r_live': word(DS, 0x160), 'r_cap': int(snap[1]),
+            'gravity': word(DS, 0x1D4), 'jaw': word(DS, 0x2F0), 'land': mem(DS, 0x357, 1)[0],
+            'a0': mem(DS, 0x3A0, 2).hex()}]
+    # optional score log alongside, one row per change (DS:0x3B5-0x3B8)
+    log[0]['score0'] = mem(DS, 0x3B5, 4).hex()
 
     call('DELETE', '/debug/breakpoints')
     for off in (SFX, RND):

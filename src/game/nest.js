@@ -366,12 +366,9 @@ export const broodCount = (rand) => 3 + (rand & 1);
  * smoothed into one rule — matching this file's own convention of keeping
  * the parent's asymmetric cull rectangles and muzzles asymmetric.
  *
- * ⚠️ NO SCORE AWARD IS VISIBLE ON THIS PATH. CS:0x8A33-0x8A65 is draw / inc /
- * free with no `call 0xc8b` (the shared BCD score entry this project
- * documents elsewhere for other kills). So either a brood kill genuinely
- * awards nothing, or an award happens somewhere off this decoded path —
- * UNKNOWN_brood_score, below, is that second half; the first half (no award
- * ON this specific path) is not itself in doubt.
+ * No score award is on THIS path (CS:0x8A33-0x8A65 is draw / inc / free).
+ * The kill's award is earlier, on the alive path's killing tick: CS:0x89E6
+ * -> CS:0x89F8 `call 0xc8b`, 1000 (UNKNOWN_brood_score, below, now closed).
  *
  * Not modelled: the gate byte at CS:0x894D and the live-counter DS:0x3af
  * (self-disarm bookkeeping — see LIVE_COUNTER_DS above for the PARENT's own
@@ -401,19 +398,20 @@ export const BROOD_FALL_GRAVITY_CAP = 8;
  *  Y does not (-0x11, not -8). See the correction above. */
 export const BROOD_DEATH_DRAW_OFFSET = Object.freeze({ dx: -4, dy: -0x11 });
 export const BROOD_FACING_OFFSET = 3;               // CS:0x89AA `add dx,3`
+/** CS:0x89F3 `mov dl,0x10` -> CS:0x0C8B: a brood kill scores 1000 on the
+ *  killing tick. This closes UNKNOWN_brood_score: the award sits on the
+ *  alive path right after the draw (CS:0x89E6), not on the death branch
+ *  CS:0x8A33 that the earlier search read. [PROVEN] live: PJOYL2. */
+export const BROOD_KILL_DL = 0x10;
 
 /**
- * SS:0x360A. CLAUDE.md's own CS:0x894E decode proves the LOOKUP exists (a
- * frame-doubled word index into a small table) and proves the +-3 facing
- * variant, but records no concrete byte ever read from the table itself —
- * the residual it closed was the MECHANISM, not the CONTENTS, and no pass
- * over this project (including this one) has read SS:0x360A live. Per this
- * task's own instruction not to fabricate specific numbers, this is an
- * IDENTITY placeholder — frame passed straight through, not an invented
- * sprite sequence dressed up as a finding. See UNKNOWN_brood_sprite_table,
- * below.
+ * SS:0x360A — the brood's alive sprites by frame (CS:0x89A2), a four-frame
+ * ping-pong; CS:0x89AA adds 3 for the right-facing set. [PROVEN]: read live
+ * (SS:0x360A = 0217 0218 0219 0218) and identical in the static image
+ * (Ghidra 2F3D:360A). This closes UNKNOWN_brood_sprite_table, which had
+ * this as an identity placeholder.
  */
-export const BROOD_SPRITE_TABLE = Object.freeze([0, 1, 2, 3]);
+export const BROOD_SPRITE_TABLE = Object.freeze([0x217, 0x218, 0x219, 0x218]);
 
 /** CS:0x89AA. `js` skips the `add dx,3` only when vx is NEGATIVE, so the
  *  offset applies when vx is non-negative — right-facing, or stalled at
@@ -443,8 +441,8 @@ export class Brood {
       x: 0, y: 0, frame: -1, strength: 0, vx: 0, vy: 0, fallSubstate: 0,
     }));
     this.killed = 0;
-    /** CS:0x8A33-0x8A65 is draw / inc / free with no score-award call on
-     *  this path. Kept at 0 rather than guessed at. UNKNOWN_brood_score. */
+    /** Unused: a kill's 1000 goes straight to the score (CS:0x89F8,
+     *  `step`'s `score` argument). */
     this.score = 0;
   }
 
@@ -478,7 +476,7 @@ export class Brood {
    * @param {?Uint8Array} planeB
    * @returns {{drawn:Array}}
    */
-  step(cam, freezeTimer, contact, planeB) {
+  step(cam, freezeTimer, contact, planeB, score = null) {
     const drawn = [];
     for (const s of this.slots) {
       if (s.frame < 0) continue;                          // CS:0x895A -- free, skip
@@ -492,9 +490,14 @@ export class Brood {
       }
 
       s.strength = contact({ x: s.x, y: s.y, w: BROOD_BOX.w, h: BROOD_BOX.h, hp: s.strength });   // CS:0x8997/0x899A
-      const sprite = (BROOD_SPRITE_TABLE[s.frame] ?? s.frame) + broodFacingOffset(s.vx);          // CS:0x899D-0x89AA
+      const sprite = BROOD_SPRITE_TABLE[s.frame] + broodFacingOffset(s.vx);                        // CS:0x899D-0x89AA
       drawn.push({ x: s.x - cam.x, y: s.y - cam.y, sprite, gfxExport: 1 });
-      if (s.strength < 0) this.killed++;
+      if (s.strength < 0) {                               // CS:0x89E6 `jns 0x8a00`
+        this.killed++;
+        if (score) score.addHundreds(BROOD_KILL_DL);      // CS:0x89F3-0x89F8: dl = 0x10, 1000
+        s.frame = 0;                                      // CS:0x89FB
+      }
+      s.frame = (s.frame + 1) & 3;                        // CS:0x8A00-0x8A03, every alive tick
     }
     return { drawn };
   }
@@ -841,12 +844,14 @@ export const signed16 = (v) => ((v & 0xffff) ^ 0x8000) - 0x8000;
  * CS:0x894E's field map, movement, death and facing are all decoded and
  * implemented (see the walker section above, which also corrects several
  * specific claims a task-level summary made about this exact address range).
- * Two residuals remain, both narrower than "the walker is out of scope":
- *   UNKNOWN_brood_score — CS:0x8A33-0x8A65 shows no score-award call on the
- *     decoded death path; whether one exists off that path is open.
- *   UNKNOWN_brood_sprite_table — SS:0x360A's own contents were never read by
- *     any pass over this project; `BROOD_SPRITE_TABLE` is an identity
- *     placeholder, not an invented sprite sequence.
+ * Its two residuals are closed (2026-09-28):
+ *   UNKNOWN_brood_score — the award is on the ALIVE path, right after the
+ *     draw: CS:0x89E6 tests the strength the contact just wrote back and a
+ *     kill scores dl = 0x10 (1000, CS:0x89F8) and zeroes the frame. [PROVEN]
+ *     live in PJOYL2 (the three +1000 at 1912/1913/1928).
+ *   UNKNOWN_brood_sprite_table — SS:0x360A = 0x217 0x218 0x219 0x218, read
+ *     live and in the static image; the alive frame cycles 0..3 every tick
+ *     (CS:0x8A00), which the port had also left out.
  *
  * ── UNKNOWN_8014_world1 / UNKNOWN_ce64_pool ──────────────────────────────
  * Two neighbouring subsystems, unrelated to the brood walker, deliberately

@@ -39,7 +39,12 @@ def main():
         go([at])
         if mem(DS, 0x3E6, 1)[0] == CYCLER[name]:
             break
+    r_live = word(DS, 0x160)
     call('PUT', f'/memory/{DS}/{0x7E14}', table, raw=True)
+    call('PUT', f'/memory/{DS}/{0x160}', int(snap[1]).to_bytes(2, 'little'), raw=True)   # the random cursor too
+    seeds = {'gravity': word(DS, 0x1D4), 'jaw': word(DS, 0x2F0), 'land': mem(DS, 0x357, 1)[0],
+             'r_live': r_live, 'r_cap': int(snap[1])}
+    print(seeds, flush=True)
     rows, last = [], None
     tick = [{'type': 'execute', 'segment': CS, 'offset': POLLER}]
     while True:
@@ -55,7 +60,7 @@ def main():
         go(tick)
     call('DELETE', '/debug/breakpoints')
     call('POST', '/debug/continue')
-    json.dump({'inject': inject, 'rows': rows}, open(f'{here}/{name}.score.json', 'w'), indent=0)
+    json.dump({'inject': inject, 'seeds': seeds, 'rows': rows}, open(f'{here}/{name}.score.json', 'w'), indent=0)
 
 
 if __name__ == '__main__':

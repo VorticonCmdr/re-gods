@@ -3369,7 +3369,7 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
             if (!slot) return;
             slot.x = x; slot.y = y; slot.type = type; slot.flag6 = 0;
           } });
-        if (!rt) lastBroodFx = brood.step(camNow, fx.freeze, nestContactScan, level.map.planeB).drawn;
+        if (!rt) lastBroodFx = brood.step(camNow, fx.freeze, nestContactScan, level.map.planeB, score).drawn;
         const nestResult = nests.step(
           camNow, { x: player.x }, fx.freeze,
           nestContactScan, brood, tock);
@@ -4679,6 +4679,8 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
       },
       /* The shop potion's shopkeeper (game/shopkeeper.js): `summonShop` is
        * CS:0x61E9's [0x363] = 0x41, the twin of walker_live.py's poke. */
+      /* DS:0x8014, the nest's brood (game/nest.js), for brood-compare.js. */
+      brood: () => brood.slots,
       summonShop: () => shopkeeper.summon(),
       shopkeeper: () => shopkeeper,
       heroRaw: () => ({ x: player.x, y: player.y, st: player.stateIndex, ph: player.phase }),
