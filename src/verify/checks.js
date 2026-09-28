@@ -107,7 +107,7 @@ import { Health, HEALTH_MAX, damageFor, attackHero, creatureTouchesHero,
          difficultyScale, DIFFICULTY_MULTIPLIERS, difficultyForgiven,
          DIFFICULTY_PROGRESSION, creatureScansGrid, hitSparkAxis,
          CREATURE_CONTACT_BOX, db4eHit, DB4E_CROUCH_TOP_RAISE,
-         KILL_SFX, HURT_SFX } from '../game/combat.js';
+         KILL_SFX, HURT_SFX, setTargetSink } from '../game/combat.js';
 import { DeathBurst, DEATH_BURST_TEMPLATE, DEATH_BURST_TICKS,
          DEATH_BURST_SPRITE_BASE, ARRIVAL_ZONE_TABLE, findRespawnPosition,
          loseLife, gameOverPlaceholder, DEATH_SFX } from '../game/death.js';
@@ -127,7 +127,7 @@ import { CONSUMABLES, WIRED, WEAPON_ARCS, NOT_WIRED_REASON, applyConsumable,
          applyFamiliar, banksOverheal } from '../game/consumables.js';
 
 import { stepHeroFrame, stepCreatureDamage, FRAME_ORDER,
-         HUNTER_WEAPON } from '../game/frame.js';
+         HUNTER_WEAPON, targetGateOpen } from '../game/frame.js';
 import { CHEST_MIN, CHEST_MAX, CHEST_KEY_BASE, chestKeyFor, openedType,
          isLockedChest, isOpenChest, isChestType, scoreForValue,
          collectTreasure, parseObjectRecords, Score, Purse, TreasureBurst,
@@ -6686,6 +6686,26 @@ export async function checkWeaponsProjectiles(fetchRaw) {
       `that clears it every tick gives the hero a 15 Hz autocannon`);
   }
 
+  /* ── the target list is emptied every frame, right after the familiar ── */
+  {
+    /* CS:0x0218/0x021E. Without the reset a guardian fight (no entity scan
+     * to rebuild the list) would keep last tick's entries forever, and a
+     * consumed one (key 0) still beats the -1 seed. */
+    const { a, p, m } = armed();
+    const h = new Health(); h.familiarEnergy = 1000; h.familiarPower = 4;
+    const fam = new Familiar();
+    a.targets = [{ x: 50, y: 50, key: 90 }];
+    const frame = () => stepHeroFrame({ input: IN({}), arsenal: a, grid: new DamageGrid(),
+      player: p, map: m, cam: { x: 0, y: 0 }, world: 1, health: h,
+      familiar: { entity: fam, rng: () => 0, hero: { x: p.x, y: p.y, state: 4 } } });
+    frame();
+    const afterFirst = a.targets.length;
+    a.targets.push({ x: 1, y: 1, key: 0 });          // a stale, consumed leftover
+    frame();
+    check('the target list is emptied right after the familiar every frame (CS:0x021E), '
+      + 'so nothing survives into a tick with no scans', afterFirst === 0 && a.targets.length === 0);
+  }
+
   /* ── the record geometry, which only a SECOND volley can expose ───────── */
   {
     const { a, p, m } = armed(0);               // knife: maxShots 3
@@ -7149,13 +7169,20 @@ export async function checkWeaponsProjectiles(fetchRaw) {
     const cam = { x: 0, y: 0 };
     const mob = () => ([{ x: 100, y: 100, state: 20, alive: true,
                           frame: 0, delay: 0 }]);
-    const run = (weapon) => {
+    const run = (weapon, familiarEnergy = -1) => {
       const a = new Arsenal(w1);
       if (weapon >= 0) pickUpWeapon(a, weapon);
-      return stepCreatureDamage(mob(), { grid, cam, health: new Health(),
+      const h = new Health(); h.familiarEnergy = familiarEnergy;
+      a.targets = [];
+      setTargetSink(() => (targetGateOpen(h, a) ? a.targets : null));   // as main.js
+      stepCreatureDamage(mob(), { grid, cam, health: h,
         hero: { x: 900, y: 900, state: 26 }, decodeTag: () => ({ damage: 0 }),
-        arsenal: a }).targets.length;
+        arsenal: a });
+      setTargetSink(null);
+      return a.targets.length;
     };
+    check(`the familiar opens the same gate (CS:0x9129, energy >= 0)`,
+      run(-1, 1000) === 1 && run(0, 1000) === 1);
     check(`the hunter's target list is built ONLY while the hero holds a hunter`,
       run(HUNTER_WEAPON) === 1 && run(0) === 0 && run(-1) === 0,
       `holding weapon ${HUNTER_WEAPON} appends ${run(HUNTER_WEAPON)} target(s); ` +

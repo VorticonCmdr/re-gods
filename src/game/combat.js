@@ -586,6 +586,15 @@ export function hitSparkAxis(center, size, draw) {
  *   the hit-spark above.
  * @returns {{hit:boolean, tag:number, damage:number, killed:boolean}}
  */
+/* DS:0x8C52 (cursor DS:0x1D2, count DS:0x33C) — the ONE hunter/familiar
+ * target list every CS:0xA9E4 call appends to, gated at append time by
+ * DS:0x343 (CS:0xAA86). main.js installs the sink: a function returning the
+ * list while the gate is open, else null. frame.js empties it right after the
+ * familiar's tick (CS:0x0218/0x021E), so the hunter (0x020F) and the familiar
+ * (0x0215) read what the previous tick's scans appended. */
+let targetSink = null;
+export function setTargetSink(fn) { targetSink = fn; }
+
 export function creatureScansGrid(entity, grid, cam, decode, scalar = 0,
                                   box = CREATURE_CONTACT_BOX, targets = null,
                                   opts = {}) {
@@ -600,6 +609,7 @@ export function creatureScansGrid(entity, grid, cam, decode, scalar = 0,
    * (UNKNOWN_DS_0168: a counter set to 1000 at CS:0xC347 and to -1 at
    * CS:0xC470, decremented by a hit at CS:0xAB4D. Its meaning is not
    * established, so it is an input here rather than a constant.) */
+  if (targets == null && targetSink) targets = targetSink();   // the shared list
   if (targets) {                                        // CS:0xAA86-0xAAA5, after the clip
     const t = targetEntry(sx, sy, box.w, box.h, opts.cx ?? 0);
     if (t) targets.push({ ...t, entity });

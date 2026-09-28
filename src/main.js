@@ -70,7 +70,7 @@ import { SpikeClock, stepSpikes, spikeSprites, spike130Sprite,
 /* creatureScansGrid is imported for the world-1B statue's own scan only (it
  * was used there without an import — a ReferenceError the first time an
  * awake statue ran, found by a no-undef lint). */
-import { Health, HEALTH_MAX, attackHero, HURT_SFX, creatureScansGrid, combatHooks } from './game/combat.js';
+import { Health, HEALTH_MAX, attackHero, HURT_SFX, creatureScansGrid, combatHooks, setTargetSink } from './game/combat.js';
 import { Nests, Brood } from './game/nest.js';
 import { Statues } from './game/statue.js';
 import { Ce64Creatures, Ce64Spits, OBJECT_TYPE as CE64_OBJECT_TYPE } from './game/ce64.js';
@@ -89,7 +89,7 @@ import { buildObjectArena, appendHints, hintOffsetForX,
          stringAt } from './game/text-arena.js';
 import { Arsenal, spawnableWeapons, ALT_EMITTER_NONE } from './game/hero-fire.js';
 import { Familiar } from './game/familiar.js';
-import { stepHeroFrame, stepCreatureDamage } from './game/frame.js';
+import { stepHeroFrame, stepCreatureDamage, targetGateOpen } from './game/frame.js';
 import { DamageGrid, damageForTag, despawnConsumedHit } from './game/collision.js';
 import { parseWeapons } from './game/weapons.js';
 import { pickUpWeapon } from './game/pickup.js';
@@ -778,6 +778,10 @@ const guardianTables = {
   /* The familiar (game/familiar.js): DS:0x16A.., ticked at CS:0x0215 inside
    * stepHeroFrame, drawn at CS:0x02B7. */
   const familiar = new Familiar();
+  /* DS:0x343 (CS:0x9124-0x9146, 0xC359, 0xC481-0xC496): every writer computes
+   * "a familiar lives or a slot holds the hunter", so it is tested at each
+   * append. combat.js's creatureScansGrid appends through this sink. */
+  setTargetSink(() => (targetGateOpen(health, arsenal) ? arsenal.targets : null));
   const grid = new DamageGrid();
   /* CS:0x9320 — decode a grid tag back to the weapon that stamped it. Bound
    * over the arsenal's live slots so the creature scan needs no other state.

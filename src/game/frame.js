@@ -179,6 +179,10 @@ export function stepHeroFrame({ input, arsenal, grid, player, map, cam,
     const f = familiar.entity;
     arsenal.altEmitter = f.alive ? { x: f.x, y: f.y } : null;
   }
+  /* CS:0x0218/0x021E — the target list's cursor and count are reset right
+   * after the familiar: this tick's scans (selector 2 at 0x0223, the
+   * entities at 0x0285, the guardian driver ...) append afresh. */
+  arsenal.targets = [];
   const debrisFx = debris ? debris.step(cam) : [];
   /* CROUCH + FIRE, CS:0x4B1A -> CS:0x6069 — the key scan needs the SAME live
    * object array and category table the pickup walk above just used, plus
@@ -256,29 +260,26 @@ export function stepCreatureDamage(enemies, { grid, cam, hero, health,
                                               decodeTag, difficulty = 0,
                                               arsenal = null, rng = null,
                                               debris = null, sfx = null }) {
-  /* CS:0x9124-0x9146 — the hunter target list is built only while the hero
-   * carries the hunter (weapon 8). CS:0x021E resets its count to 0xFF every
-   * frame, so it is rebuilt from scratch each tick by the scan below. */
-  /* ...or while the familiar lives: CS:0x9129 opens the gate DS:0x343 for
-   * energy >= 0 too, the summon (CS:0xC359) opens it, and the familiar's
-   * death (CS:0xC481-0xC496) closes it unless a slot holds the hunter. Every
-   * writer computes this same condition, so testing it per frame matches. */
-  const wantTargets = !!arsenal
-    && ((health && health.familiarEnergy >= 0)
-        || arsenal.slots.some((s) => s.weapon === HUNTER_WEAPON));
-  const targets = wantTargets ? [] : null;
+  /* The scans below append to the shared target list through combat.js's
+   * sink (main.js installs it; the gate DS:0x343 is open while the hero
+   * carries the hunter or the familiar lives). */
   let touched = 0, killed = 0;
   for (const e of enemies) {
     if (!e.alive || e.justAlive) continue;               // CS:0xFF48 — see entity.js
     const c = creatureTouchesHero(e, hero, health, { sfx });
     if (c.strengthOut < 0) { touched++; continue; }     // CS:0xa9ec — contact won
     const s = creatureScansGrid(e, grid, cam, decodeTag, difficulty,
-                                undefined, targets, { rng, debris, sfx });
+                                undefined, null, { rng, debris, sfx });
     if (s.killed) { killed++; e.frame = -1; e.delay = 0; }
   }
-  if (arsenal) arsenal.targets = targets || [];
-  return { touched, killed, targets: targets || [] };
+  return { touched, killed };
 }
 
 /** CS:0x9130/0x9137/0x913E all compare a slot word against 8 — the hunter. */
 export const HUNTER_WEAPON = 8;
+
+/** DS:0x343, the target-list gate: every writer (CS:0x9124-0x9146, 0xC359,
+ *  0xC481-0xC496) computes "a familiar lives or a slot holds the hunter". */
+export const targetGateOpen = (health, arsenal) =>
+  (!!health && health.familiarEnergy >= 0)
+  || arsenal.slots.some((s) => s.weapon === HUNTER_WEAPON);

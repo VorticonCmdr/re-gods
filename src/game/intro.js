@@ -322,8 +322,9 @@ export const INTRO_END_TICK = 7900;
  * tick earlier than the model's 768 start); at 1101 the palette is DS:0x173
  * exactly; at 1359 the story has ramped to white and is two EB8 steps down
  * toward PONE (0x555 / 0x655 / 0x767), matching introPaletteAt entry for
- * entry. One early sample, at the return from the opener's first DCC, read a
- * single step at counter 11 and is unexplained.
+ * entry. A fifth sample, at counter 11, read one DCC step, which is exactly
+ * what introPaletteAt(11) gives; only its reported stop address (the return
+ * from that DCC, which the fade could not have reached yet) is odd.
  * Every card change is a flash: the new page is flipped in (CS:0x1992 swaps
  * the display start), DCC(0xF3, AX 0) whitens the text at once and
  * EB8(0x113, 3) settles it to gold. The story fades DOWN from white. */
