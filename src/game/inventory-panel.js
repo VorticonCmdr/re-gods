@@ -334,8 +334,8 @@ export function panelIconSprite(type) {
 export class InventoryPanel {
   constructor() {
     /** DS:0x366 — which slot draws highlighted. Moved by the crouch FIRE
-     *  tap (player.js `_crouch`, CS:0x615F) through `pending`; zeroed at
-     *  every level entry (CS:0x8D73/0x8D78). */
+     *  tap (player.js `_crouch`, CS:0x615F) through `pending`; zeroed by a
+     *  new game only (CS:0x8D73/0x8D78, inside the [0x391] block CS:0x8D58). */
     this.selector = 0;
     /** DS:0x367 — the pending selector the FIRE tap writes (CS:0x6171);
      *  the panel draw copies it into DS:0x366 (CS:0x1F5A). */

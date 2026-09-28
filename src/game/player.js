@@ -252,6 +252,12 @@ export const S = {
  * before standing back up (CS:0x4B00-0x4B07 / 0x4B75-0x4B7C), and the scan
  * itself, gated on FIRE exactly where CS:0x60E4 gates it — at the moment of
  * collection, not before. */
+/* The CS:0x4C54 call sites a plain fall's landing runs: left (state 11,
+ * CS:0x4C28 -> 0x4C4E), right (state 12 and the fall-fire right landing,
+ * CS:0x4D2A -> 0x4D36 and 0x4D53). */
+export const LAND_FALL_LEFT = Object.freeze([0x4c4e]);
+export const LAND_FALL_RIGHT = Object.freeze([0x4d36, 0x4d53]);
+
 export const CROUCH_EXIT_PHASE_START = 1;   // CS:0x4B11/0x4B86 `mov cl,1`
 
 /**
@@ -636,6 +642,7 @@ export class Player {
     this.footstep = false;
     this.climbStep = false;
     this.landSfx = 0;            // plays of 0x318 (CS:0x4C54) this tick — see _enterLand
+    this.landSites = [];         // which CS:0x4C54 call sites they are (?debug trace)
     this.inventoryCycled = false; // CS:0x615F, the crouch FIRE tap (sound 0x2831) — see _crouch
     this.emitted = null;
     this.keyCollected = null;
@@ -772,7 +779,7 @@ export class Player {
         }
         /* CS:0x4DF8/0x4E0D -> 0x4D2A (right) and the left mirror -> 0x4C28:
          * the SAME landing the plain fall uses, into the landing pose. */
-        this._enterLand(st.right, false, st.right ? 2 : 1);
+        this._enterLand(st.right, false, st.right ? LAND_FALL_RIGHT : LAND_FALL_LEFT);
         this.renderPhase = 0;
         return;
       }
@@ -845,7 +852,7 @@ export class Player {
     this.fireState = -1;
     this.pendingAlloc = null;
     this.fallV = 0; this.airSteps = 0;
-    this._enterLand(right);
+    this._enterLand(right, false, right ? [0x5391] : [0x5274]);   // the firing jumps
     this.renderPhase = 0;
   }
 
@@ -1440,7 +1447,7 @@ export class Player {
       this.y &= 0xfff0;
       this.fallV = 0;
       this.airSteps = 0;
-      this._enterLand(this.facing > 0);
+      this._enterLand(this.facing > 0, false, this.facing > 0 ? [0x5168] : [0x4f69]);
       this.renderPhase = 0;
       return;
     }
@@ -1487,7 +1494,7 @@ export class Player {
       this.y &= 0xfff0;
       this.fallV = 0;
       this.airSteps = 0;
-      this._enterLand(this.facing > 0);
+      this._enterLand(this.facing > 0, false, this.facing > 0 ? [0x5168] : [0x4f69]);
       this.renderPhase = 0;
       return;
     }
@@ -1532,12 +1539,13 @@ export class Player {
    * pose, state 17 (left) / 16 (right), with [0x357] := 0 and CL := 0. The
    * fall-damage accumulator DS:0x176 is NOT cleared — the pose drains it.
    */
-  _enterLand(right, fromLadderFall = false, sounds = 1) {
+  _enterLand(right, fromLadderFall = false, sites = [0x4c4e]) {
     /* CS:0x4C54 plays 0x318, and EVERY landing calls it: the falls (state 11
      * CS:0x4C4E; state 12 / fall-fire right CS:0x4D2A calls it TWICE, at
      * 0x4D36 and 0x4D53; the ladder fall CS:0x4CC5), the jumps (CS:0x4F69,
      * 0x5168) and the firing jumps (CS:0x5274, 0x5391). */
-    this.landSfx += sounds;
+    this.landSfx += sites.length;
+    this.landSites.push(...sites);
     this.state = ST.LAND;
     this.stateIndex = right ? S.LAND_R : S.LAND_L;
     this.facing = right ? +1 : -1;
@@ -1655,7 +1663,7 @@ export class Player {
        * which hold one tick and then drain DS:0x176 by 4 per tick before
        * handing back to walk (see `_land`). Live-confirmed by PJOYG3. */
       const right = ladderFall ? this.ladderFacing >= 0 : this.stateIndex === S.FALL_R;
-      this._enterLand(right, ladderFall, ladderFall || !right ? 1 : 2);
+      this._enterLand(right, ladderFall, ladderFall ? [0x4cc5] : right ? LAND_FALL_RIGHT : LAND_FALL_LEFT);
       return;
     }
     if (ladderFall) return;                        // CS:0x4C8E / 0x4C98: no fire test

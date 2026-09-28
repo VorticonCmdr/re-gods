@@ -1579,7 +1579,6 @@ const guardianTables = {
       player = new Player(spawn.x, spawn.y);
       player.spawnAtLevelStart(spawn.x, spawn.y);   // CS:0x8C34 — the level-load seed
       progress.reset(level.world, spawn.x, spawn.y); // CS:0x8C34 — chain, counters, ring, respawn
-      inventoryPanel.selector = inventoryPanel.pending = 0;   // CS:0x8D73 / 0x8D78
       events = new EventRunner(level.map, level.palfils);
       slots = new GroupSlots(); enemies = []; clamped = 0; firedByB = 0;
       slotsA = new GroupSlots(); enemiesA = []; clampedA = 0; firedByA = 0;
@@ -1858,6 +1857,10 @@ const guardianTables = {
     fx.lives = 2;                       // CS:0x8DD9's own starting value
     purse = new Purse(); score = new Score();          // CS:0x0487/0x8D91
     inventory = [INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY]; // CS:0x0498/0x8D80
+    /* CS:0x8D73/0x8D78 — the selector and its pending copy, in the same
+     * [0x391]-gated block (CS:0x8D58) as the score and inventory: a new game
+     * only, not every level entry. */
+    inventoryPanel.selector = inventoryPanel.pending = 0;
     /* CS:0x914c — clears all three weapon slots (the hero starts UNARMED,
      * Gods/docs/consumables-and-treasure.md). This is now the ONLY place
      * arsenal is rebuilt from scratch — switchLevel's own reloadWorld call
@@ -1884,9 +1887,10 @@ const guardianTables = {
    *   0473  CS:0x914C clears the weapon slots, 0x95B5 restores the standard
    *         arc, 0xC440 (with [0x391] set) dismisses the familiar
    *   048F  the inventory selector [0x366] and its pending copy [0x367] = 3
-   *         (⚠️ an earlier note said nothing else resets them: the level
-   *         init CS:0x8D73/0x8D78 zeroes both on every level entry, this
-   *         one included, so the 3 never reaches play)
+   *         (the level init zeroes both, CS:0x8D73/0x8D78, but only inside
+   *         its [0x391]-gated new-game block, CS:0x8D58, which also zeroes
+   *         the score this restart is proven to keep; whether that block
+   *         runs here is not established)
    *   04A4  CS:0x228E ([0x3BB]/[0x3BC] = 0xFF), CC67 RET, jmp 0x2A37
    * [0x70]/[0x71] = 0xFF (CS:0x046B) are the score's HUD dirty flags; the port
    * redraws the HUD every frame, so there is nothing to mirror. */
@@ -1898,7 +1902,7 @@ const guardianTables = {
     resetWeaponArc();                                             // CS:0x95B5
     health.familiarEnergy = -1; health.familiarPower = 0; health.familiarWings = 0;
     familiar.reset();                                            // CS:0xC440, no burst ([0x391])
-    inventoryPanel.selector = inventoryPanel.pending = 3;         // CS:0x048F / 0x0492 (the level init zeroes both again)
+    inventoryPanel.selector = inventoryPanel.pending = 3;         // CS:0x048F / 0x0492
     deathSeq = null; lastDeathBurstFx = []; paused = false;
     uiState = 'game';
     await switchLevel('1A');
@@ -2077,6 +2081,7 @@ const guardianTables = {
         fx.lives = 2;
         purse = new Purse(); score = new Score();
         inventory = [INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY];
+        inventoryPanel.selector = inventoryPanel.pending = 0;   // CS:0x8D73 / 0x8D78, [0x391] set
         health.familiarEnergy = -1; health.familiarPower = 0; health.familiarWings = 0;
         familiar.reset();                                            // CS:0xC440, no burst ([0x391])
         deathSeq = null; lastDeathBurstFx = []; paused = false; gameOverFade = null;
@@ -4550,6 +4555,7 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
       slots: arsenal.slots.map((sl) => `${sl.weapon}:${sl.live}`).join(' '),
       hp: health.target, ph: player.phase, pst: player.state, freeze: fx.freeze, tock,
       sfx: sfxTrace.splice(0).map((id) => (typeof id === 'string' ? id : id.toString(16))).join(','),
+      land: (player.landSites || []).map((a) => a.toString(16)).join(' '),   // CS:0x4C54 callers this tick
       inv: `${player.fireLatch | 0},${player.scanned | 0},${player.noKey | 0},${inventoryPanel.selector},${inventoryPanel.pending}`,   // [0x341],[0x354],[0x355],[0x366],[0x367]
     });
     sfxTrace = [];
