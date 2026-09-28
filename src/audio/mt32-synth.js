@@ -14,9 +14,13 @@
  * partial becomes band-passed noise with a little of its pitch, a ROM timbre
  * a simple voice chosen from its name. The parameter-to-time/level curves
  * below are approximations of the MT-32's, not measurements. Ring
- * modulation (partial structures 2, 4, 5, 7, ...) is mixed instead. There is
- * no reverb. So this sounds LIKE the Roland version, played from its real
- * notes and instrument settings; it is not an emulation of the chip.
+ * modulation (partial structures 2, 4, 5, 7, ...) is mixed instead. The
+ * reverb follows the bank's own settings — the system area's mode, time and
+ * level (PTITLE.RL: 1 Hall, 5, 3) and each patch's / rhythm key's reverb
+ * switch — but its sound is a generated impulse response (a decaying noise
+ * tail, or taps for mode 3), not the MT-32's reverb chip; the time and level
+ * curves are guesses. So this sounds LIKE the Roland version, played from
+ * its real notes and instrument settings; it is not an emulation of the chip.
  */
 
 import { MT32_PRESET_NAMES } from './mt32-bank.js';
@@ -98,6 +102,8 @@ export class Mt32Synth {
     this.out = ctx.createGain();
     this.out.gain.value = OUT_GAIN * ((bank.system.masterVolume ?? 100) / 100);
     this.out.connect(destination);
+    this.reverbIn = this.#makeReverb(destination);
+    this.wet = false;                               // the note being built: reverb switch
     this.noise = this.#makeNoise();
     this.waves = new Map();
     this.parts = [];
@@ -118,10 +124,55 @@ export class Mt32Synth {
       const part = this.parts[channels[i]];
       if (!part) return;
       part.patch = { timbreGroup: pt.timbreGroup, timbreNumber: pt.timbreNumber,
-        keyShift: pt.keyShift, fineTune: pt.fineTune, benderRange: pt.benderRange };
+        keyShift: pt.keyShift, fineTune: pt.fineTune, benderRange: pt.benderRange,
+        reverb: pt.reverb };
       part.pan = (pt.panpot - 7) / 7;
     });
     this.rhythmChannel = channels[8];
+  }
+
+  /* The system area's reverb: mode 0 Room, 1 Hall, 2 Plate, 3 Tap delay;
+   * time and level 0-7. Returns the send input (null when the level is 0). */
+  #makeReverb(destination) {
+    const { reverbMode: mode = 0, reverbTime: time = 0, reverbLevel: level = 0 } = this.bank.system;
+    if (!level) return null;
+    const ctx = this.ctx, rate = ctx.sampleRate;
+    const seconds = [0.35 + 0.15 * time, 0.8 + 0.3 * time, 0.5 + 0.2 * time, 0.12 + 0.08 * time][mode & 3];
+    const pre = [0.008, 0.02, 0.004, 0][mode & 3];
+    const len = Math.ceil((pre + seconds) * rate);
+    const ir = ctx.createBuffer(2, len, rate);
+    let s = 0x2468ace;
+    for (let c = 0; c < 2; c++) {
+      const d = ir.getChannelData(c);
+      if ((mode & 3) === 3) {                       // tap delay: a few decaying echoes
+        for (let k = 1; k <= 6; k++) {
+          const i = Math.floor((k * seconds / 3 + c * 0.011) * rate);
+          if (i < len) d[i] = 0.7 ** k;
+        }
+        continue;
+      }
+      for (let i = Math.floor(pre * rate); i < len; i++) {
+        s = (s * 1103515245 + 12345) >>> 0;
+        const age = i / rate - pre;
+        d[i] = ((s / 0x80000000) - 1) * Math.exp(-6.9 * age / seconds);   // -60 dB at `seconds`
+      }
+    }
+    for (let c = 0; c < 2; c++) {                   // unit energy per channel, so `level` is the wet level
+      const d = ir.getChannelData(c);
+      let e = 0;
+      for (let i = 0; i < len; i++) e += d[i] * d[i];
+      const k = e > 0 ? 1 / Math.sqrt(e) : 0;
+      for (let i = 0; i < len; i++) d[i] *= k;
+    }
+    const conv = ctx.createConvolver();
+    conv.normalize = false;
+    conv.buffer = ir;
+    const input = ctx.createGain();
+    input.gain.value = OUT_GAIN * ((this.bank.system.masterVolume ?? 100) / 100);
+    const wet = ctx.createGain();
+    wet.gain.value = 0.12 * level;
+    input.connect(conv).connect(wet).connect(destination);
+    return input;
   }
 
   #makeNoise() {
@@ -203,6 +254,7 @@ export class Mt32Synth {
       else if (DRUMS[64 + p.timbreNumber]) drum = DRUMS[64 + p.timbreNumber];
     }
     const gain = level * (part.volume / 127) ** 2 * (part.expression / 127) ** 2;
+    this.wet = !!(ch === this.rhythmChannel ? this.bank.rhythm.get(note)?.reverb : part.patch?.reverb);
     const voice = timbre ? this.#timbreVoice(timbre, key, vel, gain, pan, part, t)
       : drum ? this.#drumVoice(drum, vel, gain, pan, t)
         : preset >= 0 ? this.#presetVoice(presetVoice(preset), key, vel, gain, pan, part, t) : null;
@@ -215,6 +267,7 @@ export class Mt32Synth {
     const p = this.ctx.createStereoPanner();
     p.pan.value = Math.max(-1, Math.min(1, pan));
     gainNode.connect(p).connect(this.out);
+    if (this.wet && this.reverbIn) p.connect(this.reverbIn);
     return p;
   }
 

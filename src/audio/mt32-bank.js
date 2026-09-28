@@ -111,7 +111,7 @@ export function parseMt32Bank(data) {
   for (let i = 0; i < 8; i++) {
     const r = pt.subarray(16 * i, 16 * i + 16);
     patchTemp.push({ timbreGroup: r[0], timbreNumber: r[1], keyShift: r[2], fineTune: r[3],
-      benderRange: r[4], outputLevel: r[8], panpot: r[9] });
+      benderRange: r[4], assignMode: r[5], reverb: r[6], outputLevel: r[8], panpot: r[9] });
   }
   const timbres = [];
   for (let i = 0; i < TIMBRE_COUNT; i++) timbres.push(parseTimbre(take(TIMBRE_BYTES)));
