@@ -25,6 +25,7 @@ import { runAllChecks, checkDescriptorAnchors, checkHeroSprites,
          checkShop, checkMusic } from './verify/checks.js';
 import { EventRunner, parsePalfils, palfilsNameFor } from './game/events.js';
 import { Guardian, convertBezier, resetProcessJaw } from './game/guardian.js';
+import { Guardian4 } from './game/guardian4.js';
 import { FlashPool } from './game/flash.js';
 import { LineBarriers, parseLineBarrierRecords } from './game/line-barriers.js';
 import { makeActionContext, makeGates, DOOR_TILES,
@@ -583,6 +584,12 @@ async function main() {
 const guardianTables = {
   sincos: await fetchRaw('game/SINCOS.DAT'),
   bezier: convertBezier(await fetchRaw('game/BEZIER.DAT')),
+  /* World 4: the worm path (the last PGOD04.PAT record, CS:0xC94B) and the
+   * head list PBUMLIST.BIN (CS:0x0588 -> SS:0x4F20). */
+  w4: {
+    pat: dclDecompress(await fetchRaw('game/PGOD04.PAT')).data,
+    bumlist: dclDecompress(await fetchRaw('game/PBUMLIST.BIN')).data,
+  },
 };
   let hero = null;
   /* CS:0x0df8's own export-21 anchor (formats/descriptors.js, descriptor
@@ -1091,6 +1098,13 @@ const guardianTables = {
   /* After a guardian dies: DS:0x3BE, the CS:0xD9CA gate's score countdown,
    * and world 3's corpse (the CS:0xD557 gate). */
   let guardianScoreTicks = 0, guardianCorpse = null;
+  /* World 4 (game/guardian4.js): the rise hook's background sprites this
+   * tick, the ending gate CS:0xCC67 (the dead guardian), and the frozen
+   * background — `w4Clean` is the export-19 save, `w4Frozen` the export-18
+   * snapshot export 0 blits back once DS:0x32 > 2, `w4Restore` this tick's
+   * export-20 paste (the ending). */
+  let guardianBg = [], guardianEnding = null;
+  let w4Clean = null, w4Frozen = null, w4Restore = false, w4Freeze = null;
   /* DS:0x32 — the scripted camera (camera.js scriptedCameraStep) and its
    * target DS:0x2EC/0x2EE. Only the level (re)init clears it (CS:0x8D53);
    * a death keeps it. `camPending` is this tick's scripted result, applied
@@ -1146,13 +1160,15 @@ const guardianTables = {
   const wireSpawn = () => {
     guardian = null; guardianFx = []; camShake = 0; camNudgeY = 0;
     guardianScoreTicks = 0; guardianCorpse = null;
+    guardianBg = []; guardianEnding = null;
+    w4Clean = null; w4Frozen = null; w4Restore = false; w4Freeze = null;
     camScript = { mode: 0, tx: 0, ty: 0 }; camPending = null; camWasScripted = false;
     flashPool.reset(); flashFx = [];
-    /* Selector 11 — CS:0xC49C. Only world 1's guardian is ported; the other
-     * worlds' events are still counted as unhandled. */
+    /* Selector 11 — CS:0xC49C, the world's guardian (guardian.js for worlds
+     * 1-3, guardian4.js for world 4). */
     events.onGuardian = () => {
-      if (level.world === 4) return false;
-      guardian = new Guardian(level.world, guardianTables);
+      guardian = level.world === 4 ? new Guardian4(guardianTables.w4)
+        : new Guardian(level.world, guardianTables);
       return true;
     };
     events.onSpawnB = (param) => {
@@ -2371,6 +2387,34 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
        * -4 when DS:0x36C is set and +4 otherwise, before this tick's snapshot. */
       if (camShake > 0) { cam.x += tock ? -4 : 4; camShake--; }
       cam.snapshot();
+      /* CS:0x01E2 `call 0xCC67` and CS:0x01E5 `call [0x286]` — world 4's
+       * ending gate (after its guardian died) and rise hook, both before the
+       * object pass and the player, and neither in the hero's death ticks
+       * (CS:0x01C4 jumps to CS:0x09BB past them). game/guardian4.js. */
+      if (w4Freeze !== 'snap') guardianBg = [];   // a pending snapshot keeps its tick's parts
+      w4Restore = false;
+      if (!deathSeq && !health.dead) {
+        if (guardianEnding) {
+          w4Restore = guardianEnding.stepEnding(events.actionCtx.timer, {
+            messages, lives: fx.lives,
+            tally: () => { progress.pending = true; },            // [0x36A] = 1
+            gift: (x, y, id) => {                                  // CS:0x1764 -> 0xC041
+              const o = dropCarriedItem(level.drawObjects, id, x, y);
+              if (o) level.drawObjects = insertSpawned(level.drawObjects.filter((q) => q !== o), level.cats, o);
+            },
+            complete: () => {                                      // [0x34A] = 1 -> CS:0x037A
+              if (guardianEnding.completed) return;
+              guardianEnding.completed = true;
+              $('event').textContent = 'game complete — the CS:0x037A ending is not ported';
+            },
+          });
+        }
+        if (guardian && guardian.world === 4) {
+          guardianBg = guardian.hook({ cam: { x: cam.snapX, y: cam.snapY }, camScript,
+            sfx: (id) => audio.play(id) });
+          if (guardian.freeze) { w4Freeze = guardian.freeze; guardian.freeze = null; }
+        }
+      }
       /* CS:0x0e83/0x0e8a — the health bar's own shimmer phase (game/health-
        * bar.js), gated on every OTHER tick in the original; unconnected to
        * anything else this tick does, so it advances here rather than
@@ -3198,6 +3242,10 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
             sfx: (id) => audio.play(id),
             popup: (p) => popup.spawn(p.x, p.y, p.id, dropCarriedIntoWorld) });
           guardian = null;
+          if (g.world === 4) {                               // CS:0xC76C / 0xC772
+            guardianEnding = g;
+            events.actionCtx.timer = 0;                      // CS:0xC64C [0x11E] = [0x120] = 0
+          }
           guardianScoreTicks = d.scoreTicks;                 // [0x3BE], the CS:0xD9CA gate
           difficulty += d.difficulty;                        // CS:0xD5F7 (world 3), unclamped
           if (d.corpse) guardianCorpse = g;                  // CS:0xD557 NOPed
@@ -3522,12 +3570,29 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
       }
       const camX = cam.snapX, camY = cam.snapY;
       renderer.clear(0);
-      renderer.drawTilemap(level.map, level.tiles, camX, camY);
+      /* Graphics export 0: with DS:0x32 > 2 and a world-4 snapshot taken,
+       * the frozen screen instead of the tiles (VGA:0x10EE). */
+      if (w4Frozen && camScript.mode > 2) renderer.buf.set(w4Frozen);
+      else renderer.drawTilemap(level.map, level.tiles, camX, camY);
       /* Selectors 7-10 — the line-barrier system's own footprint (game/
        * line-barriers.js), drawn in the same pass/order as the tilemap
        * itself since it fills gaps IN that tilemap (plane A never carries
        * these tiles; this system draws over plane A's own "empty" cells). */
-      renderer.drawExtraTiles(lineBarriers.cells(), level.tiles, camX, camY);
+      if (!(w4Frozen && camScript.mode > 2)) renderer.drawExtraTiles(lineBarriers.cells(), level.tiles, camX, camY);
+      /* World 4's rise (game/guardian4.js hook): export 19 saves the clean
+       * background, the body parts go on top, and on the last rise tick
+       * export 18 snapshots the lot. After the death, export 20 pastes the
+       * clean save back every tick. UNKNOWN_w4_restore_block: the original
+       * saves and restores a 104 x 112 block (VGA:0x0D9D / 0x0DD8); this
+       * uses the whole clean frame, identical wherever the body was not. */
+      if (w4Freeze) w4Clean = renderer.buf.slice();
+      if (w4Restore && w4Clean) renderer.buf.set(w4Clean);
+      for (const d of guardianBg) {
+        const bf = hero && hero.frames[d.sprite];
+        if (bf) renderer.blitSprite(bf, d.x, d.y);
+      }
+      if (w4Freeze === 'snap') w4Frozen = renderer.buf.slice();
+      w4Freeze = null;
       /* OBJECTS, with real sprites: `170 + type`, or `302 + (type - 0xC0)` for
        * a weapon pickup. Drawn at (x, y) top-left, in the original's draw
        * order (cat-3/cat-5 behind, ordinary next, weapons on top — graphics
@@ -3755,7 +3820,7 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
       /* Selector 11's guardian and its spits (game/guardian.js). */
       for (const d of guardianFx) {
         const gf = hero && hero.frames[d.sprite];
-        if (gf) renderer.blitSprite(gf, d.x, d.y);
+        if (gf) renderer.blitSprite(gf, d.x, d.y, d.clipBottom);
         else { outOfRange++; renderer.strokeRect(d.x, d.y, 32, 32, 13); }
       }
 

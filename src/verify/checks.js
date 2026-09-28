@@ -6,6 +6,7 @@
  * format claim were wrong, these would go red rather than fail silently.
  */
 
+import { Guardian4 } from '../game/guardian4.js';
 import { dclDecompress } from '../formats/dcl.js';
 import { DOOR_TILES, ZONE_TELEPORT, ZONE_EXIT, makeGates, makeActionContext,
          runAction, fireTrigger, SFX } from '../game/trigger-actions.js';
@@ -500,6 +501,53 @@ export async function runAllChecks(fetchRaw) {
     for (let i = 2; i < 16 && sharedTail; i++) sharedTail = panelImg.paletteRaw[i] === levelImg.paletteRaw[i];
     check(`PSTATUS's own palette words 2..15 match PLEVEL1A's exactly (shared baseline, no DAC install)`,
       sharedTail);
+  }
+
+  /* The world-4 guardian (game/guardian4.js), CS:0xC5EA. No demo reaches it,
+   * so these pin the arithmetic of the bytes: the path is PGOD04.PAT's LAST
+   * record (CS:0xC94B), the rise takes 105 hook calls (0x180 -> 0xB0 by 2),
+   * the thrower launches on driver calls 128 + 56k (C62A 120, CB44 reset 40,
+   * ph 3 at t = 8), worm record 0 first steps on call 172 (delay 0xAA + the
+   * install call) and, unhit, the next worm's on 486 (escape at 414, delays
+   * 0x46). With no hits the fight draws no random numbers. */
+  {
+    const w4 = new Guardian4({ pat: dclDecompress(await fetchRaw('game/PGOD04.PAT')).data,
+      bumlist: dclDecompress(await fetchRaw('game/PBUMLIST.BIN')).data });
+    check('world 4: the worm path is PGOD04.PAT record 21 — start (0xBC0, 0xE6), 456 step bytes',
+      w4.path.x === 0xbc0 && w4.path.y === 0xe6 && w4.path.steps.length === 456,
+      `(${w4.path.x.toString(16)}, ${w4.path.y.toString(16)}) ${w4.path.steps.length}`);
+    const health = { bar: 24, target: 24, damage(n) { this.target -= n; } };
+    let draws = 0, hooks = 0, riseEnd = 0;
+    const o = { cam: { x: 0xb60, y: 0x78 }, hero: { x: 0, y: 0, state: 0 }, health,
+      rng: () => { draws++; return 0; }, sfx: () => {}, zap: () => {}, invuln: false };
+    const cs = { mode: 0, tx: 0, ty: 0 };
+    const launches = [], firstSteps = [];
+    for (let call = 1; call <= 500; call++) {
+      if (call > 1 && w4.hookOn) { w4.hook({ ...o, camScript: cs }); hooks++; if (!w4.hookOn) riseEnd = hooks; }
+      const bf = w4.boulder.frame, p0 = w4.recs[0].p;
+      w4.drive(o);
+      if (bf < 0 && w4.boulder.frame >= 0) launches.push(call);
+      if (p0 === 0 && w4.recs[0].p > 0) firstSteps.push(call);
+    }
+    check('world 4: the rise ends on hook call 105 at y 0xB0, camera mode 4 (export 18)',
+      riseEnd === 105 && w4.baseY === 0xb0 && cs.mode === 4 && cs.tx === 0xb60 && cs.ty === 0x78, `${riseEnd}`);
+    check('world 4: boulders launch on driver calls 128, 184, 240 ...',
+      launches.slice(0, 3).join() === '128,184,240', launches.join());
+    check('world 4: worm record 0 first steps on calls 172 and (after an escape) 486',
+      firstSteps.join() === '172,486', firstSteps.join());
+    check('world 4: an unhit fight draws no random numbers', draws === 0, `${draws}`);
+    /* C776: a destroyed worm (all 8 explosions done) costs 1000; the 7th kills. */
+    const k = new Guardian4({ pat: dclDecompress(await fetchRaw('game/PGOD04.PAT')).data,
+      bumlist: w4.bumlist });
+    const hps = [];
+    for (let worm = 0; worm < 7 && !k.dead; worm++) {
+      k.destroyed = true;                                   // [0x3DB] = 1
+      for (const r of k.recs) { r.wait = -1; }
+      for (let t = 0; t < 40 && !k.dead && k.destroyed; t++) k.drive(o);
+      hps.push(k.hp);
+    }
+    check('world 4: each destroyed worm costs 1000 health; the 7th kills (6000 -> -1000)',
+      hps.join() === '5000,4000,3000,2000,1000,0,-1000' && k.dead, hps.join());
   }
 
   return { results, sampleMessages, hist };

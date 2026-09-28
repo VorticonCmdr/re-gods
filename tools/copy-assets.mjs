@@ -54,6 +54,9 @@ const WANTED = [
   // The world-2 guardian's arm (game/guardian.js): SINCOS.DAT and BEZIER.DAT,
   // both raw (no DCL). BEZIER.DAT is loaded only in world 2 (CS:0x0570).
   'SINCOS.DAT','BEZIER.DAT',
+  // The world-4 guardian's worm head list (game/guardian4.js), DCL, loaded
+  // at CS:0x0588 into SS:0x4F20.
+  'PBUMLIST.BIN',
   // The status panel (game/status-panel.js). PSTATUS.PI1 is the boot-time
   // placeholder (Table 2 disk id 1); PSTAT3.PI1 is loaded once when real
   // gameplay starts and overwrites it (disk ids 2,3 — the world data disks),

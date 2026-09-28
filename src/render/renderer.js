@@ -106,12 +106,15 @@ export class Renderer {
    * Blit an indexed sprite, clipped, colour 0 transparent.
    * The original's masked blitters are exports 1 and 2 of the graphics driver;
    * this reproduces the visible result, not the EGA latch mechanism.
+   * `clipBottom` is export 1's bottom clip line SS:0x40A (the world-4 worm
+   * head sets 0x41).
    * @param {{w:number,h:number,pixels:Uint8Array}} f
    */
-  blitSprite(f, dx, dy) {
+  blitSprite(f, dx, dy, clipBottom = SCREEN_H) {
+    const yEnd = Math.min(SCREEN_H, clipBottom);
     for (let y = 0; y < f.h; y++) {
       const py = dy + y;
-      if (py < 0 || py >= SCREEN_H) continue;
+      if (py < 0 || py >= yEnd) continue;
       const rowOff = py * SCREEN_W, src = y * f.w;
       for (let x = 0; x < f.w; x++) {
         const px = dx + x;

@@ -104,6 +104,20 @@ export const DEATH_POPUP = Object.freeze({                                      
   3: { x: 0x220, y: 0x80, id: 0x1f },      // CS:0xD5FC — after D923
 });
 
+/** CS:0xD923 itself, at the origin DS:0x28C/0x28E. */
+export function sharedDeath(x, y, { rng, starburst, burst, sfx }) {
+  if (starburst) starburst.active = false;                          // CS:0xD926
+  for (let i = 0; i < 7; i++) {
+    const by = (rng() & 0x3f) + 0x10;                               // CS:0xD92B
+    const bx = rng() & 0x3f;                                        // CS:0xD936
+    if (starburst) starburst.spawn(x + bx, y + by);                 // CS:0xD945
+  }
+  if (starburst) starburst.chain = -4;                              // CS:0xD94B `mov byte [0x374],0xfc`
+  if (burst) burst.spawnList(DEATH_ITEMS, x + 0x18, y + 0x28);      // CS:0xD955-0xD96E
+  else for (let i = 0; i < 20; i++) rng();
+  sfx(DEATH_SFX);                                                   // CS:0xD98A
+}
+
 export class Guardian {
   constructor(world, tables = null) {
     if (world < 1 || world > 3) throw new Error(`guardian for world ${world} is not ported`);
@@ -152,16 +166,7 @@ export class Guardian {
   die({ rng, starburst, burst, sfx, popup }) {
     const out = { scoreTicks: (this.world * 20) & 0xff, difficulty: 0, corpse: false };
     if (this.world === 2 && popup) popup(DEATH_POPUP[2]);            // CS:0xCE81
-    if (starburst) starburst.active = false;                          // CS:0xD926
-    for (let i = 0; i < 7; i++) {
-      const by = (rng() & 0x3f) + 0x10;                               // CS:0xD92B
-      const bx = rng() & 0x3f;                                        // CS:0xD936
-      if (starburst) starburst.spawn(this.x + bx, this.y + by);       // CS:0xD945
-    }
-    if (starburst) starburst.chain = -4;                              // CS:0xD94B `mov byte [0x374],0xfc`
-    if (burst) burst.spawnList(DEATH_ITEMS, this.x + 0x18, this.y + 0x28);   // CS:0xD955-0xD96E
-    else for (let i = 0; i < 20; i++) rng();
-    sfx(DEATH_SFX);                                                   // CS:0xD98A
+    sharedDeath(this.x, this.y, { rng, starburst, burst, sfx });
     if (this.world === 3) {
       this.corpseVy = 0;                                              // CS:0xD5EE [0x2CC] = 0
       out.corpse = true;                                              // CS:0xD5E8 cs:[0xD557] = NOP
