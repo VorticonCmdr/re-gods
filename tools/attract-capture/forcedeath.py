@@ -13,7 +13,10 @@ Writes NAME.death.json.
 import json, struct, sys
 from sweep import DS, CS, POLLER, call, mem, word, wait_stop
 
-name, inject, at, drv, span = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4], 16), int(sys.argv[5])
+name, inject, at, span = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[5])
+# `drv` or `drv>target`: patch drv's first bytes to jmp target (default the shared death 0xD923)
+drv, _, tgt = sys.argv[4].partition('>')
+drv, tgt = int(drv, 16), int(tgt or 'd923', 16)
 ranges = [tuple(int(v, 16) for v in a.split(':')) for a in sys.argv[6:]]
 here = __file__.rsplit('/', 1)[0]
 cap = json.load(open(f'{here}/{name}.raw.json'))['output']
@@ -37,7 +40,7 @@ run_to(inject)
 call('PUT', f'/memory/{DS}/{0x7E14}', table, raw=True)
 run_to(at)
 orig = mem(CS, drv, 3)
-rel = (0xD923 - (drv + 3)) & 0xFFFF
+rel = (tgt - (drv + 3)) & 0xFFFF
 call('PUT', f'/memory/{CS}/{drv}', bytes([0xE9, rel & 0xFF, rel >> 8]), raw=True)
 out = []
 for c in range(at + 1, at + span + 1):
