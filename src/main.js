@@ -26,6 +26,7 @@ import { runAllChecks, checkDescriptorAnchors, checkHeroSprites,
 import { EventRunner, parsePalfils, palfilsNameFor } from './game/events.js';
 import { Guardian, convertBezier, resetProcessJaw } from './game/guardian.js';
 import { Guardian4 } from './game/guardian4.js';
+import { PayoffScreen } from './game/payoff.js';
 import { FlashPool } from './game/flash.js';
 import { LineBarriers, parseLineBarrierRecords } from './game/line-barriers.js';
 import { makeActionContext, makeGates, DOOR_TILES,
@@ -635,6 +636,11 @@ const guardianTables = {
     titleBackground = await loadTitleBackground();
   } catch (e) { console.error('title background failed to load', e); }
 
+  /* PPAYOFF.PI1 — the game-completion screen (game/payoff.js, CS:0x03AC). */
+  let payoffImage = null;
+  try {
+    payoffImage = decodePI1(dclDecompress(await fetchRaw('game/PPAYOFF.PI1')).data);
+  } catch (e) { console.error('payoff image failed to load', e); }
   let introAssets = null;
   try {
     introAssets = await loadIntroAssets();
@@ -1132,6 +1138,8 @@ const guardianTables = {
    * export-18 snapshot export 0 blits back once DS:0x32 > 2, `w4Restore`
    * this tick's export-20 paste (the ending). */
   let guardianBg = [], guardianEnding = null;
+  /* CS:0x037A's payoff screen (game/payoff.js) and its frame clock. */
+  let payoffScreen = null, payoffLast = 0;
   let w4Clean = null, w4Restore = false, w4Freeze = null;
   /* ADBA:0 — graphics export 18's background snapshot (see export 0 in the
    * render callback). Level init clears DS:0x32, so a level starts without. */
@@ -1643,6 +1651,28 @@ const guardianTables = {
     health.familiarEnergy = -1; health.familiarPower = 0; health.familiarWings = 0;
     deathSeq = null; lastDeathBurstFx = []; paused = false; gameOverFade = null;
     await switchLevel(key);             // CS:0x914c's own two callers both fall into world 1
+  }
+
+  /* CS:0x043F-0x04AD — after the payoff screen the game starts again at
+   * world 1A, harder, keeping the score and the lives (the ten "immortality"
+   * gifts). [PROVEN] live (w4payoff.py): at the next CS:0x2A37, [0x42]/[0x43]
+   * = 1/0, [0x365] 1 -> 2, lives 10 and the score unchanged, the key slots
+   * [0x17E..0x184] = 0xFFFF, money [0x194/0x196] = 0, [0x366/0x367] = 3.
+   *   0445  difficulty + 1, clamped to 2..4
+   *   0473  CS:0x914C clears the weapon slots, 0x95B5 restores the standard
+   *         arc, 0xC440 (with [0x391] set) dismisses the familiar
+   *   04A4  CS:0x228E ([0x3BB]/[0x3BC] = 0xFF), CC67 RET, jmp 0x2A37
+   * Not modelled: [0x70]/[0x71] = 0xFF and the key-slot cursor [0x366]. */
+  async function completionRestart() {
+    difficulty = Math.min(4, Math.max(2, difficulty + 1));
+    purse = new Purse();
+    inventory = [INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY];
+    arsenal = new Arsenal(level.weapons);
+    resetWeaponArc();                                             // CS:0x95B5
+    health.familiarEnergy = -1; health.familiarPower = 0; health.familiarWings = 0;
+    deathSeq = null; lastDeathBurstFx = []; paused = false;
+    uiState = 'game';
+    await switchLevel('1A');
   }
 
   /* CS:0x0643 — DS:0x194:=0x3880, DS:0x196:=1. The FULL 32-bit value (not
@@ -2374,6 +2404,15 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
         }
         return;
       }
+      if (uiState === 'payoff') {
+        const now = performance.now();
+        if (payoffScreen.step(now - payoffLast, !!input.fire)) {
+          payoffScreen = null;
+          completionRestart();                                     // CS:0x043F
+        }
+        payoffLast = now;
+        return;
+      }
       if (uiState === 'hiscore-table') {
         if (hiscoreTable.step(input)) {
           hiscoreTable = null;
@@ -2436,10 +2475,9 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
               const o = dropCarriedItem(level.drawObjects, id, x, y);
               if (o) level.drawObjects = insertSpawned(level.drawObjects.filter((q) => q !== o), level.cats, o);
             },
-            complete: () => {                                      // [0x34A] = 1 -> CS:0x037A
-              if (guardianEnding.completed) return;
-              guardianEnding.completed = true;
-              $('event').textContent = 'game complete — the CS:0x037A ending is not ported';
+            complete: () => {                                      // [0x34A] = 1 -> CS:0x032E -> 0x037A
+              payoffScreen = new PayoffScreen(); payoffLast = performance.now();
+              uiState = 'payoff';
             },
           });
         }
@@ -3571,6 +3609,13 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
         if (introAssets) {
           intro.draw(renderer, introAssets);
           renderer.present(intro.palette(introAssets), intro.fadeT());
+        }
+        return;
+      }
+      if (uiState === 'payoff') {
+        if (payoffScreen && payoffImage && introAssets) {
+          payoffScreen.draw(renderer, payoffImage, introAssets.storyGlyphs);
+          renderer.present(payoffImage.palette, payoffScreen.fadeT);   // export 9 from DS:0xDCE
         }
         return;
       }

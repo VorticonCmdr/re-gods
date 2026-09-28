@@ -47,6 +47,8 @@ const WANTED = [
   'PGUARD11.PI1','PGUARD11.DAT','PGUARD12.PI1','PGUARD12.DAT','PAMDRAGN.PI1','PAMDRAGN.DAT',
   'PGUARD31.PI1','PGUARD31.DAT','PGUARD32.PI1','PGUARD32.DAT',
   'PGUARD41.PI1','PGUARD41.DAT','PGUARD42.PI1','PGUARD42.DAT',
+  // the game-completion screen (game/payoff.js, CS:0x03AC)
+  'PPAYOFF.PI1',
   // object category codes: record +4 (BE u16). Verified byte-identical to
   // the EXE's own table at DS:0xef78 for all 132 records in all 4 worlds
   // (528/528), so the port reads the shipped asset, not the executable.

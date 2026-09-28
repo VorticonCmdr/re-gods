@@ -7,6 +7,7 @@
  */
 
 import { Guardian4 } from '../game/guardian4.js';
+import { PayoffScreen, PAYOFF_PAGES, LINE_Y, lineX } from '../game/payoff.js';
 import { dclDecompress } from '../formats/dcl.js';
 import { DOOR_TILES, ZONE_TELEPORT, ZONE_EXIT, makeGates, makeActionContext,
          runAction, fireTrigger, SFX } from '../game/trigger-actions.js';
@@ -546,6 +547,15 @@ export async function runAllChecks(fetchRaw) {
       for (let t = 0; t < 40 && !k.dead && k.destroyed; t++) k.drive(o);
       hps.push(k.hp);
     }
+    /* CS:0x037A, the payoff screen: live, page 1's text spans x 68-260 from
+     * y 12 (0x04C5: 164 - 4*len), and a page holds 250 ticks of DS:0x39. */
+    const pay = new PayoffScreen();
+    let ms = 0;
+    while (pay.page < 1) { pay.step(10, false); ms += 10; }
+    check('payoff: line 1 of page 1 starts at x 68 (live), a page holds 250/60 s',
+      lineX(PAYOFF_PAGES[0][0]) === 68 && LINE_Y[0] === 12 && Math.abs(ms - 250000 / 60) <= 10, `${ms} ms`);
+    for (let k = 0; k < 7; k++) while (pay.page < k + 2) pay.step(10, false);
+    check('payoff: after the 8th page only fire ends it', !pay.step(1000, false) && pay.step(10, true));
     check('world 4: each destroyed worm costs 1000 health; the 7th kills (6000 -> -1000)',
       hps.join() === '5000,4000,3000,2000,1000,0,-1000' && k.dead, hps.join());
   }
