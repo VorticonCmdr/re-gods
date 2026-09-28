@@ -162,3 +162,8 @@ Moved to the `gods-re-tooling` skill (`.claude/skills/gods-re-tooling/SKILL.md`)
 - **New open item 59.** `PJOYL2`'s score total differs: DOS has at least 10,700 at cursor 1888, the port 7,977.
 
 **Item 57 is closed (`[PROVEN]` live, ported): the crouch drop, `CS:0x61A1`.** Standing up, or crouching with no key found and no FIRE, drops the selected slot's item through the reward popup (`item + 0xB`, from the hero + (8, 0x20)). The key pickup writes into that same selected slot (`CS:0x6100`), so a key taken with FIRE drops again on stand-up unless FIRE is tapped first to move the selection. `gods-web` ports both, replacing its first-empty-slot substitution. Staged live in `PJOYL1`'s crouch by `tools/attract-capture/drop_live.py`; see `docs/player-state-machine.md`.
+
+**Items 53 and 59 are closed (`[PROVEN]` live, ported).**
+- **53: the walker is the shop potion's shopkeeper.** The potion (`CS:0x61E9`) starts a 65-tick countdown during which the hero turns to face him; then the `shop` sprites load over `level<N>`, and the shopkeeper walks in from a per-world point (`DS:0xE91A`), turning at walls and ledges, with the hero frozen. Touching him opens the shop mid-level (`CS:0x6BED`). ⚠️ This corrects "the shop opens only after a password". Two live stagings in `PJOYL1` match `gods-web` on 115 and 541 ticks; see `docs/shop.md`.
+- **59: creature kills never scored in `gods-web`.** System A and B kills award `((hp >> 1) + 1) × 100` through `CS:0xEFE7` (`adc`/`daa` bytes emulated). Proven live as the four awards `PJOYL2` was missing; its score now matches DOS at every award.
+- **New open item 60:** the sublevel switch's own shop-sprite load (`CS:0x484E` → `0x05D7`), by the bytes left over sublevel B's creature sprites. Not checked live and not ported.

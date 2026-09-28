@@ -3,8 +3,9 @@
 Placement (when the shop opens at all, and that it is not a between-level screen)
 is established in `docs/message-line.md`'s own "world gate is not world 1 only"
 section — this file only covers the shop's *internal* mechanics, disassembled
-and partly live-confirmed this session. Read that section first if the "shop
-opens exactly once per game, via password entry only" claim looks unfamiliar.
+and partly live-confirmed this session. ⚠️ That section's "shop opens exactly
+once per game, via password entry only" is wrong: the shop potion's shopkeeper
+opens it mid-level too (see *The shop potion's shopkeeper* below).
 
 > **How this was established.** `FUN_1000_6c19`, `FUN_1000_6e50`, `FUN_1000_6e62`,
 > `FUN_1000_7233`, `FUN_1000_7276`, and `FUN_1000_7392` were disassembled directly
@@ -727,6 +728,22 @@ The shop does not show `DS:0x194`/`0x196` directly. It shows a copy at `DS:0x254
 Live: the `PJOYL2` and `PJOYL3` sweeps log exactly these runs (108 and 84 plays), each under the tape cursor of its own shop pass. `gods-web` drew the purse itself; `game/shop.js` now keeps `shownMoney` and plays `0x111` per step, and matches every play per cursor.
 
 **The shop's exit runs a respawn tick.** `CS:0x6DCB` calls `FUN_1000_921B` (the tick body a respawn uses, with a tape poll) before `jmp cx` (`CS:0x6DF3`, patched to `0x0696` for the level-start shop), and only then `CS:0x06A9` plays the level-start sound `0x7F12`; `0x0111`'s check at `0x0126` then plays the aura loop `0x280` if a shield was bought, else stops `0x80`. `gods-web` now runs that respawn tick and plays the sound after it (the sweeps' `0x7F12` lands one cursor after the exit pass).
+
+## The shop potion's shopkeeper — the mid-level entry, `[PROVEN]` live (2026-09-28)
+
+⚠️ **Correction: the shop is not password-only.** The shop potion (object type 83, placed 8 times in the shipped levels) brings a shopkeeper who walks up to the hero, and touching him opens the shop in the middle of a level (`CS:0x6BED`). Ranked item 53 had this as a walker started "after the level-start password shop"; the password path only primes it with its `CS:0x063A` RET patch, and nothing but the potion switches it on.
+
+The potion's handler (`CS:0x61E9`) writes only `DS:0x363 = 0x41`. The rest hangs off that byte:
+
+- **The countdown, `CS:0x0310` → `0x05BA`,** at the end of every main-loop tick while `[0x363] ≥ 0`. At `0x19` it calls `CS:0x9026`, which zeroes the state words of the five selector-1 PAT slots (`DS:0xB6B8 + 0x1C·k + 4`) and the ten selector-2 slots (`DS:0xAEC0 + 0x20·k + 6`): the scripted enemies vanish, with no reward. When the byte goes negative, `CS:0x05CD` loads the shop sprites unless `[0x38A]` already says they are in (`CS:0x081E`, a floppy-only disk prompt, then `CS:0x05D7`), and switches the walker on.
+- **The turn, `CS:0x0248` → `0x06B0`,** in place of the player dispatch while the countdown runs. The path record's `dx ≥ 0` (the shopkeeper comes from the left) forces input LEFT until the hero stands in state 0 at phase 2; `dx < 0` forces RIGHT until state 1. The forced input goes through the ordinary state handler (`DS:0xD818`); once facing, only the epilogue runs.
+- **The load, `CS:0x05D7`:** `[0x25E] = 0x1C2`; export 22 loads the `shop` group (`VGA.EXE`'s own table: `shopspr` + `shopfnt`, 43 + 130 frames) from the arena cursor `DS:0x130`, which is the start of `level<N>` (live: `[0x134] = 0x2C10` = descriptor `0x1C2`), the same place a guardian's atlas goes; `[0x38A] = 1`. The path is `DS:0xE91A + 6·((world − 1)·2 + [0x35D])`, `{x, y, dx}` into `DS:0x266`/`0x268`/`0x26A`; `[0x35D]++`, `[0x26C] = 0`, `cs:[0x71D] = NOP`. Two visits per world: (1664, 944, −1), (3680, 384, +1); (704, 960, +1), (480, 960, −1); (1440, 784, −1), (768, 160, +1); (704, 176, −1), (384, 800, 0). The last never moves, and animates frames 4–11.
+- **The walker, `CS:0x0288` → `0x071D`,** between System B (`0x0285`) and System A (`0x028B`). While it is on, the player dispatch runs only its epilogue (`CS:0x49AA`), the spike loop does not start (`CS:0x14D3`) and contact hurt sounds are muted (`CS:0xACE5`). On ticks where `DS:0x36C` is set it moves 6 px; near a column boundary (`x & 0x1F` ≤ 4 or ≥ 0x1C) it turns when a wall (`== 1`) is in the next column's first three rows or that column's fourth row, the floor, is not solid (the fourth test's `jz 0x078C` is the only way past the `NEG`). On the other ticks it advances its phase (`& 7`) and plays footstep `0x020E` on phases 2 and 6. It draws sprite `0x1C2 + 4·dx + 4 + phase`.
+- **The contact, `CS:0x07D9`:** `CS:0xAC59` with a 0x20 × 0x30 box and strength 5 (5 damage, not scaled). A reported hit gives the 5 back unless invulnerable, switches the walker off, sets `SS:0x40A = 0xC0`, pops the main loop's return address and jumps to `CS:0x6BED`, so the rest of that tick never runs. The mid-level entry fades the music (`CS:0x6C0E`) and keeps the money; its exit (`CS:0x6D7B`) pays back the LEV3A camera nudge, restores `level<N>` over the shop sprites (`CS:0x21C2`), runs the respawn tick, sets `[0x3E8] = 5` and jumps to `CX = 0x011B`, the main loop's head, without the password path's `CS:0x0696` level-start sound.
+
+Live: `gods-web/tools/attract-capture/walker_live.py` pokes `[0x363] = 0x41` at `PJOYL1` cursor 300 and logs every tick. The hero walks right until state 1, phase 2, then holds; the countdown runs 65 ticks; at 365 the walker starts at (1664, 944, −1) with `[0x35D] = 1` and `[0x38A] = 1`; it walks and plays its footsteps from `CS:0x07FE`; moved beside the hero at 406, it touches him on tick 414 and `CS:0x6BED` runs on 415 with health unchanged and `SS:0x40A = 0xC0`. `gods-web` (`game/shopkeeper.js`, `tools/attract-capture/walker-compare.js`) matches all 115 ticks, sounds included, and opens the shop on 415. A second staging (`walker_live_wall.json`) puts the walker at x 1580 walking right: it turns seven times between the walls at columns 52 and 43 (x 1634 and 1436) through cursor 840, and the port matches all 541 ticks. The ledge turn (a missing floor) is `[STATIC]`: no staged path reached one.
+
+Not established live: what the walker's frames look like on screen, the mid-level exit, and the sublevel switch's own `CS:0x05D7` call (`CS:0x4875`, with the RET patch and a `[0x35D]` decrement). By the bytes that call overlays the shop group over `level<N>` when sublevel B starts, and only a level entry or a shop exit (`CS:0x21C2`) puts it back; the 173 frames also run past `level<N>` into the small font. `gods-web` does not reproduce the sublevel switch's load (ranked item 60).
 
 ## What `gods-web` ports and what it discloses as not ported
 

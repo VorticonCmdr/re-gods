@@ -315,6 +315,8 @@ itself opens routinely. An exhaustive program-wide search for every writer of
 exactly four sites: `CS:0x4846` (an orphan block with zero referencing
 instructions — dead), `CS:0x484e` (clears it), `CS:0x6c58` (`FUN_1000_6c19`,
 the one live *setter*), `CS:0x6db2` (`FUN_1000_6d7b`, clears it on exit). And
+⚠️ **Corrected (2026-09-28): the shop also opens mid-level.** The shop potion (type 0x53) sets `DS:0x363`; its countdown brings a shopkeeper whose contact jumps to `CS:0x6BED`, which falls through into `FUN_1000_6c19`. A jump into the code just above the function is not a reference to `6c19`, so the xref search below could not see it. `[PROVEN]` live; see `docs/shop.md`'s *The shop potion's shopkeeper*. The paragraph below stands as the record of the password entry only.
+
 `get_xrefs_to(1000:6c19)` returns **exactly one** reference program-wide:
 `CS:0x0693`, an unconditional `CALL` from `FUN_1000_0643` — not from the
 level-exit tally screen, not from the shop-potion pickup (`CS:0x61e9`), not

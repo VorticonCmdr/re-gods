@@ -57,6 +57,12 @@ ece7  pop di / mov [di+0xa],ax
 
 **Measured across the 8 shipped levels:** 270 live descriptors (14/14/30/28/50/50/42/42), 217 selector-4 references and **zero dangling**, entity counts `{1,2,3,4,5,10}`, speeds `{1,7,8,9,10}`, spawn tiles X 1..126 and Y 1..60 — inside the 128×64 map every time.
 
+### The kill score, `CS:0xEFE7` — `[PROVEN]` live (2026-09-28)
+
+A System-B kill (`CS:0xEDF7`: `[di+8] < 0` after the contact call → `CS:0xF02A`) and a System-A kill (`CS:0xE241`) both `call 0xEFE7`, which reads the group descriptor's byte `+1` (the entities' starting HP): `AL = (b >> 1) + 1`, `div 10`, and the tens and units packed into `DL` for `CS:0x0C8B`, which adds `DL` into the hundreds byte `DS:0x3B6` and ripples the carry up with `adc`/`daa`. So a kill scores `((b >> 1) + 1) × 100`. A tens digit above 9 is packed as it is (`0xA0`–`0xC0`), which `daa` still carries, and `CS:0xF023` adds `(q − 9) << 4` on top: HP 198–255 score 1,000 more than the formula.
+
+Live: `gods-web/tools/attract-capture/score_callers.py` breaks on `CS:0x0C80`/`0x0C8B` in `PJOYL2` 1600–1800. The four awards at 1638, 1640 (`DL = 0x11`), 1743 and 1758 (`DL = 0x03`) return to `CS:0xF014` inside a call from `CS:0xF02D`: System B's kill tick. `gods-web` had never wired it (ranked item 59); it now awards through `awardKill` (`game/treasure.js`), emulating the `adc`/`daa` bytes, and its `PJOYL2` score matches DOS at every award.
+
 ### `UNKNOWN_f030_item_drop` — CLOSED: a group-clear reward, and a previously undocumented descriptor field `+0x10` `[STATIC]`
 
 Found while tracing the System-B death path's score-award trampoline (`CS:0xF02A`, see *`UNKNOWN_creature_death_anim`* above): `FUN_1000_f030` (reached via `FUN_1000_ff20`'s dispatch, itself called from `FUN_1000_ed38`) turned out to belong to a genuinely different mechanism from the per-kill score award — **a bonus popup awarded once, when an entire System-B group has been cleared.**
