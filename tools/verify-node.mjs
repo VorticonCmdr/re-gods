@@ -444,6 +444,7 @@ for (const r of await checkMusic(fetchRaw)) {
   const chain = [
     ['tick       CS:0x0209', at('popup.step(dropCarriedIntoWorld);')],
     ['selector-2 CS:0x0223', at('for (const r of selectorTwo.rewards) {')],
+    ['nest       CS:0x0282', at('for (const r of nests.rewards || []) {')],
     ['System B   CS:0x0285', at('stealAttemptB(')],
     ['System A   CS:0x028b', at('const carried = stepCarriedItem(e, e.desc')],
     ['PAT        CS:0x0294', at('for (const d of patGroups.drops) {')],
@@ -452,7 +453,7 @@ for (const r of await checkMusic(fetchRaw)) {
   const outOfOrder = chain.filter((c, i) => i > 0 && chain[i - 1][1] >= c[1]);
   const popupOrder = [{
     pass: outOfOrder.length === 0,
-    name: "the six popup channels run in FUN_1000_006f's own call order",
+    name: "the seven popup channels run in FUN_1000_006f's own call order",
     detail: outOfOrder.length
       ? `out of order: ${outOfOrder.map((c) => c[0]).join(', ')}`
       : chain.map((c) => c[0].replace(/\s+CS:.*$/, '')).join(' < '),
@@ -478,8 +479,9 @@ for (const r of await checkMusic(fetchRaw)) {
   const calls = [...code.matchAll(/popup\.(spawn|step)\([^;]*/g)].map((m) => m[0]);
   const unwired = calls.filter((c) => !c.includes('dropCarriedIntoWorld'));
   popupOrder.push({
-    /* 9: the guardian death's CS:0xCE78 / 0xD5FC popup joined the eight. */
-    pass: calls.length === 9 && unwired.length === 0
+    /* 9: the guardian death's CS:0xCE78 / 0xD5FC popup joined the eight;
+     * 10: the nest's kill reward, CS:0x87EF. */
+    pass: calls.length === 10 && unwired.length === 0
           && !/for \(const l of popup\.landed\)/.test(code),
     name: 'every popup call lands CS:0xC041 inline, with no deferred drain',
     detail: unwired.length

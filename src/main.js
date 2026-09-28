@@ -3449,6 +3449,16 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
         popup.spawn(r.x, r.y, id, dropCarriedIntoWorld);
       }
       selectorTwo.rewards.length = 0;
+      /* CS:0x0282 -> 0x87EF -> 0x8A27: a nest's kill drops its reward through
+       * the popup (CS:0xBF5F) and scores 2500 (CS:0x0C8B), game/nest.js. In
+       * the original's order this channel sits between selector 2 (0x0223)
+       * and System B (0x0285), after the popup tick; nests.step itself runs
+       * earlier in this file, so its rewards are applied here. */
+      for (const r of nests.rewards || []) {
+        popup.spawn(r.x, r.y, r.id, dropCarriedIntoWorld);
+        score.add(r.score);
+      }
+      if (nests.rewards) nests.rewards.length = 0;
 
       /* CS:0xB987 — the PGOD0x.PAT scripted objects (game/pat-objects.js).
        * Reuses the SAME `shots`/`lineHazards` pools every other emitter in

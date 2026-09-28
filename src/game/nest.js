@@ -588,6 +588,9 @@ export const LIVE_COUNTER_DS = 0x3b2;
  * The model. One class per pool, so the record-sharing stays visible.
  * ═════════════════════════════════════════════════════════════════════════ */
 
+export const NEST_REWARD_ID = 0x2d;       // CS:0x87FB `mov cx,0x2d`
+export const NEST_KILL_SCORE = 2500;      // CS:0x87FE `mov dx,0x25` -> CS:0x0C8B
+
 export class Nests {
   /**
    * @param {number} world   DS:0x42. The allocator refuses outside world 2.
@@ -658,7 +661,8 @@ export class Nests {
   step(cam, hero, freezeTimer, contact, brood = null, tock = 0) {
     const drawn = [];
     const shots = [];
-    if (!this.armed) return { drawn, shots };            // CS:0x8687 == 0xC3
+    this.rewards = [];                                   // CS:0x87EF, per kill this tick
+    if (!this.armed) return { drawn, shots, rewards: this.rewards };   // CS:0x8687 == 0xC3
     let liveCount = 0;                                   // DS:0x3b2
 
     for (const s of this.slots) {
@@ -699,7 +703,7 @@ export class Nests {
     /* CS:0x8796 — nothing live, so unhook. */
     if (liveCount === 0) this.armed = false;
     this.shots.push(...shots);
-    return { drawn, shots };
+    return { drawn, shots, rewards: this.rewards };
   }
 
   /** CS:0x882E. Returns true when the creature reached state 0 and should run
@@ -736,7 +740,7 @@ export class Nests {
      * negative state and draw sprite 0x6c-4 = 104, four frames before the
      * death cloud. I had this on the live path only until a cross-read found
      * the shared tail. */
-    if (s.hp < 0) { s.state = 0; this.killed++; }                   // CS:0x8784
+    if (s.hp < 0) this.#killed(s);                                   // CS:0x8784
   }
 
   #contactAndDraw(s, cam, drawn, contact) {
@@ -744,7 +748,20 @@ export class Nests {
     drawn.push({ x: s.x - cam.x, y: s.y - cam.y,
                  sprite: SPRITE_BASE + s.state, gfxExport: 1 });     // CS:0x8776
     drawn.push(this.#companion(s, cam));                             // CS:0x877B
-    if (s.hp < 0) { s.state = 0; this.killed++; }                    // CS:0x8784
+    if (s.hp < 0) this.#killed(s);                                    // CS:0x8784
+  }
+
+  /** CS:0x8784-0x8789 -> 0x87EF -> 0x8A27: the killing tick zeroes the
+   *  state for the death draw and drops the nest's reward, id 0x2D (object
+   *  type 0x22) at (x + 4, y + 0x18) through the popup (CS:0xBF5F), then
+   *  scores dl = 0x25 (CS:0x0C8B), 2500. [PROVEN] live: PJOYL2 cursor 1888,
+   *  the reward lands as object type 0x22 at x 3306 at 1899
+   *  (tools/attract-capture/joyl2.objfall.peek.json). An earlier version had
+   *  the state write only. */
+  #killed(s) {
+    s.state = 0;
+    this.killed++;
+    this.rewards.push({ x: s.x + 4, y: s.y + 0x18, id: NEST_REWARD_ID, score: NEST_KILL_SCORE });
   }
 
   /* CS:0x8806 — the creature keeps drawing THE OBJECT'S OWN SPRITE beneath
