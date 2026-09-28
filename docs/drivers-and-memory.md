@@ -679,11 +679,37 @@ Read with `ndisasm` from the ROL.EXE image (file + 0x200; it is not packed) and 
   - This is not an MT-32 emulation.
 - `audio/roland-player.js`, and the call sites above in `main.js`.
 - The intro's Roland waits (`intro.js` `introTimeForRoland`).
-- **Not modelled:**
-  - export 4's wait;
-  - export 12's 300-retrace stall when no fade is running (the port stops the old music at once);
-  - the `id 0x28 / DS:0xEA` quirk shared with ADL (`CS:0x376`);
-  - the invulnerability loop sound `0x0280` (`CS:0x0126`), which neither driver path plays in the port.
+- **Modelled since (ranked item 51):** the drivers' waits, the `0x28` trap as data, and the invulnerability loop, all below.
+
+**The drivers' waits (ranked item 51).**
+- **Export 4** (`CS:0x22D0`) stops the three looping sounds (`0x80`, `0x97`, `0xC5`), then spins until the SFX slots are free. The game waits inside the driver.
+  - ADL:0x33D checks all `[0xA8]` = 5 slots and has no counter.
+  - ROL:0x55D checks slots 1-4 (`add si,2`, `[0xA8]-1`). Its 200-pass counter at `CS:0x746` never runs out, because the retry `jnz 0x55D` at `CS:0x5B6` lands on the instruction that reloads it.
+  - GAME's call sites: `CS:0x8E76` (level init), `0x00F3` (level entry), `0x06A2` (shop exit), `0x08FB` (respawn), `0x095A` (game over: after the jingle, before the fade), `0x2C87` (title loop), `0x6573`/`0x65A7`/`0x67A5` (tally: start, after the fanfare, end).
+- **Export 12** (ROL only) waits while `CS:0x32` is nonzero, up to 300 retraces. After a fade-out that is the fade. With music simply playing (e.g. the title's at BEGIN QUEST) it is the full ~4.3 s, the music playing on meanwhile.
+- `gods-web` freezes its ticks, and with them an attract tape, for the wait the bus reports, then runs what followed each call. Waits are 0 while the browser's AudioContext is not running. The export-4 wait is capped at 10 s (port-only).
+
+**Id `0x28` is a copy-protection trap (ranked item 51) `[STATIC]` + live negative.**
+- All four drivers' export 3 open with `cmp al,0x28 / jnz / cmp word [0xEA],0 / jz / mov byte [0x11A],5` (ADL:0x15A, ROL:0x376, TDY:0x185, BPR:0x187).
+- The drivers run with GAME's DS, so this is GAME's **DOS exit code** (`CS:0x22FD`: `mov ah,0x4C / mov al,[0x11A] / int 21h`). GODS.EXE answers exit code 5 with "Protection failure." (`execution-and-boot.md`).
+- Id `0x28` has one producer, the tally fanfare `0x7928` (`CS:0x6806`).
+- It cannot fire in the shipped game:
+  - `DS:0xEA` is 0 in the image and no instruction in GAME.EXE or any driver names it (`ndisasm` operand grep).
+  - Live in DOSBox, a write watch on both bytes stayed silent through boot, the menu and about a minute of attract play, while the driver tick word below it (`DS:0xE8`) counted from `0x0CCC` to 4571.
+  - The only exit the menu offers sets the code to 1 first (`CS:0x2D87`); the other three paths to `CS:0x22ED` are load-failure exits.
+- `gods-web` keeps it as data (`rol-driver.js` `protectionExitCode`).
+
+**The invulnerability loop `0x0280` (ranked item 51).**
+- Bit 7 makes it loop, blob 0 under ADL and blob 1 under ROL.
+- Starts:
+  - the shield potion, `CS:0x62C8` → `0xA90B` then `0x62CC`. It is entry 6 of the consumable table `DS:0xD8B8`, which the pickup (`CS:0x1822`) and the shop (`CS:0x6F32`) both dispatch through, so a bought shield plays it too.
+  - respawn, `CS:0x0907`;
+  - the loop head `CS:0x012E` on re-entry while `DS:0x172` is set.
+- Stops:
+  - `CS:0xA9AA`, when the countdown runs out;
+  - `CS:0x0137`, the loop head with no aura;
+  - every export 4.
+- Both drivers refuse a bit-7 id while a slot already holds it (ADL:0x296, ROL:0x4B1).
 
 ### `UNKNOWN_mus_type2` — CLOSED (word-dictionary-compressed SMF; see the closure in the SFX section above). Historical reading below `[mixed — see inline tags]`
 
