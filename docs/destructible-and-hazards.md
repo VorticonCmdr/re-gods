@@ -611,6 +611,8 @@ Two earlier candidates from the prior pass — `SS:[0x408]`'s inter-bitplane str
 - `0xBF59` does `and bx,0xFFF0` and jumps straight to the `CS:0xC041` landing, with no arc.
 - `CS:0xC041` makes it object type `0x3D − 0xB` = **50**, a live spike, at the last dying position + 8, snapped to its 16-px row. Killing that enemy therefore places a spike trap, by design.
 
+**Only world 1 has it.** Class 30 carries reward 61 in every world 1–3 PALFILS. But a plane-B cell dispatches class 30 only in `PLEV1A`/`1B` (event 78) and in `PLEV4A`/`4B` (event 134, cell 1024,784), and world 4's class 30 carries reward 32 (type 21, a chest key).
+
 Live in `PLEV1B` (`gods-web/tools/attract-capture/sel2drop.py`, `sel2contact.py`):
 - The allocator ran with `AX = 0x1E`, and slot `+0x1E` = `0x003D`.
 - The hero touched the entity at (704,368) and killed it.

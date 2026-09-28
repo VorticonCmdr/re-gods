@@ -545,7 +545,7 @@ A scratch simulation drove each lever through `gods-web`'s `LeverToggle` and eac
 - This is `PLEV1A` lever 18 at (836,336). Its sole reachable reader is #31: `has item 127` (trap door key) ∧ lever 18 ON. It opens the trap door at (768,400) and consumes the key (action bit 15).
 - #40 is lever 18 ON as a verb-13 gate at (2016,672), and nothing dispatches it.
 
-**Pulling a lever needs state 26, and a plain stop is not state 26.** `CS:0x1045` runs only from idle, state 26. After a walk key is released without UP held, the hero keeps WALK_L/WALK_R in the locked "stopped" pose (`docs/player-state-machine.md`). FIRE there throws a weapon instead. UP while stopped, or any landing, enters state 26, and FIRE then toggles the lever. Checked in the port: lever 18 went 24 → 25.
+**Pulling a lever needs state 26, and a plain stop is not state 26.** `CS:0x1045` runs only from idle, state 26. After a walk key is released without UP held, the hero keeps WALK_L/WALK_R in the locked "stopped" pose (`docs/player-state-machine.md`). FIRE there takes the ordinary fire path, not the lever scan (`gods-web` `player.js`, `[STATIC]`; what it does from WALK_L was not observed). UP while stopped, or any landing, enters state 26, and FIRE then toggles the lever. Checked in the port: lever 18 went 24 → 25.
 
 ⚠️ **Correction to "Trap doors are not lever-driven" above.** That paragraph is right that the level-load patcher `CS:0x40C0` has no lever caller. But trap doors are opened and closed at runtime by `ACT7`/`ACT8`, and many shipped lever-gated triggers use exactly those verbs. `PLEV1A` alone has five:
 - lever 5 → #36;
