@@ -812,6 +812,7 @@ const guardianTables = {
       try { localStorage.setItem('gods.sound', d); } catch { /* private mode */ }
       if (d === 'roland') ensureRoland();
       audio.setDriver(d);
+      soundSel.blur();
       if (d !== 'roland') return;
       /* Pick the music up where the game is. */
       if (uiState === 'menu' || uiState === 'password' || uiState === 'hiscore-table') enterTitleLoopMusic();
@@ -820,7 +821,6 @@ const guardianTables = {
         audio.music('load', guardian ? MUSIC_CONTEXT.GUARDIAN : worldMusicContext(level.world));
         audio.music('start', guardian ? GUARDIAN_MUSIC_VOLUME : levelMusicVolume(level.world));
       }
-      soundSel.blur();
     });
   }
   /* CS:0x084B/0x0851 — target full, bar 1, so it animates up over 23 frames. */
@@ -2012,6 +2012,9 @@ const guardianTables = {
     uiState = 'menu';
     passwordEntry = null; nameEntry = null; hiscoreTable = null;
     idleTicks = 0; idleCycles = 0;
+    /* Port-only exit (a real key mid-demo): a joyg segment may have loaded a
+     * world's or the shop's music, so put the title's back (CS:0x2C82). */
+    enterTitleLoopMusic();
   }
 
   /* ── The title screen ─────────────────────────────────────────────────

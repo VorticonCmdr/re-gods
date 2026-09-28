@@ -45,13 +45,14 @@ export class RolandPlayer {
 
   async #load() {
     const title = dclDecompress(await this.fetchRaw('game/PTITLE.RL')).data;
-    this.bank = parseMt32Bank(title);
     this.titleTrack = parseRolandTrack(expandBlob(parseMusContainer(title)[0]));
     for (let ctx = 0; ctx < 7; ctx++) {
       const blobs = parseMusContainer(dclDecompress(await this.fetchRaw(`game/${rlFileForContext(ctx)}`)).data);
       this.tracks.set(ctx, parseRolandTrack(expandBlob(blobs[0])));
       if (!this.sfxTracks) this.sfxTracks = blobs.map((b, i) => (i === 0 ? null : parseRolandTrack(expandBlob(b))));
     }
+    /* Last: #ensureRunning keys on it, so no call runs against half-loaded tracks. */
+    this.bank = parseMt32Bank(title);
   }
 
   #ensureRunning() {
@@ -138,8 +139,7 @@ export class RolandPlayer {
     if (!this.#ensureRunning()) { this.ready.then(() => this.playTitle(offsetTicks)); return; }
     this.seq.stopAll(this.#emit);
     this.seq.play(0, this.titleTrack, 0, false);
-    const t = this.seq.tracks[this.seq.tracks.length - 1];
-    if (t && offsetTicks > 0) t.origin -= offsetTicks;
+    if (offsetTicks > 0) this.seq.skipAhead(this.seq.tracks[this.seq.tracks.length - 1], offsetTicks, this.#emit);
   }
 
   /** Stop every track at once (leaving the intro, switching drivers). */

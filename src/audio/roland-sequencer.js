@@ -101,6 +101,21 @@ export class RolandSequencer {
     return true;
   }
 
+  /**
+   * Join `track` `ticks` into its piece (a late audio unlock): the skipped
+   * program, controller and bend messages are sent so the parts are set up,
+   * the skipped notes are not. Port-only.
+   */
+  skipAhead(t, ticks, emit) {
+    if (!t) return;
+    const { events } = t.track;
+    while (t.cursor < events.length && events[t.cursor].tick < ticks) {
+      const e = events[t.cursor++], hi = e.status & 0xf0;
+      if (hi === 0xb0 || hi === 0xc0 || hi === 0xe0) this.#send(t, e, emit);
+    }
+    t.origin = this.now + 1 - ticks;
+  }
+
   /** AH=5 (`0000:04EF`, AL bit 7 clear): does a track play this blob. */
   isPlaying(blob) { return this.tracks.some((t) => t.blob === blob); }
 
