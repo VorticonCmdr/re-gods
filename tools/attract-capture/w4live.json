@@ -1,0 +1,2865 @@
+[
+{
+"t": 0,
+"y250": 384,
+"m32": 0,
+"d34": 1,
+"cam": [
+3292,
+342
+],
+"hp": 6000,
+"thr": 119,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be600a9003a0effff0210ffffc00be600ab003a0effff0210ffffc00be600ad003a0effff0210ffffc00be600af003a0effff0210ffffc00be600b1003a0effff0210ffffc00be600b3003a0effff0210ffffc00be600b5003a0effff0210ffffc00be600b7003a0effff0210ffff",
+"f2f0": 2,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+192
+],
+"hook": "90"
+},
+{
+"t": 1,
+"y250": 382,
+"m32": 1,
+"d34": 1,
+"cam": [
+3288,
+231
+],
+"hp": 6000,
+"thr": 118,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be600a8003a0effff0210ffffc00be600aa003a0effff0210ffffc00be600ac003a0effff0210ffffc00be600ae003a0effff0210ffffc00be600b0003a0effff0210ffffc00be600b2003a0effff0210ffffc00be600b4003a0effff0210ffffc00be600b6003a0effff0210ffff",
+"f2f0": 384,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+197
+],
+"hook": "90"
+},
+{
+"t": 2,
+"y250": 380,
+"m32": 1,
+"d34": 1,
+"cam": [
+3284,
+175
+],
+"hp": 6000,
+"thr": 117,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be600a7003a0effff0210ffffc00be600a9003a0effff0210ffffc00be600ab003a0effff0210ffffc00be600ad003a0effff0210ffffc00be600af003a0effff0210ffffc00be600b1003a0effff0210ffffc00be600b3003a0effff0210ffffc00be600b5003a0effff0210ffff",
+"f2f0": 382,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+202
+],
+"hook": "90"
+},
+{
+"t": 3,
+"y250": 378,
+"m32": 1,
+"d34": 1,
+"cam": [
+3280,
+147
+],
+"hp": 6000,
+"thr": 116,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be600a6003a0effff0210ffffc00be600a8003a0effff0210ffffc00be600aa003a0effff0210ffffc00be600ac003a0effff0210ffffc00be600ae003a0effff0210ffffc00be600b0003a0effff0210ffffc00be600b2003a0effff0210ffffc00be600b4003a0effff0210ffff",
+"f2f0": 380,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+208
+],
+"hook": "90"
+},
+{
+"t": 4,
+"y250": 376,
+"m32": 1,
+"d34": 1,
+"cam": [
+3276,
+133
+],
+"hp": 6000,
+"thr": 115,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be600a5003a0effff0210ffffc00be600a7003a0effff0210ffffc00be600a9003a0effff0210ffffc00be600ab003a0effff0210ffffc00be600ad003a0effff0210ffffc00be600af003a0effff0210ffffc00be600b1003a0effff0210ffffc00be600b3003a0effff0210ffff",
+"f2f0": 378,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+214
+],
+"hook": "90"
+},
+{
+"t": 5,
+"y250": 374,
+"m32": 1,
+"d34": 1,
+"cam": [
+3272,
+126
+],
+"hp": 6000,
+"thr": 114,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be600a4003a0effff0210ffffc00be600a6003a0effff0210ffffc00be600a8003a0effff0210ffffc00be600aa003a0effff0210ffffc00be600ac003a0effff0210ffffc00be600ae003a0effff0210ffffc00be600b0003a0effff0210ffffc00be600b2003a0effff0210ffff",
+"f2f0": 376,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+221
+],
+"hook": "90"
+},
+{
+"t": 6,
+"y250": 372,
+"m32": 1,
+"d34": 1,
+"cam": [
+3268,
+123
+],
+"hp": 6000,
+"thr": 113,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be600a3003a0effff0210ffffc00be600a5003a0effff0210ffffc00be600a7003a0effff0210ffffc00be600a9003a0effff0210ffffc00be600ab003a0effff0210ffffc00be600ad003a0effff0210ffffc00be600af003a0effff0210ffffc00be600b1003a0effff0210ffff",
+"f2f0": 374,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 7,
+"y250": 370,
+"m32": 1,
+"d34": 1,
+"cam": [
+3264,
+121
+],
+"hp": 6000,
+"thr": 112,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be600a2003a0effff0210ffffc00be600a4003a0effff0210ffffc00be600a6003a0effff0210ffffc00be600a8003a0effff0210ffffc00be600aa003a0effff0210ffffc00be600ac003a0effff0210ffffc00be600ae003a0effff0210ffffc00be600b0003a0effff0210ffff",
+"f2f0": 372,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 8,
+"y250": 368,
+"m32": 1,
+"d34": 1,
+"cam": [
+3260,
+120
+],
+"hp": 6000,
+"thr": 111,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be600a1003a0effff0210ffffc00be600a3003a0effff0210ffffc00be600a5003a0effff0210ffffc00be600a7003a0effff0210ffffc00be600a9003a0effff0210ffffc00be600ab003a0effff0210ffffc00be600ad003a0effff0210ffffc00be600af003a0effff0210ffff",
+"f2f0": 370,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 9,
+"y250": 366,
+"m32": 1,
+"d34": 1,
+"cam": [
+3256,
+120
+],
+"hp": 6000,
+"thr": 110,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be600a0003a0effff0210ffffc00be600a2003a0effff0210ffffc00be600a4003a0effff0210ffffc00be600a6003a0effff0210ffffc00be600a8003a0effff0210ffffc00be600aa003a0effff0210ffffc00be600ac003a0effff0210ffffc00be600ae003a0effff0210ffff",
+"f2f0": 368,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 10,
+"y250": 364,
+"m32": 1,
+"d34": 1,
+"cam": [
+3252,
+120
+],
+"hp": 6000,
+"thr": 109,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be6009f003a0effff0210ffffc00be600a1003a0effff0210ffffc00be600a3003a0effff0210ffffc00be600a5003a0effff0210ffffc00be600a7003a0effff0210ffffc00be600a9003a0effff0210ffffc00be600ab003a0effff0210ffffc00be600ad003a0effff0210ffff",
+"f2f0": 366,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 11,
+"y250": 362,
+"m32": 1,
+"d34": 1,
+"cam": [
+3248,
+120
+],
+"hp": 6000,
+"thr": 108,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be6009e003a0effff0210ffffc00be600a0003a0effff0210ffffc00be600a2003a0effff0210ffffc00be600a4003a0effff0210ffffc00be600a6003a0effff0210ffffc00be600a8003a0effff0210ffffc00be600aa003a0effff0210ffffc00be600ac003a0effff0210ffff",
+"f2f0": 364,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 12,
+"y250": 360,
+"m32": 1,
+"d34": 1,
+"cam": [
+3244,
+120
+],
+"hp": 6000,
+"thr": 107,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be6009d003a0effff0210ffffc00be6009f003a0effff0210ffffc00be600a1003a0effff0210ffffc00be600a3003a0effff0210ffffc00be600a5003a0effff0210ffffc00be600a7003a0effff0210ffffc00be600a9003a0effff0210ffffc00be600ab003a0effff0210ffff",
+"f2f0": 362,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 13,
+"y250": 358,
+"m32": 1,
+"d34": 1,
+"cam": [
+3240,
+120
+],
+"hp": 6000,
+"thr": 106,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be6009c003a0effff0210ffffc00be6009e003a0effff0210ffffc00be600a0003a0effff0210ffffc00be600a2003a0effff0210ffffc00be600a4003a0effff0210ffffc00be600a6003a0effff0210ffffc00be600a8003a0effff0210ffffc00be600aa003a0effff0210ffff",
+"f2f0": 360,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 14,
+"y250": 356,
+"m32": 1,
+"d34": 1,
+"cam": [
+3236,
+120
+],
+"hp": 6000,
+"thr": 105,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be6009b003a0effff0210ffffc00be6009d003a0effff0210ffffc00be6009f003a0effff0210ffffc00be600a1003a0effff0210ffffc00be600a3003a0effff0210ffffc00be600a5003a0effff0210ffffc00be600a7003a0effff0210ffffc00be600a9003a0effff0210ffff",
+"f2f0": 358,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 15,
+"y250": 354,
+"m32": 1,
+"d34": 1,
+"cam": [
+3232,
+120
+],
+"hp": 6000,
+"thr": 104,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be6009a003a0effff0210ffffc00be6009c003a0effff0210ffffc00be6009e003a0effff0210ffffc00be600a0003a0effff0210ffffc00be600a2003a0effff0210ffffc00be600a4003a0effff0210ffffc00be600a6003a0effff0210ffffc00be600a8003a0effff0210ffff",
+"f2f0": 356,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 16,
+"y250": 352,
+"m32": 1,
+"d34": 1,
+"cam": [
+3228,
+120
+],
+"hp": 6000,
+"thr": 103,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be60099003a0effff0210ffffc00be6009b003a0effff0210ffffc00be6009d003a0effff0210ffffc00be6009f003a0effff0210ffffc00be600a1003a0effff0210ffffc00be600a3003a0effff0210ffffc00be600a5003a0effff0210ffffc00be600a7003a0effff0210ffff",
+"f2f0": 354,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 17,
+"y250": 350,
+"m32": 1,
+"d34": 1,
+"cam": [
+3224,
+120
+],
+"hp": 6000,
+"thr": 102,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be60098003a0effff0210ffffc00be6009a003a0effff0210ffffc00be6009c003a0effff0210ffffc00be6009e003a0effff0210ffffc00be600a0003a0effff0210ffffc00be600a2003a0effff0210ffffc00be600a4003a0effff0210ffffc00be600a6003a0effff0210ffff",
+"f2f0": 352,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 18,
+"y250": 348,
+"m32": 1,
+"d34": 1,
+"cam": [
+3220,
+120
+],
+"hp": 6000,
+"thr": 101,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be60097003a0effff0210ffffc00be60099003a0effff0210ffffc00be6009b003a0effff0210ffffc00be6009d003a0effff0210ffffc00be6009f003a0effff0210ffffc00be600a1003a0effff0210ffffc00be600a3003a0effff0210ffffc00be600a5003a0effff0210ffff",
+"f2f0": 350,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 19,
+"y250": 346,
+"m32": 1,
+"d34": 1,
+"cam": [
+3216,
+120
+],
+"hp": 6000,
+"thr": 100,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be60096003a0effff0210ffffc00be60098003a0effff0210ffffc00be6009a003a0effff0210ffffc00be6009c003a0effff0210ffffc00be6009e003a0effff0210ffffc00be600a0003a0effff0210ffffc00be600a2003a0effff0210ffffc00be600a4003a0effff0210ffff",
+"f2f0": 348,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 20,
+"y250": 344,
+"m32": 1,
+"d34": 1,
+"cam": [
+3212,
+120
+],
+"hp": 6000,
+"thr": 99,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be60095003a0effff0210ffffc00be60097003a0effff0210ffffc00be60099003a0effff0210ffffc00be6009b003a0effff0210ffffc00be6009d003a0effff0210ffffc00be6009f003a0effff0210ffffc00be600a1003a0effff0210ffffc00be600a3003a0effff0210ffff",
+"f2f0": 346,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 21,
+"y250": 342,
+"m32": 1,
+"d34": 1,
+"cam": [
+3208,
+120
+],
+"hp": 6000,
+"thr": 98,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be60094003a0effff0210ffffc00be60096003a0effff0210ffffc00be60098003a0effff0210ffffc00be6009a003a0effff0210ffffc00be6009c003a0effff0210ffffc00be6009e003a0effff0210ffffc00be600a0003a0effff0210ffffc00be600a2003a0effff0210ffff",
+"f2f0": 344,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 22,
+"y250": 340,
+"m32": 1,
+"d34": 1,
+"cam": [
+3204,
+120
+],
+"hp": 6000,
+"thr": 97,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be60093003a0effff0210ffffc00be60095003a0effff0210ffffc00be60097003a0effff0210ffffc00be60099003a0effff0210ffffc00be6009b003a0effff0210ffffc00be6009d003a0effff0210ffffc00be6009f003a0effff0210ffffc00be600a1003a0effff0210ffff",
+"f2f0": 342,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 23,
+"y250": 338,
+"m32": 1,
+"d34": 1,
+"cam": [
+3200,
+120
+],
+"hp": 6000,
+"thr": 96,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be60092003a0effff0210ffffc00be60094003a0effff0210ffffc00be60096003a0effff0210ffffc00be60098003a0effff0210ffffc00be6009a003a0effff0210ffffc00be6009c003a0effff0210ffffc00be6009e003a0effff0210ffffc00be600a0003a0effff0210ffff",
+"f2f0": 340,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 24,
+"y250": 336,
+"m32": 1,
+"d34": 1,
+"cam": [
+3196,
+120
+],
+"hp": 6000,
+"thr": 95,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be60091003a0effff0210ffffc00be60093003a0effff0210ffffc00be60095003a0effff0210ffffc00be60097003a0effff0210ffffc00be60099003a0effff0210ffffc00be6009b003a0effff0210ffffc00be6009d003a0effff0210ffffc00be6009f003a0effff0210ffff",
+"f2f0": 338,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 25,
+"y250": 334,
+"m32": 1,
+"d34": 1,
+"cam": [
+3192,
+120
+],
+"hp": 6000,
+"thr": 94,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be60090003a0effff0210ffffc00be60092003a0effff0210ffffc00be60094003a0effff0210ffffc00be60096003a0effff0210ffffc00be60098003a0effff0210ffffc00be6009a003a0effff0210ffffc00be6009c003a0effff0210ffffc00be6009e003a0effff0210ffff",
+"f2f0": 336,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 26,
+"y250": 332,
+"m32": 1,
+"d34": 1,
+"cam": [
+3188,
+120
+],
+"hp": 6000,
+"thr": 93,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be6008f003a0effff0210ffffc00be60091003a0effff0210ffffc00be60093003a0effff0210ffffc00be60095003a0effff0210ffffc00be60097003a0effff0210ffffc00be60099003a0effff0210ffffc00be6009b003a0effff0210ffffc00be6009d003a0effff0210ffff",
+"f2f0": 334,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 27,
+"y250": 330,
+"m32": 1,
+"d34": 1,
+"cam": [
+3184,
+120
+],
+"hp": 6000,
+"thr": 92,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be6008e003a0effff0210ffffc00be60090003a0effff0210ffffc00be60092003a0effff0210ffffc00be60094003a0effff0210ffffc00be60096003a0effff0210ffffc00be60098003a0effff0210ffffc00be6009a003a0effff0210ffffc00be6009c003a0effff0210ffff",
+"f2f0": 332,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 28,
+"y250": 328,
+"m32": 1,
+"d34": 1,
+"cam": [
+3180,
+120
+],
+"hp": 6000,
+"thr": 91,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be6008d003a0effff0210ffffc00be6008f003a0effff0210ffffc00be60091003a0effff0210ffffc00be60093003a0effff0210ffffc00be60095003a0effff0210ffffc00be60097003a0effff0210ffffc00be60099003a0effff0210ffffc00be6009b003a0effff0210ffff",
+"f2f0": 330,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 29,
+"y250": 326,
+"m32": 1,
+"d34": 1,
+"cam": [
+3176,
+120
+],
+"hp": 6000,
+"thr": 90,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be6008c003a0effff0210ffffc00be6008e003a0effff0210ffffc00be60090003a0effff0210ffffc00be60092003a0effff0210ffffc00be60094003a0effff0210ffffc00be60096003a0effff0210ffffc00be60098003a0effff0210ffffc00be6009a003a0effff0210ffff",
+"f2f0": 328,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 30,
+"y250": 324,
+"m32": 1,
+"d34": 1,
+"cam": [
+3172,
+120
+],
+"hp": 6000,
+"thr": 89,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be6008b003a0effff0210ffffc00be6008d003a0effff0210ffffc00be6008f003a0effff0210ffffc00be60091003a0effff0210ffffc00be60093003a0effff0210ffffc00be60095003a0effff0210ffffc00be60097003a0effff0210ffffc00be60099003a0effff0210ffff",
+"f2f0": 326,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 31,
+"y250": 322,
+"m32": 1,
+"d34": 1,
+"cam": [
+3168,
+120
+],
+"hp": 6000,
+"thr": 88,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be6008a003a0effff0210ffffc00be6008c003a0effff0210ffffc00be6008e003a0effff0210ffffc00be60090003a0effff0210ffffc00be60092003a0effff0210ffffc00be60094003a0effff0210ffffc00be60096003a0effff0210ffffc00be60098003a0effff0210ffff",
+"f2f0": 324,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 32,
+"y250": 320,
+"m32": 1,
+"d34": 1,
+"cam": [
+3164,
+120
+],
+"hp": 6000,
+"thr": 87,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be60089003a0effff0210ffffc00be6008b003a0effff0210ffffc00be6008d003a0effff0210ffffc00be6008f003a0effff0210ffffc00be60091003a0effff0210ffffc00be60093003a0effff0210ffffc00be60095003a0effff0210ffffc00be60097003a0effff0210ffff",
+"f2f0": 322,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 33,
+"y250": 318,
+"m32": 1,
+"d34": 1,
+"cam": [
+3160,
+120
+],
+"hp": 6000,
+"thr": 86,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be60088003a0effff0210ffffc00be6008a003a0effff0210ffffc00be6008c003a0effff0210ffffc00be6008e003a0effff0210ffffc00be60090003a0effff0210ffffc00be60092003a0effff0210ffffc00be60094003a0effff0210ffffc00be60096003a0effff0210ffff",
+"f2f0": 320,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 34,
+"y250": 316,
+"m32": 1,
+"d34": 1,
+"cam": [
+3156,
+120
+],
+"hp": 6000,
+"thr": 85,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be60087003a0effff0210ffffc00be60089003a0effff0210ffffc00be6008b003a0effff0210ffffc00be6008d003a0effff0210ffffc00be6008f003a0effff0210ffffc00be60091003a0effff0210ffffc00be60093003a0effff0210ffffc00be60095003a0effff0210ffff",
+"f2f0": 318,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 35,
+"y250": 314,
+"m32": 1,
+"d34": 1,
+"cam": [
+3152,
+120
+],
+"hp": 6000,
+"thr": 84,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be60086003a0effff0210ffffc00be60088003a0effff0210ffffc00be6008a003a0effff0210ffffc00be6008c003a0effff0210ffffc00be6008e003a0effff0210ffffc00be60090003a0effff0210ffffc00be60092003a0effff0210ffffc00be60094003a0effff0210ffff",
+"f2f0": 316,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 36,
+"y250": 312,
+"m32": 1,
+"d34": 1,
+"cam": [
+3148,
+120
+],
+"hp": 6000,
+"thr": 83,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be60085003a0effff0210ffffc00be60087003a0effff0210ffffc00be60089003a0effff0210ffffc00be6008b003a0effff0210ffffc00be6008d003a0effff0210ffffc00be6008f003a0effff0210ffffc00be60091003a0effff0210ffffc00be60093003a0effff0210ffff",
+"f2f0": 314,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 37,
+"y250": 310,
+"m32": 1,
+"d34": 1,
+"cam": [
+3144,
+120
+],
+"hp": 6000,
+"thr": 82,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be60084003a0effff0210ffffc00be60086003a0effff0210ffffc00be60088003a0effff0210ffffc00be6008a003a0effff0210ffffc00be6008c003a0effff0210ffffc00be6008e003a0effff0210ffffc00be60090003a0effff0210ffffc00be60092003a0effff0210ffff",
+"f2f0": 312,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 38,
+"y250": 308,
+"m32": 1,
+"d34": 1,
+"cam": [
+3140,
+120
+],
+"hp": 6000,
+"thr": 81,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be60083003a0effff0210ffffc00be60085003a0effff0210ffffc00be60087003a0effff0210ffffc00be60089003a0effff0210ffffc00be6008b003a0effff0210ffffc00be6008d003a0effff0210ffffc00be6008f003a0effff0210ffffc00be60091003a0effff0210ffff",
+"f2f0": 310,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 39,
+"y250": 306,
+"m32": 1,
+"d34": 1,
+"cam": [
+3136,
+120
+],
+"hp": 6000,
+"thr": 80,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be60082003a0effff0210ffffc00be60084003a0effff0210ffffc00be60086003a0effff0210ffffc00be60088003a0effff0210ffffc00be6008a003a0effff0210ffffc00be6008c003a0effff0210ffffc00be6008e003a0effff0210ffffc00be60090003a0effff0210ffff",
+"f2f0": 308,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 40,
+"y250": 304,
+"m32": 1,
+"d34": 1,
+"cam": [
+3132,
+120
+],
+"hp": 6000,
+"thr": 79,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be60081003a0effff0210ffffc00be60083003a0effff0210ffffc00be60085003a0effff0210ffffc00be60087003a0effff0210ffffc00be60089003a0effff0210ffffc00be6008b003a0effff0210ffffc00be6008d003a0effff0210ffffc00be6008f003a0effff0210ffff",
+"f2f0": 306,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 41,
+"y250": 302,
+"m32": 1,
+"d34": 1,
+"cam": [
+3128,
+120
+],
+"hp": 6000,
+"thr": 78,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be60080003a0effff0210ffffc00be60082003a0effff0210ffffc00be60084003a0effff0210ffffc00be60086003a0effff0210ffffc00be60088003a0effff0210ffffc00be6008a003a0effff0210ffffc00be6008c003a0effff0210ffffc00be6008e003a0effff0210ffff",
+"f2f0": 304,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 42,
+"y250": 300,
+"m32": 1,
+"d34": 1,
+"cam": [
+3124,
+120
+],
+"hp": 6000,
+"thr": 77,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be6007f003a0effff0210ffffc00be60081003a0effff0210ffffc00be60083003a0effff0210ffffc00be60085003a0effff0210ffffc00be60087003a0effff0210ffffc00be60089003a0effff0210ffffc00be6008b003a0effff0210ffffc00be6008d003a0effff0210ffff",
+"f2f0": 302,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 43,
+"y250": 298,
+"m32": 1,
+"d34": 1,
+"cam": [
+3120,
+120
+],
+"hp": 6000,
+"thr": 76,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be6007e003a0effff0210ffffc00be60080003a0effff0210ffffc00be60082003a0effff0210ffffc00be60084003a0effff0210ffffc00be60086003a0effff0210ffffc00be60088003a0effff0210ffffc00be6008a003a0effff0210ffffc00be6008c003a0effff0210ffff",
+"f2f0": 300,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 44,
+"y250": 296,
+"m32": 1,
+"d34": 1,
+"cam": [
+3116,
+120
+],
+"hp": 6000,
+"thr": 75,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be6007d003a0effff0210ffffc00be6007f003a0effff0210ffffc00be60081003a0effff0210ffffc00be60083003a0effff0210ffffc00be60085003a0effff0210ffffc00be60087003a0effff0210ffffc00be60089003a0effff0210ffffc00be6008b003a0effff0210ffff",
+"f2f0": 298,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 45,
+"y250": 294,
+"m32": 1,
+"d34": 1,
+"cam": [
+3112,
+120
+],
+"hp": 6000,
+"thr": 74,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be6007c003a0effff0210ffffc00be6007e003a0effff0210ffffc00be60080003a0effff0210ffffc00be60082003a0effff0210ffffc00be60084003a0effff0210ffffc00be60086003a0effff0210ffffc00be60088003a0effff0210ffffc00be6008a003a0effff0210ffff",
+"f2f0": 296,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 46,
+"y250": 292,
+"m32": 1,
+"d34": 1,
+"cam": [
+3108,
+120
+],
+"hp": 6000,
+"thr": 73,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be6007b003a0effff0210ffffc00be6007d003a0effff0210ffffc00be6007f003a0effff0210ffffc00be60081003a0effff0210ffffc00be60083003a0effff0210ffffc00be60085003a0effff0210ffffc00be60087003a0effff0210ffffc00be60089003a0effff0210ffff",
+"f2f0": 294,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 47,
+"y250": 290,
+"m32": 1,
+"d34": 1,
+"cam": [
+3104,
+120
+],
+"hp": 6000,
+"thr": 72,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be6007a003a0effff0210ffffc00be6007c003a0effff0210ffffc00be6007e003a0effff0210ffffc00be60080003a0effff0210ffffc00be60082003a0effff0210ffffc00be60084003a0effff0210ffffc00be60086003a0effff0210ffffc00be60088003a0effff0210ffff",
+"f2f0": 292,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 48,
+"y250": 288,
+"m32": 1,
+"d34": 1,
+"cam": [
+3100,
+120
+],
+"hp": 6000,
+"thr": 71,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be60079003a0effff0210ffffc00be6007b003a0effff0210ffffc00be6007d003a0effff0210ffffc00be6007f003a0effff0210ffffc00be60081003a0effff0210ffffc00be60083003a0effff0210ffffc00be60085003a0effff0210ffffc00be60087003a0effff0210ffff",
+"f2f0": 290,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 49,
+"y250": 286,
+"m32": 1,
+"d34": 1,
+"cam": [
+3096,
+120
+],
+"hp": 6000,
+"thr": 70,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be60078003a0effff0210ffffc00be6007a003a0effff0210ffffc00be6007c003a0effff0210ffffc00be6007e003a0effff0210ffffc00be60080003a0effff0210ffffc00be60082003a0effff0210ffffc00be60084003a0effff0210ffffc00be60086003a0effff0210ffff",
+"f2f0": 288,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 50,
+"y250": 284,
+"m32": 1,
+"d34": 1,
+"cam": [
+3092,
+120
+],
+"hp": 6000,
+"thr": 69,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be60077003a0effff0210ffffc00be60079003a0effff0210ffffc00be6007b003a0effff0210ffffc00be6007d003a0effff0210ffffc00be6007f003a0effff0210ffffc00be60081003a0effff0210ffffc00be60083003a0effff0210ffffc00be60085003a0effff0210ffff",
+"f2f0": 286,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 51,
+"y250": 282,
+"m32": 1,
+"d34": 1,
+"cam": [
+3088,
+120
+],
+"hp": 6000,
+"thr": 68,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be60076003a0effff0210ffffc00be60078003a0effff0210ffffc00be6007a003a0effff0210ffffc00be6007c003a0effff0210ffffc00be6007e003a0effff0210ffffc00be60080003a0effff0210ffffc00be60082003a0effff0210ffffc00be60084003a0effff0210ffff",
+"f2f0": 284,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 52,
+"y250": 280,
+"m32": 1,
+"d34": 1,
+"cam": [
+3084,
+120
+],
+"hp": 6000,
+"thr": 67,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be60075003a0effff0210ffffc00be60077003a0effff0210ffffc00be60079003a0effff0210ffffc00be6007b003a0effff0210ffffc00be6007d003a0effff0210ffffc00be6007f003a0effff0210ffffc00be60081003a0effff0210ffffc00be60083003a0effff0210ffff",
+"f2f0": 282,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 53,
+"y250": 278,
+"m32": 1,
+"d34": 1,
+"cam": [
+3080,
+120
+],
+"hp": 6000,
+"thr": 66,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be60074003a0effff0210ffffc00be60076003a0effff0210ffffc00be60078003a0effff0210ffffc00be6007a003a0effff0210ffffc00be6007c003a0effff0210ffffc00be6007e003a0effff0210ffffc00be60080003a0effff0210ffffc00be60082003a0effff0210ffff",
+"f2f0": 280,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 54,
+"y250": 276,
+"m32": 1,
+"d34": 1,
+"cam": [
+3076,
+120
+],
+"hp": 6000,
+"thr": 65,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be60073003a0effff0210ffffc00be60075003a0effff0210ffffc00be60077003a0effff0210ffffc00be60079003a0effff0210ffffc00be6007b003a0effff0210ffffc00be6007d003a0effff0210ffffc00be6007f003a0effff0210ffffc00be60081003a0effff0210ffff",
+"f2f0": 278,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 55,
+"y250": 274,
+"m32": 1,
+"d34": 1,
+"cam": [
+3072,
+120
+],
+"hp": 6000,
+"thr": 64,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be60072003a0effff0210ffffc00be60074003a0effff0210ffffc00be60076003a0effff0210ffffc00be60078003a0effff0210ffffc00be6007a003a0effff0210ffffc00be6007c003a0effff0210ffffc00be6007e003a0effff0210ffffc00be60080003a0effff0210ffff",
+"f2f0": 276,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 56,
+"y250": 272,
+"m32": 1,
+"d34": 1,
+"cam": [
+3068,
+120
+],
+"hp": 6000,
+"thr": 63,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be60071003a0effff0210ffffc00be60073003a0effff0210ffffc00be60075003a0effff0210ffffc00be60077003a0effff0210ffffc00be60079003a0effff0210ffffc00be6007b003a0effff0210ffffc00be6007d003a0effff0210ffffc00be6007f003a0effff0210ffff",
+"f2f0": 274,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 57,
+"y250": 270,
+"m32": 1,
+"d34": 1,
+"cam": [
+3064,
+120
+],
+"hp": 6000,
+"thr": 62,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be60070003a0effff0210ffffc00be60072003a0effff0210ffffc00be60074003a0effff0210ffffc00be60076003a0effff0210ffffc00be60078003a0effff0210ffffc00be6007a003a0effff0210ffffc00be6007c003a0effff0210ffffc00be6007e003a0effff0210ffff",
+"f2f0": 272,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 58,
+"y250": 268,
+"m32": 1,
+"d34": 1,
+"cam": [
+3060,
+120
+],
+"hp": 6000,
+"thr": 61,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be6006f003a0effff0210ffffc00be60071003a0effff0210ffffc00be60073003a0effff0210ffffc00be60075003a0effff0210ffffc00be60077003a0effff0210ffffc00be60079003a0effff0210ffffc00be6007b003a0effff0210ffffc00be6007d003a0effff0210ffff",
+"f2f0": 270,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 59,
+"y250": 266,
+"m32": 1,
+"d34": 1,
+"cam": [
+3056,
+120
+],
+"hp": 6000,
+"thr": 60,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be6006e003a0effff0210ffffc00be60070003a0effff0210ffffc00be60072003a0effff0210ffffc00be60074003a0effff0210ffffc00be60076003a0effff0210ffffc00be60078003a0effff0210ffffc00be6007a003a0effff0210ffffc00be6007c003a0effff0210ffff",
+"f2f0": 268,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 60,
+"y250": 264,
+"m32": 1,
+"d34": 1,
+"cam": [
+3052,
+120
+],
+"hp": 6000,
+"thr": 59,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be6006d003a0effff0210ffffc00be6006f003a0effff0210ffffc00be60071003a0effff0210ffffc00be60073003a0effff0210ffffc00be60075003a0effff0210ffffc00be60077003a0effff0210ffffc00be60079003a0effff0210ffffc00be6007b003a0effff0210ffff",
+"f2f0": 266,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 61,
+"y250": 262,
+"m32": 1,
+"d34": 1,
+"cam": [
+3048,
+120
+],
+"hp": 6000,
+"thr": 58,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be6006c003a0effff0210ffffc00be6006e003a0effff0210ffffc00be60070003a0effff0210ffffc00be60072003a0effff0210ffffc00be60074003a0effff0210ffffc00be60076003a0effff0210ffffc00be60078003a0effff0210ffffc00be6007a003a0effff0210ffff",
+"f2f0": 264,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 62,
+"y250": 260,
+"m32": 1,
+"d34": 1,
+"cam": [
+3044,
+120
+],
+"hp": 6000,
+"thr": 57,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be6006b003a0effff0210ffffc00be6006d003a0effff0210ffffc00be6006f003a0effff0210ffffc00be60071003a0effff0210ffffc00be60073003a0effff0210ffffc00be60075003a0effff0210ffffc00be60077003a0effff0210ffffc00be60079003a0effff0210ffff",
+"f2f0": 262,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 63,
+"y250": 258,
+"m32": 1,
+"d34": 1,
+"cam": [
+3040,
+120
+],
+"hp": 6000,
+"thr": 56,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be6006a003a0effff0210ffffc00be6006c003a0effff0210ffffc00be6006e003a0effff0210ffffc00be60070003a0effff0210ffffc00be60072003a0effff0210ffffc00be60074003a0effff0210ffffc00be60076003a0effff0210ffffc00be60078003a0effff0210ffff",
+"f2f0": 260,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 64,
+"y250": 256,
+"m32": 1,
+"d34": 1,
+"cam": [
+3036,
+120
+],
+"hp": 6000,
+"thr": 55,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be60069003a0effff0210ffffc00be6006b003a0effff0210ffffc00be6006d003a0effff0210ffffc00be6006f003a0effff0210ffffc00be60071003a0effff0210ffffc00be60073003a0effff0210ffffc00be60075003a0effff0210ffffc00be60077003a0effff0210ffff",
+"f2f0": 258,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 65,
+"y250": 254,
+"m32": 1,
+"d34": 1,
+"cam": [
+3032,
+120
+],
+"hp": 6000,
+"thr": 54,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be60068003a0effff0210ffffc00be6006a003a0effff0210ffffc00be6006c003a0effff0210ffffc00be6006e003a0effff0210ffffc00be60070003a0effff0210ffffc00be60072003a0effff0210ffffc00be60074003a0effff0210ffffc00be60076003a0effff0210ffff",
+"f2f0": 256,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 66,
+"y250": 252,
+"m32": 1,
+"d34": 1,
+"cam": [
+3028,
+120
+],
+"hp": 6000,
+"thr": 53,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be60067003a0effff0210ffffc00be60069003a0effff0210ffffc00be6006b003a0effff0210ffffc00be6006d003a0effff0210ffffc00be6006f003a0effff0210ffffc00be60071003a0effff0210ffffc00be60073003a0effff0210ffffc00be60075003a0effff0210ffff",
+"f2f0": 254,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 67,
+"y250": 250,
+"m32": 1,
+"d34": 1,
+"cam": [
+3024,
+120
+],
+"hp": 6000,
+"thr": 52,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be60066003a0effff0210ffffc00be60068003a0effff0210ffffc00be6006a003a0effff0210ffffc00be6006c003a0effff0210ffffc00be6006e003a0effff0210ffffc00be60070003a0effff0210ffffc00be60072003a0effff0210ffffc00be60074003a0effff0210ffff",
+"f2f0": 252,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 68,
+"y250": 248,
+"m32": 1,
+"d34": 1,
+"cam": [
+3020,
+120
+],
+"hp": 6000,
+"thr": 51,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be60065003a0effff0210ffffc00be60067003a0effff0210ffffc00be60069003a0effff0210ffffc00be6006b003a0effff0210ffffc00be6006d003a0effff0210ffffc00be6006f003a0effff0210ffffc00be60071003a0effff0210ffffc00be60073003a0effff0210ffff",
+"f2f0": 250,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 69,
+"y250": 246,
+"m32": 1,
+"d34": 1,
+"cam": [
+3016,
+120
+],
+"hp": 6000,
+"thr": 50,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be60064003a0effff0210ffffc00be60066003a0effff0210ffffc00be60068003a0effff0210ffffc00be6006a003a0effff0210ffffc00be6006c003a0effff0210ffffc00be6006e003a0effff0210ffffc00be60070003a0effff0210ffffc00be60072003a0effff0210ffff",
+"f2f0": 248,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 70,
+"y250": 244,
+"m32": 1,
+"d34": 1,
+"cam": [
+3012,
+120
+],
+"hp": 6000,
+"thr": 49,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be60063003a0effff0210ffffc00be60065003a0effff0210ffffc00be60067003a0effff0210ffffc00be60069003a0effff0210ffffc00be6006b003a0effff0210ffffc00be6006d003a0effff0210ffffc00be6006f003a0effff0210ffffc00be60071003a0effff0210ffff",
+"f2f0": 246,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 71,
+"y250": 242,
+"m32": 1,
+"d34": 1,
+"cam": [
+3008,
+120
+],
+"hp": 6000,
+"thr": 48,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be60062003a0effff0210ffffc00be60064003a0effff0210ffffc00be60066003a0effff0210ffffc00be60068003a0effff0210ffffc00be6006a003a0effff0210ffffc00be6006c003a0effff0210ffffc00be6006e003a0effff0210ffffc00be60070003a0effff0210ffff",
+"f2f0": 244,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 72,
+"y250": 240,
+"m32": 1,
+"d34": 1,
+"cam": [
+3004,
+120
+],
+"hp": 6000,
+"thr": 47,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be60061003a0effff0210ffffc00be60063003a0effff0210ffffc00be60065003a0effff0210ffffc00be60067003a0effff0210ffffc00be60069003a0effff0210ffffc00be6006b003a0effff0210ffffc00be6006d003a0effff0210ffffc00be6006f003a0effff0210ffff",
+"f2f0": 242,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 73,
+"y250": 238,
+"m32": 1,
+"d34": 1,
+"cam": [
+3000,
+120
+],
+"hp": 6000,
+"thr": 46,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be60060003a0effff0210ffffc00be60062003a0effff0210ffffc00be60064003a0effff0210ffffc00be60066003a0effff0210ffffc00be60068003a0effff0210ffffc00be6006a003a0effff0210ffffc00be6006c003a0effff0210ffffc00be6006e003a0effff0210ffff",
+"f2f0": 240,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 74,
+"y250": 236,
+"m32": 1,
+"d34": 1,
+"cam": [
+2996,
+120
+],
+"hp": 6000,
+"thr": 45,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be6005f003a0effff0210ffffc00be60061003a0effff0210ffffc00be60063003a0effff0210ffffc00be60065003a0effff0210ffffc00be60067003a0effff0210ffffc00be60069003a0effff0210ffffc00be6006b003a0effff0210ffffc00be6006d003a0effff0210ffff",
+"f2f0": 238,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 75,
+"y250": 234,
+"m32": 1,
+"d34": 1,
+"cam": [
+2992,
+120
+],
+"hp": 6000,
+"thr": 44,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be6005e003a0effff0210ffffc00be60060003a0effff0210ffffc00be60062003a0effff0210ffffc00be60064003a0effff0210ffffc00be60066003a0effff0210ffffc00be60068003a0effff0210ffffc00be6006a003a0effff0210ffffc00be6006c003a0effff0210ffff",
+"f2f0": 236,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 76,
+"y250": 232,
+"m32": 1,
+"d34": 1,
+"cam": [
+2988,
+120
+],
+"hp": 6000,
+"thr": 43,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be6005d003a0effff0210ffffc00be6005f003a0effff0210ffffc00be60061003a0effff0210ffffc00be60063003a0effff0210ffffc00be60065003a0effff0210ffffc00be60067003a0effff0210ffffc00be60069003a0effff0210ffffc00be6006b003a0effff0210ffff",
+"f2f0": 234,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 77,
+"y250": 230,
+"m32": 1,
+"d34": 1,
+"cam": [
+2984,
+120
+],
+"hp": 6000,
+"thr": 42,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be6005c003a0effff0210ffffc00be6005e003a0effff0210ffffc00be60060003a0effff0210ffffc00be60062003a0effff0210ffffc00be60064003a0effff0210ffffc00be60066003a0effff0210ffffc00be60068003a0effff0210ffffc00be6006a003a0effff0210ffff",
+"f2f0": 232,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 78,
+"y250": 228,
+"m32": 1,
+"d34": 1,
+"cam": [
+2980,
+120
+],
+"hp": 6000,
+"thr": 41,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be6005b003a0effff0210ffffc00be6005d003a0effff0210ffffc00be6005f003a0effff0210ffffc00be60061003a0effff0210ffffc00be60063003a0effff0210ffffc00be60065003a0effff0210ffffc00be60067003a0effff0210ffffc00be60069003a0effff0210ffff",
+"f2f0": 230,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 79,
+"y250": 226,
+"m32": 1,
+"d34": 1,
+"cam": [
+2976,
+120
+],
+"hp": 6000,
+"thr": 40,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be6005a003a0effff0210ffffc00be6005c003a0effff0210ffffc00be6005e003a0effff0210ffffc00be60060003a0effff0210ffffc00be60062003a0effff0210ffffc00be60064003a0effff0210ffffc00be60066003a0effff0210ffffc00be60068003a0effff0210ffff",
+"f2f0": 228,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 80,
+"y250": 224,
+"m32": 1,
+"d34": 1,
+"cam": [
+2972,
+120
+],
+"hp": 6000,
+"thr": 39,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be60059003a0effff0210ffffc00be6005b003a0effff0210ffffc00be6005d003a0effff0210ffffc00be6005f003a0effff0210ffffc00be60061003a0effff0210ffffc00be60063003a0effff0210ffffc00be60065003a0effff0210ffffc00be60067003a0effff0210ffff",
+"f2f0": 226,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 81,
+"y250": 222,
+"m32": 1,
+"d34": 1,
+"cam": [
+2968,
+120
+],
+"hp": 6000,
+"thr": 38,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be60058003a0effff0210ffffc00be6005a003a0effff0210ffffc00be6005c003a0effff0210ffffc00be6005e003a0effff0210ffffc00be60060003a0effff0210ffffc00be60062003a0effff0210ffffc00be60064003a0effff0210ffffc00be60066003a0effff0210ffff",
+"f2f0": 224,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 82,
+"y250": 220,
+"m32": 1,
+"d34": 1,
+"cam": [
+2964,
+120
+],
+"hp": 6000,
+"thr": 37,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be60057003a0effff0210ffffc00be60059003a0effff0210ffffc00be6005b003a0effff0210ffffc00be6005d003a0effff0210ffffc00be6005f003a0effff0210ffffc00be60061003a0effff0210ffffc00be60063003a0effff0210ffffc00be60065003a0effff0210ffff",
+"f2f0": 222,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 83,
+"y250": 218,
+"m32": 1,
+"d34": 1,
+"cam": [
+2960,
+120
+],
+"hp": 6000,
+"thr": 36,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be60056003a0effff0210ffffc00be60058003a0effff0210ffffc00be6005a003a0effff0210ffffc00be6005c003a0effff0210ffffc00be6005e003a0effff0210ffffc00be60060003a0effff0210ffffc00be60062003a0effff0210ffffc00be60064003a0effff0210ffff",
+"f2f0": 220,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 84,
+"y250": 216,
+"m32": 1,
+"d34": 1,
+"cam": [
+2956,
+120
+],
+"hp": 6000,
+"thr": 35,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be60055003a0effff0210ffffc00be60057003a0effff0210ffffc00be60059003a0effff0210ffffc00be6005b003a0effff0210ffffc00be6005d003a0effff0210ffffc00be6005f003a0effff0210ffffc00be60061003a0effff0210ffffc00be60063003a0effff0210ffff",
+"f2f0": 218,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 85,
+"y250": 214,
+"m32": 1,
+"d34": 1,
+"cam": [
+2952,
+120
+],
+"hp": 6000,
+"thr": 34,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be60054003a0effff0210ffffc00be60056003a0effff0210ffffc00be60058003a0effff0210ffffc00be6005a003a0effff0210ffffc00be6005c003a0effff0210ffffc00be6005e003a0effff0210ffffc00be60060003a0effff0210ffffc00be60062003a0effff0210ffff",
+"f2f0": 216,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 86,
+"y250": 212,
+"m32": 1,
+"d34": 1,
+"cam": [
+2948,
+120
+],
+"hp": 6000,
+"thr": 33,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be60053003a0effff0210ffffc00be60055003a0effff0210ffffc00be60057003a0effff0210ffffc00be60059003a0effff0210ffffc00be6005b003a0effff0210ffffc00be6005d003a0effff0210ffffc00be6005f003a0effff0210ffffc00be60061003a0effff0210ffff",
+"f2f0": 214,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 87,
+"y250": 210,
+"m32": 1,
+"d34": 1,
+"cam": [
+2944,
+120
+],
+"hp": 6000,
+"thr": 32,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be60052003a0effff0210ffffc00be60054003a0effff0210ffffc00be60056003a0effff0210ffffc00be60058003a0effff0210ffffc00be6005a003a0effff0210ffffc00be6005c003a0effff0210ffffc00be6005e003a0effff0210ffffc00be60060003a0effff0210ffff",
+"f2f0": 212,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 88,
+"y250": 208,
+"m32": 1,
+"d34": 1,
+"cam": [
+2940,
+120
+],
+"hp": 6000,
+"thr": 31,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be60051003a0effff0210ffffc00be60053003a0effff0210ffffc00be60055003a0effff0210ffffc00be60057003a0effff0210ffffc00be60059003a0effff0210ffffc00be6005b003a0effff0210ffffc00be6005d003a0effff0210ffffc00be6005f003a0effff0210ffff",
+"f2f0": 210,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 89,
+"y250": 206,
+"m32": 1,
+"d34": 1,
+"cam": [
+2936,
+120
+],
+"hp": 6000,
+"thr": 30,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be60050003a0effff0210ffffc00be60052003a0effff0210ffffc00be60054003a0effff0210ffffc00be60056003a0effff0210ffffc00be60058003a0effff0210ffffc00be6005a003a0effff0210ffffc00be6005c003a0effff0210ffffc00be6005e003a0effff0210ffff",
+"f2f0": 208,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 90,
+"y250": 204,
+"m32": 1,
+"d34": 1,
+"cam": [
+2932,
+120
+],
+"hp": 6000,
+"thr": 29,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be6004f003a0effff0210ffffc00be60051003a0effff0210ffffc00be60053003a0effff0210ffffc00be60055003a0effff0210ffffc00be60057003a0effff0210ffffc00be60059003a0effff0210ffffc00be6005b003a0effff0210ffffc00be6005d003a0effff0210ffff",
+"f2f0": 206,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 91,
+"y250": 202,
+"m32": 1,
+"d34": 1,
+"cam": [
+2928,
+120
+],
+"hp": 6000,
+"thr": 28,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be6004e003a0effff0210ffffc00be60050003a0effff0210ffffc00be60052003a0effff0210ffffc00be60054003a0effff0210ffffc00be60056003a0effff0210ffffc00be60058003a0effff0210ffffc00be6005a003a0effff0210ffffc00be6005c003a0effff0210ffff",
+"f2f0": 204,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 92,
+"y250": 200,
+"m32": 1,
+"d34": 1,
+"cam": [
+2924,
+120
+],
+"hp": 6000,
+"thr": 27,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be6004d003a0effff0210ffffc00be6004f003a0effff0210ffffc00be60051003a0effff0210ffffc00be60053003a0effff0210ffffc00be60055003a0effff0210ffffc00be60057003a0effff0210ffffc00be60059003a0effff0210ffffc00be6005b003a0effff0210ffff",
+"f2f0": 202,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 93,
+"y250": 198,
+"m32": 1,
+"d34": 1,
+"cam": [
+2920,
+120
+],
+"hp": 6000,
+"thr": 26,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be6004c003a0effff0210ffffc00be6004e003a0effff0210ffffc00be60050003a0effff0210ffffc00be60052003a0effff0210ffffc00be60054003a0effff0210ffffc00be60056003a0effff0210ffffc00be60058003a0effff0210ffffc00be6005a003a0effff0210ffff",
+"f2f0": 200,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 94,
+"y250": 196,
+"m32": 1,
+"d34": 1,
+"cam": [
+2916,
+120
+],
+"hp": 6000,
+"thr": 25,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be6004b003a0effff0210ffffc00be6004d003a0effff0210ffffc00be6004f003a0effff0210ffffc00be60051003a0effff0210ffffc00be60053003a0effff0210ffffc00be60055003a0effff0210ffffc00be60057003a0effff0210ffffc00be60059003a0effff0210ffff",
+"f2f0": 198,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 95,
+"y250": 194,
+"m32": 2,
+"d34": 1,
+"cam": [
+2912,
+120
+],
+"hp": 6000,
+"thr": 24,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be6004a003a0effff0210ffffc00be6004c003a0effff0210ffffc00be6004e003a0effff0210ffffc00be60050003a0effff0210ffffc00be60052003a0effff0210ffffc00be60054003a0effff0210ffffc00be60056003a0effff0210ffffc00be60058003a0effff0210ffff",
+"f2f0": 196,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 96,
+"y250": 192,
+"m32": 4,
+"d34": 1,
+"cam": [
+2912,
+120
+],
+"hp": 6000,
+"thr": 23,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be60049003a0effff0210ffffc00be6004b003a0effff0210ffffc00be6004d003a0effff0210ffffc00be6004f003a0effff0210ffffc00be60051003a0effff0210ffffc00be60053003a0effff0210ffffc00be60055003a0effff0210ffffc00be60057003a0effff0210ffff",
+"f2f0": 194,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 97,
+"y250": 190,
+"m32": 4,
+"d34": 1,
+"cam": [
+2912,
+120
+],
+"hp": 6000,
+"thr": 22,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be60048003a0effff0210ffffc00be6004a003a0effff0210ffffc00be6004c003a0effff0210ffffc00be6004e003a0effff0210ffffc00be60050003a0effff0210ffffc00be60052003a0effff0210ffffc00be60054003a0effff0210ffffc00be60056003a0effff0210ffff",
+"f2f0": 192,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 98,
+"y250": 188,
+"m32": 4,
+"d34": 1,
+"cam": [
+2912,
+120
+],
+"hp": 6000,
+"thr": 21,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be60047003a0effff0210ffffc00be60049003a0effff0210ffffc00be6004b003a0effff0210ffffc00be6004d003a0effff0210ffffc00be6004f003a0effff0210ffffc00be60051003a0effff0210ffffc00be60053003a0effff0210ffffc00be60055003a0effff0210ffff",
+"f2f0": 190,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 99,
+"y250": 186,
+"m32": 4,
+"d34": 1,
+"cam": [
+2912,
+120
+],
+"hp": 6000,
+"thr": 20,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be60046003a0effff0210ffffc00be60048003a0effff0210ffffc00be6004a003a0effff0210ffffc00be6004c003a0effff0210ffffc00be6004e003a0effff0210ffffc00be60050003a0effff0210ffffc00be60052003a0effff0210ffffc00be60054003a0effff0210ffff",
+"f2f0": 188,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 100,
+"y250": 184,
+"m32": 4,
+"d34": 1,
+"cam": [
+2912,
+120
+],
+"hp": 6000,
+"thr": 19,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be60045003a0effff0210ffffc00be60047003a0effff0210ffffc00be60049003a0effff0210ffffc00be6004b003a0effff0210ffffc00be6004d003a0effff0210ffffc00be6004f003a0effff0210ffffc00be60051003a0effff0210ffffc00be60053003a0effff0210ffff",
+"f2f0": 186,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 101,
+"y250": 182,
+"m32": 4,
+"d34": 1,
+"cam": [
+2912,
+120
+],
+"hp": 6000,
+"thr": 18,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be60044003a0effff0210ffffc00be60046003a0effff0210ffffc00be60048003a0effff0210ffffc00be6004a003a0effff0210ffffc00be6004c003a0effff0210ffffc00be6004e003a0effff0210ffffc00be60050003a0effff0210ffffc00be60052003a0effff0210ffff",
+"f2f0": 184,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 102,
+"y250": 180,
+"m32": 4,
+"d34": 1,
+"cam": [
+2912,
+120
+],
+"hp": 6000,
+"thr": 17,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be60043003a0effff0210ffffc00be60045003a0effff0210ffffc00be60047003a0effff0210ffffc00be60049003a0effff0210ffffc00be6004b003a0effff0210ffffc00be6004d003a0effff0210ffffc00be6004f003a0effff0210ffffc00be60051003a0effff0210ffff",
+"f2f0": 182,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 103,
+"y250": 178,
+"m32": 4,
+"d34": 1,
+"cam": [
+2912,
+120
+],
+"hp": 6000,
+"thr": 16,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be60042003a0effff0210ffffc00be60044003a0effff0210ffffc00be60046003a0effff0210ffffc00be60048003a0effff0210ffffc00be6004a003a0effff0210ffffc00be6004c003a0effff0210ffffc00be6004e003a0effff0210ffffc00be60050003a0effff0210ffff",
+"f2f0": 180,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 104,
+"y250": 176,
+"m32": 4,
+"d34": 1,
+"cam": [
+2912,
+120
+],
+"hp": 6000,
+"thr": 15,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be60041003a0effff0210ffffc00be60043003a0effff0210ffffc00be60045003a0effff0210ffffc00be60047003a0effff0210ffffc00be60049003a0effff0210ffffc00be6004b003a0effff0210ffffc00be6004d003a0effff0210ffffc00be6004f003a0effff0210ffff",
+"f2f0": 178,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "90"
+},
+{
+"t": 105,
+"y250": 176,
+"m32": 4,
+"d34": 1,
+"cam": [
+2912,
+120
+],
+"hp": 6000,
+"thr": 14,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be60040003a0effff0210ffffc00be60042003a0effff0210ffffc00be60044003a0effff0210ffffc00be60046003a0effff0210ffffc00be60048003a0effff0210ffffc00be6004a003a0effff0210ffffc00be6004c003a0effff0210ffffc00be6004e003a0effff0210ffff",
+"f2f0": 176,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "c3"
+},
+{
+"t": 106,
+"y250": 176,
+"m32": 4,
+"d34": 1,
+"cam": [
+2912,
+120
+],
+"hp": 6000,
+"thr": 13,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be6003f003a0effff0210ffffc00be60041003a0effff0210ffffc00be60043003a0effff0210ffffc00be60045003a0effff0210ffffc00be60047003a0effff0210ffffc00be60049003a0effff0210ffffc00be6004b003a0effff0210ffffc00be6004d003a0effff0210ffff",
+"f2f0": 176,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "c3"
+},
+{
+"t": 107,
+"y250": 176,
+"m32": 4,
+"d34": 1,
+"cam": [
+2912,
+120
+],
+"hp": 6000,
+"thr": 12,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be6003e003a0effff0210ffffc00be60040003a0effff0210ffffc00be60042003a0effff0210ffffc00be60044003a0effff0210ffffc00be60046003a0effff0210ffffc00be60048003a0effff0210ffffc00be6004a003a0effff0210ffffc00be6004c003a0effff0210ffff",
+"f2f0": 176,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "c3"
+},
+{
+"t": 108,
+"y250": 176,
+"m32": 4,
+"d34": 1,
+"cam": [
+2912,
+120
+],
+"hp": 6000,
+"thr": 11,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be6003d003a0effff0210ffffc00be6003f003a0effff0210ffffc00be60041003a0effff0210ffffc00be60043003a0effff0210ffffc00be60045003a0effff0210ffffc00be60047003a0effff0210ffffc00be60049003a0effff0210ffffc00be6004b003a0effff0210ffff",
+"f2f0": 176,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "c3"
+},
+{
+"t": 109,
+"y250": 176,
+"m32": 4,
+"d34": 1,
+"cam": [
+2912,
+120
+],
+"hp": 6000,
+"thr": 10,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be6003c003a0effff0210ffffc00be6003e003a0effff0210ffffc00be60040003a0effff0210ffffc00be60042003a0effff0210ffffc00be60044003a0effff0210ffffc00be60046003a0effff0210ffffc00be60048003a0effff0210ffffc00be6004a003a0effff0210ffff",
+"f2f0": 176,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "c3"
+},
+{
+"t": 110,
+"y250": 176,
+"m32": 4,
+"d34": 1,
+"cam": [
+2912,
+120
+],
+"hp": 6000,
+"thr": 9,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be6003b003a0effff0210ffffc00be6003d003a0effff0210ffffc00be6003f003a0effff0210ffffc00be60041003a0effff0210ffffc00be60043003a0effff0210ffffc00be60045003a0effff0210ffffc00be60047003a0effff0210ffffc00be60049003a0effff0210ffff",
+"f2f0": 176,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "c3"
+},
+{
+"t": 111,
+"y250": 176,
+"m32": 4,
+"d34": 1,
+"cam": [
+2912,
+120
+],
+"hp": 6000,
+"thr": 8,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be6003a003a0effff0210ffffc00be6003c003a0effff0210ffffc00be6003e003a0effff0210ffffc00be60040003a0effff0210ffffc00be60042003a0effff0210ffffc00be60044003a0effff0210ffffc00be60046003a0effff0210ffffc00be60048003a0effff0210ffff",
+"f2f0": 176,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "c3"
+},
+{
+"t": 112,
+"y250": 176,
+"m32": 4,
+"d34": 1,
+"cam": [
+2912,
+120
+],
+"hp": 6000,
+"thr": 7,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be60039003a0effff0210ffffc00be6003b003a0effff0210ffffc00be6003d003a0effff0210ffffc00be6003f003a0effff0210ffffc00be60041003a0effff0210ffffc00be60043003a0effff0210ffffc00be60045003a0effff0210ffffc00be60047003a0effff0210ffff",
+"f2f0": 176,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "c3"
+},
+{
+"t": 113,
+"y250": 176,
+"m32": 4,
+"d34": 1,
+"cam": [
+2912,
+120
+],
+"hp": 6000,
+"thr": 6,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be60038003a0effff0210ffffc00be6003a003a0effff0210ffffc00be6003c003a0effff0210ffffc00be6003e003a0effff0210ffffc00be60040003a0effff0210ffffc00be60042003a0effff0210ffffc00be60044003a0effff0210ffffc00be60046003a0effff0210ffff",
+"f2f0": 176,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "c3"
+},
+{
+"t": 114,
+"y250": 176,
+"m32": 4,
+"d34": 1,
+"cam": [
+2912,
+120
+],
+"hp": 6000,
+"thr": 5,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be60037003a0effff0210ffffc00be60039003a0effff0210ffffc00be6003b003a0effff0210ffffc00be6003d003a0effff0210ffffc00be6003f003a0effff0210ffffc00be60041003a0effff0210ffffc00be60043003a0effff0210ffffc00be60045003a0effff0210ffff",
+"f2f0": 176,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "c3"
+},
+{
+"t": 115,
+"y250": 176,
+"m32": 4,
+"d34": 1,
+"cam": [
+2912,
+120
+],
+"hp": 6000,
+"thr": 4,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be60036003a0effff0210ffffc00be60038003a0effff0210ffffc00be6003a003a0effff0210ffffc00be6003c003a0effff0210ffffc00be6003e003a0effff0210ffffc00be60040003a0effff0210ffffc00be60042003a0effff0210ffffc00be60044003a0effff0210ffff",
+"f2f0": 176,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "c3"
+},
+{
+"t": 116,
+"y250": 176,
+"m32": 4,
+"d34": 1,
+"cam": [
+2912,
+120
+],
+"hp": 6000,
+"thr": 3,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be60035003a0effff0210ffffc00be60037003a0effff0210ffffc00be60039003a0effff0210ffffc00be6003b003a0effff0210ffffc00be6003d003a0effff0210ffffc00be6003f003a0effff0210ffffc00be60041003a0effff0210ffffc00be60043003a0effff0210ffff",
+"f2f0": 176,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "c3"
+},
+{
+"t": 117,
+"y250": 176,
+"m32": 4,
+"d34": 1,
+"cam": [
+2912,
+120
+],
+"hp": 6000,
+"thr": 2,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be60034003a0effff0210ffffc00be60036003a0effff0210ffffc00be60038003a0effff0210ffffc00be6003a003a0effff0210ffffc00be6003c003a0effff0210ffffc00be6003e003a0effff0210ffffc00be60040003a0effff0210ffffc00be60042003a0effff0210ffff",
+"f2f0": 176,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "c3"
+},
+{
+"t": 118,
+"y250": 176,
+"m32": 4,
+"d34": 1,
+"cam": [
+2912,
+120
+],
+"hp": 6000,
+"thr": 1,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be60033003a0effff0210ffffc00be60035003a0effff0210ffffc00be60037003a0effff0210ffffc00be60039003a0effff0210ffffc00be6003b003a0effff0210ffffc00be6003d003a0effff0210ffffc00be6003f003a0effff0210ffffc00be60041003a0effff0210ffff",
+"f2f0": 176,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "c3"
+},
+{
+"t": 119,
+"y250": 176,
+"m32": 4,
+"d34": 1,
+"cam": [
+2912,
+120
+],
+"hp": 6000,
+"thr": 0,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be60032003a0effff0210ffffc00be60034003a0effff0210ffffc00be60036003a0effff0210ffffc00be60038003a0effff0210ffffc00be6003a003a0effff0210ffffc00be6003c003a0effff0210ffffc00be6003e003a0effff0210ffffc00be60040003a0effff0210ffff",
+"f2f0": 176,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "c3"
+},
+{
+"t": 120,
+"y250": 176,
+"m32": 4,
+"d34": 1,
+"cam": [
+2912,
+120
+],
+"hp": 6000,
+"thr": 65535,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be60031003a0effff0210ffffc00be60033003a0effff0210ffffc00be60035003a0effff0210ffffc00be60037003a0effff0210ffffc00be60039003a0effff0210ffffc00be6003b003a0effff0210ffffc00be6003d003a0effff0210ffffc00be6003f003a0effff0210ffff",
+"f2f0": 176,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "c3"
+},
+{
+"t": 121,
+"y250": 176,
+"m32": 4,
+"d34": 1,
+"cam": [
+2912,
+120
+],
+"hp": 6000,
+"thr": 65534,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be60030003a0effff0210ffffc00be60032003a0effff0210ffffc00be60034003a0effff0210ffffc00be60036003a0effff0210ffffc00be60038003a0effff0210ffffc00be6003a003a0effff0210ffffc00be6003c003a0effff0210ffffc00be6003e003a0effff0210ffff",
+"f2f0": 176,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "c3"
+},
+{
+"t": 122,
+"y250": 176,
+"m32": 4,
+"d34": 1,
+"cam": [
+2912,
+120
+],
+"hp": 6000,
+"thr": 65533,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be6002f003a0effff0210ffffc00be60031003a0effff0210ffffc00be60033003a0effff0210ffffc00be60035003a0effff0210ffffc00be60037003a0effff0210ffffc00be60039003a0effff0210ffffc00be6003b003a0effff0210ffffc00be6003d003a0effff0210ffff",
+"f2f0": 176,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "c3"
+},
+{
+"t": 123,
+"y250": 176,
+"m32": 4,
+"d34": 1,
+"cam": [
+2912,
+120
+],
+"hp": 6000,
+"thr": 65532,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be6002e003a0effff0210ffffc00be60030003a0effff0210ffffc00be60032003a0effff0210ffffc00be60034003a0effff0210ffffc00be60036003a0effff0210ffffc00be60038003a0effff0210ffffc00be6003a003a0effff0210ffffc00be6003c003a0effff0210ffff",
+"f2f0": 176,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "c3"
+},
+{
+"t": 124,
+"y250": 176,
+"m32": 4,
+"d34": 1,
+"cam": [
+2912,
+120
+],
+"hp": 6000,
+"thr": 65531,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be6002d003a0effff0210ffffc00be6002f003a0effff0210ffffc00be60031003a0effff0210ffffc00be60033003a0effff0210ffffc00be60035003a0effff0210ffffc00be60037003a0effff0210ffffc00be60039003a0effff0210ffffc00be6003b003a0effff0210ffff",
+"f2f0": 176,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "c3"
+},
+{
+"t": 125,
+"y250": 176,
+"m32": 4,
+"d34": 1,
+"cam": [
+2912,
+120
+],
+"hp": 6000,
+"thr": 65530,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be6002c003a0effff0210ffffc00be6002e003a0effff0210ffffc00be60030003a0effff0210ffffc00be60032003a0effff0210ffffc00be60034003a0effff0210ffffc00be60036003a0effff0210ffffc00be60038003a0effff0210ffffc00be6003a003a0effff0210ffff",
+"f2f0": 176,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "c3"
+},
+{
+"t": 126,
+"y250": 176,
+"m32": 4,
+"d34": 1,
+"cam": [
+2912,
+120
+],
+"hp": 6000,
+"thr": 65529,
+"boulder": "2b02de00ffffffff",
+"worm": "c00be6002b003a0effff0210ffffc00be6002d003a0effff0210ffffc00be6002f003a0effff0210ffffc00be60031003a0effff0210ffffc00be60033003a0effff0210ffffc00be60035003a0effff0210ffffc00be60037003a0effff0210ffffc00be60039003a0effff0210ffff",
+"f2f0": 176,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "c3"
+},
+{
+"t": 127,
+"y250": 176,
+"m32": 4,
+"d34": 1,
+"cam": [
+2912,
+120
+],
+"hp": 6000,
+"thr": 65528,
+"boulder": "b00beb0001000000",
+"worm": "c00be6002a003a0effff0210ffffc00be6002c003a0effff0210ffffc00be6002e003a0effff0210ffffc00be60030003a0effff0210ffffc00be60032003a0effff0210ffffc00be60034003a0effff0210ffffc00be60036003a0effff0210ffffc00be60038003a0effff0210ffff",
+"f2f0": 176,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "c3"
+},
+{
+"t": 128,
+"y250": 176,
+"m32": 4,
+"d34": 1,
+"cam": [
+2912,
+120
+],
+"hp": 6000,
+"thr": 65527,
+"boulder": "b60bec0002000000",
+"worm": "c00be60029003a0effff0210ffffc00be6002b003a0effff0210ffffc00be6002d003a0effff0210ffffc00be6002f003a0effff0210ffffc00be60031003a0effff0210ffffc00be60033003a0effff0210ffffc00be60035003a0effff0210ffffc00be60037003a0effff0210ffff",
+"f2f0": 176,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "c3"
+},
+{
+"t": 129,
+"y250": 176,
+"m32": 4,
+"d34": 1,
+"cam": [
+2912,
+120
+],
+"hp": 6000,
+"thr": 65526,
+"boulder": "bc0bed0003000000",
+"worm": "c00be60028003a0effff0210ffffc00be6002a003a0effff0210ffffc00be6002c003a0effff0210ffffc00be6002e003a0effff0210ffffc00be60030003a0effff0210ffffc00be60032003a0effff0210ffffc00be60034003a0effff0210ffffc00be60036003a0effff0210ffff",
+"f2f0": 176,
+"cur310": 20256,
+"rnd": 0,
+"hero": [
+3168,
+224
+],
+"hook": "c3",
+"ss500": "900695c20000a4003407966600004000740796a600005400c80796fa00002c00f40797260000400034089766000024005808978a000036008e0897c000003c00ca0897fc00002e00f808982a00001a0012099844000056006809989a00005e00c60998f800002e00f409992600005200460a997800002000660a999800002e00940a99c600003000c40a99f600003400f80a9a2a000024001c0b9a4e0000a601c20c9bf400006e01300e9d620000d201ffffffafffffffff",
+"pat": "23450bc000e60000000e0d0f1e0d0c0e0e0d0e0e0c0cfd0cecfefc0dfefdfdfd0dfd0d0c0d2c1d2c3d2e2f2e3e3f3f4f3f30202020302021221112231323131313021302030203020203030303020303030412030303130212131322222222223221312240415151414050404040404050405030404f4f4f2f3f3e3e3e2e2e2e2d2d1d1d2c0d1c0d0d0d0e0d0e0d0d0e0dfe0efe0efefefdfdfdecfdedfefeeeedefeddedfeeefdfeedfdfefdfefdfdfbfcfafcfbebfcfc0c0cfb0c0b0b0c0c0c0c1c1c1c2c1d1e2d1f2e1f3f3020301021213222322332243323222323111313241323241323142324242323132323232323223322332243313231203020201020202f2f2f2e1d2e1d1d0d1d0c0b0b0a0c0cfcfdedfcececddddedceeecfcfd0b0d0bfc0b0b0afb0bfcfc0dfdfdfdedfcedecdddcdceccddddddddedfdedfefdfdfcfbfafbfbfa0afb0b0c0c0c0d0d1e1d1e2d3e3e3f2f2f302f3030302221211222233323241314030302040303f4f4e3f4e3f2e2e3e3e2e1e2d1e2d1d0e0d1d0d0dfdedeeeeffffefe0e0d0d0e0e1e2e3f2f203030403030322232322232222222313321303120301020102010101020201020101010201f1010201020201010102f203030303f3030203020202010202",
+"bum": "060e160e06060e160e060607070700000810080001010101020a120a0202a212a20202020201010101010000081008000008100800000707070706060e160e06060e160e06060605050505050505050504040c140c040c140c0403030303020202020101010101010101010101010101010101010101020a120a02030303040c140c040405050506060e160e160e060606050505050505050504040c140c0404030303020a120a020101010100000000000000070707070707060505050404030302020202020101010101010202020202020202020202020202020202020202020202020202020202ffffffffffffffffffffffffffffffffffffffffffffff"
+}
+]
