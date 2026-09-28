@@ -138,4 +138,21 @@ Spec source: a disassembly of the live code segment, re-read by hand for `CE87`,
 
   ~~At least one more carried value is involved (`UNKNOWN_w2_attract_carryover`)~~ — **closed.** It was a port bug: shots froze during the hero's death burst, whereas the death driver `CS:0x09BB` keeps stepping them. With that fixed and the jaw seeded (3 for the live run, 2 for the older capture), `PJOYG2` matches DOS exactly for the whole demo.
 
+## The deaths, worlds 1–3 `[PROVEN]` live, ported
+
+Each world has its own way in: world 1 via `D91E js`, world 2 via `CE78`, world 3 via `D5E3` → `D5E5`. The shared `CS:0xD923` then:
+- **Turns off the running starburst.** `[0x34D]` = 0.
+- **Sets off seven starbursts.** Two draws each: by = (r & 0x3F) + 0x10, then bx = r & 0x3F; each burst is at (x+bx, y+by).
+- **Sets `[0x374]`** = 0xFC.
+- **Ends guardian mode.** `[0x34]` = 0.
+- **Throws ten items** from the aligned list `DS:0xD90E` at (x+0x18, y+0x28) through `CS:0xD992`, the chest burst's record format, with two draws per item.
+- **Arms the score gate.** `[0x3BE]` = world × 20, and `CS:0xD9CA` is un-RETed.
+- **Plays sfx `0x6422`.**
+
+The gate (main loop `CS:0x02D5`) then pays +500 a tick for those ticks, starting on the death tick, and restores the level music.
+- **World 2** first pops item 0x1F at (0x160, 0x380) (`CS:0xCE78`).
+- **World 3** afterwards un-RETs the corpse gate `CS:0xD557`: the body falls, vy +1 capped at 0x10, to y = 0x70 and stays. It then pops item 0x1F at (0x220, 0x80) and increments the difficulty scalar `[0x365]` (`CS:0xD5F7`, reached by fall-through; see `docs/triggers-and-difficulty.md`).
+
+Proven by forcing deaths live, patching the code for one tick (`gods-web/tools/attract-capture/forcedeath.py`): world 1 via `D866 → D923`, world 3 via `D5C0 → D5E5`. The port matched DOS for 6–8 ticks in the random cursor, starburst array, treasure burst, `[0x374]`, `[0x3BE]`, score and popup arc.
+
 World 4 (`0xC5EA`) is not ported.
