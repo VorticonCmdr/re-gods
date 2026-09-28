@@ -62,7 +62,7 @@ import { WEAPON_SLOTS, MAX_SUBSLOTS, tagFor, allocateShots, armWeapon,
          reloadWorld } from './weapons.js';
 import { spawnVolley, spawnAxeVolley, spawnHunterVolley, spawnTimeBombVolley,
          stepProjectiles, stepHunterArray, stepMagicAxe, stepTimeBomb, timeBombHoldTicks,
-         axeWallAt, bombWallAt, bombGroundAt, newAxeState, newWobble, stepFireball, HANDLERS,
+         axeWallAt, bombWallAt, bombGroundAt, bombCell, newAxeState, newWobble, stepFireball, HANDLERS,
          DECODED_HANDLERS, NULL_HANDLERS, AREA_ENTRIES, ENTRIES_REACHABLE, GROUP_ENTRIES,
          MOVER_WALK,
          muzzle } from './projectiles.js';
@@ -348,6 +348,7 @@ export class Arsenal {
       if (s.weapon === TIME_BOMB_WEAPON) {
         const wallAt = (x, y, dirSign) => bombWallAt(x, y, dirSign, planeB);
         const groundAt = (x, y) => bombGroundAt(x, y, planeB);
+        const cellAt = planeB ? (x, y) => bombCell(x, y, planeB) : null;
         for (let i = 0; i < MOVER_WALK; i++) {
           const p = s.area[i];
           if (!p || p.tag === 0) continue;
@@ -358,7 +359,7 @@ export class Arsenal {
             moved++;
             continue;
           }
-          const r = stepTimeBomb(p, s.bombState, cam, wallAt, groundAt);
+          const r = stepTimeBomb(p, s.bombState, cam, wallAt, groundAt, cellAt);
           if (r.sfx) bombSfx.push(r.sfx);
           if (r.status === 'explode') {
             this.bombFragments = (this.bombFragments || 0) + r.fragments;

@@ -1002,59 +1002,40 @@ export const axeSprite = (weaponFrame, i, landed = false) =>
  * signed velocity pair for the hunter. Three encodings, one field.
  *
  * Flight uses the globals DS:0x1c8 (vx), DS:0x1ca (vy), DS:0x1cc (state), not
- * per-projectile storage — safe because the time bomb's max-shots is 1.
+ * per-projectile storage — safe because the time bomb's max-shots is 1. The
+ * spawn (CS:0x9A54-0x9A60) sets vx = +-4, vy = 0, [0x1cc] = -1.
  *
- *   gravity   A0A8  inc [0x1ca] capped at 4, ONLY when (fuse + 2) & 3 == 0
- *   vx decay  A130  dec/inc [0x1c8] toward zero, on the SAME gate as gravity
- *   wall      A16C  neg word [0x1c8]      <- NEGATES, unlike the axe's fixed 4
- *   land      A234  and bx,~0xf ; [0x1ca] = 0 ; [0x1cc] = 0x64
+ * ⚠️ **Rewritten 2026-09-28 from a read of the whole mover, CS:0xA058-0xA24D**
+ * `[STATIC]`. The earlier model applied gravity, vx decay and the ground test
+ * on every airborne tick and bounced forever; the bytes split on vx instead:
  *
- * ⚠️ **CORRECTED, the same session.** This used to say vx decays "every 4th
- * tick" on its OWN gate, `(fuse & 3) === 0`. Fresh disassembly of the whole
- * mover (`CS:0xA058`-`0xA24D`, not just the previously-cited fragments) shows
- * the vx-decay gate (`CS:0xA129`/`0xA176`) reads the SAME register the
- * gravity gate (`CS:0xA0A3`) already left at `(fuse + 2) & 3` — `DX` is
- * mutated once at the top of the tick and never reloaded before either test.
- * Gravity and vx-decay fire on the IDENTICAL ticks, not offset ones. This
- * port's `stepTimeBomb` had carried the wrong (unoffset) gate since it was
- * first written, undetected because the function was never wired into
- * `Arsenal.step()` and so never exercised.
+ * vx != 0 (CS:0xA09E), the throw:
+ *   A0A0  g = ((fuse + 2) & 3) == 0 ; if g: vy = min(4, vy + 1)
+ *   A0B9  if (y + vy) crosses a 16-px row, test the cells at the OLD (x, y):
+ *         two rows below solid and one row below open, or (x & 0x1f >= 0x10)
+ *         the same pair one column right (+0x101 solid, +0x81 open) ->
+ *   A0F1  LAND: y = (y + vy) & ~0xf, x unmoved, vx = vy = [0x1cc] = 0 (at
+ *         rest, no settling bounce) and the thud plays at once
+ *   A118  else y += vy, x += vx; vx steps toward 0 on the same g
+ *         (A130 / A17D); the wall probe at the new (x, y), column rounded up
+ *         when vx was >= 0 (A139 `add cx,0xf`) and down when < 0, solid at
+ *         the cell or one row below -> thud, vx = -vx (A165-A16C)
+ * vx == 0 (CS:0xA188):
+ *   [0x1cc] < 0   A1EC  y += vy with NO gravity step, then the ordinary ground
+ *                       test at the new y (A211-A232, bombGroundAt): land
+ *                       with y &= ~0xf, vy = 0, [0x1cc] = 0x64 (silent)
+ *   [0x1cc] == 0  A191  at rest: nothing moves
+ *   [0x1cc] == 0x64     A1D7  thud, y -= 4, [0x1cc] = 1
+ *   [0x1cc] 1..23       A1A1  thud when SS:0x5450[n] != 0 (n = 9, 16, 21:
+ *                       the first step of arcs 2-4), y += DS:0xdf2c[n], then
+ *                       [0x1cc] = n + 1, or 0 (rest) once n reached 0x17. So
+ *                       entry 0 is never read and the bounce nets +4, undoing
+ *                       the -4 of the landing tick.
  *
- * ⚠️ The wall probe rounds x with `add cx,0xf` (CS:0xA139) when moving RIGHT
- * only; moving LEFT (CS:0xA181-0xA186) skips that add and floors plainly —
- * a FOURTH rounding convention in this file, not merely a third, and it
- * differs by direction within this ONE mover. The probe then tests BOTH the
- * cell at that column/row (`CS:0xA158`) and the cell one row below it
- * (`CS:0xA15D`, `+0x80`) — a wall OR an unsupported ledge both bounce it,
- * playing `BOMB_THUD_SFX` (`CS:0xA165`).
- *
- * The GROUND test run every ordinary tick (`CS:0xA1F0`-`0xA248`, once the
- * bomb is not mid-row-crossing) probes the SAME `row*128+col` table this
- * project already uses for `planeB`: land when the cell one row below is
- * solid and the current cell is not (`CS:0xA211`-`0xA21B`), OR — only when
- * the X sub-tile is in the right half of its cell — when the diagonal
- * down-right neighbour is solid and its same-row neighbour is not
- * (`CS:0xA21D`-`0xA232`, the same "which corner" shape `axeWallAt` already
- * uses for the magic axe). Landing snaps Y to the tile row and sets
- * `state.phase = BOMB_LANDED`; the actual "just landed" thud
- * (`BOMB_THUD_SFX`, `CS:0xA1D7`) doesn't play until the FOLLOWING tick, when
- * `BOMB_LANDED` transitions to phase 0 — landing itself is silent.
- *
- * ⚠️ **Disclosed, not modelled**: a THIRD, more elaborate ground/landing
- * branch (`CS:0xA0B9`-`0xA0F1`) that runs only on the specific tick the
- * bomb's Y crosses a tile-row boundary, testing TWO rows below plus a
- * diagonal case with its own separate geometry — an edge-case shortcut for
- * landing mid-fall on a ledge corner, not a different mechanism from the
- * ordinary ground test above, and rare enough (one specific tick, one
- * specific row-boundary crossing) that this port uses the ordinary
- * per-tick ground test unconditionally instead. Also disclosed: a per-phase
- * repeat of `BOMB_THUD_SFX` during the settling bounce, gated on a byte
- * table this project could not resolve statically (`SS:0x5450`, in the
- * STACK segment rather than the code/data segment every other cited table
- * in this project lives in — its live per-run contents aren't recoverable
- * from the EXE image alone). And the ten-fragment debris burst
- * (`BOMB_FRAGMENTS`) is reported as a count, not rendered as particles —
- * this port has no fragment-particle system to feed it.
+ * SS:0x5450 is initialised data in the image (file 0x249B0, the same SS
+ * base as guardian4.js's SS:0x5024), not live-only state as this header
+ * used to say. The ten-fragment debris burst (`BOMB_FRAGMENTS`) is reported
+ * as a count, not rendered as particles.
  */
 export const FUSE_START = 0x2f;           // 47 ticks ~ 3.1 s
 export const FUSE_EXPLODE = -1;           // CS:0xa273 `cmp dx,0xffff / jz`
@@ -1062,6 +1043,12 @@ export const BOMB_FRAGMENTS = 10;         // CS:0xa286 `mov cx,0x0a`
 export const BOMB_SPRITE_BASE = 0x153;    // 339 = PINNED_SPRITE[1]
 export const BOMB_GRAVITY_CAP = 4;        // CS:0xa0ac
 export const BOMB_LANDED = 0x64;          // CS:0xa240
+export const BOMB_REST = 0;               // CS:0xa18f `jnz` not taken: nothing moves
+/* SS:0x5450 (image file 0x249B0), 24 bytes: a thud on each settling arc's
+ * first step. Only nonzero-ness is read (CS:0xA1A6). */
+export const BOMB_THUD_AT = Object.freeze([
+  0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 3, 0, 0,
+]);
 /* CORRECTED from the bare low byte `0x22` — see the header above. */
 export const BOMB_DETONATE_SFX = 0x1022;  // CS:0xa27c
 /* The wall bounce (CS:0xA165) and the landed->settling transition
@@ -1070,7 +1057,8 @@ export const BOMB_THUD_SFX = 0x0609;      // CS:0xa1d8 / 0xa165
 
 /* DS:0xdf2c — 24 signed bytes, the damped settling bounce after landing.
  * Four arcs of falling amplitude: 9 entries peaking at 4, then 7 at 3, then
- * 5 at 2, then 3 at 1. Indexed by DS:0x1cc, which resets to 0 past 23. */
+ * 5 at 2, then 3 at 1. Indexed by DS:0x1cc = 1..23; entry 0 is never read,
+ * and past 23 the bomb rests. */
 export const BOMB_BOUNCE = [
   -4, -3, -2, -1, 0, 1, 2, 3, 4,
   -3, -2, -1, 0, 1, 2, 3,
@@ -1083,7 +1071,7 @@ export const BOMB_BOUNCE = [
  * the ordinary per-tick ground probe, and CS:0xA134 — the wall/ledge bounce
  * probe. Both share the `row*128+col` addressing `axeWallAt` already uses.
  */
-function bombCell(x, y, planeB) {
+export function bombCell(x, y, planeB) {
   const col = (x & ~0x1f) >> 5, row = (y & ~0xf) >> 4;
   if (col < 0 || col > 127 || row < 0 || row > 63) return null;
   const idx = row * 128 + col;
@@ -1136,11 +1124,12 @@ export function timeBombHoldTicks(extra) {
 
 /**
  * CS:0xa058 — one tick. `state` carries the three globals for this slot
- * ({phase, vx, vy}); safe as one object per slot (not per record) because
- * the time bomb's max-shots is 1. `wallAt`/`groundAt` should be
- * `bombWallAt`/`bombGroundAt` above, bound to a `planeB`.
+ * ({phase = DS:0x1cc, vx, vy}); safe as one object per slot (not per record)
+ * because the time bomb's max-shots is 1. `wallAt`/`groundAt` are
+ * `bombWallAt`/`bombGroundAt`, and `cellAt(x, y)` is `bombCell` (all bound to
+ * a `planeB`); each may be null, meaning open air.
  */
-export function stepTimeBomb(p, state, cam, wallAt, groundAt) {
+export function stepTimeBomb(p, state, cam, wallAt, groundAt, cellAt = null) {
   if (!p || p.tag === 0) return { status: 'empty' };
   if (p.dir < 0) {                                    // CS:0xa06b
     return { status: p.dir === FUSE_EXPLODE ? 'explode' : 'spent',
@@ -1148,30 +1137,42 @@ export function stepTimeBomb(p, state, cam, wallAt, groundAt) {
              sfx: p.dir === FUSE_EXPLODE ? BOMB_DETONATE_SFX : null };
   }
   let sfx = null;
-  if (state.phase < 0) {                              // still flying
-    /* CS:0xA0A3/0xA129/0xA176 — gravity and the vx decay share ONE gate,
-     * `(fuse + 2) & 3 === 0`; see the header's correction above. */
-    const tick4 = ((p.dir + 2) & 3) === 0;
-    if (tick4) {                                      // CS:0xa0a0
-      state.vy = Math.min(BOMB_GRAVITY_CAP, state.vy + 1);
+  if (state.vx !== 0) {                               // CS:0xa094 -> 0xa09e
+    const g = ((p.dir + 2) & 3) === 0;                // CS:0xa0a0-0xa0a6
+    if (g) state.vy = Math.min(BOMB_GRAVITY_CAP, state.vy + 1);
+    const ny = p.y + state.vy;
+    if ((ny & ~0xf) !== (p.y & ~0xf) && cellAt) {     // CS:0xa0b9-0xa0c9
+      const at = cellAt(p.x, p.y);                    // SI from the OLD x, y (CS:0xa073)
+      const land = at && ((at(256) && !at(128))       // CS:0xa0cb-0xa0d7
+        || ((p.x & 0x1f) >= 0x10 && at(257) && !at(129)));   // CS:0xa0d9-0xa0ef
+      if (land) {                                     // CS:0xa0f1-0xa115
+        p.y = ny & ~0xf;
+        state.vx = 0; state.vy = 0; state.phase = BOMB_REST;
+        p.dir -= 1;
+        return { status: 'fly', sprite: BOMB_SPRITE_BASE + (p.dir & 3), sfx: BOMB_THUD_SFX };
+      }
     }
-    p.y += state.vy;
-    if (tick4) {                                       // CS:0xa129/0xa176
-      state.vx += state.vx > 0 ? -1 : (state.vx < 0 ? 1 : 0);
-    }
-    p.x += state.vx;
-    if (wallAt && wallAt(p.x, p.y, state.vx >= 0 ? 1 : -1)) {  // CS:0xa16c
-      state.vx = -state.vx;
+    p.y = ny;                                         // CS:0xa118
+    const right = state.vx >= 0;                      // CS:0xa122 `js`, before the decay
+    const nx = p.x + state.vx;                        // CS:0xa11e
+    if (g) state.vx += right ? -1 : 1;                // CS:0xa130 / 0xa17d
+    if (wallAt && wallAt(nx, p.y, right ? 1 : -1)) {  // CS:0xa134-0xa162
       sfx = BOMB_THUD_SFX;
+      state.vx = -state.vx;                           // CS:0xa16c
     }
-    if (groundAt && groundAt(p.x, p.y)) {              // CS:0xa234
-      p.y &= ~0xf; state.vy = 0; state.phase = BOMB_LANDED;
+    p.x = nx;
+  } else if (state.phase < 0) {                       // CS:0xa1ec, no gravity step
+    p.y += state.vy;
+    if (groundAt && groundAt(p.x, p.y)) {             // CS:0xa211-0xa232
+      p.y &= ~0xf; state.vy = 0; state.phase = BOMB_LANDED;   // CS:0xa234-0xa240
     }
-  } else if (state.phase === BOMB_LANDED) {           // CS:0xa1d7 — just landed
-    state.phase = 0; p.y -= 4; sfx = BOMB_THUD_SFX;
-  } else {                                            // the settling bounce
-    p.y += BOMB_BOUNCE[state.phase];
-    state.phase = state.phase + 1 >= BOMB_BOUNCE.length ? 0 : state.phase + 1;
+  } else if (state.phase === BOMB_LANDED) {           // CS:0xa1d7
+    sfx = BOMB_THUD_SFX; p.y -= 4; state.phase = 1;
+  } else if (state.phase !== BOMB_REST) {             // CS:0xa194-0xa1d5
+    const n = state.phase;
+    if (BOMB_THUD_AT[n]) sfx = BOMB_THUD_SFX;         // CS:0xa1a1-0xa1b3
+    p.y += BOMB_BOUNCE[n];
+    state.phase = n >= 0x17 ? BOMB_REST : n + 1;      // CS:0xa1c3-0xa1cf
   }
   p.dir -= 1;                                         // CS:0xa261 — the fuse
   return { status: 'fly', sprite: BOMB_SPRITE_BASE + (p.dir & 3), sfx };

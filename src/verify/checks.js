@@ -229,7 +229,7 @@ import { SLOT_STRIDE, PROJECTILE_SIZE, GROUP_STRIDE, GROUP_ENTRIES,
          spawnHunterVolley, stepHunterCoast, HUNTER_COAST_SENTINEL,
          HUNTER_COAST_TICK, HUNTER_COAST_REAIM_AT,
          FUSE_START, FUSE_EXPLODE, BOMB_FRAGMENTS, BOMB_SPRITE_BASE,
-         BOMB_BOUNCE, BOMB_GRAVITY_CAP, BOMB_LANDED, stepTimeBomb, timeBombHoldTicks,
+         BOMB_BOUNCE, BOMB_GRAVITY_CAP, BOMB_LANDED, BOMB_REST, bombCell, stepTimeBomb, timeBombHoldTicks,
          BOMB_DETONATE_SFX, BOMB_THUD_SFX, bombWallAt, bombGroundAt,
          spawnTimeBombVolley,
          PROJECTILE_VELOCITY, setWeaponArc, resetWeaponArc,
@@ -5754,6 +5754,68 @@ export async function checkWeaponsProjectiles(fetchRaw) {
       "4th-tick counter of vx's own");
   }
 
+  /* ── the whole mover, CS:0xA058-0xA24D, split on vx (2026-09-28) ─────── */
+  {
+    const pb = new Uint8Array(128 * 64);
+    const solid = (col, row) => { pb[row * 128 + col] = 1; };
+    const wallAt = (x, y, d) => bombWallAt(x, y, d, pb);
+    const groundAt = (x, y) => bombGroundAt(x, y, pb);
+    const cellAt = (x, y) => bombCell(x, y, pb);
+    /* A dropped bomb (vx 0) falls at a constant vy: no gravity step. */
+    {
+      const p = { tag: 1, x: 64, y: 0, dir: FUSE_START };
+      const st = { vx: 0, vy: 2, phase: -1 };
+      for (let t = 0; t < 8; t++) stepTimeBomb(p, st, { x: 0, y: 0 }, null, null, null);
+      check('with vx 0 the bomb falls at a constant vy (CS:0xA1EC has no gravity step)',
+        st.vy === 2 && p.y === 16);
+    }
+    /* vx 0 fall onto a floor: land silently into 0x64, then the thud and y-4,
+     * then 23 bounce steps (entries 1..23) with thuds on 9, 16, 21, then rest. */
+    {
+      pb.fill(0); solid(2, 10);                 // floor row 10 under column 2
+      const p = { tag: 1, x: 64, y: 140, dir: FUSE_START };
+      const st = { vx: 0, vy: 4, phase: -1 };
+      const r0 = stepTimeBomb(p, st, { x: 0, y: 0 }, wallAt, groundAt, cellAt);
+      const landed = st.phase === BOMB_LANDED && p.y === 144 && r0.sfx === null;
+      const r1 = stepTimeBomb(p, st, { x: 0, y: 0 }, wallAt, groundAt, cellAt);
+      const thudFirst = r1.sfx === BOMB_THUD_SFX && p.y === 140 && st.phase === 1;
+      const thuds = [];
+      for (let n = 1; n <= 23; n++) {
+        const r = stepTimeBomb(p, st, { x: 0, y: 0 }, wallAt, groundAt, cellAt);
+        if (r.sfx === BOMB_THUD_SFX) thuds.push(n);
+      }
+      const yRest = p.y;
+      stepTimeBomb(p, st, { x: 0, y: 0 }, wallAt, groundAt, cellAt);
+      check('a vx-0 landing is silent, sets 0x64; the next tick thuds and lifts 4 px',
+        landed && thudFirst, `${p.y}`);
+      check('the settle reads DS:0xDF2C entries 1..23 (never 0), thuds on 9, 16, 21 '
+        + '(SS:0x5450), nets +4 and then RESTS (no endless bounce)',
+        thuds.join() === '9,16,21' && yRest === 144 && st.phase === BOMB_REST && p.y === 144,
+        `thuds ${thuds.join()} y ${yRest} phase ${st.phase}`);
+    }
+    /* A thrown bomb crossing into a new row with two rows below solid and one
+     * open lands at once: vx, vy and [0x1cc] all 0, thud now, no bounce. */
+    {
+      pb.fill(0); solid(2, 12);                 // two rows below row 10
+      const p = { tag: 1, x: 64, y: 160 + 12, dir: 0x2e };   // row 10, g true this tick
+      const st = { vx: 4, vy: 3, phase: -1 };
+      const r = stepTimeBomb(p, st, { x: 0, y: 0 }, wallAt, groundAt, cellAt);
+      check('a thrown bomb crossing a row onto a ledge lands at once (CS:0xA0F1): '
+        + 'x unmoved, y snapped, vx = vy = [0x1cc] = 0, thud this tick',
+        p.x === 64 && p.y === 176 && st.vx === 0 && st.vy === 0 && st.phase === BOMB_REST
+        && r.sfx === BOMB_THUD_SFX, `${p.x},${p.y} vx ${st.vx} phase ${st.phase}`);
+    }
+    /* The ordinary ground test does not run while vx != 0. */
+    {
+      pb.fill(0); solid(2, 11);
+      const p = { tag: 1, x: 64, y: 160, dir: 0x2f };
+      const st = { vx: 4, vy: 0, phase: -1 };
+      stepTimeBomb(p, st, { x: 0, y: 0 }, wallAt, groundAt, cellAt);
+      check('while vx != 0 only the row-crossing test can land it (no per-tick ground test)',
+        st.phase === -1 && p.y === 160);
+    }
+  }
+
   /* ── the spawn handler, CS:0x9a51 (right) / 0x9a7a (left) ─────────────── */
   {
     const right = spawnTimeBombVolley({ x: 100, y: 200 }, 7, true);
@@ -9388,12 +9450,12 @@ export async function checkWeaponsProjectiles(fetchRaw) {
       `appears exactly ONCE in the whole program, so the two tables were not ` +
       `independently corroborated until this read`);
 
-    check(`the terminal state CLAMPS at 24, unlike the time bomb's own wrap`,
+    check(`the terminal state CLAMPS at 24`,
       BOUNCE_TERMINAL === 24 && BOUNCE_TERMINAL === BOMB_BOUNCE.length,
       `CS:0x1420 \`mov dl,0x18\` pins the dirty byte at 24 once it reaches ` +
-      `the table's own length, where the time bomb's mover (CS:0x142F ` +
-      `wraps to phase 0 instead) recycles the SAME table forever. One table, ` +
-      `two different consumers with different loop shapes`);
+      `the table's own length. (This note used to say the time bomb recycles ` +
+      `the table forever; it does not: CS:0xA1CF sets [0x1cc] = 0, at rest, ` +
+      `after entry 23.)`);
 
     /* ── The category gate: weapons and cat<3 fall, cat>=3 never visibly
      * moves — CS:0x1526/0x1613 cache-and-restore the object's own pre-tick
