@@ -17,8 +17,11 @@ const STATE_OF = { joyl1: 0, joyl2: 2, joyg2: 3, joyl3: 4 };
 const SWEEPS = { joyl1: 'joyl1.sweep.json', joyl2: 'joyl2.sweep.json',
                  joyg2: 'joyg2.sweep.2-470.json', joyl3: 'joyl3.sweep.92-1500.json' };
 const GRAVITY = { joyl3: 5 };
+/* The world-2 jaw DS:0x2F0, which no fight initialises (guardian.js): the
+ * value the PJOYG2 sweep's cycle carried in. */
+const JAW = { joyg2: 2 };
 
-export async function compareSweeps({ ids = null, demos = Object.keys(SWEEPS), show = 12 } = {}) {
+export async function compareSweeps({ ids = null, demos = Object.keys(SWEEPS), show = 12, jaw = JAW } = {}) {
   const g = window.__gods;
   const keep = ids && new Set(ids);
   const out = {};
@@ -40,7 +43,9 @@ export async function compareSweeps({ ids = null, demos = Object.keys(SWEEPS), s
     const inject = (c) => { while (pend.length && pend[0].cursor <= c) { const e = pend.shift(); g.setRandom(e.hex, e.r); } };
     inject(0);
     const got = new Map();
+    let jawSet = jaw[name] === undefined;
     for (let i = 0; i < 5000; i++) {
+      if (!jawSet && g.guardianRaw()) { g.guardianRaw().jaw = jaw[name]; jawSet = true; }
       const [s] = await g.stepTicks(1);
       if (!s.attract || s.attract.state !== STATE_OF[name]) break;
       const c = s.attract.cursor;

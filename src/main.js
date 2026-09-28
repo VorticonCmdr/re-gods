@@ -1368,6 +1368,11 @@ const guardianTables = {
               audio.play(LEVEL_START_SFX);                           // CS:0x0902
               audio.play(INVULN_LOOP_SFX);                           // CS:0x0907, the aura's loop
               audio.music('fadeTo', levelMusicVolume(respawnWorld)); // CS:0x091C-0x0921
+              /* CS:0x0926 `jmp 0x11b` -> 0x0126: the loop head plays the
+               * aura's loop AGAIN while [0x172] is set (it always is after a
+               * respawn), else stops it. [PROVEN] against the PJOYG2 sweep:
+               * two 0x280 per respawn, from 0x090D and 0x0134. */
+              if (fx.invuln > 0) audio.play(INVULN_LOOP_SFX); else audio.stop(INVULN_LOOP_STOP);
             }, true));
             musicStartTicks = 0;                                     // CS:0x0917 [0x3E8] = 0xFE
             respawnTick = true;                                      // CS:0x08F5 call 0x921B
@@ -2004,8 +2009,9 @@ const guardianTables = {
         respawnTick = true;
         afterRespawnTick.push(() => waitSfx(() => {          // CS:0x06A2-0x06A9
           audio.play(LEVEL_START_SFX);
-          /* -> CS:0x0111 ... 0x0126: a shield bought in the shop plays its loop. */
-          if (fx.invuln > 0) audio.play(INVULN_LOOP_SFX);
+          /* -> CS:0x0111 ... 0x0126: a shield bought in the shop plays its
+           * loop; otherwise the loop is stopped (CS:0x0137-0x0139). */
+          if (fx.invuln > 0) audio.play(INVULN_LOOP_SFX); else audio.stop(INVULN_LOOP_STOP);
         }));
         musicStartTicks = LEVEL_MUSIC_DELAY;
       },
