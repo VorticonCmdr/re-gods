@@ -173,6 +173,9 @@ export class Starburst {
       placed++; slot++;
     }
     this.bursts++;
+    /* CS:0xA4B0-0xA4B4: every spawn that passed the gate sounds 0x1427 at
+     * once, inside the spawn, even with the particle array full. */
+    if (this.onSpawn) this.onSpawn();
     return placed;
   }
 

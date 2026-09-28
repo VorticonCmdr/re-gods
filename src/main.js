@@ -42,7 +42,7 @@ import { spriteForType, parseObjectCategories, sortForDraw, isDeadType,
          ObjectAnimClock, animatedObjectSprite, allocObject } from './game/objects.js';
 import { parseObjectRecords, Score, Purse, TreasureBurst,
          INVENTORY_EMPTY } from './game/treasure.js';
-import { CONSUMABLES, WEAPON_ARCS, INVULN_TICKS_SPAWN } from './game/consumables.js';
+import { CONSUMABLES, WEAPON_ARCS, INVULN_TICKS_SPAWN, handlerSfx } from './game/consumables.js';
 import { Starburst, SPRITE_BASE as SB_SPRITE, SPAWN_SFX, setStarburstGravityPhase } from './game/starburst.js';
 import { Destructibles } from './game/destructible.js';
 import { resetWeaponArc, setWeaponArc, projectileSprite, FIRE_SFX,
@@ -105,7 +105,7 @@ import { TitleMenu, PasswordEntry, NameEntry, HiscoreTable, HISCORE_TABLE_TICKS,
 import { DEFAULT_TABLE, encodeScoreBytes, rankOf, insertAt, bcdToNumber } from './formats/hiscores.js';
 import { decodeJoyRecording } from './formats/joy.js';
 import { CYCLE, JOYG_SHOWCASE_SPAWN, JOYG_SHOWCASE_LOADOUT, fileNameFor, nextState } from './game/attract.js';
-import { ShopScreen, BUY_CONFIRM_SFX, MOVE_SFX as SHOP_MOVE_SFX } from './game/shop.js';
+import { ShopScreen, BUY_CONFIRM_SFX, MONEY_TICK_SFX, MOVE_SFX as SHOP_MOVE_SFX } from './game/shop.js';
 import { Intro, buildIntroAssets } from './game/intro.js';
 import { TallyScreen, CHA_CHING_SFX, tallyFanfareSfx } from './game/tally.js';
 import { WebAudioBus } from './audio/audio-bus.js';
@@ -780,10 +780,14 @@ const guardianTables = {
    * with the AdLib driver's draws, would play out differently, as they
    * would in DOS. */
   let sfxTrace = null;   // ?debug: ids played since the last snap()
+  /* ?debug: the tape cursor a shop pass reads (the shop runs 4 passes per 3
+   * ticks, one tape entry each, and the live sweeps log each sound under its
+   * own pass's DS:0x282), so the trace can attribute shop sounds exactly. */
+  let sfxAt = null;
   {
     const rawPlay = audio.play.bind(audio);
     audio.play = (id) => {
-      if (sfxTrace) sfxTrace.push(id);
+      if (sfxTrace) sfxTrace.push(sfxAt === null ? id : `${id.toString(16)}@${sfxAt}`);
       const rnd = audio.driver !== 'roland' && sfxDrawsRandom(id) ? rng.next() : undefined;
       return rawPlay(id, rnd);
     };
@@ -985,6 +989,12 @@ const guardianTables = {
    * CS:0x0297/0x029A, the score gate CS:0x02D5, the message countdown
    * CS:0x02DB and the tally check CS:0x02F0. [STATIC], read side by side. */
   let respawnTick = false;
+  /* What CS:0x08F5 and CS:0x6DCB run AFTER their call to CS:0x921B: the
+   * respawn tick polls the tape first, then the level-start sound plays.
+   * Flushed at the end of the respawn tick below. [PROVEN] against the
+   * PJOYL2/PJOYL3 sweeps: the shop's exit sound (CS:0x06A9) lands one tape
+   * cursor after the exit pass. */
+  let afterRespawnTick = [];
   /* CS:0xA461 — the starburst potion's 80-slot particle array. It is a real
    * damage source (tag 0xFC), so it lives beside the projectiles rather than
    * with the cosmetics. */
@@ -993,13 +1003,12 @@ const guardianTables = {
    * CURRENT `rng` (which a level load replaces), not a generator of their own. */
   const sharedRandom = { next: () => rng.next() };
   let starburst = new Starburst(sharedRandom);
-  /* `starburst.bursts` only counts real spawner runs (starburst.js: "how
-   * many times the spawner actually ran"), incremented once per call
-   * regardless of how many of the 8 particles it seeds — edge-detecting it
-   * here is how a NEW chain reaction is told apart from the per-tick
-   * `burstFx` snapshot frame.js already returns for every tick a burst is
-   * still animating, without needing a dedicated signal from starburst.js. */
-  let lastStarburstBursts = 0;
+  starburst.onSpawn = () => audio.play(SPAWN_SFX);        // CS:0xA4B1, inside every spawn
+  /* ⚠️ The spawn sound used to be played once per TICK when
+   * `starburst.bursts` had changed, after the hero frame: a burst spawned
+   * later in the tick (a chain hit in the creature scans) sounded a tick
+   * late, and two in one tick sounded once. [PROVEN] live against the PJOYL3
+   * sweep (1043/1049/1066): it belongs inside the spawn. */
   /* CS:0x73EC — breakable masonry. Only worlds 3-4 place solid 0x6d cells,
    * and only the six terrain-stopping weapons can reach it. */
   let blocks = new Destructibles(1);
@@ -1355,11 +1364,11 @@ const guardianTables = {
              * level volume (CS:0x0370) — also inside a guardian fight. */
             audio.music('setVolume', 1);
             const respawnWorld = level.world;
-            waitSfx(() => {                                          // CS:0x08FB, export 4
+            afterRespawnTick.push(() => waitSfx(() => {              // CS:0x08FB, export 4, after 0x921B
               audio.play(LEVEL_START_SFX);                           // CS:0x0902
               audio.play(INVULN_LOOP_SFX);                           // CS:0x0907, the aura's loop
               audio.music('fadeTo', levelMusicVolume(respawnWorld)); // CS:0x091C-0x0921
-            }, true);
+            }, true));
             musicStartTicks = 0;                                     // CS:0x0917 [0x3E8] = 0xFE
             respawnTick = true;                                      // CS:0x08F5 call 0x921B
             $('event').textContent = `respawned — ${fx.lives} ${fx.lives === 1 ? 'life' : 'lives'} left`;
@@ -1626,7 +1635,7 @@ const guardianTables = {
        * slots). */
       burst = new TreasureBurst(sharedRandom); opened = 0; lootLanded = 0;
       starburst = new Starburst(sharedRandom);
-      lastStarburstBursts = 0;  // a fresh instance restarts its own bursts count at 0 too
+      starburst.onSpawn = () => audio.play(SPAWN_SFX);      // CS:0xA4B1
       /* CS:0x69B1/0x8E40 restore every broken block, then clear the queue. */
       if (blocks) blocks.restoreAll(level.map.planeA, level.map.planeB);
       blocks = new Destructibles(level.world);
@@ -1990,11 +1999,14 @@ const guardianTables = {
          * -> 0x06A9 the level-start sound; -> 0x0111 re-arms DS:0x3E8. */
         audio.music('fadeOut');
         loadMusic(worldMusicContext(matchWorld));
-        waitSfx(() => {                                      // CS:0x06A2-0x06A9
+        /* CS:0x6DCB — the exit runs the respawn tick CS:0x921B before it
+         * jumps on to CS:0x0696, so the sound comes after that tick. */
+        respawnTick = true;
+        afterRespawnTick.push(() => waitSfx(() => {          // CS:0x06A2-0x06A9
           audio.play(LEVEL_START_SFX);
           /* -> CS:0x0111 ... 0x0126: a shield bought in the shop plays its loop. */
           if (fx.invuln > 0) audio.play(INVULN_LOOP_SFX);
-        });
+        }));
         musicStartTicks = LEVEL_MUSIC_DELAY;
       },
     });
@@ -2530,10 +2542,17 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
            * DS:0x36C sampled live at 29 cursors across its 1190-cursor shop. */
           tock ^= 1;
           do {
+            sfxAt = t.cursor + 1;   // ?debug attribution only: the pass's poll (CS:0x241D) has advanced DS:0x282
             const purchase = shopScreen.iterate(t.ticks[t.cursor].bits);
             t.cursor++;
             if (shopScreen?.moved) audio.play(SHOP_MOVE_SFX);   // EXIT's onDone nulls it
+            if (shopScreen?.moneyTicked) audio.play(MONEY_TICK_SFX);   // CS:0x718B
             if (purchase && !purchase.refused) audio.play(BUY_CONFIRM_SFX);
+            if (purchase && !purchase.refused && purchase.rank !== undefined) {   // CS:0x6F32, the handler
+              const hid = handlerSfx(CONSUMABLES[purchase.rank], health);
+              if (hid) audio.play(hid);
+            }
+            sfxAt = null;
           } while (shopScreen && shopScreen.fireWait && t.cursor < t.ticks.length);
           if (shopTrace) shopTrace.push(`${t.cursor}:${tock}`);   // ?debug
         }
@@ -2590,7 +2609,12 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
             if (toggle) tock ^= 1;                               // CS:0x6C9E, every pass
             const purchase = shopScreen.step(input);
             if (shopScreen?.moved) audio.play(SHOP_MOVE_SFX);   // EXIT's onDone nulls it
+            if (shopScreen?.moneyTicked) audio.play(MONEY_TICK_SFX);   // CS:0x718B
             if (purchase && !purchase.refused) audio.play(BUY_CONFIRM_SFX);
+            if (purchase && !purchase.refused && purchase.rank !== undefined) {   // CS:0x6F32, the handler
+              const hid = handlerSfx(CONSUMABLES[purchase.rank], health);
+              if (hid) audio.play(hid);
+            }
           };
           if (shopScreen.fireWait) pass(false);
           else {
@@ -2980,10 +3004,6 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
        * same as the draw call itself. */
       inventoryPanel.step(player.state === ST.CROUCH);
       if (fr) {
-      if (starburst.bursts !== lastStarburstBursts) {
-        audio.play(SPAWN_SFX);
-        lastStarburstBursts = starburst.bursts;
-      }
       for (const t of fr.treasures) {
         if (t.sfx) audio.play(t.sfx);
         /* CS:0x18A4 (ordinary treasure, CX = type) and CS:0x18EF (a chest just
@@ -3074,6 +3094,9 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
          * TWICE, before and after the rank count. [PROVEN] live: PJOYL3 1031
          * logs both (returns 0x17F5 / 0x1821). */
         if (c.sfx) { audio.play(c.sfx); audio.play(c.sfx); }
+        /* CS:0x1829 — then the handler, which may play its own sound. */
+        const handlerId = handlerSfx(CONSUMABLES[c.rank], health);
+        if (handlerId) audio.play(handlerId);
         postPickupMessage(c);
         /* CS:0x6377 — over-healing is banked into DS:0x168 at 32 a point,
          * not discarded. UNKNOWN_DS_0168, so it is only counted here. */
@@ -3901,6 +3924,7 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
       /* CS:0xD7E7 `[0x270] -= 8` lands on the camera the update just computed,
        * which CS:0x02EA commits. */
       if (camNudgeY) { cam.y += camNudgeY; camNudgeY = 0; }
+      if (rt) for (const f of afterRespawnTick.splice(0)) f();   // CS:0x08FB / 0x0696, after 0x921B
     },
     () => {
       /* uiState === 'quitting' — see the `quitFade` declaration above.
@@ -4519,7 +4543,7 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
       r: rng.cursor,
       slots: arsenal.slots.map((sl) => `${sl.weapon}:${sl.live}`).join(' '),
       hp: health.target, ph: player.phase, pst: player.state, freeze: fx.freeze, tock,
-      sfx: sfxTrace.splice(0).map((id) => id.toString(16)).join(','),
+      sfx: sfxTrace.splice(0).map((id) => (typeof id === 'string' ? id : id.toString(16))).join(','),
       inv: `${player.fireLatch | 0},${player.scanned | 0},${player.noKey | 0},${inventoryPanel.selector},${inventoryPanel.pending}`,   // [0x341],[0x354],[0x355],[0x366],[0x367]
     });
     sfxTrace = [];

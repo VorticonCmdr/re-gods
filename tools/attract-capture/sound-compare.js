@@ -37,7 +37,13 @@ export async function compareSound(name = 'joyl1', { seeds = { land: 1, gravity:
     if (!s.attract || s.attract.state !== STATE_OF[name]) break;
     const c = s.attract.cursor;
     if (c > live.end) break;
-    if (c > live.inject && s.sfx) portAt.set(c, (portAt.get(c) || []).concat(s.sfx.split(',')));
+    if (c > live.inject && s.sfx) {
+      for (const raw of s.sfx.split(',')) {             // `id@cursor`: a shop pass's own cursor
+        const [id, at] = raw.split('@');
+        const cc = at ? +at : c;
+        portAt.set(cc, (portAt.get(cc) || []).concat(id));
+      }
+    }
     inject(c);
   }
   const sortj = (a) => (a || []).slice().sort().join(',');

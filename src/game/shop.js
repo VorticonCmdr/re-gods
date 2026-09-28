@@ -161,6 +161,11 @@ export const PRICES = {
   53: 1000, 70: 650, 71: 1300, 72: 1000,
 };
 
+/** CS:0x71AA / 0x71D6 `0x2ee` — the shown money's step per shop pass. */
+export const MONEY_STEP = 750;
+/** CS:0x71A3 / 0x71CF — played on every step of the shown money. */
+export const MONEY_TICK_SFX = 0x111;
+
 export class ShopScreen {
   /**
    * @param {number[]} roster the FULL raw per-world candidate list (`SS:
@@ -225,6 +230,11 @@ export class ShopScreen {
     this.repeatBits = 0;          // DS:0x339, the input byte being held
     this.repeatCount = 0;         // DS:0x33A
     this.fireWait = false;        // inside CS:0x6E62's poll-until-released loop
+    /* DS:0x254/0x256, the money the shop SHOWS. Both entries copy the real
+     * money into it (CS:0x6BED, CS:0x0676), and every non-FIRE pass moves it
+     * 750 toward the real amount (CS:0x718B), with sound 0x111 per step. */
+    this.shownMoney = purse ? purse.total : 0;
+    this.moneyTicked = false;     // this pass stepped the shown money (sound 0x111)
 
     this.#rebuildVisible();      // an unaffordable/ineligible starting item is never shown, CS:0x72c9
   }
@@ -267,6 +277,7 @@ export class ShopScreen {
    * @returns {?object} a purchase, like `step()`, or null
    */
   iterate(bits) {
+    this.moneyTicked = false;
     if (this.done) return null;
     if (this.fireWait) {
       this.moved = false;
@@ -291,7 +302,20 @@ export class ShopScreen {
     }
     this.moved = this.cursor !== before;          // CS:0x6D42 -> sfx MOVE_SFX
     if (bits & 0x80) this.fireWait = true;       // CS:0x6D53 -> 0x6E62
+    else this.moneyTicked = this.#chaseMoney();  // CS:0x6D5D-0x6D60, not on a FIRE pass
     return null;
+  }
+
+  /** CS:0x718B: the shown money steps 0x2EE (750) toward the real money,
+   *  never past it, and every step plays 0x111 (CS:0x71A3 down, 0x71CF up).
+   *  Equal: nothing. [PROVEN] live: the PJOYL2/PJOYL3 sweeps' 0x111 runs
+   *  after each purchase. @returns {boolean} whether it stepped */
+  #chaseMoney() {
+    if (!this.purse) return false;
+    const want = this.purse.total, cur = this.shownMoney;
+    if (cur === want) return false;
+    this.shownMoney = cur > want ? Math.max(want, cur - MONEY_STEP) : Math.min(want, cur + MONEY_STEP);
+    return true;
   }
 
   #fire() {
@@ -500,7 +524,7 @@ export class ShopScreen {
     if (!glyphs) return;
     if (renderer.clear) renderer.clear(0);   // no backdrop bitmap was RE'd — plain background
     drawCentered(renderer, glyphs, 'SHOP', 8);
-    if (this.purse) drawText(renderer, glyphs, `$${this.purse.total}`, 16, 8);
+    if (this.purse) drawText(renderer, glyphs, `$${this.shownMoney}`, 16, 8);   // DS:0x254, CS:0x71F8
     for (let row = 0; row < GRID_ROWS; row++) {
       for (let col = 0; col < GRID_COLS; col++) {
         const slot = row * GRID_COLS + col;

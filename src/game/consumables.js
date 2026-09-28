@@ -381,6 +381,30 @@ export function applyFamiliar(type, health) {
  *  NOT_WIRED_REASON.familiar — not because no shipped path can reach it. */
 export const banksOverheal = (familiarEnergy) => familiarEnergy >= 0;
 
+/* ── The handlers' own sounds ─────────────────────────────────────────────
+ * Played by the handler itself, after the pickup's two 0x638 (CS:0x17EF /
+ * 0x181B) or the shop's 0x333 (CS:0x6EE1):
+ *     6327 / 6350  health 12 / 24: 0x3720 (CS:0x6332 / 0x635B), only while
+ *                  the displayed bar DS:0x19A is not negative (the same test
+ *                  skips the whole handler, CS:0x6327 / 0x6350 `jns`)
+ *     62D7 / 62DA  the power potions: 0xA3E (CS:0x62E1)
+ *     62EC         extra life: 0x6416 (CS:0x62ED)
+ *     6217         teleport stone: 0x193A (CS:0x6296)
+ * (62C8 invulnerability starts its 0x280 loop; main.js already plays it.)
+ * The food handlers (6306 / 6393 / 63B4) play nothing. [PROVEN] live:
+ * PJOYL2's power potion (0xA3E, cursor 851) and health potion (0x3720,
+ * 2165) at the sweep's cursors. */
+export const HANDLER_SFX = Object.freeze({
+  0x6327: 0x3720, 0x6350: 0x3720, 0x62d7: 0x0a3e, 0x62da: 0x0a3e,
+  0x62ec: 0x6416, 0x6217: 0x193a,
+});
+export function handlerSfx(entry, health = null) {
+  const id = entry ? HANDLER_SFX[entry.at] : undefined;
+  if (!id) return 0;
+  if (entry.effect === 'health' && health && health.bar < 0) return 0;   // CS:0x632C `jns`
+  return id;
+}
+
 /* ── Applying an effect ───────────────────────────────────────────────────
  * `state` carries only what the wired effects touch, so a caller that does not
  * model a field simply does not get that effect.
