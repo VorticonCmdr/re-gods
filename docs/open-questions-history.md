@@ -193,8 +193,8 @@
       - every level start granted 85 ticks of invulnerability that the original does not. `[PROVEN]` live: the loader clears `DS:0x172`, which corrects `combat-and-projectiles.md`'s "level-start/respawn block".
 52. The five port residuals after item 51 (2026-09-28), all closed:
     - **Selector 11's turret patch** `[PROVEN]` live. `cs:[0xAD88]` has two writers, `CS:0xC4AA` (RET) and the per-level init's `CS:0x8E70` (NOP). So the turrets stay off after the guardian dies, until the next level load. `gods-web` had gated them on the guardian being alive, and kept drawing their last frame; both are fixed (`docs/guardians.md`).
-    - **The familiar** `[PROVEN]` live for 342 ticks. It was summoned into `PJOYL3` by making the `CS:0x0215` call run `C308` + `C35E` + `C08E`. Its hits and death stay `[STATIC]` (`gods-web/src/game/familiar.js`).
-    - **The "stop" sounds** were not orphans. `GAME.EXE` starts two looping ambiences itself: the spikes (`0x0197`, `CS:0x14C4`, starts `[PROVEN]` against the live sweeps) and a moving line barrier (`0x08C5`, the rescan's tail, `[STATIC]`). Both are ported (`docs/drivers-and-memory.md`).
+    - **The familiar** `[PROVEN]` live for 342 ticks. It was summoned into `PJOYL3` by making the `CS:0x0215` call run `C308` + `C35E` + `C08E`. Its hits and death stayed `[STATIC]` then (`gods-web/src/game/familiar.js`); both are `[PROVEN]` in item 54.
+    - **The "stop" sounds** were not orphans. `GAME.EXE` starts two looping ambiences itself: the spikes (`0x0197`, `CS:0x14C4`, starts `[PROVEN]` against the live sweeps) and a moving line barrier (`0x08C5`, the rescan's tail; `[PROVEN]` in item 54). Both are ported (`docs/drivers-and-memory.md`).
     - **The world-4 worm** `[PROVEN]` live: the escape, the hero's shots on the body box, and injected hits through two worm kills, 0 differences (`docs/guardians.md`).
     - **Roland.** The SFX path is `[PROVEN]` live: 334 export-3 calls, the port's draw counts equal to the game's under ROL, and the split from the AdLib stream at `PJOYG1` cursor 17. The MT-32 stand-in now has a reverb driven by the bank's own settings. Real MT-32 emulation would need the MT-32 ROMs, which the dump does not contain.
     - **Found by diffing the sound ids per cursor against the live ROL trace, all fixed in `gods-web`:**
@@ -204,6 +204,30 @@
       - the par bonus `CS:0x9364`–`0x939F` was not modelled at all. An ordinary hit gains `(DS:0xE66C[world−1] − DS:0x1BA) >> 3`, with par 0/14/22/34.
     - After these fixes, the port plays 333 of the 334 live ids at the same cursors; the other is the level-start sound, which the harness clears. All six attract demos still replay exactly.
 53. `UNKNOWN_shop_walker` — **open, not ported.** After the level-start password shop (worlds 2–4, `CS:0x00CB` → `CS:0x0643`), `CS:0x05D7` patches `CS:0x063A` so that the main loop's `CS:0x0288` call to `CS:0x071D` runs `FUN_1000_071E`. That routine is a walker: a sprite from base `[0x25E]` = `0x1C2` on a per-world path from `DS:0xE91A` (indexed by world and the shop count `[0x35D]`). It plays footsteps `0x020E` on phases 2/6. It touches the hero through `CS:0xAC59` with strength 5, adds 5 back to `[0x192]` when the hero is not invulnerable, and then re-RETs itself (`CS:0x080D`). While it runs, `cs:[0x71D]` = `0x90`, which skips the hero's state machine (`CS:0x49AA`) and holds off the spike loop (`CS:0x14D3`). `FUN_1000_484E` patches `CS:0x063A` to RET around its own `05D7` call, so the sublevel switch never starts it. What the sprite shows, and why the hero is frozen, are not established.
+54. The familiar's hits and death, and the barrier loop, live (2026-09-28). Both were `[STATIC]` residuals of item 52.
+    - **The familiar** `[PROVEN]` (`docs/consumables-and-treasure.md`).
+      - 22 live `CS:0xAB4D` drains over two creature encounters replay exactly, and so does the death at `CS:0xC440`: energy 50 → 25 → 4 → −13 at cursor 1161, with the burst, sprite, carried slot and list gate.
+      - The random stream diverged later in two of the three runs. The divergence is cross-cycle pathfinder state (`CS:0xF713`, gravity phase 4 or 1 instead of 5), not the familiar.
+    - **The loop sounds** `[PROVEN]` (`docs/drivers-and-memory.md`).
+      - The stops, and the ROL skip, come from a play/stop sweep of `PJOYL1`.
+      - The barrier's play comes from two teleport runs onto `PLEV2B`'s barrier cells, compared slot byte by slot byte.
+    - **Found on the way, all fixed in `gods-web`:**
+      - The spike walk ran after the player tick. It belongs to `CS:0x0206`'s object walk, and the loop stopped a tick early whenever a lever killed on-screen spikes.
+      - Every line barrier walks from its source before it settles. 36 of the 58 reachable settle dispatches slide into place; the port had placed them at once. The walker overshoots each point and a cycler reseeds from it. A settle barrier's point comes from its type, not its selector (4 dispatches differ). See `docs/triggers-and-difficulty.md`'s *The walk before the snap*.
+      - `CS:0x767A` is `RET` until the first arm, so a level without barriers makes no stop calls. The port had stopped `0xC5` every tick.
+      - The rescan has a third caller, the respawn tick at `CS:0x9260`. This corrects item 22's "two callers".
+55. `UNKNOWN_barrier_disable_free` — **open, not ported.**
+    - What the bytes show: a type-`0xFF` dispatch frees an ARMED barrier slot (`CS:0x78DC` sets `DI+4 = 0xFF`), so the rescan stops drawing and restamping it.
+    - How often it happens: 15 plane-B-reachable dispatches do this to a record another cell arms. That's one each in `1B`, `2B` and `3B`, and six each in `4A`/`4B`.
+    - Still unknown: whether the barrier's stamped plane-B cells stay solid, and whether it is meant to vanish. Settling that needs a live run.
+56. **Plays `gods-web` misses in `PJOYL1`** — open, a port gap. `sound_sweep.py` under ROL and the older AdLib sweep agree on them:
+    - `0x0318` ×12 from `CS:0x4C5B`, the state-10 ladder landing (the port has the sound, but it never fires here);
+    - `0x0504` from `CS:0x15EB`;
+    - `0x0505`–`0x0507` from `CS:0x13F2` (all inside the object walk);
+    - two of the sixteen `0x0638` pickup sounds;
+    - `0x2831` from `CS:0x6166`.
+
+    The hero's own sounds (`0x020E`, `0x0F22`, `0x041C`) match exactly, so the hero's path is not the cause.
 
 ⚠️ `UNKNOWN_openlist_field4` was listed here *and* in the resolved list below. It is **closed** — the resolved entry is correct.
 

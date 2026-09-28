@@ -510,7 +510,7 @@ The port (`gods-web/src/game/projectiles.js`) had already worked out the muzzle 
 
 So "the second muzzle position" framing was half right and half a red herring: `DS:0x33d` does gate a muzzle switch in the fire path (already resolved by the port), but the *position it switches to* is not a second emitter offset at all — it is wherever the player's own familiar currently stands. A port that models the familiar as a tracked entity with a world position already has everything needed; one that treats `0x16a`/`0x16c` as a fixed alternate muzzle constant does not.
 
-### The familiar, read in full — `CS:0xC08E`–`0xC49B` `[STATIC]`, ported (2026-09-28)
+### The familiar, read in full — `CS:0xC08E`–`0xC49B`, ported; movement, hits and death `[PROVEN]` live (2026-09-28)
 
 ⚠️ Two corrections to the list above: item 1's `CS:0x8C56` is **level start only** (`FUN_1000_8c34` has one caller, `CS:0x0092`; a respawn after a death does not move the familiar), and item 3's "lowest sprite id" is doubly wrong — the scan takes the **largest** key, and the key is the box's right edge (`docs/combat-and-projectiles.md`, corrected and proven live). The complete writer census of `[0x16a]`/`[0x16c]`: teleport `0x1003`, level start `0x8C5D`, the mover `0xC1B5`, the summon `0xC313`.
 
@@ -533,5 +533,9 @@ So "the second muzzle position" framing was half right and half a red herring: `
 
 **The list gate `[0x343]`**: written by the weapon arm (`CS:0x9124`/`0x9146`: open iff energy ≥ 0 or a slot holds the hunter), the summon (open), and the death (closed unless hunter) — all the same condition, so a per-frame test of it is exact.
 
-`gods-web/src/game/familiar.js` implements all of this; no attract demo has a familiar, so it is `[STATIC]`, smoke-tested in the running port (summon, flight toward the hero's head, the fireball slot carried).
+`gods-web/src/game/familiar.js` implements all of this. No attract demo has a familiar, so one is summoned live into `PJOYL3`'s world-3 gameplay (`gods-web/tools/attract-capture/familiar_live.py`: the `CS:0x0215` call made to run `C308` + `C35E` + `C08E` at tape cursor 760, with the capture's random table injected at 92). The script breaks on `CS:0xAB4D` and `CS:0xC440` as well, and `familiar-compare.js` replays the same inputs in the port under `?sound=roland` (the running DOSBox had `DS:0x85 = 2`):
+- **Hits `[PROVEN]`.** At energy 1000 (`familiar_rnd.json`, cursors 760–1620, 860 rows) the familiar meets two creature groups. That gives 22 `CS:0xAB4D` drains: BP = 25, 21 … 1 and 50, 46 … 22, then 50 … 26, i.e. each creature's strength before the hit, falling by the familiar's power 4 per tick. Energy goes 1000 → 355. The port matches every row (position, speed, facing, animation, sprite, energy, carried slot, list gate, random cursor) and every drain, cursor for cursor.
+- **Death `[PROVEN]`.** With the summon's energy overwritten to 50 at the first `CS:0x0218` (`familiar_hits.json`), the third hit (50 − 25 − 21 − 17 = −13) calls `CS:0xC440` on the same tick, cursor 1161. The port matches the death: the burst, sprite −1, `[0x33D]` = `0xFF` and the gate `[0x343]` = `0xFF`, for 763 rows.
+- **Where the comparisons end.** Both of these, and a third energy-1000 run (`familiar_probe.json`), later diverge in the random stream only (at 1513 or 1523). The extra draws come from the pathfinder's strategy pick (`CS:0xF713`). The three live runs started from different carried-over state (the starburst gravity phase `DS:0x1D4` read 4, 1 and 5), and the run with 5, the value `PJOYL3`'s parity work already uses, matches to the end of the demo. So the divergence is cross-cycle state in the pathfinder, not the familiar.
+- **`[0x391]` gate.** Every run also caught `CS:0xC440` at the demo's end (cursor 1621) with `[0x391] = 1` and energy ≥ 0. That is the no-burst clear-out the port does in its restart/level paths, not a death.
 

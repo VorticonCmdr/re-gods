@@ -127,3 +127,15 @@ Moved to the `gods-re-tooling` skill (`.claude/skills/gods-re-tooling/SKILL.md`)
   - After these, the port plays the same sound ids as live DOS at every `PJOYG1` cursor except the level-start sound.
 - **The MT-32 stand-in** gets a bank-driven reverb. Real emulation would need MT-32 ROMs.
 - **New open item.** One unported mechanism was found: `UNKNOWN_shop_walker` (ranked item 53), the `CS:0x071E` walker after a level-start password shop.
+
+**The familiar's hits and death, and the barrier loop, are `[PROVEN]` live (ranked item 54).**
+- **The familiar** was summoned into `PJOYL3`. 22 hits and a forced death replay exactly in `gods-web`.
+- **The loop sounds.** A play/stop sweep of `PJOYL1` proves the stops and the ROL skip. Teleports onto `PLEV2B`'s barrier cells prove the barrier's play, every slot byte compared.
+- **Found on the way, all fixed in `gods-web`:**
+  - The spike walk belongs at `CS:0x0206`, before the player; the port had it after, and stopped the spike loop a tick early.
+  - ⚠️ **Every line barrier walks from its source before it settles.** 36 of the 58 reachable settle dispatches slide into place; the port placed them at once. The settle point comes from the type byte, not the selector.
+  - The rescan's `RET` gate means a level without barriers makes no stop calls.
+  - The rescan has a third caller, the respawn tick `CS:0x9260`.
+- **New open items:**
+  - `UNKNOWN_barrier_disable_free` (item 55): type `0xFF` frees an armed barrier; reachable in 15 dispatches.
+  - Item 56: sounds the port misses in `PJOYL1` (`0x318`, `0x504`–`0x507`, `0x2831`).
