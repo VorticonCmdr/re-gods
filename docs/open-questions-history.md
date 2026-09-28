@@ -186,7 +186,7 @@
     - **`gods-web` ports all of it** with an MT-32 stand-in synth, plus the `DS:0x35E` alternate kill layer, the intro's Roland waits, and the level-start/game-over sounds.
 51. The Roland residuals (2026-09-28); see `docs/drivers-and-memory.md`:
     - **The drivers' waits** are ported. Export 4 makes the game wait for the sound effects under BOTH drivers. ROL's 200-pass counter never runs out (the retry jumps above its reload). ROL's export 12 holds the game through a fade, or 4.3 s of plain playing music.
-    - **Id `0x28`** is a copy-protection trap in all four drivers. It sets GAME's DOS exit code to 5 ("Protection failure.") when `DS:0xEA` is nonzero. It is dormant: nothing writes `DS:0xEA` (static, plus a live write watch), and EXIT overwrites the code.
+    - **Id `0x28`** is a copy-protection trap in all four drivers. It sets GAME's DOS exit code to 5 ("Protection failure.") when `DS:0xEA` is nonzero. It stayed dormant in every window checked: no direct writer of `DS:0xEA`, a silent live write watch, and `DS:0xEA = 0` at the check itself during a forced tally. EXIT overwrites the code anyway.
     - **The invulnerability loop `0x0280`** is ported (potion, shop, respawn; stops when the aura ends).
     - **Two port bugs fixed on the way:**
       - the shield, freeze and giant-jump potions never took effect;

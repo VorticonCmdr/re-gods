@@ -693,9 +693,10 @@ Read with `ndisasm` from the ROL.EXE image (file + 0x200; it is not packed) and 
 - All four drivers' export 3 open with `cmp al,0x28 / jnz / cmp word [0xEA],0 / jz / mov byte [0x11A],5` (ADL:0x15A, ROL:0x376, TDY:0x185, BPR:0x187).
 - The drivers run with GAME's DS, so this is GAME's **DOS exit code** (`CS:0x22FD`: `mov ah,0x4C / mov al,[0x11A] / int 21h`). GODS.EXE answers exit code 5 with "Protection failure." (`execution-and-boot.md`).
 - Id `0x28` has one producer, the tally fanfare `0x7928` (`CS:0x6806`).
-- It cannot fire in the shipped game:
-  - `DS:0xEA` is 0 in the image and no instruction in GAME.EXE or any driver names it (`ndisasm` operand grep).
+- It stayed closed in every window checked:
+  - `DS:0xEA` is 0 in the image and no instruction in GAME.EXE or any driver names it as a direct operand (`ndisasm` grep; indexed and string stores are not excluded).
   - Live in DOSBox, a write watch on both bytes stayed silent through boot, the menu and about a minute of attract play, while the driver tick word below it (`DS:0xE8`) counted from `0x0CCC` to 4571.
+  - `[PROVEN]` live at the check itself: a tally forced with `DS:0x178 = 0xE6EA`, `DS:0x36A = 1` hit ADL's `cmp word [0xEA],0` (live `0x339E:0x015E`) with `AX = 0x7928`, `DS` = GAME's. `DS:0xEA` read 0 and `DS:0x11A` stayed 0. `DS:0xE8` read 65099, about to wrap; `inc word` does not carry into it.
   - The only exit the menu offers sets the code to 1 first (`CS:0x2D87`); the other three paths to `CS:0x22ED` are load-failure exits.
 - `gods-web` keeps it as data (`rol-driver.js` `protectionExitCode`).
 
