@@ -216,18 +216,28 @@
       - Every line barrier walks from its source before it settles. 36 of the 58 reachable settle dispatches slide into place; the port had placed them at once. The walker overshoots each point and a cycler reseeds from it. A settle barrier's point comes from its type, not its selector (4 dispatches differ). See `docs/triggers-and-difficulty.md`'s *The walk before the snap*.
       - `CS:0x767A` is `RET` until the first arm, so a level without barriers makes no stop calls. The port had stopped `0xC5` every tick.
       - The rescan has a third caller, the respawn tick at `CS:0x9260`. This corrects item 22's "two callers".
-55. `UNKNOWN_barrier_disable_free` — **open, not ported.**
-    - What the bytes show: a type-`0xFF` dispatch frees an ARMED barrier slot (`CS:0x78DC` sets `DI+4 = 0xFF`), so the rescan stops drawing and restamping it.
-    - How often it happens: 15 plane-B-reachable dispatches do this to a record another cell arms. That's one each in `1B`, `2B` and `3B`, and six each in `4A`/`4B`.
-    - Still unknown: whether the barrier's stamped plane-B cells stay solid, and whether it is meant to vanish. Settling that needs a live run.
-56. **Plays `gods-web` misses in `PJOYL1`** — open, a port gap. `sound_sweep.py` under ROL and the older AdLib sweep agree on them:
-    - `0x0318` ×12 from `CS:0x4C5B`, the state-10 ladder landing (the port has the sound, but it never fires here);
-    - `0x0504` from `CS:0x15EB`;
-    - `0x0505`–`0x0507` from `CS:0x13F2` (all inside the object walk);
-    - two of the sixteen `0x0638` pickup sounds;
-    - `0x2831` from `CS:0x6166`.
-
-    The hero's own sounds (`0x020E`, `0x0F22`, `0x041C`) match exactly, so the hero's path is not the cause.
+55. ~~`UNKNOWN_barrier_disable_free`~~ — **CLOSED `[PROVEN]` live, and ported** (2026-09-28).
+    - A type-`0xFF` dispatch frees an ARMED barrier slot (`CS:0x78DC`): the rescan no longer draws or stamps it, and its cells get their own values back.
+    - That follows from how the stamp works. `CS:0x77D6` saves each cell's old value and writes 1, and every rescan first restores the saved list (`CS:0x75C7`) and then re-stamps; the anchor is the rounded cell, `(x + 16) >> 5` / `(y + 8) >> 4`.
+    - Live: `PLEV3B` record 3, armed by event 38 and freed by event 70 during `PJOYG3` (`barrier_disable.json`). `gods-web` matches plane B, the slot bytes and the sounds over 61 rescans. See `docs/triggers-and-difficulty.md`.
+56. ~~The plays `gods-web` missed in `PJOYL1`~~ — **CLOSED `[PROVEN]`** (2026-09-28). All 237 plays of every id in the `PJOYL1` AdLib sweep now match per cursor.
+    - `0x0318`: every landing calls `CS:0x4C54`, and the right-facing fall landing calls it twice (`docs/player-state-machine.md`).
+    - `0x0504`–`0x0507`: an object's landing and its bounce cues from `SS:0x5450` (`docs/consumables-and-treasure.md`).
+    - `0x0638`: a category-0 pickup sounds twice before its handler runs, so unwired ones like the tablet sound too.
+    - `0x2831`: the crouch FIRE tap, with the whole crouch flag machine (`[0x341]`, `[0x354]`, `[0x355]`, `[0x366]`, `[0x367]`) matched live for `PJOYL1` 790–843.
+    - **Found on the way:** the world-2 nest's kill reward (`CS:0x87EF`: popup `0x2D` and 2500 points) was never dropped by the port. `PJOYL2`'s nest reward now falls, bounces and is picked up at DOS's cursors.
+    - The same ids match per cursor in the `PJOYL2` and `PJOYL3` sweeps. `PJOYL3`'s sweep needs the gravity-5 seed, not the capture's 1: its random stream matches only with 5.
+57. **The crouch drop, `CS:0x61A1`** — open, not ported.
+    - Standing up from a crouch (`CS:0x4AE7`), or a crouch tick with no key found and no FIRE (`CS:0x4B31`), drops the selected inventory item. The item goes out through `CS:0xBF5F`, popping up from the hero + (8, 0x20).
+    - The DOS key pickup also writes into the selected slot (`CS:0x6100`); `gods-web` uses the first empty slot instead.
+    - Porting the drop means reverting that too, as one gameplay change. No demo exercises it, because the attract inventory is empty.
+58. **Sounds `gods-web` misses outside `PJOYL1`** — open.
+    - Found by the same all-id per-cursor diff against the AdLib sweeps:
+      - `0x0111` from `CS:0x71A9`: 108 plays in `PJOYL2` and 84 in `PJOYL3`, none in the port;
+      - `0x3720` (`CS:0x6338`) and `0x0A3E` (`CS:0x62E7`), one each in `PJOYL2`: consumable handlers;
+      - in `PJOYG2`: the invulnerability loop `0x0280` (4 vs 2), `0x0B26` from `CS:0xD10E` (55 vs 54, two ticks apart) and the guardian clink `0x021D` (240 vs 242).
+    - `0x0232`, `0x0333`, `0x7F12` and `0x1427` play at shifted cursors.
+    - Item 52's all-id check covered `PJOYG1` only.
 
 ⚠️ `UNKNOWN_openlist_field4` was listed here *and* in the resolved list below. It is **closed** — the resolved entry is correct.
 

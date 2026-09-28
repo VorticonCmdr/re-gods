@@ -136,6 +136,18 @@ Moved to the `gods-re-tooling` skill (`.claude/skills/gods-re-tooling/SKILL.md`)
   - ⚠️ **Every line barrier walks from its source before it settles.** 36 of the 58 reachable settle dispatches slide into place; the port placed them at once. The settle point comes from the type byte, not the selector.
   - The rescan's `RET` gate means a level without barriers makes no stop calls.
   - The rescan has a third caller, the respawn tick `CS:0x9260`.
-- **New open items:**
+- **New open items** (both closed in item 55/56 below):
   - `UNKNOWN_barrier_disable_free` (item 55): type `0xFF` frees an armed barrier; reachable in 15 dispatches.
   - Item 56: sounds the port misses in `PJOYL1` (`0x318`, `0x504`–`0x507`, `0x2831`).
+
+**Items 55 and 56 are closed, `[PROVEN]` live and ported.**
+- **Barriers (55).** A type-`0xFF` dispatch frees an armed barrier, so it vanishes. The plane-B stamp lasts one rescan: `CS:0x75C7` restores the saved cells, then `CS:0x77D6` re-stamps at the rounded cell. So a barrier's cells get their own values back when it moves or is freed. Proven with a live arm and disable in `PLEV3B`.
+- **Sounds (56).** Every `PJOYL1` play now matches per cursor:
+  - every landing sounds `0x318`;
+  - objects thud and bounce (`0x504`–`0x507`);
+  - category-0 pickups always sound;
+  - the crouch FIRE tap (`0x2831`) runs DOS's flag machine, live-matched.
+- **Found on the way:** the world-2 nest's kill reward (`CS:0x87EF`) was never dropped by the port.
+- **Open:**
+  - item 57, the crouch drop (`CS:0x61A1`), not ported;
+  - item 58, sounds the port misses in the other demos (`0x111` from `CS:0x71A9` above all).

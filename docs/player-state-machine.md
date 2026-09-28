@@ -184,6 +184,35 @@ Not yet observed live: this pass verified the fix by fresh disassembly (`CS:0x5d
 
 **State 7 is a bare `RET` at `0x593a`.** Handlers are entered by `jmp` with the caller's return address still on the stack, so this returns *past* the `0x5e9b` epilogue — skipping the phase store, the event probe, the camera update, sprite selection **and** the draw. It is a freeze, not a pose; its `anim_base` of 9 is never read. States 27 and 28 are three instructions each and transition immediately, so their bases are never read either.
 
+### The crouch loop: the key pickup, the FIRE tap and the drop — `[PROVEN]` live (2026-09-28)
+
+States 18/19 (`CS:0x4AE0` / `CS:0x4B55`, mirrors) run a small flag machine. A fresh crouch (`CS:0x59EA`–`0x59F6`, `0x5C2E`–`0x5C3A`) clears the FIRE latch `[0x341]`, "scanned" `[0x354]` and "no key here" `[0x355]`.
+
+```
+DOWN held (4B11, cl = 1):
+  [0x354] == 0  -> 6069  the key scan: [0x354] = 1; in the hot-point box a
+                         weapon aborts, a key is taken with FIRE (60FB:
+                         [0x341] = 1, slot [0x366] := key, its name at
+                         6128 -> 4609) or put back without it (60EB:
+                         [0x354] = 0, so the next tick scans again); no key
+                         at all sets [0x355] = 1 (60B4)
+  [0x355] == 0  -> 6134  the FIRE tap: [0x355] = 0; if [0x341], wait for
+                         FIRE to be let go (614D [0x341] = 0); else on FIRE:
+                         sound 0x2831, [0x367] = ([0x366] + 1) & 3,
+                         [0x341] = 1, [0x354] = 1, the new slot's item named
+                         (6192, skipped for an empty slot), panel dirty
+  FIRE          -> 612F  [0x341] = 1, then 6134 (so this press only arms)
+  otherwise     -> 4B31  drop the selected item if its slot holds one (61A1)
+DOWN released (4AE7):     drop the selected item if its slot holds one (61A1),
+                          then the 2-tick stand-up count
+```
+
+The panel draw copies `[0x367]` into `[0x366]` every frame (`CS:0x1F5A`), so a tap's new slot shows the same tick. The level init zeroes both (`CS:0x8D73`/`0x8D78`); the payoff restart's `3` (`CS:0x048F`) is overwritten by it.
+
+**The drop, `CS:0x61A1`**: the item in slot `[0x367]` is removed from the inventory and handed to `CS:0xBF5F` as id `type + 0xB` at the hero + (8, 0x20). It pops up out of the hero (the reward popup, vy −6) and lands as a world object, or becomes one at once if the popup slot is busy. So crouching where there is no key, without pressing FIRE, drops the selected item; tapping FIRE instead cycles the selection, and standing up drops whatever is selected then.
+
+Live proof: `PJOYL1` cursors 790–843 peeked (`[0x341]`, `[0x354]`, `[0x355]`, `[0x366]`, `[0x367]`; `gods-web/tools/attract-capture/joyl1.inventory.peek.json`): the scan at 801, the arming press, its release at 803, and the tap at 809 that moves the selector to 1 and plays `0x2831`. `gods-web` reproduces all 53 rows. **Not ported: the drop** (`CS:0x61A1`, and with it the "overwrite the selected slot" pickup at `CS:0x6100`, which the port replaces with a first-empty slot). The joyl1 inventory is empty, so no shipped demo exercises it (ranked item 57).
+
 ### The wall probes and the map cursor `[PROVEN]`
 
 `0x496a` builds the plane-B cursor with no rounding at all:
@@ -445,6 +474,10 @@ Two things matter for a port, both confirmed by tracing the caller sequence exac
 Not yet confirmed live in DOSBox for this specific mechanic (the port fix rests on the disassembly alone, tagged `[STATIC]` for the live-observation half of this project's evidence standard). To promote: an execute breakpoint at `877:0x4f50` (state 8) or `877:0x514f` (state 9) should hit, with `CH=1` in the return register on the tick the hero lands short of the arc's scripted end — i.e., before `DS:0x358` reaches `0x2e`.
 
 **Ladder snap** rounds to the **tile origin**, not the tile centre: `add word [0x17a],0x20` / `and word [0x17a],0xFFE0` — the `AND` can only yield a multiple of 32.
+
+### Every landing sounds `0x318` — `[PROVEN]` live (2026-09-28)
+
+`CS:0x4C54` (`mov ax,0x318 / call 0x22ca`) has eight callers, one per landing: the plain falls (state 11 `CS:0x4C4E`; state 12 and the fall-fire right landing both reach `CS:0x4D2A`, which calls it **twice**, at `0x4D36` and `0x4D53`), the ladder-foot fall (`CS:0x4CC5`), the jumps (`CS:0x4F69`, `0x5168`) and the firing jumps (`CS:0x5274`, `0x5391`). `gods-web` had only the ladder one; it now counts the plays per landing. Checked per cursor against the live AdLib sweeps of `PJOYL1`, `PJOYL2` and `PJOYL3`.
 
 ## `UNKNOWN_DS_0192` — CLOSED: health, and a bar that lags it `[PROVEN]`
 
