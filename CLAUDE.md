@@ -112,3 +112,12 @@ Moved to the `gods-re-tooling` skill (`.claude/skills/gods-re-tooling/SKILL.md`)
 **The port's eight disclosed "not modelled" gaps are closed (ranked item 49).** Found on the way: `DS:0x33` is the scroll phase (`VGA:0x10FB`, proven live, closing `UNKNOWN_ds33_bit2_setter`); the shop cursor is a flat index (a `[PROVEN]` "row clamp" was wrong); the hunter's target key is the box's right edge, not the sprite id (proven live), and `gods-web`'s hunter had never homed; the familiar is ported (`[STATIC]`) and carries only the fireball slot. See `docs/open-questions-history.md` item 49.
 
 **The Roland path is read and ported (ranked item 50, `[STATIC]`).** ROL.EXE remaps sound ids to `.RL` blobs and allocates five SFX slots by priority. Its random variants come from its own generator, never the game's table, which ADL.EXE uses. Music contexts: worlds 1-4 → `PGODSRLA`-`D`, title/game over `E`, guardian fight `F`, shop `G`. That corrects "world-2/4 cutscene" and "attract world 2/3". PTITLE.RL ends in the MT-32 bank (64 custom timbres, 128 patches, rhythm setup) that the game's program changes rely on. `gods-web` plays all of it through an MT-32 stand-in synth, selected with `?sound=roland` or the panel's picker. See `docs/drivers-and-memory.md`'s *ROL.EXE and the Roland path*. Ranked item 51 follows up: the drivers' waits are ported, id `0x28` turns out to be a dormant copy-protection trap (exit code 5), and the invulnerability loop is ported. That work also corrects "spawn protection at level start": `[PROVEN]` live, a level starts with `DS:0x172 = 0`.
+
+**The five port residuals after item 51 are closed (ranked item 52), mostly `[PROVEN]` live.**
+- **Turrets.** Selector 11's turret RET patch lasts until the next level load (`CS:0x8E70` is its only restore).
+- **Familiar.** It was summoned live into `PJOYL3` and replays for 342 ticks.
+- **Loop sounds.** The export-5 "stops" belong to two looping sounds `GAME.EXE` starts itself: spikes `0x0197` and moving barriers `0x08C5`.
+- **World-4 worm.** Its escape and hits (two kills, with injected grid tags) replay with 0 differences.
+- **Roland.** ROL's SFX path matches the port call for call under `GODS.INI = Roland`.
+- **The MT-32 stand-in** gets a bank-driven reverb. Real emulation would need MT-32 ROMs.
+- **New open item.** One unported mechanism was found: `UNKNOWN_shop_walker` (ranked item 53), the `CS:0x071E` walker after a level-start password shop.
