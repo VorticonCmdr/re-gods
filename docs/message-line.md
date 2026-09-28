@@ -183,10 +183,20 @@ to settle it. Only the wrap path at `CS:0x43ee` makes it positive.
 Rows 189–197 sit inside the 160–199 status band, never the playfield, and match
 the flat trough in the shipped `PSTAT3` art exactly.
 
-The `+4` arm and its `DS:0xad4c` pre-shifted panel page are **not** modelled in
-the port: they are selected by bit 2 of `DS:0x33`, and an operand scan finds no
-site in `GAME.EXE` that ever *sets* that bit — every write is an explicit zero or
-a restore of a saved value. `UNKNOWN_ds33_bit2_setter`.
+The `+4` arm and its `DS:0xad4c` panel page are **not** modelled in the port,
+correctly. ~~`UNKNOWN_ds33_bit2_setter`~~ — **CLOSED, `[PROVEN]` live
+(2026-09-28).** The setter is in the driver, not `GAME.EXE`: graphics export 0
+writes `[0x33] = [0xa] & 0x1c` every frame (`VGA:0x10F5`–`0x10FB`), the camera's
+fine-scroll phase. `GAME.EXE`'s own writes are all zeroes or `POP AX` restores,
+which is why the earlier `GAME.EXE`-only operand scan found nothing. At
+`CS:0x4449`–`0x4475` a nonzero `[0x33]` selects the pre-shifted panel copy
+`0xad4c` (and clears `0x3b9`, else `0x3ba` for `0xacde`), and bit 2 adds the 4 px
+that copy needs. Live, with camera X poked to `0x1C0`/`0x1C4`/`0x1C8` at the loop
+head (`[0x33]` read back 0/4/8) and at a natural `0x1DC` (28), the status band's
+pixels matched each other at shift 0; the only differing pixels (19, at x 19–27,
+y 174–179) are the health bar's shimmer. So the panel and its text never move on
+screen, and the port's single unshifted panel is exact. The same byte drives the
+health bar, digits and inventory panel shifts (`docs/drivers-and-memory.md`).
 
 ### The blit gate, `CS:0x44c7`-`0x44e1`
 
