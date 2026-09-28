@@ -348,11 +348,12 @@ export const RETRACE_WAIT_TICKS = Math.round(300 * 50 / 70);
  * int 21h`) — and GODS.EXE answers 5 with "Protection failure." (its
  * AH=4Dh dispatch at 1000:0168). Id 0x28 has one producer, the tally
  * fanfare 0x7928 (CS:0x6806). So it is a copy-protection trap keyed on
- * DS:0xEA. It cannot fire in the shipped game: DS:0xEA is 0 in the image, no
- * instruction in GAME.EXE or any driver names it, and live in DOSBox a
- * write watch on both bytes stayed silent through boot, menu and a minute of
- * attract play while the driver tick word below it (DS:0xE8) counted on.
- * And the one exit the menu offers (CS:0x2D87) sets the code to 1 first.
+ * DS:0xEA. No instruction in GAME.EXE or any driver names DS:0xEA (a direct
+ * operand; an indexed or string store is not excluded), and it stayed 0 in
+ * every window checked: 0 in the image; a live write watch silent through
+ * boot, menu and a minute of attract play; and 0 AT the check itself, live,
+ * during a forced tally (ADL:0x15E hit with AX=0x7928, DS:0x11A stayed 0).
+ * Even set, the one exit the menu offers (CS:0x2D87) writes 1 first.
  * @returns {?number} the exit code the driver would store, or null
  */
 export const DS_00EA = 0;

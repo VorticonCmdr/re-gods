@@ -16522,6 +16522,12 @@ export function checkShop() {
     const s4 = new ShopScreen({ roster: [38], inventory: [INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY],
       state: {}, onConsumable: (effect, result) => got.push([effect, result && result.ticks]) });
     s4.step(fire); s4.step(release); s4.step(fire); s4.step(release);
+    const gotLife = [];
+    const s5 = new ShopScreen({ roster: [42], inventory: [INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY],
+      state: { lives: 2 }, onConsumable: (effect, result) => gotLife.push(result && result.lives) });
+    s5.step(fire); s5.step(release); s5.step(fire); s5.step(release);
+    check('buying the extra life (type 42) with 2 lives hands back 3 (CS:0x62EC), for main.js to copy into fx',
+      gotLife.join() === '3', JSON.stringify(gotLife));
     check('buying the shield (type 38) hands its 255-tick timer to onConsumable, as a pickup does',
       got.length === 1 && got[0][0] === 'invulnerable' && got[0][1] === 0xff, JSON.stringify(got));
 

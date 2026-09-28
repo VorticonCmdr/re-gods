@@ -826,11 +826,15 @@ const guardianTables = {
    * music simply playing, for 300 retraces. The port freezes its ticks (and
    * with them an attract tape) for the time the bus reports, then runs what
    * followed the call in the original. */
-  let soundStallUntil = 0;
+  let soundStallUntil = 0, stallDark = false;
   const afterStall = [];
-  const soundStall = (ms, then) => {
+  const soundStall = (ms, then, dark = false) => {
     const now = performance.now();
-    if (ms > 0) soundStallUntil = Math.max(soundStallUntil, now + ms);
+    if (ms > 0) {
+      if (now >= soundStallUntil) stallDark = false;
+      soundStallUntil = Math.max(soundStallUntil, now + ms);
+      if (dark) stallDark = true;
+    }
     if (!then) return;
     if (soundStallUntil > now) afterStall.push(then); else then();
   };
@@ -839,8 +843,8 @@ const guardianTables = {
     while (afterStall.length && performance.now() >= soundStallUntil) afterStall.shift()();
     return performance.now() < soundStallUntil;
   };
-  const waitSfx = (then) => soundStall(audio.waitSfx(), then);              // export 4
-  const loadMusic = (ctx) => soundStall(audio.music('load', ctx));         // export 12
+  const waitSfx = (then, dark) => soundStall(audio.waitSfx(), then, dark);  // export 4
+  const loadMusic = (ctx, dark) => soundStall(audio.music('load', ctx), undefined, dark);   // export 12
   const enterTitleLoopMusic = () => {                              // CS:0x2C82-0x2CAA
     audio.music('fadeOut');
     waitSfx();                                                     // CS:0x2C87
@@ -1333,7 +1337,7 @@ const guardianTables = {
               audio.play(LEVEL_START_SFX);                           // CS:0x0902
               audio.play(INVULN_LOOP_SFX);                           // CS:0x0907, the aura's loop
               audio.music('fadeTo', levelMusicVolume(respawnWorld)); // CS:0x091C-0x0921
-            });
+            }, true);
             musicStartTicks = 0;                                     // CS:0x0917 [0x3E8] = 0xFE
             respawnTick = true;                                      // CS:0x08F5 call 0x921B
             $('event').textContent = `respawned — ${fx.lives} ${fx.lives === 1 ? 'life' : 'lives'} left`;
@@ -1628,11 +1632,11 @@ const guardianTables = {
        * level-start sound; the music itself waits for CS:0x013C. The loader
        * clears DS:0x38A (CS:0x2BFB), so the next guardian loads afresh. */
       guardianMusic = false;
-      waitSfx();                                              // CS:0x8E76, inside the loader
+      waitSfx(undefined, true);                               // CS:0x8E76, inside the loader
       if (levelMusicOnLoad) {
-        loadMusic(worldMusicContext(levelInfo.world));        // CS:0x00D8
+        loadMusic(worldMusicContext(levelInfo.world), true);  // CS:0x00D8
         musicStartTicks = LEVEL_MUSIC_DELAY;
-        waitSfx(() => audio.play(LEVEL_START_SFX));           // CS:0x00F3-0x00FA
+        waitSfx(() => audio.play(LEVEL_START_SFX), true);     // CS:0x00F3-0x00FA
       }
       $('event').textContent = '–';
     } finally {
@@ -1946,9 +1950,14 @@ const guardianTables = {
       prices: level.objValues,
       roster: shopRosterForWorld(matchWorld),
       inventory,
-      state: { health, arsenal },
+      state: { health, arsenal, lives: fx.lives },
       purse,
-      onConsumable: (effect, result) => takeTimedEffect(effect, result),
+      /* The same copy-back as a pickup's (see takeTimedEffect): the extra
+       * life (type 42, in every shop roster) counts from the real lives. */
+      onConsumable: (effect, result) => {
+        if (result && typeof result.lives === 'number') fx.lives = result.lives;
+        takeTimedEffect(effect, result);
+      },
       onDone: () => {
         uiState = 'game'; shopScreen = null; paused = false;
         /* CS:0x6D8F-0x6DA8 fade out and load the world's music; CS:0x0696
@@ -4345,7 +4354,10 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
        * underneath the text). */
       if (tallyScreen) tallyScreen.draw(renderer, hero && hero.menuGlyphs, digitFrames);
 
-      renderer.present(level.palette);
+      /* A level-entry or respawn wait falls between the fade-out (graphics
+       * export 8: CS:0x0082 / CS:0x0845) and the fade-in (export 9:
+       * CS:0x010E / CS:0x0914), so the original shows black meanwhile. */
+      renderer.present(level.palette, stallDark && performance.now() < soundStallUntil ? 0 : 1);
 
       $('fps').textContent = clock.fps.toFixed(0);
       $('pos').textContent = `${player.x},${player.y}`;
