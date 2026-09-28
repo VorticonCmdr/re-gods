@@ -87,6 +87,23 @@ export function convertBezier(raw) {
   return out;
 }
 
+/* ── The death, CS:0xD923 (shared by worlds 1-3; world 4 has its own
+ * callers) [STATIC], read from the live code segment:
+ *   D926  [0x34d] = 0                 the running starburst is switched off
+ *   D92B  7x: by = (rand & 0x3f) + 0x10, bx = rand & 0x3f,
+ *         CS:0xA461 starburst at (x + bx, y + by)
+ *   D94B  [0x374] = 0xFC, [0x34] = 0  (guardian mode off)
+ *   D955  ten items from DS:0xD90E at (x + 0x18, y + 0x28) -> CS:0xD992
+ *   D971  [0x3BE] = world * 20 (byte), cs:[0xD9CA] = NOP, sfx 0x6422
+ * The CS:0xD9CA gate (main loop CS:0x02D5) then adds 500 points a tick
+ * (CS:0x0C8B dl=5) for [0x3BE] ticks and restores the level music. */
+export const DEATH_ITEMS = Object.freeze([80, 80, 80, 80, 5, 78, 10, 11, 5, 5]);   // DS:0xD90E
+export const DEATH_SFX = 0x6422;                                                  // CS:0xD98A
+export const DEATH_POPUP = Object.freeze({                                        // CS:0xBF5F calls
+  2: { x: 0x160, y: 0x380, id: 0x1f },     // CS:0xCE78 — before D923
+  3: { x: 0x220, y: 0x80, id: 0x1f },      // CS:0xD5FC — after D923
+});
+
 export class Guardian {
   constructor(world, tables = null) {
     if (world < 1 || world > 3) throw new Error(`guardian for world ${world} is not ported`);
@@ -127,6 +144,44 @@ export class Guardian {
   }
 
   get dead() { return this.hp < 0; }
+
+  /** CS:0xD923 plus each world's own extras (world 2: the CS:0xCE78 popup
+   *  first; world 3: the corpse, the popup and `inc [0x365]` after). Returns
+   *  what the host must apply: the popup, the score ticks, the difficulty
+   *  bump, and whether a corpse stays behind (world 3's CS:0xD557 gate). */
+  die({ rng, starburst, burst, sfx, popup }) {
+    const out = { scoreTicks: (this.world * 20) & 0xff, difficulty: 0, corpse: false };
+    if (this.world === 2 && popup) popup(DEATH_POPUP[2]);            // CS:0xCE81
+    if (starburst) starburst.active = false;                          // CS:0xD926
+    for (let i = 0; i < 7; i++) {
+      const by = (rng() & 0x3f) + 0x10;                               // CS:0xD92B
+      const bx = rng() & 0x3f;                                        // CS:0xD936
+      if (starburst) starburst.spawn(this.x + bx, this.y + by);       // CS:0xD945
+    }
+    if (starburst) starburst.chain = -4;                              // CS:0xD94B `mov byte [0x374],0xfc`
+    if (burst) burst.spawnList(DEATH_ITEMS, this.x + 0x18, this.y + 0x28);   // CS:0xD955-0xD96E
+    else for (let i = 0; i < 20; i++) rng();
+    sfx(DEATH_SFX);                                                   // CS:0xD98A
+    if (this.world === 3) {
+      this.corpseVy = 0;                                              // CS:0xD5EE [0x2CC] = 0
+      out.corpse = true;                                              // CS:0xD5E8 cs:[0xD557] = NOP
+      if (popup) popup(DEATH_POPUP[3]);                               // CS:0xD5F4 -> 0xD5FC
+      out.difficulty = 1;                                             // CS:0xD5F7 `inc byte [0x365]`
+    }
+    return out;
+  }
+
+  /** CS:0xD558, world 3's corpse gate: fall (vy +1, cap 0x10) to y = 0x70 and
+   *  lie there, drawn in two halves at 0x1C2 + (frame < 0x20 ? 0x29 : 0x2B). */
+  stepCorpse(cam) {
+    const dx = this.frame < 0x20 ? 0x29 : 0x2b;                       // CS:0xD563-0xD56B
+    let y = this.y + this.corpseVy;                                   // CS:0xD570
+    if (y >= 0x70) { y = 0x70; this.corpseVy = 0; }                   // CS:0xD574-0xD57C
+    else if (++this.corpseVy >= 0x10) this.corpseVy = 0x10;           // CS:0xD584-0xD58F
+    this.y = y;
+    const sx = this.x - cam.x, sy = y - cam.y;
+    return [{ x: sx, y: sy, sprite: 0x1c2 + dx }, { x: sx + 0x20, y: sy, sprite: 0x1c2 + dx + 1 }];
+  }
 
   drive(opts) {
     if (this.world === 2) return this.drive2(opts);

@@ -371,6 +371,23 @@ export class TreasureBurst {
     return this.records;
   }
 
+  /** CS:0xD992 — the guardian death's own ten-item throw (CS:0xD966 `mov
+   *  si,0xd90e`, the ALIGNED third list): the same record layout and the same
+   *  two draws per item as the chest (vx with bit-7 sign, then vy). */
+  spawnList(types, x, y) {
+    for (let i = 0; i < BURST_COUNT; i++) {
+      const r1 = this.rnd.next();
+      let vx = (r1 & 7) + 1;                       // CS:0xD99F-0xD9A4
+      if (r1 & 0x80) vx = -vx;                     // CS:0xD9A5
+      const r2 = this.rnd.next();
+      const vy = -((r2 & 7) + 3);                  // CS:0xD9B4-0xD9BA
+      const rec = this.records[i];
+      rec.x = x; rec.y = y; rec.vx = vx; rec.vy = vy; rec.type = types[i];
+    }
+    this.active = true;                            // CS:0xD9C4 [0x397] = 1
+    return this.records;
+  }
+
   /**
    * CS:0x132D. One tick.
    * @param {Function} alloc CS:0x38d7 — returns a free object slot, or null.

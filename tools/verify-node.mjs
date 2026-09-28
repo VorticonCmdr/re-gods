@@ -478,7 +478,8 @@ for (const r of await checkMusic(fetchRaw)) {
   const calls = [...code.matchAll(/popup\.(spawn|step)\([^;]*/g)].map((m) => m[0]);
   const unwired = calls.filter((c) => !c.includes('dropCarriedIntoWorld'));
   popupOrder.push({
-    pass: calls.length === 8 && unwired.length === 0
+    /* 9: the guardian death's CS:0xCE78 / 0xD5FC popup joined the eight. */
+    pass: calls.length === 9 && unwired.length === 0
           && !/for \(const l of popup\.landed\)/.test(code),
     name: 'every popup call lands CS:0xC041 inline, with no deferred drain',
     detail: unwired.length

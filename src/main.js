@@ -1088,6 +1088,9 @@ const guardianTables = {
    * (CS:0xD7E1), and the committed-camera-y nudge it applies (CS:0xD7E7,
    * `[0x270] -= 8`). The shake runs at CS:0x01CF whatever DS:0x34 holds. */
   let camShake = 0, camNudgeY = 0;
+  /* After a guardian dies: DS:0x3BE, the CS:0xD9CA gate's score countdown,
+   * and world 3's corpse (the CS:0xD557 gate). */
+  let guardianScoreTicks = 0, guardianCorpse = null;
   /* DS:0x32 — the scripted camera (camera.js scriptedCameraStep) and its
    * target DS:0x2EC/0x2EE. Only the level (re)init clears it (CS:0x8D53);
    * a death keeps it. `camPending` is this tick's scripted result, applied
@@ -1142,6 +1145,7 @@ const guardianTables = {
   };
   const wireSpawn = () => {
     guardian = null; guardianFx = []; camShake = 0; camNudgeY = 0;
+    guardianScoreTicks = 0; guardianCorpse = null;
     camScript = { mode: 0, tx: 0, ty: 0 }; camPending = null; camWasScripted = false;
     flashPool.reset(); flashFx = [];
     /* Selector 11 — CS:0xC49C. Only world 1's guardian is ported; the other
@@ -1978,6 +1982,11 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
    * @returns {number} the world to jump to, or -1 (CS:0x2e8a, no match)
    */
   function matchPassword(submit) {
+    const r = matchPasswordInner(submit);
+    if (typeof window !== 'undefined' && window.__pwLog) window.__pwLog.push({ submit, world: r });   // ?debug
+    return r;
+  }
+  function matchPasswordInner(submit) {
     for (let i = 0; i < passwordSlots.length; i++) {
       const pw = passwordSlots[i];
       if (pw && passwordToString(pw) === submit) return passwordWorldForSlot(i);
@@ -2280,6 +2289,7 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
             const bypass = !!attract && r.submit.length === 2 && r.submit[0] === 'L'
               && r.submit[1] >= '2' && r.submit[1] <= '4';
             const world = bypass ? r.submit.charCodeAt(1) - 0x30 : matchPassword(r.submit);
+            if (window.__pwLog) window.__pwLog.push({ submit: r.submit, bypass, world });   // ?debug
             passwordEntry = null;
             uiState = 'menu';                 // CS:0x2e8a default; overridden below on a match
             if (world > 0) enterViaPassword(world);
@@ -3169,8 +3179,33 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
            * (DS:0x1F0 = 6 steps, aimed at the jittered hero +8/+6). */
           tock36d, camScript, markers: markerList,
           zap: (x, y, tx, ty) => lineHazards.spawn(x, y, tx, ty, 6) };
-        guardianFx = guardian.drive(gOpts).concat(guardian.moveSpits(gOpts));
+        const g = guardian;
+        guardianFx = g.drive(gOpts);
+        if (g.dead) {
+          /* CS:0xD923 (and each world's extras) runs inside the driver, so
+           * this tick's world gates below still run. [0x34] = 0: the normal
+           * enemy suite resumes next tick. game/guardian.js `die`. */
+          const d = g.die({ rng: () => rng.next(), starburst, burst,
+            sfx: (id) => audio.play(id),
+            popup: (p) => popup.spawn(p.x, p.y, p.id, dropCarriedIntoWorld) });
+          guardian = null;
+          guardianScoreTicks = d.scoreTicks;                 // [0x3BE], the CS:0xD9CA gate
+          difficulty += d.difficulty;                        // CS:0xD5F7 (world 3), unclamped
+          if (d.corpse) guardianCorpse = g;                  // CS:0xD557 NOPed
+        }
+        guardianFx = guardianFx.concat(g.moveSpits(gOpts));
       }
+      if (!gmLate) guardianFx = [];
+      /* CS:0x02B1 `call 0xd557` — world 3's corpse gate, on both branches. */
+      if (guardianCorpse) guardianFx = guardianFx.concat(guardianCorpse.stepCorpse({ x: cam.snapX, y: cam.snapY }));
+      /* CS:0x02D5 `call 0xd9ca` — after a guardian's death, +500 points a tick
+       * (CS:0xD9CB dl=5 -> CS:0x0C8B) for world*20 ticks, starting on the
+       * death tick itself; at zero it patches itself back to RET and restores
+       * the level music (CS:0xD9DE-0xD9F2; the port's music is never stopped
+       * by the guardian, so there is nothing to restore). [PROVEN] live by a
+       * forced world-1 death (forcedeath.py): DS:0x3BE 19 and +500 on the
+       * death tick. */
+      if (guardianScoreTicks > 0) { score.add(500); guardianScoreTicks--; }
       /* `UNKNOWN_f030_item_drop` — System-B's own per-GROUP elimination
        * reward. CS:0xED78-ED80 sums `[0x3c3]` (state===0, dead) + `[0x1f4]`
        * (state<0 and NOT -2/-3, i.e. DYING) and compares to the descriptor's
@@ -3977,6 +4012,13 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
       /* DS:0x1d4, the starburst gravity phase, lives for the process too. */
       setStarburstGravityPhase,
       enemiesB: () => enemies,
+      /* Force the installed guardian to die on the next driver call (the
+       * port-side twin of tools/attract-capture/forcedeath.py). */
+      killGuardian: () => { if (guardian) guardian.hp = -1; return !!guardian; },
+      deathState: () => ({ guardian: !!guardian, scoreTicks: guardianScoreTicks, chain: starburst.chain,
+        sb: starburst.slots.map((q, i) => q.x >= 0 ? `${i}:${q.x},${q.y},${q.vx},${q.vy}` : null).filter(Boolean).join(' '),
+        burst: burst.records.map((q) => `${q.x},${q.y},${q.vx},${q.vy},${q.type}`).join(' '),
+        score: score.value }),
       starburst: () => ({ active: starburst.active, age: starburst.age, live: starburst.liveCount,
         bursts: starburst.bursts, refused: starburst.refused, chain: starburst.chain,
         slots: starburst.slots.map((q, i) => q.x >= 0 ? `${i}:${q.x},${q.y},${q.vx},${q.vy}` : null).filter(Boolean).join(' ') }),
