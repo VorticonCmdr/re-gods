@@ -16,6 +16,7 @@ import { dclDecompress } from '../../src/formats/dcl.js';
 import { Guardian4 } from '../../src/game/guardian4.js';
 import { DamageGrid } from '../../src/game/collision.js';
 import { GodsRandom } from '../../src/game/random.js';
+import { sfxDrawsRandom } from '../../src/audio/adl-random.js';
 
 const here = new URL('.', import.meta.url).pathname;
 const game = new URL('../../../Gods/', import.meta.url).pathname;
@@ -84,7 +85,8 @@ for (let t = 0; t + 1 < log.length && bad < 5; t++) {
     rng = () => { draws++; return gr.next(); };
   }
   const o = { cam: { x: r.cam[0], y: r.cam[1] }, hero: { x: r.hero[0], y: r.hero[1], state: 0 }, health,
-              rng, sfx: () => {}, zap: () => {}, invuln: false, camScript: cs,
+              rng, sfx: (id) => { if (sfxDrawsRandom(id)) rng(); },   // ADL draws for some ids (main.js audio.play)
+              zap: () => {}, invuln: false, camScript: cs,
               grid, decodeTag, difficulty: r.diff, debris: { spawn() {} } };   // a hit's spark draws twice (CS:0xABDE)
   const before = g.recs.map((q) => q.p);
   g.hook(o);
