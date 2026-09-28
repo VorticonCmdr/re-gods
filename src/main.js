@@ -1571,6 +1571,12 @@ const guardianTables = {
    * 0x1000:2a37` tail BEGIN QUEST uses).
    */
   async function fullRestart(key = '1A') {
+    /* CS:0x8D62-0x8D6E — every new-game start ([0x391] set at CS:0x0025 /
+     * 0x2D94 / 0x2E09 / 0x2EA8) resets the difficulty scalar DS:0x365 to 0,
+     * or 1 when the game starts in world 4. Nothing raises it per level: the
+     * world-3 guardian's death does (CS:0xD5F7), and the game-completion loop
+     * (CS:0x0445, clamped 2..4). [STATIC]. */
+    difficulty = key[0] === '4' ? 1 : 0;
     fx.lives = 2;                       // CS:0x8DD9's own starting value
     purse = new Purse(); score = new Score();          // CS:0x0487/0x8D91
     inventory = [INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY]; // CS:0x0498/0x8D80
@@ -1736,6 +1742,7 @@ const guardianTables = {
         inventory = [INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY];
         health.familiarEnergy = -1; health.familiarPower = 0; health.familiarWings = 0;
         deathSeq = null; lastDeathBurstFx = []; paused = false; gameOverFade = null;
+        difficulty = 0;                                   // CS:0x2E09 [0x391]=1 -> CS:0x8D62 (worlds 1-3)
         await switchLevel(levelKeyFor(entry.world, 1));   // sublevel B — JOYG_SUBLEVEL
         /* switchLevel's own `health = new Health()` already lands on
          * bar=START_BAR(1)/target=START_TARGET(24) — CS:0x8E16's own
@@ -4016,7 +4023,11 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
       enemiesB: () => enemies,
       /* Force the installed guardian to die on the next driver call (the
        * port-side twin of tools/attract-capture/forcedeath.py). */
-      killGuardian: () => { if (guardian) guardian.hp = -1; return !!guardian; },
+      killGuardian: (atHit = false) => {
+        if (!guardian) return false;
+        if (atHit) guardian.forceKill = true; else guardian.hp = -1;
+        return true;
+      },
       deathState: () => ({ guardian: !!guardian, scoreTicks: guardianScoreTicks, chain: starburst.chain,
         sb: starburst.slots.map((q, i) => q.x >= 0 ? `${i}:${q.x},${q.y},${q.vx},${q.vy}` : null).filter(Boolean).join(' '),
         burst: burst.records.map((q) => `${q.x},${q.y},${q.vx},${q.vy},${q.type}`).join(' '),

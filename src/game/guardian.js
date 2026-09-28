@@ -509,7 +509,8 @@ export class Guardian {
                         targets || null, { rng, debris, sfx });
       this.hp = proxy.state;
     }
-    /* D5E3 `jns` — the death (CS:0xD923, the corpse gate D557) is not ported yet. */
+    if (this.forceKill) this.hp = -1;                       // ?debug — forcedeath.py's D5C0 -> D5E5 twin
+    /* D5E3 `js` -> D5E5: the death (Guardian#die). */
     return drawn;
   }
 
