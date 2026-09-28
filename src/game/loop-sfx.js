@@ -1,8 +1,12 @@
 /* loop-sfx.js — the two looping ambience sounds GAME.EXE starts and stops
  * itself: the retracting spikes' machinery (sound 0x17) and a moving line
  * barrier (sound 0x45). Both are "bit 7 = repeat" ids, so the driver loops
- * them until sound export 5 (CS:0x22D6) stops them. [STATIC], read from
- * GAME.EXE; neither has been heard live.
+ * them until sound export 5 (CS:0x22D6) stops them. Read from GAME.EXE.
+ * The spike loop's starts are [PROVEN]: the port plays 0x0197 at exactly the
+ * tape cursors the live sweeps logged it from CS:0x14E6 (PJOYL1 218 and 679,
+ * PJOYL2 1712), and at none in the swept PJOYG2 2-470 / PJOYL3 92-1500. Its
+ * stop and the whole barrier loop are [STATIC]: no demo moves a cycling
+ * barrier on screen, and the sweeps log CS:0x22CA only.
  *
  * THE SPIKES — FUN_1000_1432, the per-tick object walk (inside the CS:0x01FC
  * object-pass gate). It zeroes DS:0x39A at CS:0x143C; FUN_1000_1AD6, called

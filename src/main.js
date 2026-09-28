@@ -1264,8 +1264,10 @@ const guardianTables = {
    * writes 0xC3 (RET) at CS:0xC4AA; the only other writer is the per-level
    * init FUN_1000_8C34 at CS:0x8E70 (0x90, NOP), called once from CS:0x0092.
    * So the turrets stay frozen and undrawn after the guardian dies, until
-   * the next level load — not only while DS:0x34 is set. [STATIC], an
-   * exhaustive byte search for `88 AD` in GAME.EXE finds only those two. */
+   * the next level load — not only while DS:0x34 is set. An exhaustive byte
+   * search for `88 AD` in GAME.EXE finds only those two; [PROVEN] live: C3
+   * after a forced world-4 guardian death with [0x34] = 0, 90 after the next
+   * level load (Gods/docs/guardians.md). */
   let turretWalkerRet = false;
   /* DS:0x2D2 — the camera-x shake counter the world-3 guardian's 0xFD sets
    * (CS:0xD7E1), and the committed-camera-y nudge it applies (CS:0xD7E7,
