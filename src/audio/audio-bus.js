@@ -126,6 +126,7 @@
 
 import { buildSfxSequence } from './sfx-sequence.js';
 import { renderSequence, OPL_RATE } from './opl2-core.js';
+import { adlVariantOffset } from './adl-random.js';
 
 function scheduleTone(ctx, dest, t0, { freq, dur, type = 'square', gain = 0.2, slideTo, delay = 0 }) {
   const osc = ctx.createOscillator();
@@ -259,10 +260,18 @@ export const SFX_VOICES = {
 
 /** Node-testable: records ids instead of making sound. */
 export class RecordingAudioBus {
-  constructor() { this.played = []; this.stopped = []; }
+  constructor() { this.played = []; this.stopped = []; this.musicOps = []; }
   play(id) { this.played.push(id); }
   stop(id) { this.stopped.push(id); }
+  music(op, arg) { this.musicOps.push(arg === undefined ? [op] : [op, arg]); }
 }
+
+/**
+ * ADL.EXE's own id gate (ADL:0x17D `cmp al,0x49 / jnl`): a SIGNED compare, so
+ * ids 0x49..0x7F are dropped and 0x80..0xFF (bit 7, the looping sounds) pass.
+ * TDY/BPR have the same gate; ROL.EXE has none (rol-driver.js).
+ */
+export const adlAccepts = (id) => ((id << 24) >> 24) < 0x49;
 
 /** Browser-only: real Web Audio playback, lazy-started on the first play(). */
 export class WebAudioBus {
@@ -270,6 +279,34 @@ export class WebAudioBus {
   #pgodsBlobs = null;
   #buffers = new Map();
   #playing = new Map();          // blob index -> the sources still sounding
+  #driver = 'adlib';             // GODS.INI's sound choice: 'adlib' | 'roland'
+  #roland = null;                // roland-player.js, when the Roland path is set up
+
+  /** The shared AudioContext (created on first use). */
+  context() { return this.#ensureContext(); }
+
+  /** Supply the Roland path (roland-player.js). */
+  setRoland(player) { this.#roland = player; }
+
+  get driver() { return this.#driver; }
+
+  /** Switch drivers; the one being left is silenced. */
+  setDriver(name) {
+    if (name === this.#driver) return;
+    if (this.#driver === 'roland' && this.#roland) this.#roland.silence();
+    this.#driver = name;
+  }
+
+  #rolandOn() { return this.#driver === 'roland' && this.#roland; }
+
+  /**
+   * Sound exports 6-12, the music controls. ADL.EXE's are a bare RETF
+   * (docs/drivers-and-memory.md), so under AdLib they do nothing — the
+   * shipped AdLib/Sound Blaster game has no in-game music at all.
+   */
+  music(op, arg) {
+    if (this.#rolandOn()) { this.#ensureContext(); this.#roland.musicOp(op, arg); }
+  }
 
   #ensureContext() {
     if (!this.#ctx) {
@@ -313,9 +350,17 @@ export class WebAudioBus {
     return this.#buffers.get(blobIndex);
   }
 
-  play(id) {
+  /**
+   * @param {number} id the GAME.EXE sound word
+   * @param {number} [rnd] the random word ADL.EXE's helper drew for it (main.js
+   *   draws it from the game's table, adl-random.js)
+   */
+  play(id, rnd) {
     const ctx = this.#ensureContext();
-    const buffer = this.#bufferFor(ctx, id);
+    if (this.#rolandOn()) { this.#roland.play(id); return; }
+    if (!adlAccepts(id)) return;
+    const blob = (id + adlVariantOffset(id, rnd)) & 0x7f;
+    const buffer = this.#bufferFor(ctx, blob);
     if (buffer) {
       const src = ctx.createBufferSource();
       src.buffer = buffer;
@@ -323,7 +368,7 @@ export class WebAudioBus {
       g.gain.value = SFX_GAIN;
       src.connect(g).connect(ctx.destination);
       src.start(ctx.currentTime);
-      const key = id & 0x7f;
+      const key = blob;                  // export 5 stops by blob: a variant is not the base
       if (!this.#playing.has(key)) this.#playing.set(key, new Set());
       const live = this.#playing.get(key);
       live.add(src);
@@ -342,6 +387,7 @@ export class WebAudioBus {
    * left to finish.
    */
   stop(id) {
+    if (this.#rolandOn()) { this.#roland.stop(id); return; }
     const live = this.#playing.get(id & 0x7f);
     if (!live) return;
     for (const src of live) { try { src.stop(); } catch { /* already ended */ } }

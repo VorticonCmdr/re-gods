@@ -289,6 +289,33 @@ export const INTRO_TIMELINE = [
 ];
 export const INTRO_END_TICK = 7900;
 
+/* The same waits' Roland column (DS:0x195 == 2, the first of each triple;
+ * INTROV.unpacked.exe, e.g. CS:0x007B 0x1E5C / 0x008C 0x1D13 / 0x009D 0x1DD0
+ * for the tail). Pairs are [`> 2` value used above, `== 2` value]. The
+ * story's page hold is 0x180 for both (only id 3 uses 0x110, CS:0x07CD). */
+export const INTRO_ROLAND_ANCHORS = Object.freeze([
+  [7, 7], [90, 91], [194, 197], [288, 293], [384, 391], [472, 480], [577, 587], [665, 677],
+  [768, 782], [870, 885], [967, 984], [1161, 1182], [1256, 1279],
+  [1342, 1366], [1544, 1572], [1641, 1671], [3368, 3429], [3427, 3489], [6400, 6517],
+  [6498, 6617], [6534, 6654], [6634, 6755], [6729, 6852], [6824, 6949], [6919, 7046],
+  [7014, 7142], [7109, 7239], [7204, 7336], [7497, 7634], [7632, 7772],
+]);
+
+/**
+ * Roland counter -> the timeline's own units. Every INTROV wait is `counter
+ * < threshold` and what runs between two waits has a fixed length, so each
+ * stretch keeps its offset from the last threshold passed, and holds just
+ * short of the next one while the Roland wait is the longer.
+ */
+export function introTimeForRoland(real) {
+  let i = INTRO_ROLAND_ANCHORS.length - 1;
+  while (i > 0 && INTRO_ROLAND_ANCHORS[i][1] > real) i--;
+  const [sb, ro] = INTRO_ROLAND_ANCHORS[i];
+  const next = INTRO_ROLAND_ANCHORS[i + 1];
+  const t = real - ro + sb;
+  return next ? Math.min(t, next[0] - 0.001) : t;
+}
+
 /* ── The palette: DS:0x73 and the three fade routines ─────────────────
  * [STATIC], INTROV.unpacked.exe. Each routine works on 16 words of 3-bit
  * channels (B bits 0-2, G 4-6, R 8-10), installs the result (CS:0x1635), then
@@ -421,8 +448,11 @@ function toRGBA(words) {
  * reads `input` directly — any key skips (see the SKIP header), handled by
  * main.js's keydown listener. Runs once (see DOES NOT LOOP). */
 export class Intro {
-  constructor() {
-    this.t = 7;
+  /** @param {{roland?:boolean}} [opts] use the Roland driver's waits */
+  constructor({ roland = false } = {}) {
+    this.roland = roland;
+    this.real = 7;           // INTROV's own counter, DS:0x93
+    this.t = 7;              // the timeline's units (the `> 2` column)
     this.done = false;
     this.#sync();
   }
@@ -438,7 +468,8 @@ export class Intro {
 
   step(ticks = INTRO_HZ / 15) {
     if (this.done) return;
-    this.t += ticks;
+    this.real += ticks;
+    this.t = this.roland ? introTimeForRoland(this.real) : this.real;
     if (this.t >= INTRO_END_TICK) { this.done = true; return; }
     this.#sync();
   }

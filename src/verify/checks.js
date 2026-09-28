@@ -13,8 +13,14 @@ import { PayoffScreen, PAYOFF_PAGES, LINE_Y, lineX } from '../game/payoff.js';
 import { dclDecompress } from '../formats/dcl.js';
 import { DOOR_TILES, ZONE_TELEPORT, ZONE_EXIT, makeGates, makeActionContext,
          runAction, fireTrigger, SFX } from '../game/trigger-actions.js';
-import { RecordingAudioBus, SFX_VOICES } from '../audio/audio-bus.js';
+import { RecordingAudioBus, SFX_VOICES, adlAccepts } from '../audio/audio-bus.js';
 import { parseMusContainer, isSmf, expandBlob } from '../audio/mus-container.js';
+import { parseMt32Bank, bankOffset, MT32_BANK_BYTES, MT32_RHYTHM_NAMES } from '../audio/mt32-bank.js';
+import { ROL_SFX_REMAP, ROL_SFX_RECORDS, RolSfxDriver, RolRandom, RolMusic, rolRemap,
+         rolVariantOffset, worldMusicContext, rlFileForContext, levelMusicVolume,
+         MUSIC_CONTEXT } from '../audio/rol-driver.js';
+import { RolandSequencer, parseRolandTrack } from '../audio/roland-sequencer.js';
+import { adlVariantOffset, ADL_SFX_VARIANT } from '../audio/adl-random.js';
 import { parseSmf, notesFromEvents, buildTempoMap, ticksToSeconds } from '../audio/smf-parser.js';
 import { KillSmoke, SLOTS as SMOKE_SLOTS, FRAMES as SMOKE_FRAMES,
          SPRITE_BASE as SMOKE_SPRITE_BASE,
@@ -107,7 +113,7 @@ import { Health, HEALTH_MAX, damageFor, attackHero, creatureTouchesHero,
          difficultyScale, DIFFICULTY_MULTIPLIERS, difficultyForgiven,
          DIFFICULTY_PROGRESSION, creatureScansGrid, hitSparkAxis,
          CREATURE_CONTACT_BOX, db4eHit, DB4E_CROUCH_TOP_RAISE,
-         KILL_SFX, HURT_SFX, setTargetSink } from '../game/combat.js';
+         KILL_SFX, KILL_ALT_SFX, HURT_SFX, setTargetSink } from '../game/combat.js';
 import { DeathBurst, DEATH_BURST_TEMPLATE, DEATH_BURST_TICKS,
          DEATH_BURST_SPRITE_BASE, ARRIVAL_ZONE_TABLE, findRespawnPosition,
          loseLife, gameOverPlaceholder, DEATH_SFX } from '../game/death.js';
@@ -6890,6 +6896,16 @@ export async function checkWeaponsProjectiles(fetchRaw) {
       0, undefined, null, { rng: () => 1, debris: debris2, sfx: (id) => bus2.play(id) });
     check('creatureScansGrid: a KILL plays KILL_SFX exactly once (CS:0xAB98 -> 0xABA0)',
       bus2.played.length === 1 && bus2.played[0] === KILL_SFX, `played [${bus2.played}]`);
+
+    /* Inside a DS:0x35E bracket (System A, the statue, the PAT driver) the
+     * death branch plays KILL_SFX and THEN 0x0E49 (CS:0xABAF, 0xABB7). */
+    const bus3 = new RecordingAudioBus();
+    const killer3 = { x: 200, y: 200, state: 3 };
+    grid2.stamp2x2(killer3.x, killer3.y, 1);
+    creatureScansGrid(killer3, grid2, cam2, () => ({ damage: 5, weapon: 0 }),
+      0, undefined, null, { rng: () => 1, debris: debris2, sfx: (id) => bus3.play(id), alt35e: true });
+    check('creatureScansGrid in the DS:0x35E bracket: a KILL plays 0x0F22 then 0x0E49 (CS:0xABAF, 0xABB7)',
+      bus3.played.join() === [KILL_SFX, KILL_ALT_SFX].join(), `played [${bus3.played}]`);
   }
 
   /* ── attackHero/creatureTouchesHero: the OTHER death branch, CS:0xA9EC ──
@@ -6921,6 +6937,14 @@ export async function checkWeaponsProjectiles(fetchRaw) {
       { reportGate: 1, sfx: (id) => busGated.play(id) });
     check('attackHero: a reportGate-suppressed hit plays no sound',
       busGated.played.length === 0, `played [${busGated.played}]`);
+
+    const busAlt = new RecordingAudioBus();
+    attackHero(atkBox, hero0, new Health(), { sfx: (id) => busAlt.play(id), alt35e: true });
+    check('attackHero in the DS:0x35E bracket: a reported hit plays 0x0E49 INSTEAD of 0x0F22 (CS:0xABD1)',
+      busAlt.played.join() === String(KILL_ALT_SFX), `played [${busAlt.played}]`);
+    check('ADL.EXE drops 0x0E49 (ADL:0x17D signed `cmp al,0x49 / jnl`), so under AdLib that touch is silent; '
+      + 'bit-7 ids (0x0280) and 0x0F22 pass',
+      !adlAccepts(KILL_ALT_SFX) && adlAccepts(KILL_SFX) && adlAccepts(0x0280) && !adlAccepts(0x7f7f));
   }
 
   /* ── HURT_SFX and FIRE_SFX: consume-and-reset / dispatch shape ─────────── */
@@ -17134,6 +17158,16 @@ export async function checkMusic(fetchRaw) {
       firstOf('opener') < firstOf('logo') && firstOf('logo') < firstOf('story') && firstOf('story') < firstOf('credits'));
     check('story page 1 starts at the live-confirmed counter 1641 and page 2 at 1641+0x180 (FUN_1000_07ae)',
       pages.length === 8 && pages[0][0] === 1641 && pages[1][0] === 1641 + 0x180 && INTRO_HZ === 50);
+    const { introTimeForRoland, INTRO_ROLAND_ANCHORS, Intro, INTRO_END_TICK } = await import('../game/intro.js');
+    const ri = new Intro({ roland: true });
+    while (!ri.done) ri.step();
+    check('intro under Roland (DS:0x195 == 2): page 1 at counter 1671, held at the old page until then; page 2 '
+      + '0x180 later; the tail runs 140 ticks later than under Sound Blaster',
+      introTimeForRoland(1671) === 1641 && introTimeForRoland(1671 + 0x180) === 1641 + 0x180
+      && introTimeForRoland(1670) < 1641 && introTimeForRoland(1572) === 1544
+      && Math.abs(ri.real - (INTRO_END_TICK + 140)) < 4
+      && INTRO_ROLAND_ANCHORS.every(([a, b], i, all) => i === 0 || (a > all[i - 1][0] && b > all[i - 1][1])),
+      `ends at real ${ri.real}`);
   }
   {
     /* The intro palette: DS:0x73 stepped by 0xDCC / 0xEB8 / 0xE51 (intro.js). */
@@ -17162,22 +17196,140 @@ export async function checkMusic(fetchRaw) {
       (() => { const p = introPaletteAt(7632 + 200 * 50 / 70 + 25); return p[1] === 0 && p[8] !== 0; })());
   }
 
-  /* PGODSRLB-G.RL (six more files, same letter family) are NOT staged or
-   * fetched by this check — GAME.EXE never loads any of them for real play
-   * (this module's own header), so re-deriving their shape here would only
-   * ever exercise dead weight. This session found, by direct Python
-   * analysis of the raw shipped bytes (NOT re-run by this tool, unlike
-   * PGODSRLA.RL just above — flagged per this project's own [WF]-style
-   * discipline for a claim this check itself cannot re-verify), that all
-   * six share PGODSRLA's exact shape: 63 blobs, exactly one non-SMF blob,
-   * always at index 21. */
-  results.push({
-    name: 'NOTE (Python-only, not re-derived by this check): PGODSRLB-G.RL '
-      + '(six files) share PGODSRLA.RL\'s exact container shape above — 63 '
-      + 'blobs, one non-SMF blob, always at index 21 — a new finding; '
-      + 'drivers-and-memory.md only ever checked PGODSRLA\'s own shape.',
-    note: true, pass: true, detail: '',
-  });
+  /* ── The Roland path: ROL.EXE, the seven .RL files, PTITLE.RL's bank ──
+   * (audio/rol-driver.js, roland-sequencer.js, mt32-bank.js). */
+  {
+    const rlBlobs = [], rlData = [];
+    for (let c = 0; c < 7; c++) {
+      rlData.push(dclDecompress(await fetchRaw(`game/${rlFileForContext(c)}`)).data);
+      rlBlobs.push(parseMusContainer(rlData[c]));
+    }
+    check('all seven PGODSRL?.RL: 63 blobs, exactly one non-SMF, at index 21 (was a Python-only note)',
+      rlBlobs.every((b) => b.length === 63
+        && b.map((x, i) => (isSmf(x) ? -1 : i)).filter((i) => i >= 0).join() === '21'));
+    check('blobs 1..62 (the sound effects) are byte-identical in all seven files; only blob 0, the music, differs',
+      rlBlobs.every((b) => b.slice(1).every((x, i) => x.length === rlBlobs[0][i + 1].length
+        && x.every((v, k) => v === rlBlobs[0][i + 1][k])))
+      && new Set(rlBlobs.map((b) => b[0].length)).size === 7);
+    const music = rlBlobs.map((b) => parseRolandTrack(expandBlob(b[0])));
+    const musicChannels = new Set(music.flatMap((t) => t.events
+      .filter((e) => (e.status & 0xf0) === 0x90).map((e) => e.status & 0x0f)));
+    check('every context\'s music (blob 0) plays its notes on MIDI channels 6-9 only: MT-32 parts 6-8 and the '
+      + 'rhythm part, clear of the SFX slots\' channels 1-5 (ROL:0x131 sets volume slots 5-8). PGODSRLC '
+      + 'also sends a few bends and a CC 0 on channel 0, which has no MT-32 part',
+      [...musicChannels].every((c) => c >= 6 && c <= 9), [...musicChannels].join());
+    check('world contexts: world N -> PGODSRL{A..D}, title E, guardian F, shop G (export 12 adds \'a\')',
+      [1, 2, 3, 4].map((w) => rlFileForContext(worldMusicContext(w))).join() === 'PGODSRLA.RL,PGODSRLB.RL,PGODSRLC.RL,PGODSRLD.RL'
+      && rlFileForContext(MUSIC_CONTEXT.TITLE) === 'PGODSRLE.RL'
+      && rlFileForContext(MUSIC_CONTEXT.GUARDIAN) === 'PGODSRLF.RL'
+      && rlFileForContext(MUSIC_CONTEXT.SHOP) === 'PGODSRLG.RL');
+    check('the level music volume is 0x80, 0x6C in world 2 (CS:0x0370 `sub al,0x14`)',
+      levelMusicVolume(1) === 0x80 && levelMusicVolume(2) === 0x6c && levelMusicVolume(4) === 0x80);
+
+    /* ROL.EXE's tables, against the file (image = file + 0x200). */
+    const rol = await fetchRaw('game/ROL.EXE');
+    const at = (o) => rol[0x200 + o];
+    check('ROL_SFX_REMAP is ROL.EXE CS:0x6F4, all 74 bytes',
+      ROL_SFX_REMAP.length === 74 && ROL_SFX_REMAP.every((v, i) => v === at(0x6f4 + i)));
+    check('ROL_SFX_RECORDS is ROL.EXE CS:0x634, 64 x 3 bytes',
+      ROL_SFX_RECORDS.length === 64
+      && ROL_SFX_RECORDS.every(([a, b, c], i) => a === at(0x634 + 3 * i) && b === at(0x635 + 3 * i) && c === at(0x636 + 3 * i)));
+    check('every id GAME.EXE can send (0..0x49) remaps to a real SFX blob (1..62)',
+      [...ROL_SFX_REMAP].every((v) => v >= 1 && v <= 62));
+    check('export 12 patches ROL.EXE\'s own "godsrle.rl" (CS:0x27; letter at CS:0x2D)',
+      String.fromCharCode(...rol.subarray(0x200 + 0x27, 0x200 + 0x31)) === 'godsrle.rl');
+
+    /* PTITLE.RL's bank. */
+    const title = dclDecompress(await fetchRaw('game/PTITLE.RL')).data;
+    const bank = parseMt32Bank(title);
+    check('PTITLE.RL carries an MT-32 bank at 0x8048 filling the file exactly (23+128+64*246+128*8+85*4 = 17259)',
+      bank && bank.offset === 0x8048 && title.length - bank.offset === MT32_BANK_BYTES && MT32_BANK_BYTES === 17259,
+      bank ? `offset 0x${bank.offset.toString(16)}, tail ${title.length - bank.offset}` : 'no bank');
+    check('no in-game .RL carries one (PPLAYER 0x2A45: first blob at 256 = count*4+2 + 2)',
+      rlData.every((d) => bankOffset(d) === -1));
+    const tname = (p) => { const q = bank.patches[p]; return q.timbreGroup === 2 ? bank.timbres[q.timbreNumber].name : `grp${q.timbreGroup}`; };
+    check('the game\'s own sounds are custom timbres: patch 7 "xplo1", 25 "Heartbeat", 3 "pain1", 4 "Footsteps1"',
+      tname(7) === 'xplo1' && tname(25) === 'Heartbeat' && tname(3) === 'pain1' && tname(4) === 'Footsteps1',
+      `${tname(7)} ${tname(25)} ${tname(3)} ${tname(4)}`);
+    check('the rhythm setup maps key 36 to R1 (Acou BD) and key 42 to R7 (Clsd HiHat)',
+      MT32_RHYTHM_NAMES[bank.rhythm.get(36).timbre - 64] === 'Acou BD'
+      && MT32_RHYTHM_NAMES[bank.rhythm.get(42).timbre - 64] === 'Clsd HiHat');
+    check('the system area puts parts 1-8 on MIDI channels 1-8 and rhythm on 9 (0-based)',
+      bank.system.channels.join() === '1,2,3,4,5,6,7,8,9');
+    /* The kill / time-bomb sound 0x22 -> blob 2, +0..2 (variant routine 2),
+     * and all three variants play patch 7, the explosion. */
+    const sfx = rlBlobs[0].map((b) => parseRolandTrack(expandBlob(b)));
+    const progOf = (blob) => sfx[blob].events.filter((e) => (e.status & 0xf0) === 0xc0).map((e) => e.a);
+    check('0x1022 (time bomb) and 0x0F22 (kill) remap to blob 2 with variant routine 2; blobs 2-4 all play patch 7 "xplo1"',
+      rolRemap(0x1022) === 2 && rolRemap(0x0f22) === 2 && ROL_SFX_RECORDS[2][1] === 2
+      && [2, 3, 4].every((b) => progOf(b).join() === '7'));
+    check('0x0E49 (the 0x35E layer) remaps to blob 48, patch 17 "harpy"',
+      rolRemap(KILL_ALT_SFX) === 48 && progOf(48).join() === '17' && tname(17) === 'harpy');
+
+    /* CS:0x5FF and the variant routines. */
+    const r1 = new RolRandom(0x1234), r2 = new RolRandom(0x1234);
+    const seqA = Array.from({ length: 8 }, () => r1.next()), seqB = Array.from({ length: 8 }, () => r2.next());
+    const seen = new Set();
+    const rv = new RolRandom(0xbeef);
+    for (let i = 0; i < 400; i++) seen.add(rolVariantOffset(2, rv));
+    check('RolRandom is deterministic and variant routine 2 lands on 0, 1 and 2 only',
+      seqA.join() === seqB.join() && new Set(seqA).size > 4 && [...seen].sort().join() === '0,1,2');
+
+    /* The allocator (CS:0x376-0x4D3). */
+    const drv = new RolSfxDriver(new RolRandom(1));
+    const none = () => false;
+    const a = drv.play(0x0501, none);                           // blob 2, 1 voice
+    const b = drv.play(0x0513, none);                           // 0x13 -> blob 20, 3 voices
+    check('a sound takes the first free slot; a 3-voice one the next three adjacent (slots 1-3)',
+      a && a.firstSlot === 0 && b && b.firstSlot === 1 && b.voices === 3, JSON.stringify([a, b]));
+    const c = drv.play(0x0215, none);                           // 1 voice, prio 2: slot 4
+    const d = drv.play(0x0115, none);                           // prio 1, all busy: steal needs >= prio
+    check('with all five slots busy a sound only takes over a run of equal-or-lower priority',
+      c && c.firstSlot === 4 && d === null, JSON.stringify([c, d]));
+    drv.musicTick();
+    const e = drv.play(0x0115, (blob) => blob !== 2);           // blob 2 has ended: slot 0 frees
+    check('slots whose blob no longer plays are freed at most once per music tick (DS:0xD2)',
+      e && e.firstSlot === 0, JSON.stringify(e));
+    const u = new RolSfxDriver(new RolRandom(1));
+    const u1 = u.play(0x0280, () => true), u2 = u.play(0x0280, () => true);
+    check('a bit-7 id loops and is refused while it already holds a slot (0x4B1)',
+      u1 && u1.loop && u1.blob === 1 && u2 === null);
+
+    /* Exports 6-12 (the music state machine). */
+    const m = new RolMusic();
+    m.load(0); m.start(0x80);
+    const ev0 = m.take().map((x) => x.type).join();
+    let ticks = 0; m.fadeOut();
+    while (ticks < 200 && !m.take().some((x) => x.type === 'stop')) { m.tick(); ticks++; }
+    check('export 6 starts blob 0 at the given volume; export 7 fades 0x80 to silence in 64 ticks '
+      + '(two steps a tick: `not byte [cs:0x34]` sets no flags, so the skip never happens) and stops it',
+      ev0 === 'load,start,volume' && ticks === 64, `${ev0} / ${ticks}`);
+    const m2 = new RolMusic(); m2.start(0x80); m2.take(); m2.fadeOut(); m2.load(5); m2.start(0x96);
+    let loadedAt = -1;
+    for (let t = 0; t < 100 && loadedAt < 0; t++) { m2.tick(); if (m2.take().some((x) => x.type === 'load')) loadedAt = t; }
+    check('export 12 after a fade-out waits for silence, then loads; the export-6 call behind it starts after',
+      loadedAt === 63 && m2.context === 5 && m2.volume === 0x96 && m2.mode === 0xff, `load at ${loadedAt}`);
+    const m3 = new RolMusic(); m3.start(0x80); m3.mute();
+    const muted = m3.take().filter((x) => x.type === 'volume').map((x) => x.volume);
+    m3.unmute();
+    check('export 10 sends volume 0 but keeps the level; export 11 restores it',
+      muted.at(-1) === 0 && m3.volume === 0x80 && m3.take().at(-1).volume === 0x80);
+
+    /* PPLAYER's MPU output. */
+    const sq = new RolandSequencer();
+    const out = [];
+    const trk = { events: [{ tick: 0, status: 0xc1, a: 7, b: 0 }, { tick: 0, status: 0x91, a: 58, b: 100 },
+      { tick: 0, status: 0xd1, a: 40, b: 0 }, { tick: 0, status: 0x9a, a: 60, b: 100 }, { tick: 2, status: 0x81, a: 58, b: 0 }], endTick: 2 };
+    sq.setVolume(2, 0x40);
+    sq.play(2, trk, 2, false);
+    for (let t = 0; t < 4; t++) sq.tick((msg) => out.push(msg));
+    check('PPLAYER MPU path: channel + BL, velocity * vol / 128, pressure never sent, channel 11+ dropped, CC 123 on stop',
+      out.map((x) => x.status.toString(16)).join() === 'c3,93,83'
+      && out[1].b === 50 && !sq.isPlaying(2), out.map((x) => `${x.status.toString(16)}:${x.b}`).join());
+    check('ADL.EXE picks variants too, from the GAME\'s random word: 0x22 -> +0..2, 0x0E -> +0..1',
+      ADL_SFX_VARIANT.get(0x22) === 2 && adlVariantOffset(0x1022, 0x0101) === 2
+      && adlVariantOffset(0x020e, 0x0003) === 1 && adlVariantOffset(0x0f19, 0xffff) === 0);
+  }
 
   /* ── the SFX dispatch guard, moved onto the path that actually runs ──
    * There used to be a check that every wired id had a `SFX_VOICES` entry.

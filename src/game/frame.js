@@ -254,22 +254,27 @@ export function stepHeroFrame({ input, arsenal, grid, player, map, cam,
  * @param {?object} debris    the DS:0x8b4c owner — CS:0xAC4C's spark.
  * @param {?Function} sfx     played with `KILL_SFX` on either death branch —
  *   see combat.js's `attackHero`/`creatureScansGrid` for which reaches it.
+ * @param {?Set} systemA      the System-A entities among `enemies`: their
+ *   CS:0xFF93 call (CS:0xE0AA) is inside the DS:0x35E bracket CS:0xE0A5-
+ *   0xE0AD, System B's (CS:0xEDF4) is not (combat.js KILL_ALT_SFX).
  * @returns {{touched:number, killed:number}}
  */
 export function stepCreatureDamage(enemies, { grid, cam, hero, health,
                                               decodeTag, difficulty = 0,
                                               arsenal = null, rng = null,
-                                              debris = null, sfx = null }) {
+                                              debris = null, sfx = null,
+                                              systemA = null }) {
   /* The scans below append to the shared target list through combat.js's
    * sink (main.js installs it; the gate DS:0x343 is open while the hero
    * carries the hunter or the familiar lives). */
   let touched = 0, killed = 0;
   for (const e of enemies) {
     if (!e.alive || e.justAlive) continue;               // CS:0xFF48 — see entity.js
-    const c = creatureTouchesHero(e, hero, health, { sfx });
+    const alt35e = !!(systemA && systemA.has(e));
+    const c = creatureTouchesHero(e, hero, health, { sfx, alt35e });
     if (c.strengthOut < 0) { touched++; continue; }     // CS:0xa9ec — contact won
     const s = creatureScansGrid(e, grid, cam, decodeTag, difficulty,
-                                undefined, null, { rng, debris, sfx });
+                                undefined, null, { rng, debris, sfx, alt35e });
     if (s.killed) { killed++; e.frame = -1; e.delay = 0; }
   }
   return { touched, killed };

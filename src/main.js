@@ -108,6 +108,8 @@ import { ShopScreen, BUY_CONFIRM_SFX, MOVE_SFX as SHOP_MOVE_SFX } from './game/s
 import { Intro, buildIntroAssets } from './game/intro.js';
 import { TallyScreen, CHA_CHING_SFX, tallyFanfareSfx } from './game/tally.js';
 import { WebAudioBus } from './audio/audio-bus.js';
+import { RolandPlayer } from './audio/roland-player.js';
+import { MUSIC_CONTEXT, worldMusicContext, levelMusicVolume } from './audio/rol-driver.js';
 import { parseMusContainer, isSmf, expandBlob } from './audio/mus-container.js';
 import { MusicPlayer } from './audio/music-player.js';
 import { PcmPlayer } from './audio/pcm-player.js';
@@ -517,6 +519,24 @@ async function main() {
    * before now). `AudioContext` is created lazily inside the bus itself on
    * the first real play() call, not here — see that module for why. */
   const audio = new WebAudioBus();
+  /* GODS.INI's sound setting. The shipped file says Sound Blaster, which
+   * loads ADL.EXE (the default here); Roland loads ROL.EXE, whose music and
+   * sound bank this port plays through audio/roland-player.js. `?sound=roland`
+   * or the panel's picker choose it; the choice is remembered. */
+  let roland = null;
+  const ensureRoland = () => {
+    if (!roland) { roland = new RolandPlayer(fetchRaw, () => audio.context()); audio.setRoland(roland); }
+    return roland;
+  };
+  const soundSel = $('soundDriver');
+  const initialDriver = (() => {
+    const q = new URLSearchParams(location.search).get('sound');
+    if (q === 'roland' || q === 'adlib') return q;
+    try { return localStorage.getItem('gods.sound') === 'roland' ? 'roland' : 'adlib'; } catch { return 'adlib'; }
+  })();
+  if (initialDriver === 'roland') ensureRoland();
+  audio.setDriver(initialDriver);
+  if (soundSel) soundSel.value = initialDriver;
 
   /* #11 audio backlog item, music half — see audio/music-player.js's own
    * header. PGODS.MUS (mus-container.js's own header has the full citation
@@ -525,9 +545,10 @@ async function main() {
    * pick a specific one of its 70 real tracks — UNKNOWN_pgods_mus_cue_
    * dispatch is CLOSED, live-confirmed in DOSBox: the real per-level music
    * is PGODSRL{A-G}.RL, dispatched by world number, but only under Roland
-   * (see Gods/docs/drivers-and-memory.md). This port doesn't parse those
-   * files, so there is no level/event mapping to port for PGODS.MUS itself
-   * — the same disclosed-affordance spirit as the weapon picker below:
+   * (see Gods/docs/drivers-and-memory.md; this port plays them on the
+   * Roland path, audio/roland-player.js). So there is no level/event mapping
+   * to port for PGODS.MUS itself — the same disclosed-affordance spirit as
+   * the weapon picker below:
    * every track is offered on demand, none is claimed to belong to any
    * level or event. */
   const musicPlayer = new MusicPlayer();
@@ -750,15 +771,57 @@ const guardianTables = {
   let rng = new GodsRandom(1);
   /* The sound driver draws from the game's ONE random table for some sfx
    * (audio/adl-random.js) — so playing one must advance `rng` too, or every
-   * later draw (enemy AI, spawns) reads a different number than DOS. */
+   * later draw (enemy AI, spawns) reads a different number than DOS. The
+   * word drawn also picks the sound's variant (adl-random.js).
+   * ROL.EXE never calls the game back for this: its variants come from its
+   * own generator (rol-driver.js's RolRandom, CS:0x5FF), so under Roland a
+   * sound leaves the game's table alone — and the attract recordings, made
+   * with the AdLib driver's draws, would play out differently, as they
+   * would in DOS. */
   let sfxTrace = null;   // ?debug: ids played since the last snap()
   {
     const rawPlay = audio.play.bind(audio);
-    audio.play = (id, ...rest) => {
+    audio.play = (id) => {
       if (sfxTrace) sfxTrace.push(id);
-      if (sfxDrawsRandom(id)) rng.next();
-      return rawPlay(id, ...rest);
+      const rnd = audio.driver !== 'roland' && sfxDrawsRandom(id) ? rng.next() : undefined;
+      return rawPlay(id, rnd);
     };
+  }
+  /* ── Music: sound exports 6-12 (audio.music, rol-driver.js) ─────────────
+   * Only ROL.EXE implements them; under AdLib every call below is a bare
+   * RETF, so the shipped AdLib/SB game plays no music in play. The call
+   * sites are GAME.EXE's, docs/drivers-and-memory.md. */
+  let musicStartTicks = 0;        // DS:0x3E8: CS:0x013C starts the level music on reaching 0
+  let levelMusicOnLoad = true;    // cleared while a password entry goes to the shop (CS:0x00C4)
+  let guardianMusic = false;      // DS:0x38A == 2: CS:0x0529 skips a second guardian load
+  let titleLoopOnMenu = false;    // game over: CS:0x0993 jumps to CS:0x2C82 after the table
+  const LEVEL_START_SFX = 0x7f12; // CS:0x00F7 (level load) and CS:0x0902 (respawn)
+  const GAME_OVER_SFX = 0x6413;   // CS:0x0953
+  const TITLE_MUSIC_VOLUME = 0x80, GUARDIAN_MUSIC_VOLUME = 0x96, SHOP_MUSIC_VOLUME = 0x80;
+  /* CS:0x0116-0x011B: 0x1E, then `inc` on the way into the loop; CS:0x013C
+   * decrements it once a pass, so the music starts on the 31st tick. */
+  const LEVEL_MUSIC_DELAY = 0x1f;
+  const enterTitleLoopMusic = () => {                              // CS:0x2C82-0x2CAA
+    audio.music('fadeOut');
+    audio.music('load', MUSIC_CONTEXT.TITLE);
+    audio.music('start', TITLE_MUSIC_VOLUME);
+  };
+  if (soundSel) {
+    soundSel.addEventListener('change', () => {
+      const d = soundSel.value === 'roland' ? 'roland' : 'adlib';
+      try { localStorage.setItem('gods.sound', d); } catch { /* private mode */ }
+      if (d === 'roland') ensureRoland();
+      audio.setDriver(d);
+      if (d !== 'roland') return;
+      /* Pick the music up where the game is. */
+      if (uiState === 'menu' || uiState === 'password' || uiState === 'hiscore-table') enterTitleLoopMusic();
+      else if (uiState === 'shop') { audio.music('load', MUSIC_CONTEXT.SHOP); audio.music('start', SHOP_MUSIC_VOLUME); }
+      else if (uiState === 'game' && level) {
+        audio.music('load', guardian ? MUSIC_CONTEXT.GUARDIAN : worldMusicContext(level.world));
+        audio.music('start', guardian ? GUARDIAN_MUSIC_VOLUME : levelMusicVolume(level.world));
+      }
+      soundSel.blur();
+    });
   }
   /* CS:0x084B/0x0851 — target full, bar 1, so it animates up over 23 frames. */
   let health = new Health();
@@ -1198,6 +1261,9 @@ const guardianTables = {
               snapshot: renderer.buf.slice(), palette: level.palette, start: performance.now(),
               next: pendingHiscoreRank >= 0 ? 'name-entry' : 'hiscore-table',
             };
+            audio.music('mute');                                    // CS:0x094D, export 10
+            audio.play(GAME_OVER_SFX);                              // CS:0x0953
+            titleLoopOnMenu = true;                                 // CS:0x0993 jmp 0x2C82
             uiState = 'game-over-fade';
             $('event').textContent = 'GAME OVER';
           } else {
@@ -1212,6 +1278,13 @@ const guardianTables = {
             if (camScript.mode === 0) cam = cameraForSpawn(pos.x, pos.y);   // CS:0x08C5 skips it while DS:0x32 is set
             forceActivation();                                       // CS:0x08EB -> 0x1196
             fx.invuln = INVULN_TICKS_SPAWN;                          // CS:0x0860
+            /* CS:0x08EE-0x0921: the music drops to volume 1 (export 8), the
+             * level-start sound plays, and it fades back up (export 9) to the
+             * level volume (CS:0x0370) — also inside a guardian fight. */
+            audio.music('setVolume', 1);
+            audio.play(LEVEL_START_SFX);                             // CS:0x0902
+            audio.music('fadeTo', levelMusicVolume(level.world));    // CS:0x091C-0x0921
+            musicStartTicks = 0;                                     // CS:0x0917 [0x3E8] = 0xFE
             respawnTick = true;                                      // CS:0x08F5 call 0x921B
             $('event').textContent = `respawned — ${fx.lives} ${fx.lives === 1 ? 'life' : 'lives'} left`;
           }
@@ -1228,6 +1301,15 @@ const guardianTables = {
     events.onGuardian = () => {
       guardian = level.world === 4 ? new Guardian4(guardianTables.w4)
         : new Guardian(level.world, guardianTables);
+      /* CS:0x0524-0x05B2 (DS:0x35C, the main loop's next pass): unless the
+       * guardian is already loaded (DS:0x38A == 2), fade the level music
+       * out, load context 5 (PGODSRLF.RL) and start it at 0x96. */
+      if (!guardianMusic) {
+        guardianMusic = true;
+        audio.music('fadeOut');
+        audio.music('load', MUSIC_CONTEXT.GUARDIAN);
+        audio.music('start', GUARDIAN_MUSIC_VOLUME);
+      }
       if (hero) overlayGuardSprites(hero, level.world).catch((e) => console.error('guard atlas', e));
       return true;
     };
@@ -1486,6 +1568,15 @@ const guardianTables = {
       levelInfo = { world: +key[0], sublevel: key[1] === 'A' ? 0 : 1 };
       statues.clear().populate(level.map.planeA, levelInfo.world, sublevelLetter(levelInfo));
       outOfRange = 0; unstamped = 0;
+      /* CS:0x00D3-0x00FA: export 12 with the world's context, then the
+       * level-start sound; the music itself waits for CS:0x013C. The loader
+       * clears DS:0x38A (CS:0x2BFB), so the next guardian loads afresh. */
+      guardianMusic = false;
+      if (levelMusicOnLoad) {
+        audio.music('load', worldMusicContext(levelInfo.world));
+        musicStartTicks = LEVEL_MUSIC_DELAY;
+        audio.play(LEVEL_START_SFX);
+      }
       $('event').textContent = '–';
     } finally {
       transitioning = false;
@@ -1586,8 +1677,13 @@ const guardianTables = {
       moneyTotal: purse.total,
       password: passwordReveal,
     });
+    audio.music('mute');                       // CS:0x6576, export 10
     audio.play(tallyFanfareSfx(rec.word2));    // CS:0x657B -> FUN_1000_67f5, once on entry
-    tallyScreen.onDone = () => { tallyScreen = null; runProgressBits(rec); };
+    tallyScreen.onDone = () => {
+      tallyScreen = null;
+      audio.music('unmute');                   // CS:0x65AA, export 11
+      runProgressBits(rec);
+    };
   }
 
   /* CS:0x694D — the record's bits, 11 down to 0, each through SS:0x35AA.
@@ -1771,8 +1867,15 @@ const guardianTables = {
    * PJOYL2's "L2" opens the world-2 shop (VALUE 05000, money 80000). */
   async function enterViaPassword(matchWorld) {
     uiState = 'shop';
-    await fullRestart(levelKeyFor(matchWorld, 0));
+    /* CS:0x00CB: worlds 2-4 go to CS:0x0643 before the level's own export
+     * 12, so no world music is loaded here. */
+    levelMusicOnLoad = matchWorld === 1;
+    try { await fullRestart(levelKeyFor(matchWorld, 0)); } finally { levelMusicOnLoad = true; }
     if (matchWorld === 1) { uiState = 'game'; return; }          // CS:0x00C4
+    /* CS:0x0693 -> 0x6C19: the shop's music (context 6, PGODSRLG.RL), no
+     * fade first (the fade at CS:0x6C0E is on the mid-level entry only). */
+    audio.music('load', MUSIC_CONTEXT.SHOP);
+    audio.music('start', SHOP_MUSIC_VOLUME);
     purse = new Purse();
     purse.add(SHOP_STARTING_MONEY);                             // CS:0x0643 sets it, not adds
     events.actionCtx.timer = 0;                                 // CS:0x6B21, the shop entry
@@ -1783,7 +1886,15 @@ const guardianTables = {
       inventory,
       state: { health, arsenal },
       purse,
-      onDone: () => { uiState = 'game'; shopScreen = null; paused = false; },
+      onDone: () => {
+        uiState = 'game'; shopScreen = null; paused = false;
+        /* CS:0x6D8F-0x6DA8 fade out and load the world's music; CS:0x0696
+         * -> 0x06A9 the level-start sound; -> 0x0111 re-arms DS:0x3E8. */
+        audio.music('fadeOut');
+        audio.music('load', worldMusicContext(matchWorld));
+        audio.play(LEVEL_START_SFX);
+        musicStartTicks = LEVEL_MUSIC_DELAY;
+      },
     });
   }
 
@@ -1919,7 +2030,7 @@ const guardianTables = {
    * trace-and-runtime-data.md). Any key skips it (see the keydown handler
    * below), matching a live-confirmed DOSBox test. */
   let uiState = 'intro';   // 'intro'|'menu'|'password'|'name-entry'|'hiscore-table'|'game-over-fade'|'shop'|'game'|'exit'|'quitting'
-  const intro = new Intro();
+  const intro = new Intro({ roland: audio.driver === 'roland' });   // DS:0x195 == 2's waits
   /* Browsers refuse to start an AudioContext before a user gesture
    * (audio-bus.js's own header has the full citation for this port's
    * established convention: the FIRST sound always fires from inside a
@@ -1936,9 +2047,18 @@ const guardianTables = {
   const playIntroAudio = () => {
     /* Both layers start at INTROV counter 8 (live: the first DMA start);
      * a late unlock (pointerdown mid-intro) joins them at the current tick. */
-    const behind = Math.max(0, intro.t - 8);
+    const behind = Math.max(0, intro.real - 8);
+    /* Roland: PTITLE.RL on the MT-32 instead, started by the same call
+     * (introv 0x0057 -> 0x14A6, AH=1 at 0x14B7), on PPLAYER's 50 Hz ticks. */
+    if (audio.driver === 'roland') { ensureRoland().playTitle(behind); return; }
     if (introMusicBlob) musicPlayer.play(introMusicBlob, behind / SB_TICK_HZ);
     if (introSbSequence) introVoicePlayer.playSequence(introSbSequence, SB_TICK_HZ, behind);
+  };
+  /* Leaving the intro: GAME.EXE's title loop (CS:0x2C82) takes over. */
+  const leaveIntro = () => {
+    uiState = 'menu'; musicPlayer.stop(); introVoicePlayer.stop();
+    if (roland) roland.silence();
+    enterTitleLoopMusic();
   };
   playIntroAudio();
   const unlockIntroAudio = () => {
@@ -2129,7 +2249,7 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
      * intermediate screen). Checked before every other branch, including
      * attract, since attract mode is only ever reachable once 'menu' has
      * already been entered. */
-    if (uiState === 'intro') { uiState = 'menu'; musicPlayer.stop(); introVoicePlayer.stop(); e.preventDefault(); return; }
+    if (uiState === 'intro') { leaveIntro(); e.preventDefault(); return; }
     /* A real keypress during attract-mode playback always wins — port-only
      * (see game/attract.js's own header: the original has no clean way to
      * distinguish a real key from the recording's own writes to the SAME
@@ -2236,7 +2356,7 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
         intro.step();
         /* The real sequence does not loop (game/intro.js's own DOES NOT
          * LOOP header note) — it runs once and hands off, same as a skip. */
-        if (intro.done) { uiState = 'menu'; musicPlayer.stop(); introVoicePlayer.stop(); }
+        if (intro.done) leaveIntro();
         return;
       }
       /* Attract-mode playback (game/attract.js) overrides `input` from the
@@ -2461,6 +2581,7 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
           hiscoreTable = null;
           if (attract) { enterAttractState(nextState(attract.state)); return; }   // CS:0x2D07 `jmp 0x2caf`
           uiState = 'menu';
+          if (titleLoopOnMenu) { titleLoopOnMenu = false; enterTitleLoopMusic(); }  // CS:0x0993
         }
         return;
       }
@@ -2489,6 +2610,11 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
        * count, which failed PLEV2A's trigger 61 (`timer/17 < 50`) in PJOYL2. */
       const rt = respawnTick; respawnTick = false;           // CS:0x921B, see respawnTick
       if (!rt) events.actionCtx.timer = (events.actionCtx.timer + 1) >>> 0;
+      /* CS:0x013C-0x014F — the level's music starts when DS:0x3E8 counts
+       * down to 0 (export 6; a no-op if a guardian's music already plays). */
+      if (musicStartTicks > 0 && --musicStartTicks === 0) {
+        audio.music('start', levelMusicVolume(level.world));
+      }
       /* DS:0x34 — a guardian is installed (selector 11). CS:0x01FC skips the
        * object pass (activation, walk, popup, chest burst) outside world 2;
        * CS:0x0223/0x0226/0x0272 skip the turrets, rock pools, kill smoke and
@@ -3020,12 +3146,18 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
        * cheap no-op everywhere else. The trigger's own "don't wake on the
        * hero" probe and the live creature's contact test share the SAME
        * `nestContact` shape (`(box) => strengthOut`), since both are plain
-       * attackHero calls with a caller-supplied box. */
+       * attackHero calls with a caller-supplied box. Both run inside the
+       * DS:0x35E bracket (CS:0x7C8B-0x7C93), which the nests' do not, so the
+       * statue gets its own contact (combat.js KILL_ALT_SFX). */
+      const statueContact = (box) => attackHero(
+        { x: box.x, y: box.y, w: box.w, h: box.h, strength: box.hp },
+        { x: player.x, y: player.y, state: player.stateIndex }, health,
+        { invuln: fx.invuln > 0, sfx: (id) => audio.play(id), alt35e: true }).strengthOut;
       const statueScanGrid = (entity) => {
         const r = creatureScansGrid(entity, grid, camNow, decodeTag,
                                      difficulty, undefined, null,
                                      { rng: () => rng.next(), debris,
-                                       sfx: (id) => audio.play(id) });
+                                       sfx: (id) => audio.play(id), alt35e: true });
         return { killed: r.killed };
       };
       /* ⚠️ NOT `nestContact`. `checkTrigger`'s own "defer if the hero is
@@ -3116,7 +3248,7 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
                               statueTriggerProbe, rng);
         statueResult = statues.step(
           camNow, { x: player.x, y: player.y }, fx.freeze,
-          nestContact, statueScanGrid, tock);
+          statueContact, statueScanGrid, tock);
         score.add(statueResult.score);
         lastStatueFx = statueResult.drawn;
       }
@@ -3333,6 +3465,7 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
            * touches. Both the shield potion and spawn protection feed it. */
           invuln: fx.invuln > 0 ? 1 : 0,
           sfx: (id) => audio.play(id),
+          systemA: new Set(enemiesA),        // the DS:0x35E bracket, CS:0xE0A5
         }).killed;
       } else {
         /* CS:0x02A5 `call [0x284]` — the guardian's driver in place of the
@@ -3381,11 +3514,19 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
       /* CS:0x02D5 `call 0xd9ca` — after a guardian's death, +500 points a tick
        * (CS:0xD9CB dl=5 -> CS:0x0C8B) for world*20 ticks, starting on the
        * death tick itself; at zero it patches itself back to RET and restores
-       * the level music (CS:0xD9DE-0xD9F2; the port's music is never stopped
-       * by the guardian, so there is nothing to restore). [PROVEN] live by a
+       * the level music (CS:0xD9DE-0xD9F2, below). [PROVEN] live by a
        * forced world-1 death (forcedeath.py): DS:0x3BE 19 and +500 on the
        * death tick. */
-      if (guardianScoreTicks > 0 && !rt) { score.add(500); guardianScoreTicks--; }
+      if (guardianScoreTicks > 0 && !rt) {
+        score.add(500); guardianScoreTicks--;
+        /* CS:0xD9D8-0xD9F2 — at zero: fade out, the world's music back
+         * (export 12), started at the level volume (CS:0x0370). */
+        if (guardianScoreTicks === 0) {
+          audio.music('fadeOut');
+          audio.music('load', worldMusicContext(level.world));
+          audio.music('start', levelMusicVolume(level.world));
+        }
+      }
       /* `UNKNOWN_f030_item_drop` — System-B's own per-GROUP elimination
        * reward. CS:0xED78-ED80 sums `[0x3c3]` (state===0, dead) + `[0x1f4]`
        * (state<0 and NOT -2/-3, i.e. DYING) and compares to the descriptor's
@@ -3624,7 +3765,7 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
         const menuGlyphs = hero && hero.menuGlyphs;
         drawCentered(renderer, menuGlyphs, 'QUIT GAME', 92, MENU_ADVANCE);
         renderer.present(quitFade.palette, fadeT);
-        if (elapsed >= QUIT_FADE_MS) { uiState = 'menu'; quitFade = null; }
+        if (elapsed >= QUIT_FADE_MS) { uiState = 'menu'; quitFade = null; enterTitleLoopMusic(); }   // CS:0x09B8
         return;
       }
       /* uiState === 'game-over-fade' — CS:0x095D's own 150-iteration fade,
@@ -3640,6 +3781,10 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
         drawCentered(renderer, menuGlyphs, 'GAME OVER', 92, MENU_ADVANCE);
         renderer.present(gameOverFade.palette, fadeT);
         if (elapsed >= GAME_OVER_FADE_MS) {
+          /* CS:0x0978-0x0982: the title's music (context 4) under the name
+           * entry and the table. */
+          audio.music('load', MUSIC_CONTEXT.TITLE);
+          audio.music('start', TITLE_MUSIC_VOLUME);
           if (gameOverFade.next === 'name-entry') { uiState = 'name-entry'; nameEntry = new NameEntry(); }
           else { uiState = 'hiscore-table'; hiscoreTable = new HiscoreTable(hiscoreEntries); }
           gameOverFade = null;

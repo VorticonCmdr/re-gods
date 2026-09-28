@@ -46,6 +46,7 @@
       <span>event <b id="event">–</b></span>
       <span>weapon <select id="weapon"></select></span>
       <span>shots <b id="shots">0</b></span>
+      <span>sound <select id="soundDriver"><option value="adlib">Sound Blaster / AdLib</option><option value="roland">Roland MT-32</option></select></span>
       <span>music <select id="musicTrack"></select> <button id="musicStop" type="button">stop</button></span>
       <span><label><input type="checkbox" id="showUnk" checked> mark unexplained tiles</label></span>
       <span class="d">← → move · ↑ jump/climb · ↓ climb down · space fire</span>
@@ -59,8 +60,9 @@
         PGODSRL{A-G}.RL, dispatched by world number under Roland only —
         UNKNOWN_pgods_mus_cue_dispatch is closed, see Gods/docs/drivers-
         and-memory.md), so this plays any of PGODS.MUS's 70 tracks on
-        demand rather than porting a mapping that belongs to a file this
-        port doesn't parse</span>
+        demand. The in-game music is the Roland path: pick "Roland MT-32"
+        above for the per-world, title, shop and guardian music, played on an
+        MT-32 stand-in from PTITLE.RL's own sound bank</span>
     </div>
   </div>
   <aside>

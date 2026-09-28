@@ -277,18 +277,18 @@ export const damageFor = (strength) => (((strength + 1) >> 5) + 5);
  * `trigger-actions.js`'s `SFX.ACT6_KILL` already plays — the original reuses
  * one generic "kill" sound for both mechanisms, not a coincidence.
  *
- * ⚠️ Not modelled here: when `DS:0x35e` is nonzero (a bracket around exactly
- * three call sites — System A's own pipeline, the world-1 statue hazard, and
- * the `PGOD0x.PAT` driver — see Gods/docs/drivers-and-memory.md's "Sound: a
- * 13-slot interface"), the DEATH branch (`CS:0xAB98`) plays THIS id *and
- * then* the Roland-only alternate `0x0e49`, while the CONTACT branch
- * (`CS:0xABC0`) plays `0x0e49` *instead of* this id — two different
- * combine-vs-replace shapes, not the same "instead" both were once
- * mis-documented as. Reproducing that needs tracking `DS:0x35e`'s three
- * gated call sites, which this port does not do; every kill here plays this
- * one id.
+ * DS:0x35E is set around exactly three calls into this routine — System A's
+ * own pipeline (CS:0xE0A5-0xE0AD, around CS:0xFF93), the world-1 statue
+ * (CS:0x7C8B-0x7C93) and the `PGOD0x.PAT` driver (CS:0xBCDF-0xBCE7); see
+ * Gods/docs/drivers-and-memory.md's "Sound: a 13-slot interface". Callers
+ * inside one pass `alt35e: true`. Then the DEATH branch (`CS:0xAB98`) plays
+ * THIS id and then `KILL_ALT_SFX` (`0xABAF`, `0xABB7`), and the CONTACT
+ * branch (`CS:0xABC0`) plays `KILL_ALT_SFX` INSTEAD (`0xABD1`). ADL.EXE drops
+ * id 0x49 (audio-bus.js `adlAccepts`), so under AdLib such a touch is silent
+ * and such a kill sounds like any other; ROL.EXE plays it (RL blob 48).
  */
 export const KILL_SFX = 0x0f22;
+export const KILL_ALT_SFX = 0x0e49;
 
 /**
  * CS:0xac59 — does this attacker overlap the hero, and if so, hurt him.
@@ -358,7 +358,7 @@ export function attackHero(atk, hero, health, opts = {}) {
 
   /* The hit is only REPORTED when DS:0x34 is zero (CS:0xacdb / 0xace2). */
   const reported = !opts.reportGate;
-  if (reported && opts.sfx) opts.sfx(KILL_SFX);          // CS:0xA9EC -> 0xABC0
+  if (reported && opts.sfx) opts.sfx(opts.alt35e ? KILL_ALT_SFX : KILL_SFX);   // CS:0xA9EC -> 0xABC0 / 0xABD1
   return { hit: true, damage: dmg, strengthOut: reported ? -1 : atk.strength };
 }
 
@@ -630,7 +630,10 @@ export function creatureScansGrid(entity, grid, cam, decode, scalar = 0,
   const killed = entity.state <= 0;
   if (killed) {
     entity.state = -1;                                  // the caller reads its SIGN
-    if (opts.sfx) opts.sfx(KILL_SFX);                    // CS:0xAB98 -> 0xABA0
+    if (opts.sfx) {
+      opts.sfx(KILL_SFX);                                // CS:0xABA0 / 0xABAF
+      if (opts.alt35e) opts.sfx(KILL_ALT_SFX);           // CS:0xABB7
+    }
   } else if (opts.rng && opts.debris) {                  // CS:0xABDE `or bx,bx / jz` — bx=applied, skip if 0
     /* CS:0xABE5/0xABE9 read the entity's WORLD x/y straight off the stack
      * (pushed before the screen conversion at CS:0xA9FD), so this works

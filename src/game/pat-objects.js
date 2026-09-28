@@ -953,15 +953,17 @@ export class PatGroups {
    */
   #contactAndDamage(slot, s, cam, hero, health, grid, decodeTag, opts) {
     const box = { w: slot.cls.w, h: slot.cls.h };
+    /* Both calls sit inside CS:0xBCDF-0xBCE7's DS:0x35E bracket (combat.js
+     * KILL_ALT_SFX). */
     const c = attackHero({ x: s.x, y: s.y, w: box.w, h: box.h, strength: s.key },
-                          hero, health, { invuln: opts.invuln, sfx: opts.sfx });
+                          hero, health, { invuln: opts.invuln, sfx: opts.sfx, alt35e: true });
     s.key = c.strengthOut;
     if (s.key < 0) { this.#onKilled(slot, s, opts, s.x - cam.x, s.y - cam.y); return; }  // CS:0xBCEF/BCF1
 
     if (grid && decodeTag) {
       const proxy = { x: s.x, y: s.y, state: s.key };
       const r = creatureScansGrid(proxy, grid, cam, decodeTag, opts.difficulty || 0,
-                                   box, null, { rng: opts.rng, debris: opts.debris, sfx: opts.sfx });
+                                   box, null, { rng: opts.rng, debris: opts.debris, sfx: opts.sfx, alt35e: true });
       s.key = proxy.state;
       if (r.killed) this.#onKilled(slot, s, opts, s.x - cam.x, s.y - cam.y);
     }

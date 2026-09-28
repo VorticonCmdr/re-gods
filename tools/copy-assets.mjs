@@ -101,12 +101,14 @@ const WANTED = [
   // ten shipped .MUS/.RL files, which belong to the pre-game INTRO
   // executables instead (game/audio's own header has the full citation).
   'PGODS.MUS',
-  // Not loaded by GAME.EXE (see PGODS.MUS's own comment above) — staged only
-  // so checkMusic() can re-derive its container shape itself instead of
-  // resting on an un-re-run Python census. PGODSRLB-G share the same shape
-  // (checked once this session, not restaged here — see checkMusic()'s own
-  // note for exactly what that claim rests on).
-  'PGODSRLA.RL',
+  // The Roland path (audio/roland-player.js). GAME.EXE never names these:
+  // ROL.EXE does, patching the context letter into its own "godsrle.rl"
+  // (sound export 12). A-D are worlds 1-4, E the title, F a guardian fight,
+  // G the shop. PTITLE.RL is INTROV.EXE's Roland music AND carries the MT-32
+  // sound bank (audio/mt32-bank.js) the game's program changes rely on.
+  // ROL.EXE is staged so the checks can compare its tables with the port's.
+  'PGODSRLA.RL', 'PGODSRLB.RL', 'PGODSRLC.RL', 'PGODSRLD.RL',
+  'PGODSRLE.RL', 'PGODSRLF.RL', 'PGODSRLG.RL', 'PTITLE.RL', 'ROL.EXE',
   // Recorded attract-mode joystick input (game/formats/joy.js). `joyg`
   // decodes into real GAMEPLAY ticks — used both by the replay-diff harness
   // (tools/replay-diff.mjs, checking the port's physics against a live

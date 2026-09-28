@@ -20,11 +20,11 @@
  * not just `strings`, which misses table-referenced content). The other
  * ten files (`PMUSIC.MUS`, `PGODMUS2.MUS`, `PTITLE.RL`, `PGODSRLA`-`G.RL`)
  * belong to the pre-game INTRO executables (device-specific splash music)
- * or, for the seven `PGODSRLA`-`G.RL` files specifically, to NOTHING this
- * project has found a reference to at all — a raw regex scan of both
- * `GAME.EXE` and `TGAME.EXE` for the bare token "godsrl" (case-insensitive)
- * returns zero matches in either binary. So this module only needs to
- * handle `PGODS.MUS`'s own shape to be useful for actual gameplay.
+ * or, for the seven `PGODSRLA`-`G.RL` files, to ROL.EXE, the Roland driver,
+ * which names them itself ("godsrle.rl", its letter patched by sound export
+ * 12) — neither GAME.EXE nor TGAME.EXE contains "godsrl". See
+ * audio/rol-driver.js. PTITLE.RL (INTROV's Roland music) additionally ends in
+ * an MT-32 sound bank past its blob (audio/mt32-bank.js).
  */
 
 /** True iff `blob` opens with the 4-byte SMF magic `MThd`. */

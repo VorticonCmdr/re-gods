@@ -23,6 +23,24 @@
  * is nonzero. */
 export const ADL_RANDOM_SFX_IDS = new Set([0x01, 0x0e, 0x22, 0x29, 0x2b, 0x2d, 0x35, 0x3c, 0x42, 0x46]);
 
+/* The same records' +1 byte, by id: which helper (1 = 0x37D, 2 = 0x386). */
+export const ADL_SFX_VARIANT = new Map([
+  [0x01, 2], [0x0e, 1], [0x22, 2], [0x29, 1], [0x2b, 1], [0x2d, 1], [0x35, 1], [0x3c, 1], [0x42, 2], [0x46, 1],
+]);
+
+/**
+ * What the helper adds to DL, the blob the driver then plays (ADL:0x1B9
+ * `mov ax,dx`): the id's blob moves up by 0..1 or 0..2. So these sounds have
+ * variants, not just a random draw: the time bomb's and the kill's 0x22
+ * plays PGODS.MUS blob 0x22, 0x23 or 0x24. `rnd` is the word CS:0x3836
+ * returned (AX).
+ */
+export function adlVariantOffset(word, rnd) {
+  const kind = ADL_SFX_VARIANT.get(word & 0x7f);
+  if (!kind || rnd === undefined) return 0;
+  return kind === 1 ? rnd & 1 : (rnd & 1) + ((rnd >> 8) & 1);
+}
+
 /** @param {number} word the value GAME.EXE puts in AX for CS:0x22CA */
 export function sfxDrawsRandom(word) {
   const al = word & 0xff;
