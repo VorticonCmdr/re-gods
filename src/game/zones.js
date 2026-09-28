@@ -53,8 +53,7 @@
  *     0FF2  ax += 0x10              ; +16 -> the CENTRE of the destination tile
  *     0FF5  [0x17a] = ax ; [0x17c] = bx     ; hero world position, snapped
  *     0FFC  if [0x168] >= 0 (a familiar is alive): reposition it too, Y-0x28
- *           (this port has no Familiar entity yet — see hero-fire.js's own
- *           note on `UNKNOWN_DS_0168` — so that half is not reproduced here)
+ *           (game/familiar.js's place(), called from main.js's teleport)
  *     100F  CALL FUN_1000_2189 — the level-load/respawn camera-init routine
  *           (Gods/CLAUDE.md's `UNKNOWN_camera_init`, now CLOSED): camera =
  *           clamp(dest - (0x90,0x48)) against the same world-edge bounds the

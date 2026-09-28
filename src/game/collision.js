@@ -190,6 +190,22 @@ export class DamageGrid {
   }
 
   /**
+   * CS:0xC2B6 — the familiar's own stamp: tag 0xFF into the 2x2 block one
+   * cell right and one row down from its screen position (DI + 0x31/0x32/
+   * 0x61/0x62), with the WRITE window checked on DI itself and no half-band
+   * nudge. DI = 0x16CA + (x SAR 3) + (y AND ~7) * 6.
+   */
+  stampFamiliar(x, y) {
+    const di = 0x16ca + (x >> 3) + (y & ~7) * 6;         // CS:0xC2C5-0xC2D9
+    if (di < WRITE_LO || di >= WRITE_HI) return false;   // CS:0xC2DB-0xC2E5
+    for (const o of [0x31, 0x32, 0x61, 0x62]) {          // CS:0xC2E9-0xC2F2
+      const i = this._at(di + o);
+      if (i >= 0 && i < GRID_BYTES) this.buf[i] = 0xff;
+    }
+    return true;
+  }
+
+  /**
    * CS:0xA8B8 — the 3x3 (24x24 px) stamp, used by draw styles 1 and 2.
    *
    * ⚠️ THIS IS NOT stamp2x2 WITH A BIGGER LOOP. The nudge and the bounds check

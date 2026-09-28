@@ -269,9 +269,9 @@ export const UNIMPLEMENTED_TYPE = 43;
  * it (including the surprising order-dependent quirk: buying wings/claws
  * with no familiar yet just summons a plain one, since the fresh-summon
  * branch unconditionally overwrites [0x304]/[0x210] right after the type-
- * specific bump). What's still NOT modeled, because this port has no
- * familiar ENTITY at all: the summon's own position/sprite, and [0x343]'s
- * hunter/familiar target-list gate.
+ * specific bump). The entity itself (position, flight, sprite, stamp,
+ * death, the carried weapon slot and the target-list gate) is
+ * game/familiar.js, which notices the summon on its next tick.
  *
  * TELEPORT STONE (type 54, CS:0x6217) is decoded and PROVEN, just not
  * actionable in a port with no level transitions. It sets three variables:
@@ -296,9 +296,8 @@ export const NOT_WIRED_REASON = Object.freeze({
    * section above. They're placed as MAP pickups zero times, but type 39 is
    * purchasable in world 3/4's own shop (Gods/docs/shop.md's UNKNOWN_shop_
    * eligibility_gates, CLOSED), a real reachable path. The energy/power/
-   * wings state is wired exactly as CS:0xC2F6 reads it; only the summon's
-   * position/sprite and the target-list gate remain unmodeled, since this
-   * port has no familiar entity to draw or target with. */
+   * wings state is wired exactly as CS:0xC2F6 reads it, and the entity is
+   * game/familiar.js. */
   teleport:      'decoded and proven; needs level transitions the port lacks',
   /* ⚠️ THIS ENTRY USED TO READ "already ported as the PALFILS hint system",
    * and that was FALSE — the hint TABLE had been decoded (docs/asset-formats
@@ -368,9 +367,8 @@ export function applyFamiliar(type, health) {
     health.familiarEnergy = FAMILIAR_START_ENERGY;
     health.familiarPower = FAMILIAR_FRESH_POWER;
     health.familiarWings = FAMILIAR_FRESH_WINGS;
-    /* NOT modeled: summon position/sprite ([0x30c]=0x185, y = heroY-160) and
-     * [0x343]:=0 (the hunter/familiar target-list gate) — this port has no
-     * familiar entity to place, draw, or build a target list for. */
+    /* The rest of CS:0xC308 (position heroY - 0xA0, sprite 0x185) and the
+     * gate DS:0x343 are game/familiar.js's, on its next tick. */
   }
   return { energy: health.familiarEnergy, power: health.familiarPower,
            wings: health.familiarWings };

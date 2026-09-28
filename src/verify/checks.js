@@ -7,6 +7,7 @@
  */
 
 import { Guardian4, export1Bp } from '../game/guardian4.js';
+import { Familiar, chooseAltSlot } from '../game/familiar.js';
 import { Guardian, convertBezier, getProcessJaw, resetProcessJaw } from '../game/guardian.js';
 import { PayoffScreen, PAYOFF_PAGES, LINE_Y, lineX } from '../game/payoff.js';
 import { dclDecompress } from '../formats/dcl.js';
@@ -4059,8 +4060,8 @@ export async function checkSpawn(fetchRaw) {
     `times, but CS:0x6384 \`cmp word [0x168],0 / jns\` skips the credit when ` +
     `DS:0x168 is negative — and CS:0xC470 sets -1 at both full restarts. No ` +
     `shipped map PICKUP raises it, but buying the familiar (type 39) in ` +
-    `world 3/4's own shop does, so the banking is reachable there even ` +
-    `though this port doesn't wire that purchase's effect yet`);
+    `world 3/4's own shop does, so the banking is reachable there (and ` +
+    `the purchase is wired, game/familiar.js)`);
 
   /* The hurt sound is a ONE-SHOT per descent, not one per tick. */
   const noisy = new Health(HEALTH_MAX, HEALTH_MAX);
@@ -5333,6 +5334,47 @@ export async function checkWeaponsProjectiles(fetchRaw) {
     '>= this key, so the running best walks UP toward the largest, not down ' +
     'toward the smallest; the list is 6-byte {x, y, key} records built by ' +
     'the COLLISION SCANNER at CS:0xAA8D');
+
+  /* The familiar (game/familiar.js, CS:0xC08E-0xC49B), [STATIC]. */
+  {
+    const W = [0, 1, 2, 3].map((i) => ({ power: 10 + i }));
+    const slots = (a, b, c) => [a, b, c].map((weapon) => ({ weapon }));
+    check('familiar slot choice (CS:0xC35E): the fireball slot with 2+ armed, else 0xFF',
+      chooseAltSlot(slots(0, 2, -1), W, 1000) === 1 && chooseAltSlot(slots(0, 1, 3), W, 1000) === 0xff
+      && chooseAltSlot(slots(2, -1, -1), W, 1000) === 0xff && chooseAltSlot(slots(0, 2, -1), W, -1) === 0xff);
+    const health = { familiarEnergy: 1000, familiarPower: 4, familiarWings: 0 };
+    const f = new Familiar();
+    f.summon({ x: 500, y: 400 });
+    check('a fresh summon appears 0xA0 above the hero, still, facing right (CS:0xC308)',
+      f.x === 500 && f.y === 400 - 0xa0 && f.vx === 0 && f.facing === 1);
+    let draws = 0;
+    const o = (over = {}) => ({ health, hero: { x: 600, y: 400, state: 4 }, cam: { x: 400, y: 200 },
+      pick: () => null, rng: () => { draws++; return 1; }, tock: 1, altSelect: 0xff, grid: null, ...over });
+    for (let t = 0; t < 5; t++) f.tick(o());
+    check('with no target it heads for the hero\'s head, x speed capped at 2*0+3 (CS:0xC1E7)',
+      f.vx === 3 && f.facing === 1 && health.familiarWings === 0, `vx ${f.vx}`);
+    health.familiarWings = 2;
+    f.tick(o());
+    check('...and an attack-mode tick with no pick forces wings to 0 for that tick only (CS:0xC174)',
+      f.vx === 3 && health.familiarWings === 2);
+    const g = new Familiar(); g.summon({ x: 100, y: 300 }); g.x = 600; g.y = 400 - 0x24;
+    draws = 0; health.familiarWings = 0;
+    g.tick(o({ altSelect: 0 }));
+    check('an exact tie on an axis draws a random number (CS:0xC18B / 0xC1A0)', draws === 2, `${draws}`);
+    const d = g.draw;
+    check('sprite 0x185 + DS:0xD7AE[cursor], +4 facing right; the cursor steps on a tock',
+      d.sprite === 0x185 + 0 + 4 && g.anim === 2, JSON.stringify(d));
+    const grid = new DamageGrid();
+    grid.stampFamiliar(80, 40);
+    const di = 0x16ca + 10 + 40 * 6;
+    check('the familiar stamps 0xFF at DI+0x31/0x32/0x61/0x62 (CS:0xC2B6)',
+      [0x31, 0x32, 0x61, 0x62].every((k) => grid.buf[di + k - 0x1666] === 0xff)
+      && grid.buf[di - 0x1666] === 0);
+    let burst = null;
+    const died = g.hit(2000, health, (x, y) => { burst = { x, y }; });
+    check('a hit drains the creature\'s strength; below zero it bursts at +4 and is gone (CS:0xAB4D -> 0xC440)',
+      died && health.familiarEnergy === -1 && burst && burst.x === g.x + 4 && g.draw === null);
+  }
 
   /* The target list as the scanner really builds it (CS:0xAA09-0xAAA5). */
   {
@@ -7899,8 +7941,7 @@ export async function checkWeaponsProjectiles(fetchRaw) {
       `separately purchasable in the shop's own world 3/4 roster (Gods/ ` +
       `docs/shop.md's UNKNOWN_shop_eligibility_gates, CLOSED), so this ` +
       `census alone does not make the chain unreachable; this port decodes ` +
-      `CS:0xC2F6 and does not build it because it has no familiar entity, ` +
-      `not because no shipped path can reach it`);
+      `CS:0xC2F6, and game/familiar.js builds the entity`);
 
     check(`UNKNOWN_DS_0168 is the familiar's energy, and it starts dead`,
       FAMILIAR_ENERGY_DS === 0x168 && banksOverheal(-1) === false
@@ -10823,8 +10864,8 @@ export async function checkZones(fetchRaw) {
       '"ENTER A PASSWORD" grid-entry screen to type a generated password ' +
       'back in is now reproduced too (`UNKNOWN_password_entry_ui` is ' +
       'CLOSED — game/title-menu.js\'s PasswordEntry, dispatched from the ' +
-      'title screen main.js now has). Still not reproduced: the familiar ' +
-      'reposition (CS:0x0FFC, no Familiar entity exists in this port yet). ' +
+      'title screen main.js now has). The familiar reposition (CS:0x0FFC) ' +
+      'is game/familiar.js\'s place(). ' +
       'The three CALLs at CS:0x100F-0x1015 are ' +
       'traced (see game/zones.js): 0x100F is the level-load/respawn camera ' +
       'init (Gods/CLAUDE.md UNKNOWN_camera_init, now CLOSED and ported as ' +

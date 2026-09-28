@@ -24,6 +24,8 @@
 
 import { creatureTouchesHero, creatureScansGrid } from './combat.js';
 import { stepPickups } from './pickup.js';
+import { chooseAltSlot } from './familiar.js';
+import { pickTarget } from './projectiles.js';
 
 /** The addresses above, in order, so a check can assert the sequence itself. */
 export const FRAME_ORDER = [
@@ -34,6 +36,7 @@ export const FRAME_ORDER = [
   { at: 0x0206, what: 'the object pass — weapon PICKUP happens here' },
   { at: 0x020f, what: 'projectiles move and stamp' },
   { at: 0x0212, what: 'the STARBURST steps and stamps' },
+  { at: 0x0215, what: 'the FAMILIAR moves and stamps (game/familiar.js)' },
   { at: 0x0254, what: 'the player state machine — the EMIT happens here' },
   { at: 0x0285, what: 'entities: contact, then the grid scan' },
   { at: 0x02ba, what: 'ENEMY shots move, hit and stamp nothing' },
@@ -102,7 +105,7 @@ export function stepHeroFrame({ input, arsenal, grid, player, map, cam,
                                leverToggle = null, invuln = false,
                                zoneScan = null, beforePlayer = null,
                                objectPass = true, effects = null,
-                               heroDead = false }) {
+                               heroDead = false, familiar = null }) {
   /* `heroDead`: the death driver CS:0x09BB runs this same pre-player half of
    * the tick (grid clear, blocks, barriers, object pass, projectiles,
    * starburst, selector 2) WITHOUT the fire latch (CS:0x019D) and without the
@@ -151,6 +154,31 @@ export function stepHeroFrame({ input, arsenal, grid, player, map, cam,
    * projectile) a burst spawned by the player this tick does not stamp until
    * the next one. */
   const burstFx = starburst ? starburst.step(cam, grid) : null;     // 0212
+  /* CS:0x0215 — the familiar (game/familiar.js), after the hunter (0x020F)
+   * has already picked from the same target list. A summon since the last
+   * tick (the object pass above, or the shop) runs CS:0xC308 then CS:0xC35E
+   * first. `familiar` is {entity, rng, hero}. */
+  let familiarDraw = null;
+  if (familiar && health) {
+    const f = familiar.entity;
+    arsenal.onArmed = () => {                                         // CS:0x94D4
+      arsenal.altSelect = chooseAltSlot(arsenal.slots, arsenal.weapons, health.familiarEnergy);
+    };
+    if (health.familiarEnergy >= 0 && !f.alive) {
+      f.summon(familiar.hero);                                        // C308
+      arsenal.altSelect = chooseAltSlot(arsenal.slots, arsenal.weapons,
+                                        health.familiarEnergy);       // C35E
+    }
+    familiarDraw = f.tick({ health, hero: familiar.hero, cam, rng: familiar.rng, tock,
+                            altSelect: arsenal.altSelect, grid,
+                            pick: () => pickTarget(arsenal.targets) });   // 0215
+  }
+  /* CS:0x9757 — a shot from the slot DS:0x33D names leaves from the
+   * familiar's position as it stands after this move (the emit is 0x0254). */
+  if (familiar) {
+    const f = familiar.entity;
+    arsenal.altEmitter = f.alive ? { x: f.x, y: f.y } : null;
+  }
   const debrisFx = debris ? debris.step(cam) : [];
   /* CROUCH + FIRE, CS:0x4B1A -> CS:0x6069 — the key scan needs the SAME live
    * object array and category table the pickup walk above just used, plus
@@ -191,13 +219,13 @@ export function stepHeroFrame({ input, arsenal, grid, player, map, cam,
   if (heroDead) {
     return { heroDead, projectiles, emitted: null, picked: picked.taken,
              consumed: picked.consumed || [], treasures: picked.treasures || [],
-             loot, burstFx, blockFx, debrisFx, keyCollected: null, leverToggled: null,
+             loot, burstFx, blockFx, debrisFx, familiarDraw, keyCollected: null, leverToggled: null,
              footstep: false, climbStep: false, ladderLand: false };
   }
   player.tick(map, input, arsenal, tock, pickupCtx, healthApi, tock36d);   // 0254
   return { projectiles, emitted: player.emitted, picked: picked.taken,
            consumed: picked.consumed || [], treasures: picked.treasures || [],
-           loot, burstFx, blockFx, debrisFx, keyCollected: player.keyCollected,
+           loot, burstFx, blockFx, debrisFx, familiarDraw, keyCollected: player.keyCollected,
            leverToggled: player.leverToggled,
            /* CS:0x5AB3/0x5AC0 (footstep) and the FUN_1000_5931 thunk's four
             * callers (climb step) — see player.js's own FOOTSTEP_SFX/
@@ -231,8 +259,13 @@ export function stepCreatureDamage(enemies, { grid, cam, hero, health,
   /* CS:0x9124-0x9146 — the hunter target list is built only while the hero
    * carries the hunter (weapon 8). CS:0x021E resets its count to 0xFF every
    * frame, so it is rebuilt from scratch each tick by the scan below. */
+  /* ...or while the familiar lives: CS:0x9129 opens the gate DS:0x343 for
+   * energy >= 0 too, the summon (CS:0xC359) opens it, and the familiar's
+   * death (CS:0xC481-0xC496) closes it unless a slot holds the hunter. Every
+   * writer computes this same condition, so testing it per frame matches. */
   const wantTargets = !!arsenal
-    && arsenal.slots.some((s) => s.weapon === HUNTER_WEAPON);
+    && ((health && health.familiarEnergy >= 0)
+        || arsenal.slots.some((s) => s.weapon === HUNTER_WEAPON));
   const targets = wantTargets ? [] : null;
   let touched = 0, killed = 0;
   for (const e of enemies) {

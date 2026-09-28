@@ -158,6 +158,7 @@ export function pickUpWeapon(arsenal, weaponIndex) {
   s.st = armWeapon(arsenal.weapons[weaponIndex]);   // CS:0x94C5 -> CS:0x90F9
   s.clear();                                        // CS:0x94CE -> CS:0x9177
   if (weaponIndex === FIREBALL) arsenal.tagBase = FIREBALL_TAG_BASE;
+  if (arsenal.onArmed) arsenal.onArmed();           // CS:0x94D4 -> 0xC35E (familiar.js)
   return { slot: n, duplicate: false, replaced, count: s.st.count };
 }
 

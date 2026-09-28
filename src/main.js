@@ -87,7 +87,8 @@ import { SeenBitmap, messageGate, composeObjectMessage,
          composeHint, HINT_TABLET_TYPE } from './game/message-compose.js';
 import { buildObjectArena, appendHints, hintOffsetForX,
          stringAt } from './game/text-arena.js';
-import { Arsenal, spawnableWeapons } from './game/hero-fire.js';
+import { Arsenal, spawnableWeapons, ALT_EMITTER_NONE } from './game/hero-fire.js';
+import { Familiar } from './game/familiar.js';
 import { stepHeroFrame, stepCreatureDamage } from './game/frame.js';
 import { DamageGrid, damageForTag, despawnConsumedHit } from './game/collision.js';
 import { parseWeapons } from './game/weapons.js';
@@ -774,6 +775,9 @@ const guardianTables = {
    * "none", and the dropdown below is an explicit DEV affordance, labelled as
    * such, so the fire chain is exercisable before pickups exist. */
   let arsenal = new Arsenal(level.weapons);
+  /* The familiar (game/familiar.js): DS:0x16A.., ticked at CS:0x0215 inside
+   * stepHeroFrame, drawn at CS:0x02B7. */
+  const familiar = new Familiar();
   const grid = new DamageGrid();
   /* CS:0x9320 — decode a grid tag back to the weapon that stamped it. Bound
    * over the arsenal's live slots so the creature scan needs no other state.
@@ -799,6 +803,17 @@ const guardianTables = {
       Object.fromEntries(arsenal.slots.filter((s) => s.st).map((s) => [s.weapon, s.st])),
       mode);
     despawnConsumedHit(d, arsenal.weapons, arsenal.slots.map((s) => s.area));
+    /* CS:0x938E-0x9394 — the familiar's tag 0xFF deals its power DS:0x210
+     * and flags AL = 1, which makes CS:0xAB4D drain the struck creature's
+     * strength from the familiar (game/familiar.js hit, via combat.js). */
+    if ((tag & 0xff) === 0xff) {
+      return { special: 'familiar', damage: health.familiarPower,
+               familiarHit: (bp) => {
+                 if (familiar.hit(bp, health, (x, y) => starburst.spawn(x, y))) {
+                   arsenal.altSelect = ALT_EMITTER_NONE;               // CS:0xC476
+                 }
+               } };
+    }
     /* CS:0x93DD-0x9417 — a STARBURST particle (tag 0xFC) that hits something
      * outside guardian mode also sets off a new burst at the struck grid
      * cell: bp - 0x16CA split by 0x30 into row/column, 8 px each, plus the
@@ -1463,6 +1478,7 @@ const guardianTables = {
       resetWeaponArc();
       wireSpawn();
       cam = camInit(spawn);
+      familiar.place(spawn, health.familiarEnergy);             // CS:0x8C56
       levelInfo = { world: +key[0], sublevel: key[1] === 'A' ? 0 : 1 };
       statues.clear().populate(level.map.planeA, levelInfo.world, sublevelLetter(levelInfo));
       outOfRange = 0; unstamped = 0;
@@ -1649,6 +1665,7 @@ const guardianTables = {
      * level change (see its own comment), so a full restart has to clear
      * it explicitly here instead, the same asymmetry as arsenal above. */
     health.familiarEnergy = -1; health.familiarPower = 0; health.familiarWings = 0;
+    familiar.reset();                                            // CS:0xC440, no burst ([0x391])
     deathSeq = null; lastDeathBurstFx = []; paused = false; gameOverFade = null;
     await switchLevel(key);             // CS:0x914c's own two callers both fall into world 1
   }
@@ -1674,6 +1691,7 @@ const guardianTables = {
     arsenal = new Arsenal(level.weapons);
     resetWeaponArc();                                             // CS:0x95B5
     health.familiarEnergy = -1; health.familiarPower = 0; health.familiarWings = 0;
+    familiar.reset();                                            // CS:0xC440, no burst ([0x391])
     inventoryPanel.selector = 3;                                  // CS:0x048F / 0x0492
     deathSeq = null; lastDeathBurstFx = []; paused = false;
     uiState = 'game';
@@ -1825,6 +1843,7 @@ const guardianTables = {
         purse = new Purse(); score = new Score();
         inventory = [INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY];
         health.familiarEnergy = -1; health.familiarPower = 0; health.familiarWings = 0;
+        familiar.reset();                                            // CS:0xC440, no burst ([0x391])
         deathSeq = null; lastDeathBurstFx = []; paused = false; gameOverFade = null;
         difficulty = 0;                                   // CS:0x2E09 [0x391]=1 -> CS:0x8D62 (worlds 1-3)
         await switchLevel(levelKeyFor(entry.world, 1));   // sublevel B — JOYG_SUBLEVEL
@@ -2639,6 +2658,8 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
       {
       fr = stepHeroFrame({
         heroDead: !!deathSeq,                        // CS:0x09BB — see frame.js
+        familiar: { entity: familiar, rng: () => rng.next(),
+                    hero: { x: player.x, y: player.y, state: player.stateIndex } },
         input, arsenal, grid, player,
         map: level.map, cam: { x: cam.snapX, y: cam.snapY }, world: level.world,
         /* CS:0x0206 — the object pass. `drawObjects` is the same array the
@@ -2885,6 +2906,7 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
          * calls at CS:0x1012/0x1015 (destructible-block restore; the third
          * still untraced). */
         cam = cameraForSpawn(dest.x, dest.y);
+          familiar.place(dest, health.familiarEnergy);            // CS:0x0FFC
         forceActivation();                                       // CS:0x1015 -> 0x1196
         /* CS:0x1012 — FUN_1000_de6f, `rep stosb` 0x8e8 (2280) bytes at
          * SS:0x3768: the System-A entity group-RUNTIME array, 10 slots x
@@ -3936,6 +3958,12 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
         const ff = hero && hero.frames[d.sprite];
         if (ff) renderer.blitSprite(ff, d.x, d.y);
       }
+      /* CS:0x02B7 -> 0xC149 — the familiar, at DS:0x308/0x30A with sprite
+       * DS:0x30C (game/familiar.js). */
+      if (familiar.draw) {
+        const ff = hero && hero.frames[familiar.draw.sprite];
+        if (ff) renderer.blitSprite(ff, familiar.draw.x, familiar.draw.y);
+      }
       /* Selector 11's guardian and its spits (game/guardian.js). */
       for (const d of guardianFx) {
         const gf = hero && hero.frames[d.sprite];
@@ -4196,6 +4224,8 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
       /* The live guardian object (for seeding carried-over state such as
        * the world-2 jaw counter DS:0x2F0, which no fight initialises). */
       guardianRaw: () => guardian,
+      /* game/familiar.js, with the Health that holds its energy/power/wings. */
+      familiar: () => ({ entity: familiar, health, arsenal }),
       /* DS:0x2F0 lives for the process; the diff harness resets it to the
        * static-image 0 (a first attract cycle) or seeds a later cycle's value. */
       resetProcessJaw,

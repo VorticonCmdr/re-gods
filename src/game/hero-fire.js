@@ -172,6 +172,8 @@ export class Arsenal {
     this.slots = WEAPON_SLOTS.map((m) => new Slot(m));
     this.latch = false;               // DS:0x351
     this.altSelect = ALT_EMITTER_NONE;// DS:0x33d
+    this.altEmitter = null;            // DS:0x16A/0x16C, the familiar (frame.js)
+    this.onArmed = null;               // CS:0x94D4 -> 0xC35E (main.js sets it)
     /* DS:0x340 — the tag base the fireball's mover subtracts to get a
      * per-projectile index. Only CS:0x95AE writes it, when the fireball takes
      * slot C, which is why the selector hard-wires that weapon to that slot. */
@@ -256,7 +258,7 @@ export class Arsenal {
 
       const s = this.slots[a.slot];
       const m = muzzle({ x: heroX, y: heroY }, right,
-                       { slot: a.slot, sel: this.altSelect, alt: null });
+                       { slot: a.slot, sel: this.altSelect, alt: this.altEmitter });
       const isAxe = handler === 14 || handler === 15;
       const isHunter = handler === 10 || handler === 11;
       const isBomb = handler === 8 || handler === 9;

@@ -142,14 +142,12 @@ export class Health {
   familiarEnergy = -1;
   /* DS:0x210, "the familiar's power" (combat-and-projectiles.md's own tag-
    * decode source `0xFF`). Set to 4 on a fresh summon, +1 on every top-up,
-   * +2 extra from buying "power claws" (type 41) specifically. No damage-
-   * source dispatch in this port reads it yet — there is no familiar entity
-   * to deal that damage — so this is state without a consumer, same
-   * disclosed gap as the summon's own position/sprite/target-list fields. */
+   * +2 extra from buying "power claws" (type 41) specifically. It is the
+   * damage the familiar's tag 0xFF deals (main.js's decodeTag, CS:0x938E);
+   * the familiar itself is game/familiar.js. */
   familiarPower = 0;
-  /* DS:0x304, bumped by "magic wings" (type 40). Same disclosed gap as
-   * familiarPower: tracked because CS:0xC2F6 proves it exists and the shop
-   * purchase can reach it, not because anything in this port consumes it. */
+  /* DS:0x304, bumped by "magic wings" (type 40): the familiar's speed caps,
+   * 2 * wings + 3 on x and + 2 on y (game/familiar.js, CS:0xC1C4). */
   familiarWings = 0;
 
   potion(n) {
@@ -166,9 +164,8 @@ export class Health {
      * only thing that lifts it is a "familiar" potion — type 39, placed ZERO
      * times as a map pickup but purchasable in world 3/4's own shop
      * (Gods/docs/shop.md's UNKNOWN_shop_eligibility_gates, CLOSED). So the
-     * banking IS reachable in shipped play via that purchase; in THIS port
-     * specifically it's still effectively discarded today only because the
-     * familiar-summon effect isn't wired to set `familiarEnergy` yet. */
+     * banking IS reachable in shipped play via that purchase, and in this
+     * port too (consumables.js applyFamiliar sets `familiarEnergy`). */
     const banked = this.familiarEnergy >= 0 ? excess * POTION_OVERFLOW_SCALE : 0;
     return { taken: true, banked, discarded: banked ? 0 : excess };
   }
@@ -611,6 +608,10 @@ export function creatureScansGrid(entity, grid, cam, decode, scalar = 0,
   if (!tag) return { hit: false, tag: 0, damage: 0, killed: false };
 
   const d = decode(tag);                                // CS:0xAB41 -> 0x9320
+  /* CS:0xAB49-0xAB53 — the familiar's tag (0xFF, AL = 1 from CS:0x9394)
+   * drains the creature's strength BEFORE the hit from the familiar's energy,
+   * ahead of any damage. game/familiar.js. */
+  if (d && d.familiarHit) d.familiarHit(entity.state);
   if (!d || !d.damage) return { hit: true, tag, damage: 0, killed: false };
 
   const applied = difficultyScale(d.damage, scalar);    // CS:0xAB5E + 0xAB86
