@@ -1427,7 +1427,10 @@ export function stepHunterArray(area, st, targets, cam, opts = {}) {
       cullAndStamp(p);
       continue;
     }
-    const target = pickTarget(targets);
+    /* CS:0x9E5D/0x9E61 — the stored SCREEN position plus the camera at pick
+     * time: a world position one tick stale in camera terms. */
+    const pick = pickTarget(targets);
+    const target = pick && { x: pick.x + cam.x, y: pick.y + cam.y };
     if (!target) {                                       // CS:0x9F0A -> 0xA00D
       if (debris) {
         const vel = unpackHunterVel(p.dir);

@@ -10,6 +10,8 @@
  * the target instantly would change the game.
  */
 
+import { targetEntry } from './collision.js';
+
 export const HEALTH_MAX = 0x18;          // 24 — CS:0x0e30 `cmp ax,0x18`
 
 /** CS:0x0e1d `mov ax,0xe42 / call 0x22ca` — the hero's own hurt sound, one
@@ -601,7 +603,10 @@ export function creatureScansGrid(entity, grid, cam, decode, scalar = 0,
    * (UNKNOWN_DS_0168: a counter set to 1000 at CS:0xC347 and to -1 at
    * CS:0xC470, decremented by a hit at CS:0xAB4D. Its meaning is not
    * established, so it is an input here rather than a constant.) */
-  if (targets) targets.push({ x: sx, y: sy, entity });
+  if (targets) {                                        // CS:0xAA86-0xAAA5, after the clip
+    const t = targetEntry(sx, sy, box.w, box.h, opts.cx ?? 0);
+    if (t) targets.push({ ...t, entity });
+  }
   const tag = grid.scan(sx, sy, box.w, box.h);
   if (!tag) return { hit: false, tag: 0, damage: 0, killed: false };
 

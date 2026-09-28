@@ -121,6 +121,42 @@ export function clipScanBox(x, y, w, h) {
   return { x, y, w, h, hit: true };
 }
 
+/**
+ * CS:0xAA09-0xAAA5 — the hunter/familiar target-list record for one creature
+ * box, or null when the clip shrinks the box away (the jumps to CS:0xAB3B
+ * come BEFORE the append at CS:0xAA86, so such a creature is never listed).
+ * The record is {x, y, key}: the ROUNDED, CLIPPED screen x/y (AX/BX after the
+ * clip) and whatever CX holds at CS:0xAA9A. The clip reuses CX: the unclipped
+ * vertical arm sets it to the box's bottom (CS:0xAA30 `mov cx,[0x1e4] / add
+ * cx,bx`), and the unclipped horizontal arm to its RIGHT edge (CS:0xAA69), so
+ * for any creature not clipped at the left the key is x + w (less 0x150 past
+ * the right edge). The caller's own CX survives only a top AND left clip.
+ * [PROVEN] live (DOSBox, PJOYL1 attract, DS:0x343 poked to 0): a 32-wide box
+ * at world (420, 832) with the camera at (256, 864) was stored as
+ * {168, -16, 200}, while the caller's CX was 32.
+ * @param {number} cx0 the caller's CX (only reachable through the two clips)
+ */
+export function targetEntry(sx, sy, w, h, cx0 = 0) {
+  let x = (sx + 4) & ~7, y = (sy + 4) & ~7, cx = cx0;   // CS:0xAA09-0xAA12
+  if (y <= CLIP_NEAR) {                                 // CS:0xAA15
+    h += y + 16;
+    if (h <= 0) return null;
+    y = CLIP_NEAR;
+  } else {
+    cx = h + y;                                         // CS:0xAA30-0xAA34
+    if (cx >= CLIP_BOTTOM) { cx -= CLIP_BOTTOM; h -= cx; if (h <= 0) return null; }
+  }
+  if (x <= CLIP_NEAR) {                                 // CS:0xAA4E
+    w += x + 16;
+    if (w <= 0) return null;
+    x = CLIP_NEAR;
+  } else {
+    cx = w + x;                                         // CS:0xAA69-0xAA6D
+    if (x >= CLIP_RIGHT) { cx -= CLIP_RIGHT; w -= cx; if (w <= 0) return null; }
+  }
+  return { x, y, key: cx };
+}
+
 /* CS:0xA9F0/0xA9F6 save the box into DS:0x1e6/0x1e8 because the clip above
  * MUTATES the globals it reads. Those two are read back only at CS:0xABEE and
  * CS:0xAC14, in the post-hit debris tail — nowhere that this port models — so

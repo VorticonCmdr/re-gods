@@ -212,7 +212,7 @@ import { clipScanBox, CLIP_NEAR, CLIP_BOTTOM, CLIP_RIGHT,
          DamageGrid, CELL, GRID_ORIGIN, GRID_LO, GRID_BYTES, ROW_STRIDE,
          WRITE_LO, WRITE_HI, MAX_SCAN_COLS, stampIndex, scanIndex,
          damageForTag, TAGS_PER_SLOT,
-         hitConsumesProjectile, despawnConsumedHit } from '../game/collision.js';
+         hitConsumesProjectile, despawnConsumedHit, targetEntry } from '../game/collision.js';
 import { FireControl, FIRE_BIT, EMIT_PHASE, RECHECK_PHASE,
          FIRE_STATES } from '../game/fire.js';
 import { SLOT_STRIDE, PROJECTILE_SIZE, GROUP_STRIDE, GROUP_ENTRIES,
@@ -5333,6 +5333,36 @@ export async function checkWeaponsProjectiles(fetchRaw) {
     '>= this key, so the running best walks UP toward the largest, not down ' +
     'toward the smallest; the list is 6-byte {x, y, key} records built by ' +
     'the COLLISION SCANNER at CS:0xAA8D');
+
+  /* The target list as the scanner really builds it (CS:0xAA09-0xAAA5). */
+  {
+    const live = targetEntry(420 - 256, 832 - 864, 32, 32, 32);
+    check('target record = rounded, clipped screen x/y and CX as the clip leaves it: '
+      + 'the live {168, -16, 200} (key = x + w, not the caller\'s CX 32)',
+      live && live.x === 168 && live.y === -16 && live.key === 200, JSON.stringify(live));
+    check('a creature whose box clips away is never listed (the CS:0xAB3B jumps come first)',
+      targetEntry(-60, 50, 32, 32) === null && targetEntry(50, 0xd0, 32, 32) === null);
+    check('only a top AND left clip keeps the caller\'s CX; a left clip alone leaves '
+      + 'the box\'s bottom edge (h + y, CS:0xAA30)',
+      targetEntry(-20, -20, 32, 32, 77).key === 77 && targetEntry(-20, 50, 32, 32, 77).key === 32 + 48);
+    /* End to end: scan -> pick -> the hunter steers toward the creature's
+     * world position (the stored screen x/y plus the camera, CS:0x9E5D). */
+    const tl = [];
+    const cam = { x: 1000, y: 500 };
+    creatureScansGrid({ x: 1200, y: 580, state: 5 }, new DamageGrid(), cam, () => null, 0,
+                      undefined, tl);
+    creatureScansGrid({ x: 1100, y: 580, state: 5 }, new DamageGrid(), cam, () => null, 0,
+                      undefined, tl);
+    const pick = pickTarget(tl.map((t) => ({ ...t })));
+    check('the scanner\'s own list can be picked, and the RIGHTMOST box wins',
+      pick && pick.entity.x === 1200, JSON.stringify(pick && { x: pick.x, key: pick.key }));
+    const area = [{ tag: 3, x: 1150, y: 540, dir: 0 }];
+    stepHunterArray(area, { count: 5, base: 2 }, tl, cam);
+    const v = unpackHunterVel(area[0].dir);
+    check('a hunter shot steers toward the picked creature (it never did before: '
+      + 'the list carried no keys, so pickTarget always returned null)', v.vx > 0 && v.vy > 0,
+      JSON.stringify(v));
+  }
 
   /* ⚠️ X is the HIGH byte and Y the LOW one — the reverse of the obvious. */
   const hv = unpackHunterVel(0x02fe);
