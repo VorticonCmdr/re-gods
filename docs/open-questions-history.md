@@ -231,13 +231,14 @@
     - Standing up from a crouch (`CS:0x4AE7`), or a crouch tick with no key found and no FIRE (`CS:0x4B31`), drops the selected inventory item. The item goes out through `CS:0xBF5F`, popping up from the hero + (8, 0x20).
     - The DOS key pickup also writes into the selected slot (`CS:0x6100`); `gods-web` uses the first empty slot instead.
     - Porting the drop means reverting that too, as one gameplay change. No demo exercises it, because the attract inventory is empty.
-58. **Sounds `gods-web` misses outside `PJOYL1`** — open.
-    - Found by the same all-id per-cursor diff against the AdLib sweeps:
-      - `0x0111` from `CS:0x71A9`: 108 plays in `PJOYL2` and 84 in `PJOYL3`, none in the port;
-      - `0x3720` (`CS:0x6338`) and `0x0A3E` (`CS:0x62E7`), one each in `PJOYL2`: consumable handlers;
-      - in `PJOYG2`: the invulnerability loop `0x0280` (4 vs 2), `0x0B26` from `CS:0xD10E` (55 vs 54, two ticks apart) and the guardian clink `0x021D` (240 vs 242).
-    - `0x0232`, `0x0333`, `0x7F12` and `0x1427` play at shifted cursors.
-    - Item 52's all-id check covered `PJOYG1` only.
+58. ~~Sounds `gods-web` misses outside `PJOYL1`~~ — **CLOSED `[PROVEN]`** (2026-09-28). All four AdLib sweeps (`PJOYL1`, `PJOYL2`, `PJOYG2`, `PJOYL3`) now match `gods-web` on every play at the same tape cursor, 1615 plays (`gods-web/tools/attract-capture/sweep-compare.js`; the sweeps need their own cross-cycle seeds, `PJOYL3` gravity 5 and `PJOYG2` jaw 2).
+    - `0x0111`: the shop's money counter, `CS:0x718B`, which steps the shown money 750 toward the real money every non-FIRE pass (`docs/shop.md`).
+    - The consumable handlers' own sounds: health `0x3720` (only while `[0x19A]` ≥ 0), power `0x0A3E`, extra life `0x6416`, teleport stone `0x193A`.
+    - `0x1427` plays inside every starburst spawn (`CS:0xA4B1`), not once per tick.
+    - `CS:0x08F5` and the shop exit `CS:0x6DCB` run the respawn tick `0x921B` before the level-start sound; a respawn plays `0x0280` twice (`CS:0x0907` and the loop head `0x0131`), `docs/drivers-and-memory.md`.
+    - The `PJOYG2` differences were the comparison missing the jaw seed, not the port.
+    - The two evidence limits left from item 56 are closed live as well: the landing call sites (25 traced calls) and the nest's 2500 points (`[0x3B6]` 0x07 → 0x32).
+59. **The score total differs in `PJOYL2`** — open. At cursor 1888, just before the nest's award, DOS's score bytes `[0x3B6]`–`[0x3B8]` read `07 01 00`: at least 10,700 points (`[0x3B5]`, the lowest byte, was not read). `gods-web` has 7,977 on the same tick. Both started from 0: the attract demo enters through a new game, whose level init zeroes the score (`CS:0x8D91`, inside the `[0x391]` block `CS:0x8D58`). The award at 1888 itself matches. A live peek of `0x3B5`–`0x3B8` per cursor would find where the two part.
 
 ⚠️ `UNKNOWN_openlist_field4` was listed here *and* in the resolved list below. It is **closed** — the resolved entry is correct.
 

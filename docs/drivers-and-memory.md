@@ -706,6 +706,7 @@ Read with `ndisasm` from the ROL.EXE image (file + 0x200; it is not packed) and 
   - the shield potion, `CS:0x62C8` → `0xA90B` then `0x62CC`. It is entry 6 of the consumable table `DS:0xD8B8`, which the pickup (`CS:0x1822`) and the shop (`CS:0x6F32`) both dispatch through, so a bought shield plays it too.
   - respawn, `CS:0x0907`;
   - the loop head `CS:0x012E` on re-entry while `DS:0x172` is set.
+  - ⚠️ So a respawn plays it **twice** `[PROVEN]` live (the `PJOYG2` sweep, 2026-09-28): `CS:0x0907`, then `CS:0x0926 jmp 0x011B` reaches the loop head, where `DS:0x172` is always set after a respawn. Both come after the respawn tick: `CS:0x08F5` calls `FUN_1000_921B` (a tick with a tape poll) before the sounds at `0x08FB`–`0x090A`. The shop's exit does the same (`CS:0x6DCB`, then `0x06A9` and `0x0111`). `gods-web` had played them before the respawn tick and only once; fixed.
 - Stops:
   - `CS:0xA9AA`, when the countdown runs out;
   - `CS:0x0137`, the loop head with no aura;

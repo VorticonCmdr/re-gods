@@ -720,6 +720,14 @@ including the "Warning.. this weapon replaces the X" message. `[STATIC]` —
 disassembly- and shipped-bytes-confirmed, not yet exercised live under
 DOSBox.
 
+## The money counter and its tick, `CS:0x718B` — `[PROVEN]` live (2026-09-28)
+
+The shop does not show `DS:0x194`/`0x196` directly. It shows a copy at `DS:0x254`/`0x256`, set to the real money on both entries (`CS:0x6BED`, and `CS:0x0676` for the level-start shop). `FUN_1000_718B` runs once at entry (`CS:0x6C6F`) and on every loop pass that is not a FIRE press (`CS:0x6D60`, after the cursor sound `0x232` at `0x6D4F`; the FIRE path jumps to `CS:0x6E62` and skips it). Each call moves the shown money `0x2EE` (750) toward the real money, never past it, and plays **`0x111`** (`CS:0x71A3` counting down, `0x71CF` up). Equal: nothing, silent. So after a purchase the display counts down in 750 steps, one tick sound per pass: 108 ticks means 81,000 spent.
+
+Live: the `PJOYL2` and `PJOYL3` sweeps log exactly these runs (108 and 84 plays), each under the tape cursor of its own shop pass. `gods-web` drew the purse itself; `game/shop.js` now keeps `shownMoney` and plays `0x111` per step, and matches every play per cursor.
+
+**The shop's exit runs a respawn tick.** `CS:0x6DCB` calls `FUN_1000_921B` (the tick body a respawn uses, with a tape poll) before `jmp cx` (`CS:0x6DF3`, patched to `0x0696` for the level-start shop), and only then `CS:0x06A9` plays the level-start sound `0x7F12`; `0x0111`'s check at `0x0126` then plays the aura loop `0x280` if a shield was bought, else stops `0x80`. `gods-web` now runs that respawn tick and plays the sound after it (the sweeps' `0x7F12` lands one cursor after the exit pass).
+
 ## What `gods-web` ports and what it discloses as not ported
 
 See the port's own `game/shop.js` header for the current state — built and

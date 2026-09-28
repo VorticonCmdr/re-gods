@@ -151,3 +151,12 @@ Moved to the `gods-re-tooling` skill (`.claude/skills/gods-re-tooling/SKILL.md`)
 - **Open:**
   - item 57, the crouch drop (`CS:0x61A1`), not ported;
   - item 58, sounds the port misses in the other demos (`0x111` from `CS:0x71A9` above all).
+
+**Item 58 is closed (`[PROVEN]`): all four AdLib attract sweeps match `gods-web` on every play at the same tape cursor, 1615 plays.**
+- **Shop.** The shop's money counter ticks `0x111` per 750 step (`CS:0x718B`).
+- **Consumables.** Each handler plays its own sound.
+- **Starburst.** `0x1427` plays inside every spawn.
+- **Respawn order.** The respawn and shop exits run the respawn tick before the level-start sound; a respawn plays `0x280` twice.
+- **Evidence limits closed live.** The landing call sites (25 traced calls) and the nest's 2500 points both match.
+- **A correction to item 56.** The inventory selector is zeroed only by a new game (`[0x391]` block `CS:0x8D58`), not every level entry.
+- **New open item 59.** `PJOYL2`'s score total differs: DOS has at least 10,700 at cursor 1888, the port 7,977.
