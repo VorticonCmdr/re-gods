@@ -307,6 +307,46 @@ export function reloadWorld(w) {
 export function pickUpAgain(st) {         // CS:0x94e8 / CS:0x9451
   return { ...st, count: st.count + 1 };
 }
+/* ── DS:0x1BA and the per-world par: the hit bonus ─────────────────────────
+ *
+ * CS:0x94F5 (FUN_1000_950e per slot) sums the armed weapons into DS:0x1BA:
+ * each slot adds its +6 base, then up to two more times the base while
+ * `count - base` lasts, then the rest of it:
+ *     total += p; b = count - p; if !b ret; total += p; if !--b ret;
+ *     total += p; --b; total += b
+ * Its only callers are the pickup CS:0x94a7 (CS:0x94D1 a new weapon,
+ * CS:0x94F0 a duplicate) and the power potion (CS:0x62DD). So it goes stale
+ * across a world's weapon reload and a full restart, which never call it;
+ * it is one process-wide word, kept here rather than on an Arsenal.
+ *
+ * CS:0x9364-0x939F, in the tag decoder: an ordinary weapon hit whose
+ * DS:0x198 (the world's par, DS:0xE66C[world - 1], written only at level
+ * init CS:0x8E0E) exceeds DS:0x1BA gains `(par - total) >> 3` damage. */
+export const WORLD_WEAPON_PAR = Object.freeze([0, 14, 22, 34]);   // DS:0xE66C, read live
+export const dsWeaponTotal = { value: 0 };                        // DS:0x1BA
+
+export function recomputeWeaponTotal(slots) {                    // CS:0x94F5
+  let total = 0;
+  for (const s of slots) {
+    if (!(s.weapon >= 0) || !s.st) continue;                      // CS:0x9515 `js`
+    const p = s.st.base;
+    let b = s.st.count - p;
+    total += p;
+    if (b === 0) continue;
+    total += p;
+    if (--b === 0) continue;
+    total += p;
+    total += --b;
+  }
+  dsWeaponTotal.value = total & 0xffff;
+  return dsWeaponTotal.value;
+}
+
+export function hitBonus(world) {                                 // CS:0x9364-0x939F
+  const d = (WORLD_WEAPON_PAR[world - 1] ?? 0) - ((dsWeaponTotal.value << 16) >> 16);
+  return d > 0 ? d >> 3 : 0;
+}
+
 /** CS:0x6fde — the shop's trade-in credit for a weapon, from its extras. */
 export const refundFor = (st, w) =>
   (((st.count - st.base) * (w.value + 1)) >> 1);

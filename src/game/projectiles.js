@@ -660,12 +660,32 @@ export const FIREBALL_FRAMES = 4;         // CS:0x9e29 `and cl,0x3`
 export const newWobble = () => new Int16Array(WOBBLE_ENTRIES);
 
 /**
+ * CS:0xA7EF-0xA85B, the solid-cell end of CS:0xa7b6, shared by every mover
+ * that calls it (the common stamp, the fireball CS:0x9E0B and the hunter
+ * CS:0x9FCF/0x9FD6): a 0x6D block in world >= 3 takes the hit (CS:0xA810),
+ * the clink 0x21D plays (CS:0xA7F6) and a debris puff spawns (CS:0xA816) —
+ * the last two through the caller's `hits` — and the shot is consumed
+ * (CS:0xA85B). Returns whether a block was hit.
+ */
+function terrainStop(p, row, col, o, hits) {
+  let broke = false;
+  if (o.blocks && o.planeA) {
+    const idx = row * 128 + col;
+    if (o.blocks.breakable(o.planeA, idx)) { o.blocks.hit(idx, o.weaponIndex, o.pickupCount); broke = true; }
+  }
+  p.tag = 0;
+  hits.push({ x: p.x, y: p.y });
+  return broke;
+}
+
+/**
  * CS:0x9d97 — fireball. Same 9 records at stride 8, same velocity table, plus
  * the accumulator. `record` is the projectile's index within its slot.
  */
 export function stepFireball(area, cam, wobble, opts = {}) {
   const { grid = null, weapon = null, planeB = null } = opts;
-  let moved = 0, culled = 0, stamped = 0, hitTerrain = 0;
+  let moved = 0, culled = 0, stamped = 0, hitTerrain = 0, brokeBlocks = 0;
+  const hits = [];
   for (let i = 0; i < MOVER_WALK; i++) {
     const p = area[i];
     if (!p || p.tag === 0) continue;
@@ -682,11 +702,15 @@ export function stepFireball(area, cam, wobble, opts = {}) {
     if (!grid || !weapon) continue;
     if (weapon.breaksTerrain && planeB) {     // CS:0x9e0b -> 0xa7b6
       const col = ((p.x + 8) & ~0x1f) >> 5, row = ((p.y + 8) & ~0xf) >> 4;
-      if (planeB[row * 128 + col] === 1) { p.tag = 0; hitTerrain++; continue; }
+      if (planeB[row * 128 + col] === 1) {
+        if (terrainStop(p, row, col, opts, hits)) brokeBlocks++;
+        hitTerrain++;
+        continue;
+      }
     }
     if (grid.stamp2x2(sx, sy, p.tag)) stamped++;
   }
-  return { moved, culled, stamped, hitTerrain };
+  return { moved, culled, stamped, hitTerrain, brokeBlocks, hits };
 }
 
 /* ── Mover 4, CS:0x9ef7 — hunter, and it DOES home `[PROVEN]` ────────────
@@ -1393,7 +1417,8 @@ export const HUNTER_NO_TARGET_AT = 0xa00d;
  */
 export function stepHunterArray(area, st, targets, cam, opts = {}) {
   const { grid = null, weapon = null, planeB = null, debris = null } = opts;
-  let moved = 0, stamped = 0, noTarget = 0, coasting = 0, reAimed = 0;
+  let moved = 0, stamped = 0, noTarget = 0, coasting = 0, reAimed = 0, brokeBlocks = 0;
+  const hits = [];
   const rate = hunterTurnRate(st);
   /* CS:0x9FA3 onward — the cull+stamp tail, shared by the coast and the
    * search+steer arms alike. CS:0x9FC8's own tag-sign-normalise dance
@@ -1410,7 +1435,10 @@ export function stepHunterArray(area, st, targets, cam, opts = {}) {
     if (!style) return;
     if (style.stamp === 'terrain2x2' && weapon.breaksTerrain && planeB) {
       const wx = (p.x + 8) & ~0x1f, wy = (p.y + 8) & ~0xf;
-      if (planeB[(wy >> 4) * 128 + (wx >> 5)] === 1) { p.tag = 0; return; }
+      if (planeB[(wy >> 4) * 128 + (wx >> 5)] === 1) {        // CS:0x9FCF/0x9FD6 -> 0xa7b6
+        if (terrainStop(p, wy >> 4, wx >> 5, opts, hits)) brokeBlocks++;
+        return;
+      }
     }
     const sy2 = style.at === 0x9d19 ? sy - 0x10 : sy;
     const tag = Math.abs(p.tag);                        // CS:0x9FC8's neg/stamp/neg-back
@@ -1444,5 +1472,5 @@ export function stepHunterArray(area, st, targets, cam, opts = {}) {
     moved++;
     cullAndStamp(p);
   }
-  return { moved, stamped, noTarget, coasting, reAimed };
+  return { moved, stamped, noTarget, coasting, reAimed, brokeBlocks, hits };
 }

@@ -213,7 +213,8 @@ import { CELL_SOLID, CELL_CLIMBABLE, MAP_COLS as MC, attrAt } from '../formats/m
 import { parseWeapons, allocateShots, MAX_SUBSLOTS, WEAPON_SLOTS, tagFor,
          WEAPON_COUNT, PINNED_08, PINNED_SPRITE, PINNED_SPRITE2,
          armWeapon, pickUpAgain, refundFor, reloadWorld, WEAPON_NAMES,
-         SPRITE_FIELDS_ARE_PINNED } from '../game/weapons.js';
+         SPRITE_FIELDS_ARE_PINNED, recomputeWeaponTotal, hitBonus, dsWeaponTotal,
+         WORLD_WEAPON_PAR } from '../game/weapons.js';
 import { FIRE_STATES as FS, FIRE_STATE_IDS, WALK_FIRE_ANIM, EMIT_WALK,
          EMIT_OTHER, fireAnimOffset, fireTick, persistsRawPhase,
          ENTRY, tryEnterFireState } from '../game/fire-states.js';
@@ -9908,6 +9909,31 @@ export async function checkWeaponsProjectiles(fetchRaw) {
           `beneath it, not a one-row rounding offset on an otherwise-grounded set`,
       });
     }
+  }
+
+  /* ── DS:0x1BA and the par bonus (CS:0x94F5, CS:0x9364-0x939F) ──────────── */
+  {
+    const saved = dsWeaponTotal.value;
+    const slot = (weapon, base, count) => ({ weapon, st: { base, count } });
+    const t = (slots) => recomputeWeaponTotal(slots);
+    const got = [
+      t([slot(0, 2, 2)]),               // count == base: base once
+      t([slot(0, 2, 3)]),               // one extra: base twice
+      t([slot(0, 2, 4)]),               // two extras: base three times
+      t([slot(0, 2, 7)]),               // five extras: 3 x base + (5 - 2)
+      t([slot(0, 2, 2), slot(-1, 0, 0), slot(3, 4, 5)]),
+    ];
+    check('CS:0x94F5: DS:0x1BA adds a slot\'s base up to three times, then the extras beyond two',
+      JSON.stringify(got) === JSON.stringify([2, 4, 6, 9, 10]), got.join(','));
+    dsWeaponTotal.value = 5;
+    const b = [1, 2, 3, 4].map((w) => hitBonus(w));
+    check('CS:0x9364-0x939F: the hit bonus is (par - DS:0x1BA) >> 3 when positive; par DS:0xE66C = 0/14/22/34',
+      JSON.stringify(b) === JSON.stringify([0, 1, 2, 3]) && WORLD_WEAPON_PAR.join() === '0,14,22,34', b.join(','));
+    const d = damageForTag(1, [0, -1, -1], { 0: { count: 4, base: 2 } }, 1, 3);
+    const special = damageForTag(0xfc, [0, -1, -1], { 0: { count: 4, base: 2 } }, 1, 3);
+    check('damageForTag adds the bonus to an ordinary weapon tag only (the FF-FC sources return before CS:0x9364)',
+      d.damage === 7 && special.damage === 50, `${d.damage}, ${special.damage}`);
+    dsWeaponTotal.value = saved;
   }
 
   return results;

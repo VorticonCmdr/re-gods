@@ -46,7 +46,7 @@
  * variable with three different boundaries.
  */
 
-import { armWeapon, pickUpAgain } from './weapons.js';
+import { armWeapon, pickUpAgain, recomputeWeaponTotal } from './weapons.js';
 import { isDeadType, CATEGORY } from './objects.js';
 import { collectTreasure, INVENTORY_EMPTY, INVENTORY_SLOTS } from './treasure.js';
 import { CONSUMABLES, WIRED, NOT_WIRED_REASON,
@@ -149,6 +149,7 @@ export function pickUpWeapon(arsenal, weaponIndex) {
   const held = arsenal.slots.findIndex((s) => s.weapon === weaponIndex);
   if (held >= 0) {                                  // CS:0x94A8..0x94B8
     arsenal.slots[held].st = pickUpAgain(arsenal.slots[held].st);   // CS:0x94E8
+    recomputeWeaponTotal(arsenal.slots);            // CS:0x94F0 -> 0x94F5
     return { slot: held, duplicate: true, count: arsenal.slots[held].st.count };
   }
   const n = chooseSlot(arsenal, weaponIndex);
@@ -157,6 +158,7 @@ export function pickUpWeapon(arsenal, weaponIndex) {
   s.weapon = weaponIndex;                           // CS:0x94BD `mov [si],dx`
   s.st = armWeapon(arsenal.weapons[weaponIndex]);   // CS:0x94C5 -> CS:0x90F9
   s.clear();                                        // CS:0x94CE -> CS:0x9177
+  recomputeWeaponTotal(arsenal.slots);              // CS:0x94D1 -> 0x94F5
   if (weaponIndex === FIREBALL) arsenal.tagBase = FIREBALL_TAG_BASE;
   if (arsenal.onArmed) arsenal.onArmed();           // CS:0x94D4 -> 0xC35E (familiar.js)
   return { slot: n, duplicate: false, replaced, count: s.st.count };

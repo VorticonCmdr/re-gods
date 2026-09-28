@@ -321,9 +321,12 @@ export class Arsenal {
       const w = this.weapons[s.weapon];
       if (s.weapon === HUNTER_WEAPON) {
         const r = stepHunterArray(s.area, s.st, this.targets, cam,
-          { grid, weapon: w, planeB, debris });
+          { grid, weapon: w, planeB, debris, planeA, blocks,
+            weaponIndex: s.weapon, pickupCount: s.st ? s.st.count : 0 });
         moved += r.moved;
         this.stamped += r.stamped;
+        this.brokeBlocks = (this.brokeBlocks || 0) + r.brokeBlocks;
+        hits.push(...r.hits);
         this.noTarget += r.noTarget;
         this.coasting += r.coasting;
         this.reAimed += r.reAimed;
@@ -341,10 +344,13 @@ export class Arsenal {
         continue;
       }
       if (w.mover === 1) {                         // CS:0x9d97, the fireball
-        const r = stepFireball(s.area, cam, s.wobble, { grid, weapon: w, planeB });
+        const r = stepFireball(s.area, cam, s.wobble, { grid, weapon: w, planeB, planeA, blocks,
+          weaponIndex: s.weapon, pickupCount: s.st ? s.st.count : 0 });
         moved += r.moved; culled += r.culled;
         this.stamped += r.stamped;
         this.hitTerrain += r.hitTerrain;
+        this.brokeBlocks = (this.brokeBlocks || 0) + r.brokeBlocks;
+        hits.push(...r.hits);
         continue;
       }
       if (s.weapon === TIME_BOMB_WEAPON) {

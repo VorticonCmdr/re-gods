@@ -28,6 +28,7 @@
  */
 
 import { setWeaponArc } from './projectiles.js';
+import { recomputeWeaponTotal } from './weapons.js';
 
 /* ── The table, DS:0xd8b8, rank -> effect ─────────────────────────────── */
 
@@ -393,6 +394,7 @@ export function applyConsumable(entry, state) {
       for (let i = 0; i < entry.steps; i++) {
         for (const s of state.arsenal.slots) if (s.weapon >= 0) s.st.count += 1;
       }
+      recomputeWeaponTotal(state.arsenal.slots);     // CS:0x62DD -> 0x94F5
       return { steps: entry.steps };
     case 'invulnerable':                             // CS:0xA90B
       state.invuln = INVULN_TICKS_POTION;

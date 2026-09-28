@@ -92,7 +92,7 @@ import { Arsenal, spawnableWeapons, ALT_EMITTER_NONE } from './game/hero-fire.js
 import { Familiar } from './game/familiar.js';
 import { stepHeroFrame, stepCreatureDamage, targetGateOpen } from './game/frame.js';
 import { DamageGrid, damageForTag, despawnConsumedHit } from './game/collision.js';
-import { parseWeapons } from './game/weapons.js';
+import { parseWeapons, hitBonus, dsWeaponTotal } from './game/weapons.js';
 import { pickUpWeapon } from './game/pickup.js';
 import { scanZones, unpackTeleportDest,
          ZONE_TELEPORT, ZONE_EXIT, advanceWorld,
@@ -911,12 +911,17 @@ const guardianTables = {
    * hero's own creatureScansGrid, ce64/pat-objects/selector2/statue's
    * proxied scans) is threaded through this ONE decodeTag closure, so wiring
    * it here covers all of them at once. */
+  const GUARDIAN_HIT_SFX = 0x021d;                      // CS:0x9375
   const decodeTag = (tag, mode = 0) => {
     const d = damageForTag(
       tag,
       arsenal.slots.map((s) => s.weapon),
       Object.fromEntries(arsenal.slots.filter((s) => s.st).map((s) => [s.weapon, s.st])),
-      mode);
+      mode, hitBonus(level.world));                   // CS:0x9364-0x939F
+    /* CS:0x936D-0x937B — with DS:0x34 set (a guardian fight, or ce64's own
+     * bracket) every ordinary weapon hit plays 0x21D inside the decode.
+     * [PROVEN] live: PJOYG1 under ROL plays it on each guardian-hit tick. */
+    if (mode && d.weapon !== undefined) audio.play(GUARDIAN_HIT_SFX);
     despawnConsumedHit(d, arsenal.weapons, arsenal.slots.map((s) => s.area));
     /* CS:0x938E-0x9394 — the familiar's tag 0xFF deals its power DS:0x210
      * and flags AL = 1, which makes CS:0xAB4D drain the struck creature's
@@ -2992,7 +2997,10 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
         }
       }
       lastDebrisFx = fr.debrisFx || [];
-      if (fr.emitted) { shotsFired++; audio.play(FIRE_SFX); }   // CS:0x985f/0x9895
+      if (fr.emitted) {                                    // CS:0x985f/0x9895, once per slot
+        shotsFired++;
+        for (let k = 0; k < (fr.emitted.sounds ?? 1); k++) audio.play(FIRE_SFX);
+      }
       /* CS:0x5AAD/0x5ABA — already gated to WALK_FOOTSTEP_PHASES by
        * player.js, so this per-tick check IS the tuned cadence, not a bare
        * trigger. See audio/audio-bus.js's own header for why the earlier
@@ -4489,6 +4497,8 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
       guardianRaw: () => guardian,
       /* game/familiar.js, with the Health that holds its energy/power/wings. */
       familiar: () => ({ entity: familiar, health, arsenal }),
+      /* DS:0x1BA and the hit bonus it gives this world (game/weapons.js). */
+      weaponTotal: () => ({ total: dsWeaponTotal.value, bonus: hitBonus(level.world) }),
       /* DS:0x2F0 lives for the process; the diff harness resets it to the
        * static-image 0 (a first attract cycle) or seeds a later cycle's value. */
       resetProcessJaw,

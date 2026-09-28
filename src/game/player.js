@@ -782,7 +782,10 @@ export class Player {
      * the landing at 0x4DF1), so a tick that lands or bumps never emits. */
     if (r.emit && this.pendingAlloc && fire) {
       fire.emit(this.pendingAlloc, this.x, this.y, st.right);
-      this.emitted = { right: st.right, state: id };
+      /* CS:0x985F / 0x9895 play 0x41C once per slot they dispatch, before
+       * the handler: one per allocated slot (CS:0x9739 skips the empty). */
+      const sounds = this.pendingAlloc.allocated.filter(Boolean).length;
+      this.emitted = { right: st.right, state: id, sounds };
       this.pendingAlloc = null;
     }
     if (chained) this.pendingAlloc = chained;  // the next cycle's reservation

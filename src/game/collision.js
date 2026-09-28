@@ -353,7 +353,7 @@ export const SPECIAL_TAG_DAMAGE = {
  * @param {number} mode       DS:0x34 — 0 in normal play; 1 and 2 change what
  *                            the two AREA tags (0xFC, 0xFE) deal.
  */
-export function damageForTag(tag, slotWeapons, weaponState, mode = 0) {
+export function damageForTag(tag, slotWeapons, weaponState, mode = 0, bonus = 0) {
   if (tag & 0x80) {
     const e = SPECIAL_TAG_DAMAGE[tag];
     if (!e) return { special: 'unknown', damage: 0 };
@@ -375,7 +375,9 @@ export function damageForTag(tag, slotWeapons, weaponState, mode = 0) {
     slot,
     record: t - 1,                       // (tag-1)*8 / 8
     weapon,
-    damage: st ? st.count : 0,           // [di+0x8] — the pickup count
+    /* [di+0x8] — the pickup count, plus CS:0x9399's par bonus (weapons.js
+     * hitBonus; the caller passes it, 0 by default). */
+    damage: st ? st.count + bonus : 0,
   };
 }
 
