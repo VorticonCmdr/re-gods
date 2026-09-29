@@ -302,12 +302,17 @@
       Only type 55's top sprite is cleared in a world where the type is placed. Sprites drawn by fixed ids outside these tables were not audited.
     - **Census window.** Map records, trigger `ACT0`/`ACT1` spawns, and the drop ids of PAT, System A/B and selector-2 descriptors that a plane-B event references. Only one more reachable item lands on a cleared bit: the knife (weapon 192, #302) in world 4, dropped by 4A's System A group 5 and System B group 35 (reward id 0). Its descriptor aliases #303 (read live), so it would draw as weapon 1. The drop itself is `[STATIC]`. Not covered: fixed-id sprites drawn by other code in the `objects` range.
     - **Ported on purpose**, matching item 60's call: `gods-web` `src/formats/object-mask.js` rebuilds the arena and decodes each alias, including its opaque colour-0 pixels. `object-mask-compare.mjs` matches all six captured objects, and #331, pixel for pixel, and each object's own frame, as a control, does not.
-64. **Open (port): category 5's extra sprites are not drawn by `gods-web`.** The `CS:0x19BA` handlers draw more than the base sprite:
-    - types 55 and 81 add an animated sprite 16 px up (`DS:0xdfe6`/`0xdfee`);
-    - type 82 swaps its sprite (`DS:0xdff6`);
-    - types 113 and 114 add tile 448/449 32 px to the right.
-
-    All are listed in `docs/destructible-and-hazards.md`, and the port draws only the base. The animation index is `((x >> 5) + DS:0x39d) & 3`. `DS:0x39d` advances only on the `DS:0x36c`-parity branch of `CS:0x1450`, and that parity's rate is `UNKNOWN_36c_parity`. The `x` fed to `>> 5` (world or screen) was not traced. In world 1, type 55's top sprite is a static #331 (item 63), so that case needs neither.
+64. ~~Category 5's extra sprites are not drawn by `gods-web`~~ — **CLOSED `[PROVEN]` live and ported (2026-09-29).** It also closes `UNKNOWN_36c_parity`, which had left the shop potion's animation unwired.
+    - **The clock.** `CS:0x1450` steps `DS:0x39c`/`0x39d` on frames where `DS:0x36c` = 0xFF, and `DS:0x39e` (mod 5) on the others. `CS:0x0172` flips `DS:0x36c` once per frame, before the walk. Read live over ten ticks; `checks.js` replays them.
+    - ⚠️ **A port bug found on the way.** `gods-web` stepped `DS:0x39c` every frame, so type 50's spike overlay ran twice too fast.
+    - **The phase** is `((screenX >> 5) + DS:0x39d) & 3`. `CS:0x15F1` subtracts the camera before the dispatch, and `CS:0x1AAB` read `CX` = 148 live, for the torch at 3824 with the camera at 3676. This corrects "worldX" in `docs/destructible-and-hazards.md`.
+    - **What's now drawn**, fitted live in world 2B with 0 bad pixels:
+      - types 81 (torch flames, 324/325 at the phases predicted) and 113/114 (second tiles 448/449, 32 px right);
+      - type 55's top sprite (#331 in world 1, item 63);
+      - type 82's swap, which is placed nowhere.
+    - **The shop potion** (sprite 253) now cycles `DS:0xdfa6` on `DS:0x39e`. `[STATIC]` as a picture, since only the clock is proven live.
+    - **A dormant DOS bug.** Type 81's `and cl,3` reads `DS:0xDDEE` (zeros) at a negative screen x. That's unreachable: the camera stops at 3776.
+    - **Captures**: `gods-web` `tools/attract-capture/mask63/w2b_cat5_*.png`.
 
 ⚠️ `UNKNOWN_openlist_field4` was listed here *and* in the resolved list below. It is **closed** — the resolved entry is correct.
 

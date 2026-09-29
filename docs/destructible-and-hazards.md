@@ -567,7 +567,7 @@ heroY in [tipY  - 40, tipY]
 **The overlay sprite** is a SECOND, per-type animation, on its own global counter, drawn 16px above the base sprite (branching on the ORIGINAL sprite id, not the just-computed draw position):
 
 ```
-type 50  (0xdc):  DS:0x39c, wraps mod 4 (AND 0x3)   -> table DS:0xdffe
+type 50  (0xdc):  DS:0x39c, wraps mod 4 (AND 0x3), every OTHER frame -> table DS:0xdffe
                     {220, 313, 314, 315}   (170+50, then 3 more frames)
 type 117 (0x11f): DS:0x39f, wraps mod 6 (AND, CMP 6) -> table DS:0xe006
                     {287, 416, 417, 418, 419, 420}   (170+117, then 5 more)
@@ -686,6 +686,11 @@ Read directly (`read_memory`, `1ffd:dfb0`, 56 bytes): the table is exactly **13 
 | `0x19EC` | `113,114` | draws the base sprite (export 1), then a second, **fixed** sprite 32px to the **right** — `448` for type 113, `449` for type 114 — (export 2) |
 
 `frame` in every animated handler is computed identically: `((worldX >> 5) + tick) & 3`, where `tick` is a shared global byte (`DS:0x39d`, read by all three animated handlers) and `worldX >> 5` is the object's own position phase — the exact same "position-phased, globally-ticked, 4-entry ping-pong table" idiom this document already established for the destructible spike's overlay animation (`DS:0x39c`/`DS:0x39f`, *The overlay sprite*, above) — `0x39d` sits directly between those two already-documented counters. Every one of the three animated tables reads as a 4-frame cycle that returns to its own first value on the 4th step (`{a,b,c,b}` or `{a,b,c,b}` shape), the same back-and-forth flicker shape as the spike overlay.
+
+⚠️ **Corrected (ranked item 64, `[PROVEN]` live): the phase uses the SCREEN x, and the counters step every other frame.**
+- **Screen x.** `CS:0x15F1 sub ax,[0xa]` runs on every path into the dispatch, so the `x` above is `worldX − camera X`, and the phase shifts as the camera scrolls. A breakpoint at `CS:0x1AAB` read `CX` = 148 for the torch at 3824, with the camera at 3676.
+- **Every other frame.** `CS:0x1450` steps `DS:0x39c`/`0x39d` only on frames where `DS:0x36c` is 0xFF, and `DS:0x39e` (mod 5) on the others. `DS:0x39b`, `0x39f` and `0x3a0` step every frame. `DS:0x36c` is flipped once per frame at `CS:0x0172`, before the object walk. This was read live over ten ticks, and it closes `UNKNOWN_36c_parity`.
+- ⚠️ **A dormant bug.** `CS:0x1AB9` masks type 81's index with `and cl,3`, where its siblings use `and cx,3`. For a screen x below 0, the index therefore reads `DS:0xDDEE + 2i`, which holds zeros (read live in worlds 2 and 4). It is unreachable in shipped data: both torches sit at x ≥ 3824, and the camera stops at 3776.
 
 **Graphics exports 1 and 2 are already characterized in `docs/drivers-and-memory.md`'s own export table: "Masked sprite blits (descriptor consumers; differ in clip bounds)."** So the one behavioural difference among the six handlers that isn't animation or a second tile — which export a given handler calls — is a known, already-documented distinction (clip bounds), not a new unknown.
 

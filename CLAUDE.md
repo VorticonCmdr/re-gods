@@ -119,7 +119,13 @@ A sixth, `UNKNOWN_level_palette_source` (ranked item 24), CLOSED — and, like i
 - **World 4A.** The flask looks like the bag of gold, and its lever is a scrambled jewel. `[STATIC]`: a knife dropped in 4A (System A group 5, System B group 35) would draw as weapon 1.
 - **Evidence.** Descriptors and screen captures come from `gods-web` `tools/attract-capture/mask63_live.py`. `object-mask-compare.mjs` matches all six objects pixel for pixel, and the arena encoder matches three live dumps byte for byte. See `docs/open-questions-history.md` item 63.
 - **Fixed-id audit.** Every documented fixed-id sprite table (category 5, spikes, special levers, `SS:0x3602`, the nest) was checked against the masks, and only type 55's top sprite is affected.
-- **New open item 64 (port).** `gods-web` never drew category 5's extra sprites (types 55/81 top animation, 82's swap, 113/114's second tile). Their tick `DS:0x39d` depends on `UNKNOWN_36c_parity`.
+- **Item 64 (port) is closed, `[PROVEN]` live.**
+  - `gods-web` now draws category 5's extra sprites (types 55/81 top animation, 82's swap, 113/114's second tile).
+  - `UNKNOWN_36c_parity` is closed: `DS:0x39c`/`0x39d` step every other frame. `gods-web`'s spike overlay had been running twice too fast.
+  - The phase uses the screen x, not the world x.
+  - The shop potion's sparkle is wired.
+  - See `docs/open-questions-history.md` item 64.
+- **Nothing registered is open now.**
 
 ## Tooling
 
