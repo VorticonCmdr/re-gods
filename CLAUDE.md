@@ -135,7 +135,8 @@ A sixth, `UNKNOWN_level_palette_source` (ranked item 24), CLOSED — and, like i
   - **The 4A/4B turrets' score overflow.** `CS:0xAF7D`'s second `0x0C8B` call means 11,100 per kill, not 10,100.
   - ⚠️ **World-4 PAT class 3 is placed, not cut.** PALFILS +5 selects it in seven placed selector-1 descriptors of 4A and 4B each. `CS:0xBD38`/`0xBD0B` drop a falling shot through `CS:0x8B0E` into `DS:0xCFCC`. This refutes the "fourth cut feature" claim in `destructible-and-hazards.md`.
   - **`CS:0xBC4B`'s line hazard aims at the exact hero.** `CS:0xDBC6` ignores BP, so there is no jitter and no random draw.
-- **System A's leader and followers, read `[STATIC]` in item 68, live proof pending before porting.**
+- **System A's leader and followers are `[PROVEN]` live (item 68).** Elections, joins, the `EBB9` reset, 125/125 trail goals, 783/783 formation goals, and the follower-death quirk. It found two more shipped bugs: the trail ring overruns its 0xE4-byte runtime, and formation reads plane A through DS instead of `SS:0x40B0`. The pick loop `CS:0xEB76` also hangs on a 0xFFFF draw (0.39% of tables).
+- *(previously)* **System A's leader and followers, read `[STATIC]` in item 68.**
   - **What it is.** `CS:0xEB37` elects a leader and draws a random number on every leaderless tick. Stage 1 `CS:0xE6F1` recruits followers into strategy 4 (`CS:0xE7DB`), which follows a 100-entry trail ring or a rotating circle.
   - **The doubled-HP member.** It compares the wrong counter (`SS:0x435` is the group slot), and it is unreachable in shipped data.
 
