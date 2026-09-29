@@ -57,7 +57,9 @@ import { SpikeClock, spikePingpong, heroInSpikeBox, heroInSpike130Box,
 import { LoopSfx, spikeOnScreen, barrierOnScreen } from '../game/loop-sfx.js';
 import { HEALTH_EMPTY_SPRITE, HEALTH_FILLED_SPRITE_BASE, HEALTH_FILLED_SPRITE_COUNT,
 HEALTH_BAR_X, HEALTH_BAR_Y_LOCAL, HEALTH_BAR_H, healthBarDraws, drawHealthBar,
-stepHealthBarShimmer } from '../game/health-bar.js';
+stepHealthBarShimmer, GUARDIAN_BAR, GUARDIAN_BAR_X, guardianBarValue } from '../game/health-bar.js';
+import { W2_ARM_HP, W2_BODY_HP } from '../game/guardian.js';
+import { W4_HP } from '../game/guardian4.js';
 import { DIGIT_STRIP_DESCRIPTOR, DIGIT_W, DIGIT_H, DIGIT_STEP, MONEY_CAP,
 SCORE_Y_LOCAL, LIVES_Y_LOCAL, MONEY_Y_LOCAL, RIGHT_ANCHOR_X, LIVES_X,
 SCORE_DIGITS, MONEY_DIGITS, LIVES_CLAMP, sliceDigitFrames, clampMoneyForDisplay,
@@ -14564,11 +14566,12 @@ export function checkHealthBar() {
 
   /* ── the two-crop geometry, at both extremes and a midpoint ────────────── */
   check('full health (24): top crops just ITS OWN row 0 (E=(24-24)>>1=0, '
-    + 'rows1=1), bottom fills the remaining 13 rows starting at its own row '
-    + '0 (no skip) — CS:0x0eec/0x0efd/0x0f2b',
+    + 'rows1=1), bottom fills the remaining 13 rows from its own row 1 '
+    + '(CS:0x0F02 increments DX before CS:0x0F29 doubles it: E+1 rows '
+    + 'skipped), proven live — CS:0x0eec/0x0efd/0x0f2b',
     JSON.stringify(healthBarDraws(24, 0)) === JSON.stringify({
       top: { sprite: 126, rowStart: 0, rowCount: 1, y: 7 },
-      bottom: { sprite: 122, rowStart: 0, rowCount: 13, y: 8 },
+      bottom: { sprite: 122, rowStart: 1, rowCount: 13, y: 8 },
     }));
   check('zero health (0): top crops rows [0,13) (E=12, rows1=13) and bottom '
     + 'is SKIPPED entirely — CS:0x0f30\'s own `(E+1)*2==26` bounds check, '
@@ -14581,25 +14584,43 @@ export function checkHealthBar() {
     + 'different geometry',
     JSON.stringify(healthBarDraws(-5, 0)) === JSON.stringify(healthBarDraws(0, 0)));
   check('midpoint (12): the two crops are ADJACENT with no gap and no '
-    + 'overlap — top ends at output row 7, bottom starts its OWN row 6 '
-    + 'there and runs to the sprite\'s own row 13 exactly',
+    + 'overlap — top ends at output row 14, bottom starts its OWN row 7 '
+    + 'there and runs through the sprite\'s last row (13)',
     JSON.stringify(healthBarDraws(12, 2)) === JSON.stringify({
       top: { sprite: 126, rowStart: 0, rowCount: 7, y: 7 },
-      bottom: { sprite: 124, rowStart: 6, rowCount: 7, y: 14 },
+      bottom: { sprite: 124, rowStart: 7, rowCount: 7, y: 14 },
     }));
   check('every health value 0..24 tiles the two crops into EXACTLY 14 '
     + 'OUTPUT rows when bottom fires, or 13 when it\'s the E=12 skip case '
-    + '— adjacent output ranges, no gap, no overlap. Each sprite\'s own '
-    + 'row 13 (the 14th, last row) is never SOURCE-sampled by either draw '
-    + '(bottom\'s own crop always ends at its source row 13, exclusive) — '
-    + 'a reserved border row in the asset, not a hole in what\'s shown',
+    + '— adjacent output ranges, no gap, no overlap, and the bottom crop '
+    + 'always ends on the sprite\'s last row (13), which shows live',
     Array.from({ length: 25 }, (_, h) => h).every((h) => {
       const { top, bottom } = healthBarDraws(h, 0);
       if (!bottom) return top.rowCount === 13;
       const topEnd = top.y + top.rowCount;
       return topEnd === bottom.y &&                             // adjacent, no gap
-        bottom.rowStart + bottom.rowCount === HEALTH_BAR_H - 1 && // source-ends at row 13
+        bottom.rowStart + bottom.rowCount === HEALTH_BAR_H &&     // source-ends at row 13 inclusive
         top.rowCount + bottom.rowCount === HEALTH_BAR_H;          // 14 OUTPUT rows total
+    }));
+
+  /* ── the guardian's bar — CS:0x0F4D, DS:0xD7BA ──────────────────────── */
+  check('DS:0xD7BA (read in the file and live): each world\'s bar maximum is '
+    + 'that guardian\'s starting DS:0x28A (1500, 2000+2400, 0x8CA, 6000), '
+    + 'and its icon bases lie in the guard<N> atlas from descriptor 0x1C2',
+    GUARDIAN_BAR[1].max === 1500 && GUARDIAN_BAR[2].max === W2_ARM_HP + W2_BODY_HP &&
+    GUARDIAN_BAR[3].max === 0x8ca && GUARDIAN_BAR[4].max === W4_HP &&
+    [0x1e6, 0x1ec, 0x1d2, 0x1d6].every((b, i) => GUARDIAN_BAR[i + 1].base === b) &&
+    GUARDIAN_BAR_X === 0x121);
+  check('CS:0x0F72-0x0F9E: the bar value is floor(max(hp,0)*24/max), capped '
+    + 'at 24 — full at the start, empty after the kill (hp < 0)',
+    guardianBarValue(1500, 1500) === 24 && guardianBarValue(-1, 1500) === 0 &&
+    guardianBarValue(749, 1500) === 11 && guardianBarValue(9000, 6000) === 24,
+    `${guardianBarValue(749, 1500)}`);
+  check('the guardian\'s bar crops exactly like the hero\'s, from its own '
+    + 'icon base (CS:0x0E93 with [0x312] = the table word)',
+    JSON.stringify(healthBarDraws(24, 1, GUARDIAN_BAR[2].base)) === JSON.stringify({
+      top: { sprite: 0x1f0, rowStart: 0, rowCount: 1, y: 7 },
+      bottom: { sprite: 0x1ed, rowStart: 1, rowCount: 13, y: 8 },
     }));
 
   /* ── the shimmer phase — CS:0x0e83/0x0e8a-0x0e8e, every OTHER tick ─────── */

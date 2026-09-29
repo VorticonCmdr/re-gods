@@ -59,7 +59,7 @@ import { VERDICT_NONE } from './game/pathfind.js';
 import { runSearch } from './game/pathfind-producers.js';
 import { GodsRandom } from './game/random.js';
 import { decodeStatusPanel, PANEL_Y0 as STATUS_PANEL_Y0 } from './game/status-panel.js';
-import { stepHealthBarShimmer, drawHealthBar } from './game/health-bar.js';
+import { stepHealthBarShimmer, drawHealthBar, GUARDIAN_BAR, GUARDIAN_BAR_X, guardianBarValue } from './game/health-bar.js';
 import { sliceDigitFrames, clampMoneyForDisplay, drawScore, drawMoney, drawLives } from './game/hud-digits.js';
 import { LeverToggle, SFX_LEVER_TOGGLE } from './game/levers.js';
 import { KillSmoke } from './game/kill-smoke.js';
@@ -4568,6 +4568,14 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
         clampMoneyForDisplay(purse);
         drawMoney(renderer, digitFrames, purse, STATUS_PANEL_Y0);
         drawScore(renderer, digitFrames, score, STATUS_PANEL_Y0);
+      }
+      /* CS:0x02E1 -> 0x0F4D: the guardian's bar over PSTAT3's digit tile,
+       * while the guard<N> group is in (DS:0x38A == 2). After the kill its
+       * DS:0x28A is negative, so the bar reads empty. */
+      if (guardianMusic) {
+        const gb = GUARDIAN_BAR[level.world];
+        drawHealthBar(renderer, hero && hero.frames, guardianBarValue(guardian ? guardian.hp : -1, gb.max),
+                      healthBarShimmer.phase, STATUS_PANEL_Y0, { base: gb.base, x: GUARDIAN_BAR_X });
       }
       /* THE MESSAGE LINE — game/message.js. Panel-local row 0x1d (absolute
        * screen row 189), drawn last because the original draws it into the

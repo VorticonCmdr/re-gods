@@ -62,25 +62,20 @@
  *
  *   WORKING OUT THE EXACT ROW MATH (E in 0..11; E==12 is the skip case):
  *   draw #1 renders SOURCE rows [0, E+1) of sprite 126 at output Y=[panelY,
- *   panelY+E+1). draw #2's own height field (`max(11-E,0)+1`) means it
- *   renders `max(11-E,0)+2` rows — i.e. exactly `13-E` for E<=11 — of ITS
- *   OWN sprite, SOURCE-CROPPED to skip its own first E rows (the `+= E*2`
- *   byte-offset is exactly E rows of a 16px, 2-byte-per-row 1-bit MASK — the
- *   only bit depth `bytes/row == 2` fits for a 16px-wide sprite), landing at
- *   output Y=[panelY+E+1, panelY+E+1+(13-E)) = [panelY+E+1, panelY+14).
- *   The two output ranges are ADJACENT with NO gap and NO overlap, and
- *   together cover EXACTLY 14 rows (the sprite's own full height) for every
- *   E in 0..11 — confirmed algebraically (E + (13-E) + 1 == 14) before
- *   writing this module, not assumed. Sprite row 13 (the very last row of
- *   BOTH sprites) is consequently never rendered by either draw — a
- *   1px reserved border row at the bottom of the physical bitmap that this
- *   routine's own arithmetic simply never reaches, at any health value.
+ *   panelY+E+1). CS:0x0F02 then increments DX to E+1, so draw #2's height
+ *   field is `max(11-E,0)+1` (13-E rows) and its source offset grows by
+ *   (E+1)*2 bytes (CS:0x0F29 `shl dx,1` of the INCREMENTED DX): it skips its
+ *   own first E+1 rows (2 bytes a row, the 16px mask) and renders source
+ *   rows [E+1, 14) at output Y=[panelY+E+1, panelY+14). Together the two
+ *   draws cover 14 output rows, and draw #2 ends on the sprite's last row.
+ *   ⚠️ An earlier revision skipped only E rows (missing the increment) and
+ *   drew every filled row one row too high, never reaching row 13. [PROVEN]
+ *   live (tools/attract-capture/panel_*_live.png): at E=0 the screen rows
+ *   8-20 are the filled frame's rows 1-13, at E=1 rows 9-20 are rows 2-13,
+ *   for the hero's gauge and the guardian's alike.
  *   At E==12 (health==0) draw #1 alone covers SOURCE/output rows [0,13),
- *   i.e. 13 of the 14 rows — one row short of the other 24 configurations,
- *   because draw #2 is skipped rather than attempting a 2-row read starting
- *   past the sprite's own bound. Reproduced verbatim, not "fixed" to a
- *   uniform 14, since this is exactly what CS:0x0F30's own bounds check
- *   does in the original.
+ *   i.e. 13 of the 14 rows — draw #2 is skipped by CS:0x0F30's check
+ *   (`(E+1)*2 == 26`). Reproduced as is.
  *
  *   Y POSITIONING. `[0x6]=7` is PANEL-LOCAL, not an absolute screen row —
  *   confirmed by disassembling graphics-driver export 21 (VGA.EXE, via
@@ -151,6 +146,39 @@ export const HEALTH_BAR_Y_LOCAL = 7;
 export const HEALTH_BAR_H = 14;
 
 /**
+ * CS:0x0F4D (called at CS:0x02E1 after the score, and from the respawn tick
+ * at CS:0x931C) — the GUARDIAN'S health bar, drawn only while the guard<N>
+ * group is in (DS:0x38A == 2). It re-enters this gauge's body at CS:0x0E93
+ * with its own icon base (DS:0x312), x = 0x121 and, in place of DS:0x19A,
+ * the guardian's DS:0x28A scaled to 0..24 against a per-world maximum:
+ *
+ *   0f5e  di = 0xD7BA + (world-1)*4 ; [0x312] = [di]      ; icon base
+ *   0f72  ax = max([0x28A], 0) ; dx:ax = ax*24 ; ax /= [di+2]
+ *   0f99  [0x19A] = min(ax, 24) ; call 0e93 ; restore [0x19A]
+ *
+ * DS:0xD7BA, read in the file and live (identical): the maxima are the
+ * guardians' starting health (guardian.js, guardian4.js). The icon bases
+ * fall in the guard<N> atlas at descriptor 0x1C2 (the four atlases carry
+ * the same bar frames). The shimmer phase is the hero gauge's (0x0E93 reads
+ * DS:0x3B4, advanced only by 0x0E77). It draws over PSTAT3's digit tile
+ * (status-panel.js). [PROVEN] live: in a forced world-2 fight at full
+ * health, this module's render of x 280-319, panel rows 0-39 matches the
+ * captured screen on all 1600 pixels.
+ */
+export const GUARDIAN_BAR = {
+  1: { base: 0x1e6, max: 1500 },
+  2: { base: 0x1ec, max: 4400 },
+  3: { base: 0x1d2, max: 2250 },
+  4: { base: 0x1d6, max: 6000 },
+};
+export const GUARDIAN_BAR_X = 0x121;   // CS:0x0F54
+
+/** CS:0x0F72-0x0F9E — DS:0x28A as a 0..24 bar value. */
+export function guardianBarValue(hp, max) {
+  return Math.min(HEALTH_MAX, Math.floor(Math.max(0, hp) * 24 / max));
+}
+
+/**
  * CS:0x0e83/0e8a-0e8e — advance the shimmer phase. Call once per game tick.
  * `DS:0x36d` gates the original's own increment to every OTHER tick (it
  * cycles 0,1,0,1... via `inc`+wrap-at-2, CS:0x0176-0x0181); reproduced here
@@ -176,12 +204,12 @@ export function stepHealthBarShimmer(state) {
  * }} `bottom` is `null` exactly when health is clamped to 0 (CS:0x0F30's
  *   own bounds-check skip — see the module header).
  */
-export function healthBarDraws(health, shimmerPhase) {
+export function healthBarDraws(health, shimmerPhase, base = HEALTH_FILLED_SPRITE_BASE) {
   const bar = Math.max(0, health);
   const E = (HEALTH_MAX - bar) >> 1;                    // CS:0x0ee7-0x0eec
   const rows1 = E + 1;                                   // CS:0x0eee/0x0f02
   const top = {
-    sprite: HEALTH_EMPTY_SPRITE,
+    sprite: base + HEALTH_FILLED_SPRITE_COUNT,           // CS:0x0e9e, [0x312]+4
     rowStart: 0,
     rowCount: rows1,
     y: HEALTH_BAR_Y_LOCAL,
@@ -191,8 +219,8 @@ export function healthBarDraws(health, shimmerPhase) {
   return {
     top,
     bottom: {
-      sprite: HEALTH_FILLED_SPRITE_BASE + shimmerPhase,
-      rowStart: E,
+      sprite: base + shimmerPhase,
+      rowStart: E + 1,                                  // CS:0x0F02/0x0F29, (E+1)*2 bytes
       rowCount: rows2,
       y: HEALTH_BAR_Y_LOCAL + rows1,
     },
@@ -208,15 +236,18 @@ export function healthBarDraws(health, shimmerPhase) {
  * @param {number} health
  * @param {number} shimmerPhase
  * @param {number} panelY0 the status panel's own screen-Y origin (160)
+ * @param {{base?:number, x?:number}} [at] DS:0x312 and [0x4]: the hero's
+ *   gauge by default, GUARDIAN_BAR[world].base / GUARDIAN_BAR_X for 0x0F4D
  */
-export function drawHealthBar(renderer, frames, health, shimmerPhase, panelY0) {
+export function drawHealthBar(renderer, frames, health, shimmerPhase, panelY0,
+                              { base = HEALTH_FILLED_SPRITE_BASE, x = HEALTH_BAR_X } = {}) {
   if (!frames) return;
-  const { top, bottom } = healthBarDraws(health, shimmerPhase);
+  const { top, bottom } = healthBarDraws(health, shimmerPhase, base);
   for (const draw of bottom ? [top, bottom] : [top]) {
     const f = frames[draw.sprite];
     if (!f || draw.rowCount <= 0) continue;
     const start = draw.rowStart * f.w;
     const crop = { w: f.w, h: draw.rowCount, pixels: f.pixels.subarray(start, start + draw.rowCount * f.w) };
-    renderer.blitSprite(crop, HEALTH_BAR_X, panelY0 + draw.y);
+    renderer.blitSprite(crop, x, panelY0 + draw.y);
   }
 }

@@ -104,9 +104,10 @@
  *   they are not drawn. Everything else — the weapon/item alcove on the
  *   left, the portrait frame, the row of empty pillar-flanked slots, the
  *   black health-bar trough along the bottom, the ornate stone border — is
- *   pixel-identical between the two. Not established: whether anything
- *   draws on PSTAT3's digit tile during the fight (39 of the 1906 differing
- *   pixels matched neither file in the live capture).
+ *   pixel-identical between the two. During the fight the guardian's
+ *   health bar (CS:0x0F4D, game/health-bar.js) draws on PSTAT3's tile: the
+ *   38 pixels of the live capture that matched neither file are that bar,
+ *   and the port's render matches the tile exactly.
  *
  *   The dynamic overlay (health bar, lives, money, score, inventory,
  *   message line) lives in its own modules; this one renders the backdrop.
