@@ -47,6 +47,10 @@ const WANTED = [
   'PGUARD11.PI1','PGUARD11.DAT','PGUARD12.PI1','PGUARD12.DAT','PAMDRAGN.PI1','PAMDRAGN.DAT',
   'PGUARD31.PI1','PGUARD31.DAT','PGUARD32.PI1','PGUARD32.DAT',
   'PGUARD41.PI1','PGUARD41.DAT','PGUARD42.PI1','PGUARD42.DAT',
+  // the `shop` group (VGA.EXE: shopspr + shopfnt), loaded over `level<N>`
+  // the same way by CS:0x05D7: the shopkeeper's frames (game/shopkeeper.js)
+  // and, from the sublevel switch, sublevel B's creatures (ranked item 60).
+  'PSHOPSPR.PI1','PSHOPSPR.DAT','PSHOPFNT.PI1','PSHOPFNT.DAT',
   // the game-completion screen (game/payoff.js, CS:0x03AC)
   'PPAYOFF.PI1',
   // object category codes: record +4 (BE u16). Verified byte-identical to

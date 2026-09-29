@@ -11,6 +11,8 @@ right after 0x484E returns, and `after` ticks later. Leaves DOSBox PAUSED at
 the end so the screen can be captured.
 
   python3 sublevel_live.py 300 40      # writes sublevel_live.json
+  python3 sublevel_live.py 300 25 1460 msg   # hero onto PLEV1B's shop potion
+      # (1468, 936), pause 25 ticks after the switch: its message on screen
   python3 sublevel_live.py 300 200 1500   # also: after the switch, put the hero
       # (and the camera) at x=1500 on PLEV1B's first spawn cell (1504, 944:
       # System B group 4, two creatures) and stop at the first CS:0x3569 draw
@@ -38,6 +40,8 @@ def snap():
 def main():
     at, after = int(sys.argv[1]), int(sys.argv[2])
     place = int(sys.argv[3]) if len(sys.argv) > 3 else None
+    # `msg`: stop `after` ticks past the switch instead of at a creature draw
+    msg = len(sys.argv) > 4 and sys.argv[4] == 'msg'
     here = __file__.rsplit('/', 1)[0]
     call('POST', '/debug/pause')
     since = call('GET', '/debug/status')['stop']['stop_id']
@@ -93,7 +97,8 @@ def main():
                 call('PUT', f'/memory/{DS}/{0x17C}', (944).to_bytes(2, 'little'), raw=True)
                 call('PUT', f'/memory/{DS}/{0xA}', (place - 0x90).to_bytes(2, 'little'), raw=True)
                 call('PUT', f'/memory/{DS}/{0xC}', (944 - 0x48).to_bytes(2, 'little'), raw=True)
-                watch = watch + [{'type': 'execute', 'segment': CS, 'offset': 0x3569}]
+                if not msg:
+                    watch = watch + [{'type': 'execute', 'segment': CS, 'offset': 0x3569}]
             continue
         if ip == 0x3569:
             out['hits'].pop()

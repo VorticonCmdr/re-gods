@@ -430,6 +430,15 @@ async function overlayGroupSprites(sprites, world, group) {
     const img = decodePI1(dclDecompress(await fetchRaw(`game/${s}.PI1`)).data);
     for (const f of atlas.frames) sprites.frames[id++] = { ...f, pixels: cutAll(img, { frames: [f] })[0].pixels };
   }
+  /* The message line blits glyph `byte + DS:0x27E` through the same
+   * descriptors, and the small font sits right after level<N>. Only the
+   * 173-frame `shop` group reaches it (live: the glyph base 0x21B held a
+   * shop-font frame after the sublevel switch); level<N>'s own restore
+   * (CS:0x21C2) stops short of it, so the font stays overwritten until the
+   * next level load rebuilds the sprites. */
+  if (sprites.glyphs && sprites.glyphBase >= 0) {
+    for (let i = 0; i < sprites.glyphs.length; i++) sprites.glyphs[i] = sprites.frames[sprites.glyphBase + i];
+  }
 }
 
 /* The status panel. CS:0x38a's own latch loads PSTAT3 exactly once, the
@@ -1747,6 +1756,18 @@ const SHOP_EXIT_MUSIC_DELAY = 5;
       levelInfo = { world: levelInfo.world, sublevel: 1 };
       statues.clear().populate(level.map.planeA, levelInfo.world, sublevelLetter(levelInfo));
       outOfRange = 0; unstamped = 0;
+      /* CS:0x4869-0x487D — 484E's last act is CS:0x05D7 with its enable
+       * patched to RET: the `shop` sprites go over level<N> from descriptor
+       * 0x1C2 (DS:0x38A = 1), the walker's path record is primed and the
+       * visit count put back. Nothing restores level<N> until a shop exit
+       * or the next level entry (CS:0x21C2), so sublevel B's creatures draw
+       * from shop frames: a shipped bug, kept on purpose (ranked item 60,
+       * [PROVEN] live — tools/attract-capture/sublevel_live.py). PLEV1B puts
+       * a shop potion 20 px from the hand-over, whose visit repairs it. */
+      shopkeeper.start(levelInfo.world, false);
+      shopkeeper.visits--;                                      // CS:0x4878
+      shopSpritesIn = true;
+      if (hero) await overlayGroupSprites(hero, levelInfo.world, 'shop');
       $('event').textContent = `sublevel B (CS:0x4828) — hero kept at (${player.x}, ${player.y})`;
     } finally {
       transitioning = false;
@@ -4682,6 +4703,11 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
       /* DS:0x8014, the nest's brood (game/nest.js), for brood-compare.js. */
       brood: () => brood.slots,
       summonShop: () => shopkeeper.summon(),
+      /* CS:0x4828 -> 0x484E, the sublevel switch (item 60's check), and a
+       * descriptor's current frame. */
+      sublevelSwitch: () => enterSublevelB(),
+      spriteAt: (id) => { const f = hero && hero.frames[id]; return f ? { w: f.w, h: f.h } : null; },
+      glyphAt: (i) => { const f = hero && hero.glyphs && hero.glyphs[i]; return f ? { w: f.w, h: f.h, same: f === hero.frames[hero.glyphBase + i] } : null; },
       shopkeeper: () => shopkeeper,
       heroRaw: () => ({ x: player.x, y: player.y, st: player.stateIndex, ph: player.phase }),
       uiState: () => uiState,
