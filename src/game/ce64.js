@@ -1,5 +1,13 @@
 /* ce64.js — the DS:0xce64 world-3 creature, and its own "spit" sub-projectile.
  *
+ * ⚠️ UPDATE (2026-09-29): the provenance note below is superseded. The
+ * update loop (CS:0x7F5D-0x8039) and the spit (allocator CS:0x80BB-0x80F6,
+ * mover CS:0x810D-0x81E8, pool DS:0xCEC8, 10 x 12 bytes) were read from the
+ * bytes, and this file's wander timer, attack window, spit legs ((rand&7)+2
+ * toward the hero from x+4/y+12, (rand&7)+3 steps, rand&15 pauses) and spit
+ * sprites (0x1ED + 4/8, frame & 3) all match them. See Gods/docs/
+ * destructible-and-hazards.md, UNKNOWN_ce64_identity.
+ *
  * ── PROVENANCE, AND WHY THIS FILE IS TWO TIERS OF CONFIDENCE ─────────────
  *
  * The PARENT CREATURE is cross-confirmed by two independent passes: an
