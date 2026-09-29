@@ -267,7 +267,7 @@ import { Ce64Creatures, Ce64Spits,
          BOX_CREATURE, SCORE_CREATURE_KILL, SCORE_SPIT_KILL,
          DEATH_SPRITE_BASE as CE64_DEATH_SPRITE_BASE,
          DEATH_DRAW_OFFSET as CE64_DEATH_DRAW_OFFSET, DEATH_FREE_AT,
-         WANDER_SPRITE, UNKNOWN_ce64_sprite_table,
+         WANDER_SPRITE,
          SPIT_CAP, SPIT_WINDUP_TICKS, SPIT_ORIGIN_Y_BIAS, SPIT_ARM_HP,
          SPIT_ARM_STEPS, SPIT_WINDUP_SPRITE, SPIT_SPRITE_BASE,
          SPIT_FACING_LEFT_OFFSET, SPIT_FACING_RIGHT_OFFSET, SPIT_BOX,
@@ -11837,20 +11837,15 @@ export function checkCe64() {
       c.slots[0].x === -1);
   }
 
-  /* (e) The sprite table: an HONEST placeholder, not a fabricated guess.
-   * Length 4 is not a truncation of a 5-valued field — (a) above already
-   * proves wanderState's same-tick 4->0 reset means DRAW_ALIVE never
-   * actually sees a wanderState of 4. */
+  /* (e) The sprite table, SS:0x3602 (read live and from the GAME.EXE image;
+   * closes UNKNOWN_ce64_sprite_table). Length 4 is not a truncation of a
+   * 5-valued field — (a) above already proves wanderState's same-tick 4->0
+   * reset means DRAW_ALIVE never actually sees a wanderState of 4. */
   check('WANDER_SPRITE has exactly 4 entries (wanderState 4 resets to 0 in the SAME tick, before any draw sees it)',
     WANDER_SPRITE.length === 4, JSON.stringify(WANDER_SPRITE));
-  check('WANDER_SPRITE is an HONEST placeholder — [0,0,0,0] — never a fabricated plausible-looking guess',
-    WANDER_SPRITE.every((v) => v === 0), JSON.stringify(WANDER_SPRITE));
-  check('the placeholder carries its own loud, address-citing disclaimer (UNKNOWN_ce64_sprite_table)',
-    typeof UNKNOWN_ce64_sprite_table === 'string'
-    && UNKNOWN_ce64_sprite_table.includes('CS:0x8003')
-    && UNKNOWN_ce64_sprite_table.includes('SS:0x3602')
-    && /never read/i.test(UNKNOWN_ce64_sprite_table),
-    UNKNOWN_ce64_sprite_table);
+  check('SS:0x3602[0] is the creature\'s own object sprite (the idle pose), [1..3] three consecutive wind-up frames',
+    WANDER_SPRITE[0] === CE64_SPRITE && WANDER_SPRITE.slice(1).every((v, k) => v === WANDER_SPRITE[1] + k),
+    JSON.stringify(WANDER_SPRITE));
 
   /* (f) Structural sanity — the facts the task states as ground truth. */
   check(`object type ${CE64_TYPE} (sprite ${CE64_SPRITE} === 170+${CE64_TYPE})`,

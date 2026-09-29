@@ -236,32 +236,16 @@ export const DEATH_SPRITE_BASE = 0x6c;                       // 108
 export const DEATH_DRAW_OFFSET = Object.freeze({ dx: -4, dy: -8 });
 export const DEATH_FREE_AT = 7;
 
-/* UNKNOWN_ce64_sprite_table -- CS:0x8003-0x800D reads SS:0x3602 + wanderState*2,
- * the actual sprite ids were never read this session; needs a live memory
- * read or a fresh Ghidra dump of segment SS at that offset before this
- * creature will render the right graphic. Movement, damage, death and
- * scoring are all fully verified; only the VISUAL sprite ids are a
- * placeholder.
- *
- * (Not part of the verbatim disclaimer above, but worth recording alongside
- * it: the table is 4 entries, indexed 0..3. wanderState can transiently
- * reach 4 inside #wander, but the very same tick resets it to 0
- * (WANDER_CYCLE_LENGTH above) BEFORE the contact-and-draw step ever runs —
- * so DRAW_ALIVE never actually indexes past 3, and a 4-entry table is
- * exactly right, not a truncation of a 5-valued field.) */
+/* The alive sprite, CS:0x8003-0x800D: SS:[0x3602 + wanderState*2]. Read
+ * live (SS:0x3602 in a running DOSBox) and from the GAME.EXE image, the same
+ * eight words: 266 445 446 447, then the brood's 535 536 537 536 (SS:0x360A).
+ * So state 0 draws the object's own sprite (266 = 170 + 96) and states 1-3
+ * are the attack wind-up. The table is 4 entries, indexed 0..3: wanderState
+ * reaches 4 inside #wander but resets to 0 the same tick (CS:0x7FB0), before
+ * the draw. Closes UNKNOWN_ce64_sprite_table. */
 export const SPRITE_TABLE_SS = 0x3602;
 export const SPRITE_TABLE_READ_ADDR = [0x8003, 0x800d];
-/** The exact disclaimer above, verbatim, as data — so a check can assert its
- *  presence without re-typing it and risking the two copies drifting apart. */
-export const UNKNOWN_ce64_sprite_table =
-  'UNKNOWN_ce64_sprite_table -- CS:0x8003-0x800D reads SS:0x3602 + wanderState*2, '
-  + 'the actual sprite ids were never read this session; needs a live memory read '
-  + 'or a fresh Ghidra dump of segment SS at that offset before this creature will '
-  + 'render the right graphic. Movement, damage, death and scoring are all fully '
-  + 'verified; only the VISUAL sprite ids are a placeholder.';
-/** UNKNOWN_ce64_sprite_table — see the disclaimer immediately above. An
- *  honest placeholder: four zeros, not a fabricated plausible-looking guess. */
-export const WANDER_SPRITE = [0, 0, 0, 0];
+export const WANDER_SPRITE = Object.freeze([266, 445, 446, 447]);
 
 export class Ce64Creatures {
   /** @param {{next:()=>number}} rng  the replayed 256-word table (random.js) */
