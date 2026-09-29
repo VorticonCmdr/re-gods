@@ -1571,7 +1571,9 @@ const SHOP_EXIT_MUSIC_DELAY = 5;
         /* VGA:0x01B5-0x01C6 — export 38 seeds the fire timer +0x0E with
          * (16 - lo) * 4 when the descriptor's fire nibble lo is nonzero, and
          * leaves the slot's carried value otherwise. [PROVEN] live: 40 for
-         * PLEV1A descriptor 0 (lo 6), then counting down. */
+         * PLEV1A descriptor 0 (lo 6). The timer only runs once a member is
+         * alive: CS:0xDF94 sends a negative +8 to the pre-life driver
+         * CS:0xE2EC, which returns past the alive pipeline CS:0xE001. */
         const lo = (d.fireByte || 0) & 0xf;
         if (lo !== 0) sysAFireTimers[e.slot] = (0x10 - lo) * 4;
         playFlash(e);        // CS:0xDEE0 — only a zero wait (member 0) flashes at spawn; the rest at CS:0xE322
