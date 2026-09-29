@@ -107,6 +107,7 @@ import { GROUP_SLOTS as PAT_GROUP_SLOTS, SUBRECORDS_PER_GROUP, ABSOLUTE_TAG,
          parsePatSpawnDescriptor, CLASS_TABLE_A, PatGroups,
          DEATH_SPRITE_BASE as PAT_DEATH_SPRITE_BASE, DEATH_RETIRE_AT,
          scoreForKey } from '../game/pat-objects.js';
+import { killAwardGain } from '../game/treasure.js';
 import { spriteForType, parseObjectCategories, isDeadType, isUnstamped,
          OBJECT_SPRITE_BASE, STAMPED_TYPES, ObjectAnimClock, crystalSprite,
          animatedObjectSprite, CRYSTAL_SPRITE, category5Draws, SHOP_POTION_ANIM } from '../game/objects.js';
@@ -9236,6 +9237,20 @@ export async function checkWeaponsProjectiles(fetchRaw) {
         at(20, 99950) === 101050 && adcDaa(0x99, 0x01, 0)[0] === 0x00 && adcDaa(0x99, 0x01, 0)[1] === 1);
     }
 
+    /* ── killAwardGain: the plain-number form selector 1/2 add (CS:0xAF7D). */
+    {
+      const bad = [];
+      for (const base of [0, 99, 5000, 12345600, 99999900]) for (let v = 0; v < 256; v++) {
+        const s = new Score(); s.add(base); const b = s.value; awardKill(s, v);
+        if (base < 99000000 && s.value - b !== killAwardGain(v)) bad.push(`${base}/${v}`);
+      }
+      check('killAwardGain(v) equals the adc/daa award for every byte, any starting score',
+        bad.length === 0, bad.slice(0, 5).join(' '));
+      check('CS:0xAF7D: the 4A/4B turret class (entityState0 200) scores 11,100 per kill, not 10,100',
+        scoreForState0(200) === 11100 && scoreForState0(9) === 500,
+        '[STATIC] PLEV4A trigger 5 ACT5 -> event 17 -> PALFILS.0A4 class 2 (tools/wf-census.mjs)');
+    }
+
     /* ── The shop potion's shopkeeper, CS:0x05BA / 0x06B0 / 0x071E. */
     {
       const MAP_COLS = 128;
@@ -11128,17 +11143,17 @@ export async function checkZones(fetchRaw) {
     const pr = new Progress(); pr.reset(3, 0, 0);
     const t = teleportStoneDest(70, 3, 0, p3a, pr);           // PLEV3A's stone at x=70
     check('a stone keys the PALFILS +0x1770 table on ITS OWN x (DS:0x20a = the object record)',
-      t.via === 'table' && t.packed === 0x0f3c && pr.teleportCursor === TELEPORT_LIST_BASE[2],
+      t.via === 'table' && t.packed === 0x0f3c && pr.teleportCursor === 0xe650,
       `x=70 -> ${t.via} 0x${t.packed.toString(16)} (table record {0x46, 509, 960}: col 15, row 60)`);
     const p1 = new Progress(); p1.reset(1, 0, 0);
     const a1 = teleportStoneDest(1031, 1, 0, p1a, p1);        // PLEV1A's keyless stone
     const a2 = teleportStoneDest(1031, 1, 0, p1a, p1);
     check('a keyless stone takes the DS:0x19E list and steps it one word (CS:0x627B-0x6286)',
       a1.via === 'list' && a1.packed === 0x182c && a2.packed === 0x2027
-        && p1.teleportCursor === TELEPORT_LIST_BASE[0] + 4,
+        && p1.teleportCursor === 0xe636 + 4,
       `1st 0x${a1.packed.toString(16)}, 2nd 0x${a2.packed.toString(16)}, cursor 0x${p1.teleportCursor.toString(16)}`);
     check('the level load resets the cursor to the world\'s list (CS:0x8E79-0x8E88)',
-      (p1.reset(2, 0, 0), p1.teleportCursor === TELEPORT_LIST_BASE[1]));
+      (p1.reset(2, 0, 0), p1.teleportCursor === 0xe646));
     const w = teleportStoneDest(0x600, 2, 0, p2a, new Progress());
     const wB = teleportStoneDest(0x600, 2, 1, p2a, new Progress());
     check('world 2 sublevel A, x in [0x5c0,0x640] is hard-wired to 0x202e (CS:0x6237); sublevel B is not',
@@ -14134,7 +14149,8 @@ export async function checkPatObjects(fetchRaw) {
      * position = one hundred score points" scale, matching selector2.js's
      * own identical `scoreForState0`). */
     check('scoreForKey(0) === 100 (value=1, the minimum)', scoreForKey(0) === 100);
-    check('scoreForKey(200) === 10100 (value=101 -> BCD 0x101 -> 101*100)', scoreForKey(200) === 10100);
+    check('scoreForKey(200) === 11100: value 101 overflows (CS:0xAF8E), a second 0C8B call adds 1000',
+      scoreForKey(200) === 11100 && scoreForKey(197) === 9900);
 
     const directory = new Array(PAT_GROUP_SLOTS * 10).fill(null);
     const absBlob = new Uint8Array(0x1a0);           // roomy: seed + a handful of movement bytes

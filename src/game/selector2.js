@@ -192,6 +192,7 @@
  */
 
 import { CLASS_TABLES_B } from './spawn.js';
+import { killAwardGain } from './treasure.js';
 import { SFX_MATERIALISE } from './entity.js';
 import { attackHero, creatureScansGrid } from './combat.js';
 import { RockSettlePool, RockBurstPool } from './rockfall.js';
@@ -593,19 +594,19 @@ const BURST_ROCK_VELOCITIES = Object.freeze([{ vx: 4, vy: 4 }, { vx: -4, vy: 4 }
 
 /**
  * CS:0xB63F/0x93A8-family kill-score. `V` is `slot.entityState0` (the SAME
- * byte that seeded the entity's own starting HP). Reproduces CS:0xAF7D
- * exactly for the COMMON case: `score = (((V>>1)+1)) * 100`.
- * ⚠️ NOT MODELLED: the overflow branch CS:0xAF8E-AFB1 takes when
- * `(V>>1)+1 > 9` after the base-10 split (i.e. `V > 178`ish), which issues a
- * SECOND `CALL 0x1000:0c8b` at a higher BCD digit position. Every sampled
- * class's own `entityState0` byte was not read from shipped level data this
- * pass (PALFILS is runtime-loaded asset data, not present in the static
- * EXE image), so whether shipped data ever reaches that branch is not
- * established — flagged rather than guessed, matching this project's own
- * convention for a narrow, possibly-unreachable edge case.
+ * byte that seeded the entity's own starting HP), fed to CS:0xAF7D (called
+ * from CS:0xAF77 with `DL = [SI+0x11]`).
+ * CS:0xAF7D-0xAFBC is the same packing as the creature award CS:0xEFE7:
+ * `n = (V>>1)+1`, `div 10`, `CMP AX,9 / JLE` (CS:0xAF8E), and for a quotient
+ * above 9 a SECOND `CALL 0x0C8B` with `(q-9) << 4` (CS:0xAFAD-0xAFB7). So
+ * V >= 198 scores 1000 more than `n * 100` — see treasure.js killAwardGain.
+ * Shipped data reaches it exactly once: PALFILS.0A4/0B4 class 2 has
+ * entityState0 = 200, dispatched by PLEV4A trigger 5 (ACT5 -> event 17, a
+ * lever-3 gate at (768,784)); each of its three turrets scores 11,100, not
+ * 10,100 `[STATIC]`. No PAT descriptor key reaches 198 (tools/wf-census.mjs).
  */
 export function scoreForState0(v) {
-  return ((v >> 1) + 1) * 100;
+  return killAwardGain(v);
 }
 
 /** CS:0xAA36/0xAA6F-style edge culls, SS:0x3586's own 6-entry table, decoded

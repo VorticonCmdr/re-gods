@@ -316,6 +316,7 @@
  */
 
 import { attackHero, creatureScansGrid } from './combat.js';
+import { killAwardGain } from './treasure.js';
 
 export const GROUP_SLOTS = 5;                 // DS:0xb6b8, CS:0xB915 `mov cx,0x5`
 export const SUBRECORDS_PER_GROUP = 10;        // the allocator's own DL-bound loop cap
@@ -331,12 +332,12 @@ export const DEATH_RETIRE_AT = 0x11;           // CS:0xBBDC — 17; frames 0..16
  * this session's own `selector2.js` `scoreForState0` (CS:0xB63F's sibling
  * use of the same CS:0xAF7D helper) — reproduced independently here rather
  * than imported, so this module stays free of any selector2.js coupling.
- * ⚠️ NOT MODELLED: the overflow branch CS:0xAF8E-AFB1 (`(v>>1)+1 > 9`, i.e.
- * `v > 178`ish), which issues a SECOND `CALL 0x1000:0c8b` at a higher BCD
- * digit position. Whether any shipped PALFILS[4] byte ever reaches it was
- * not checked this pass — flagged, not guessed.
+ * The overflow branch CS:0xAF8E-AFB1 (`(v>>1)+1 >= 100`, v >= 198) issues a
+ * SECOND `CALL 0x1000:0c8b` for another (q-9) thousands; now modelled via
+ * treasure.js `killAwardGain`. No shipped PAT key reaches it (max placed
+ * key is 90, tools/wf-census.mjs); only a selector-2 class does.
  */
-export const scoreForKey = (v) => ((v >> 1) + 1) * 100;
+export const scoreForKey = (v) => killAwardGain(v);
 
 /** CS:0xBA95-0xBAB0 — the 4-edge screen-space "still visible, hold last
  *  motion" box. Asymmetric on purpose; do not square it off. */

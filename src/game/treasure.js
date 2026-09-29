@@ -216,6 +216,21 @@ export function awardKill(score, hp) {
   return score;
 }
 
+/**
+ * The binary gain `awardKill` produces, for callers that add a plain number:
+ * CS:0xEFE7 and CS:0xAF7D (the selector-1/2 kill award, byte for byte the
+ * same packing, `[STATIC]`) both add `n = (v >> 1) + 1` hundreds, and a
+ * quotient q = n / 10 above 9 adds a second (q - 9) thousands. The first
+ * call's `q << 4` nibble goes through DAA as a true n hundreds, so n >= 100
+ * (v >= 198) scores 1000 more than n * 100. Checked against `awardKill` for
+ * every byte and several starting scores in checks.js.
+ */
+export function killAwardGain(v) {
+  const n = ((v & 0xff) >> 1) + 1;
+  const q = Math.floor(n / 10);
+  return n * 100 + (q > 9 ? (q - 9) * 1000 : 0);
+}
+
 export class Score {
   constructor() { this.bytes = new Uint8Array(SCORE_BYTES); }
 
