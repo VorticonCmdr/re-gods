@@ -106,11 +106,11 @@ A sixth, `UNKNOWN_level_palette_source` (ranked item 24), CLOSED — and, like i
 **Item 62 closes the fourteen inline leftovers that had never been ranked (2026-09-29).**
 - **Line barriers.** `+0x04` is the barrier's tile: graphics export 29 copies it out of the VRAM tile cache (`[PROVEN]` live, byte-identical), and `gods-web` now draws it at the pixel position.
 - **Ladders.** The forced first step on every ground ladder mount is ported, and the climb step is `CS:0x58C3`.
-- **World-2 nests.** The dormant seed is seen only after a respawn camera cut, and a full pool loses the nest; both `[PROVEN]` live.
+- **World-2 nests.** In staged live runs, a nest allocated inside the hatch window after a camera cut counts down from its seed, and a full pool loses the nest (`[PROVEN]` as mechanisms). No real-play route to the seed is established.
 - **Carried axe.** It fires 3 in world 3 against 1 for a fresh pickup, `[PROVEN]` live.
 - ⚠️ **A shipped hang.** Touching either unmatched `PLEV1B` tablet (both reachable) returns into the start-up code with `DS = 0x63D5`, and the game hangs, `[PROVEN]` live. `gods-web` shows "Hint Error" instead.
 - **World-3 creature.** Its update loop is read in full, and its real sprites (`SS:0x3602` = 266 445 446 447) are ported.
-- **Static closures.** Export 22's `0x4300` is the sprite arena, and `SS:0x414` a per-world object load mask. The panel's `0xACDE`/`0xAD4C` are pre-shifted VRAM copies re-blitted each frame. `8b4c` and `ss432` are closed by exhaustive operand censuses.
+- **Static closures.** Export 22's `0x4300` is the sprite arena, and `SS:0x414` a per-world object load mask. The panel's `0xACDE`/`0xAD4C` are pre-shifted VRAM copies re-blitted each frame. `8b4c` is closed by a listing-complete census, `ss432` by an exhaustive byte scan.
 - **New open item 63.** Some placed object types sit on bits their world's load mask clears.
 
 ## Tooling
