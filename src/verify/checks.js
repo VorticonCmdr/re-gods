@@ -9298,7 +9298,7 @@ export async function checkWeaponsProjectiles(fetchRaw) {
         rh.materialise(0, { flags: 0, count: 3 }, () => 0);
         const seq = [0, 0xffff]; let q = 0;
         rh.elect(0, alive(3), { count: 3, leadWeight: 127 }, () => seq[q++]);
-        check('a pick draw of 0xFFFF is where DOS hangs (CS:0xEB76 `jc` never taken); the port counts it and elects nobody',
+        check('a pick draw of 0xFFFF is where DOS hangs (CS:0xEB76 `jc` never taken); the port counts it and elects nobody (user decision: skip, never freeze)',
           rh.pickHangs === 1 && rh.count(0) === 0);
         const rw = new GroupRuntimesA();
         rw.materialise(0, { flags: 0, count: 2 }, () => 0);

@@ -23,7 +23,9 @@
  * draw (CS:0xEB5C-0xEB7D). A living pick becomes rank 1; count 1, mask its
  * bit, tenure and cursor 0. ⚠️ The uniform pick loops `cmp ax,bx / jc` on a
  * wrapping `add bx,si`. A draw of 0xFFFF never exits (DOS hangs) for any n;
- * the port counts it in `pickHangs` and elects nobody that tick. A draw just
+ * the port counts it in `pickHangs` and elects nobody that tick — the USER'S
+ * DECISION (2026-09-29): keep skipping, do not reproduce the freeze (the same
+ * call as PLEV1B's tablet hang). A draw just
  * below wraps and exits (n = 2, 4: member 0; n = 9, 10: an index past the
  * group, `pickOutside`), ported as DOS runs it.
  *
@@ -137,7 +139,7 @@ export class GroupRuntimesA {
       if (nb < bx) wrapped = true;
       bx = nb; dx = (dx + 1) & 0xffff;
     }
-    this.pickHangs++;
+    this.pickHangs++;                                  // DOS freezes here; the port skips (user decision)
     return null;
   }
 
