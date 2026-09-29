@@ -130,8 +130,9 @@ A sixth, `UNKNOWN_level_palette_source` (ranked item 24), CLOSED — and, like i
 **A port audit (2026-09-29) found gaps the ranked list never held.** It swept the port for stale "not ported" notes, reviewed every unclosed `UNKNOWN_*` id in `gods-web/src`, ran a census of shipped content against the port's fallbacks, and diffed cited addresses against Ghidra's function list.
 - **Ranked item 65 is closed (`[STATIC]`, ported).** It covers the pickup sparkle (`CS:0x1239`/`0x1280`, `DS:0xb578`) and the four frozen PAT walk cycles (`CS:0xBED3`/`0xBEF4`/`0xBF15`/`0xBF36`). `CS:0xBF58` is a bare `RET`.
 - **Ranked item 66 is closed (`[STATIC]`, ported, parity re-checked).** It covers the time-bomb blast, the teleport stone (keyed on the stone's own x), the world-4 class-2 PAT walkers (the walk half of `CS:0xBDDB`) and the ladder-head direction gate.
+- **Ranked item 67 is closed (`[PROVEN]` live, ported).** VGA export 38 staggers System A members by `desc+0x14` and seeds their fire timer to (16 − lo) × 4, read live in PLEV1A. It corrects items 26/27: export 38 writes `+0xA` and `+0xC`.
 - **`[WF]` leads, not yet re-read:**
-  - System A spawn stagger, fire timer and leader/follower via `VGA.EXE` export 38. This conflicts with a recorded live read.
+  - System A's leader/follower reroll (`CS:0xEB37`/`0xE6E4`) and its doubled-HP member.
   - World-4 PAT class 3 appears placed via PALFILS +5, contradicting `destructible-and-hazards.md`.
   - `BC4B` should use exact-hero `CS:0xDBC6`, not a jittered spawn.
   - The 4A turrets' score overflow at `CS:0xAF8E`.

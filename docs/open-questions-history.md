@@ -336,6 +336,14 @@
     - **The ladder-head direction gate** (`CS:0x599D` / `CS:0x5BE5`).
       - **State 0.** A held direction crouches at a col+1 ladder, while col 0 has no direction test.
       - **State 1.** Col+1 has no direction test. Sub > 0x14 crouches, and a held direction crouches before col 0 is looked at.
+67. ~~System A spawns every group member at once, and its shooters never fire~~ — **CLOSED `[PROVEN]` live and ported (2026-09-29).** VGA export 38 (`VGA:0x01B5`–`0x0202`) is called once per member from `CS:0xDEE3`. Live, `SS:0x52EA` = `3120:01B5`, and the return address is `036D:DEE8`.
+    - **What export 38 does.** It adds `desc+0x14` to the stagger accumulator, so member i waits i × `+0x14` ticks. If the fire nibble lo is nonzero, it seeds the fire timer `+0xE` with (16 − lo) × 4. It also initialises `+0xA`=0, `+0xC`/`+0x10`=0xFFFF, `+0x12`/`+0x14`/`+0x18`=0, `+0x16`=2, `+0x1B`=1, `+0x24`=0xFF and `+0x25`=0, then advances DI by 0x28.
+    - **The live capture.** PLEV1A descriptor 0 has 3 members, stagger 10 and fire nibble 6. The records read `+6` = 0/10/20 and `+0xE` = 40 each, and the timer was later seen at 4. Only member 0 (DX = 0) flashes at once (`CS:0xDEE0` → `CS:0xFF59`, `+6`=5 and `+8`=−3). The others wait at `+8` = −2 and flash from `CS:0xE322`. `CS:0xE2EC`–`0xE317` is the pre-life driver.
+    - ⚠️ **Corrections.**
+      - Items 26/27's "no writer of entity `+0xC`" and "`+0xA` write-only from the reroll reset": export 38 writes both at materialise. The census missed the driver, the same lesson as `DS:0x33`.
+      - `gods-web`'s "materialise never writes `+0x0E`": it does, so a shooter's first shot comes (16 − lo) × 4 ticks after it appears, not 65535 ticks.
+    - **Ported.** `parseGroupsA` reads `+0x14` as `stagger`, and `runSpawnsA` staggers the members and seeds the timer. Attract parity, sweeps and scores are unchanged.
+    - **Still a `[WF]` lead, not touched:** the leader/follower reroll (`CS:0xEB37`/`0xE6E4`/`0xEB4A`/`0xEBB9`) and the doubled-HP member (`[bp+0x11]` vs `SS:0x435`).
 
 ⚠️ `UNKNOWN_openlist_field4` was listed here *and* in the resolved list below. It is **closed** — the resolved entry is correct.
 
