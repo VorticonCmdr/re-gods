@@ -7,6 +7,7 @@
  * and game/states.js for how each of the 29 states was identified.
  */
 
+import { fetchRaw, ensureGameData } from './io/game-files.js';
 import { dclDecompress } from './formats/dcl.js';
 import { decodePI1, sliceTiles, SCREEN_W, SCREEN_H } from './formats/pi1.js';
 import { parseMap, TILE_COUNTS } from './formats/map.js';
@@ -156,55 +157,6 @@ const WEAPON_NAMES = ['knife', 'time bomb', 'fireball', 'flame',
   'magic axe', 'mace'];
 
 const $ = (id) => document.getElementById(id);
-const cache = new Map();
-/* Files picked with the header's "Load folder…" button, by upper-case base
- * name. When set, they stand in for the staged `game/` directory. */
-const folderFiles = new Map();
-
-async function fetchRaw(url) {
-  if (cache.has(url)) return cache.get(url);
-  const picked = folderFiles.get(url.replace(/^game\//, '').toUpperCase());
-  let b;
-  if (picked) {
-    b = new Uint8Array(await picked.arrayBuffer());
-  } else {
-    const res = await fetch(url);
-    /* Vite's dev server can answer a missing file with index.html and a 200. */
-    if (!res.ok || (res.headers.get('content-type') || '').includes('text/html')) {
-      throw new Error(`fetch ${url}: ${res.status}`);
-    }
-    b = new Uint8Array(await res.arrayBuffer());
-  }
-  cache.set(url, b);
-  return b;
-}
-
-/* The shipped files are not part of this repository (in dev, Vite serves
- * them from the git-ignored game/). Without them, show "Load folder…" and wait until
- * the user picks a GODS directory that holds them. */
-const PROBE_FILE = 'PLEV1A.MAP';
-async function ensureGameData() {
-  try { await fetchRaw(`game/${PROBE_FILE}`); return; } catch { /* not staged */ }
-  const btn = $('btnFolder'), inp = $('inpFolder'), status = $('status');
-  btn.hidden = false;
-  status.textContent = 'no game data — load the GODS folder';
-  btn.onclick = () => inp.click();
-  await new Promise((resolve) => {
-    inp.onchange = () => {
-      const files = [...inp.files];
-      inp.value = '';
-      if (!files.some((f) => f.name.toUpperCase() === PROBE_FILE)) {
-        status.textContent = `${PROBE_FILE} not found in that folder — pick the GODS directory`;
-        return;
-      }
-      folderFiles.clear();
-      for (const f of files) folderFiles.set(f.name.toUpperCase(), f);
-      resolve();
-    };
-  });
-  btn.hidden = true;
-  status.textContent = '';
-}
 
 async function loadLevel(key) {
   const mapRaw  = await fetchRaw(`game/PLEV${key}.MAP`);
@@ -576,7 +528,7 @@ function renderChecks(results) {
 }
 
 async function main() {
-  await ensureGameData();
+  await ensureGameData({ button: $('btnFolder'), input: $('inpFolder'), status: $('status') });
   const sel = $('level');
   for (const k of LEVELS) {
     const o = document.createElement('option');

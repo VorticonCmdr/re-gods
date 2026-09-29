@@ -11,7 +11,19 @@
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   }
   * { box-sizing: border-box; }
-  body { margin:0; background:var(--bg); color:var(--ink); display:flex; min-height:100vh; font-size:12px; }
+  html, body { height:100%; }
+  body { margin:0; background:var(--bg); color:var(--ink); display:flex; flex-direction:column; font-size:12px; }
+  header {
+    display:flex; align-items:center; gap:.75rem; padding:.6rem 1rem; flex:none; flex-wrap:wrap;
+    background:var(--panel); border-bottom:1px solid var(--line);
+  }
+  header h1 { margin:0; white-space:nowrap; }
+  header label { color:var(--dim); }
+  header .spacer { flex:1; }
+  #status { font-size:11px; color:var(--dim); }
+  button.primary { background:#5a3f12; border-color:var(--accent); color:#ffe2b0; }
+  button:disabled { opacity:.5; cursor:default; }
+  [hidden] { display:none !important; }
   h1 { font-size:14px; margin:0 0 .25rem; letter-spacing:.08em; text-transform:uppercase; }
   h2 { font-size:11px; text-transform:uppercase; letter-spacing:.08em; color:var(--accent); margin:1rem 0 .4rem; }
   select, button, input[type=text], input[type=number] {
@@ -22,13 +34,9 @@
   button.active { border-color:var(--accent); color:var(--accent); }
   label { display:flex; align-items:center; gap:.35rem; }
 
-  #toolbar { display:flex; gap:.5rem; align-items:center; padding:.5rem .75rem;
-    border-bottom:1px solid var(--line); background:var(--panel); flex-wrap:wrap; }
-  #toolbar .spacer { flex:1; }
   #dirty { color:var(--accent); display:none; }
   #dirty.on { display:inline; }
 
-  #body { display:flex; flex:1; min-height:0; }
   #stage { flex:1; position:relative; overflow:hidden; background:#000; min-width:0; }
   #view { display:block; image-rendering:pixelated; cursor:crosshair; }
   #hint { position:absolute; left:.5rem; bottom:.5rem; color:var(--dim); background:rgba(14,13,18,.8);
@@ -60,8 +68,11 @@
 </style>
 </head>
 <body>
-  <div id="body" style="flex-direction:column; width:100%;">
-    <div id="toolbar">
+  <header>
+      <h1>GODS — level editor</h1>
+      <button id="btnFolder" class="primary" hidden>Load folder…</button>
+      <input type="file" id="inpFolder" webkitdirectory multiple hidden>
+      <span id="status"></span>
       <label>level <select id="levelSelect">
         <option value="">— new level —</option>
         <option value="1A">1A</option><option value="1B">1B</option>
@@ -69,21 +80,19 @@
         <option value="3A">3A</option><option value="3B">3B</option>
         <option value="4A">4A</option><option value="4B">4B</option>
       </select></label>
-      <button id="loadBtn">Load</button>
-      <button id="newBtn">New (blank, world 1 tiles)</button>
+      <button id="loadBtn" disabled>Load</button>
+      <button id="newBtn" disabled>New (blank, world 1 tiles)</button>
       <span class="spacer"></span>
       <span id="dirty">● unsaved changes</span>
       <button id="saveBtn">Save .MAP</button>
-    </div>
+  </header>
     <div id="body2" style="display:flex; flex:1; min-height:0;">
       <div id="stage">
         <canvas id="view" width="960" height="600"></canvas>
         <div id="hint">no level loaded</div>
       </div>
       <aside>
-        <h1>GODS level editor</h1>
-
-        <h2>Paint</h2>
+        <h2 style="margin-top:0">Paint</h2>
         <div class="row">
           <button id="modePlaneA" class="active">plane A (tiles)</button>
           <button id="modePlaneB">plane B (attr)</button>
@@ -125,7 +134,6 @@
         <div id="validation"></div>
       </aside>
     </div>
-  </div>
   <script type="module" src="/src/editor/main.js"></script>
 </body>
 </html>

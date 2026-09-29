@@ -19,6 +19,7 @@ import { TriggersPanel } from './panels/triggers.js';
 import { MessagesPanel } from './panels/messages.js';
 import { runValidation, renderValidation } from './panels/validation.js';
 import { isLive as isTriggerLive } from '../game/trigger.js';
+import { ensureGameData } from '../io/game-files.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -172,3 +173,10 @@ $('saveBtn').addEventListener('click', () => {
 });
 
 setMode('planeA');
+
+/* Load/New need the shipped files: served from game/ in dev, or picked with
+ * the header's "Load folder…" in a build. */
+ensureGameData({ button: $('btnFolder'), input: $('inpFolder'), status: $('status') }).then(() => {
+  $('loadBtn').disabled = false;
+  $('newBtn').disabled = false;
+});

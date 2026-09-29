@@ -12,16 +12,7 @@ import { decodePI1, sliceTiles } from '../formats/pi1.js';
 import { parseMap, TILE_COUNTS, MAP_COLS, MAP_ROWS, MSG_OFF, TRIG_OFF } from '../formats/map.js';
 import { serializeMap, blankMap } from '../formats/map-writer.js';
 import { parseAllTriggers, isLive as isTriggerLive } from '../game/trigger.js';
-
-const cache = new Map();
-export async function fetchRaw(url) {
-  if (cache.has(url)) return cache.get(url);
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`fetch ${url}: ${res.status}`);
-  const b = new Uint8Array(await res.arrayBuffer());
-  cache.set(url, b);
-  return b;
-}
+import { fetchRaw } from '../io/game-files.js';
 
 /** Tile sheet + palette for a level key, e.g. "1A" — reuses main.js's own
  *  asset resolution (PBITS/PXTRA/PLEVEL, TILE_COUNTS) without the rest of

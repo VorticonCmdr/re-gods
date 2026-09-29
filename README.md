@@ -13,8 +13,8 @@ npm run verify    # headless invariant run (no browser needed)
 npm run build     # dist/ holds no game data
 ```
 
-A built page has no `game/` to serve. `index.html` then shows **Load folder…** in its
-header and reads your copy straight from disk. Nothing is uploaded, and nothing is ever
+A built page has no `game/` to serve. `index.html` and `editor.html` then show **Load
+folder…** in their header and read your copy straight from disk (`src/io/game-files.js`). Nothing is uploaded, and nothing is ever
 written back to `game/`.
 
 `index.html` shows the game alone. Add `?debug` to the URL for the HUD, the dev pickers
