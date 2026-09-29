@@ -61,11 +61,12 @@
 import { WEAPON_SLOTS, MAX_SUBSLOTS, tagFor, allocateShots, armWeapon,
          reloadWorld } from './weapons.js';
 import { spawnVolley, spawnAxeVolley, spawnHunterVolley, spawnTimeBombVolley,
-         stepProjectiles, stepHunterArray, stepMagicAxe, stepTimeBomb, timeBombHoldTicks,
+         stepProjectiles, stepHunterArray, stepMagicAxe, stepTimeBomb, terrainStop,
          axeWallAt, bombWallAt, bombGroundAt, bombCell, newAxeState, newWobble, stepFireball, HANDLERS,
          DECODED_HANDLERS, NULL_HANDLERS, AREA_ENTRIES, ENTRIES_REACHABLE, GROUP_ENTRIES,
          MOVER_WALK,
          muzzle } from './projectiles.js';
+import { BombBlast } from './bomb-blast.js';
 
 /** CS:0x9130/0x9137/0x913E all compare a slot word against 8 — the hunter.
  *  Duplicated from frame.js rather than imported, to keep this file's own
@@ -125,6 +126,10 @@ export class Slot {
      * "still flying" (the mover's own sentinel, CS:0xa188). Reset fresh on
      * every throw in `emit()` below. */
     this.bombState = { phase: -1, vx: 0, vy: 0 };
+    /* DS:0x8EDA (fragments) / DS:0x8F3E (puffs) — the blast, game/bomb-
+     * blast.js. Global in the original; one per slot here, for the same
+     * max-shots-is-1 reason as bombState. */
+    this.blast = new BombBlast();
     /* DS:0xDEFC — the fireball's per-record wobble words (mover 1). One
      * array per slot for the same reason as bombState above: the original's
      * is global, indexed by tag - [0x340] - 1, and only the fireball's slot
@@ -311,8 +316,11 @@ export class Arsenal {
    * @param {?object} debris  the DS:0x8b4c owner — the hunter's no-target
    *   arm (CS:0xA00D) drops a moving spark into it when it finds nothing.
    */
-  step(cam, grid, planeB, world, planeA = null, blocks = null, debris = null) {
+  step(cam, grid, planeB, world, planeA = null, blocks = null, debris = null,
+       bombCtx = null) {
     let moved = 0, culled = 0;
+    const blastFx = [];                           // this tick's fragments/puffs (screen)
+    const blastBoxes = [];                        // this tick's CS:0x3BE8 area kills
     let axeBounced = 0;                           // this tick's bounce count
     const hits = [];                              // this tick's terrain-stops
     const bombSfx = [];                           // this tick's bomb bounce/land/detonate ids
@@ -360,20 +368,27 @@ export class Arsenal {
         for (let i = 0; i < MOVER_WALK; i++) {
           const p = s.area[i];
           if (!p || p.tag === 0) continue;
-          /* Post-detonation hold — CS:0xA41C frees the record only once the
-           * blast's smoke (and fragments, see timeBombHoldTicks) are gone. */
-          if (p.hold !== undefined) {
-            if (--p.hold <= 0) { p.tag = 0; delete p.hold; }
-            moved++;
-            continue;
-          }
           const r = stepTimeBomb(p, s.bombState, cam, wallAt, groundAt, cellAt);
           if (r.sfx) bombSfx.push(r.sfx);
+          if (r.status === 'fly') { moved++; continue; }
+          /* The fuse is negative: CS:0xA273. Exactly -1 detonates (once),
+           * then every later tick runs only the blast loops (CS:0xA278). */
           if (r.status === 'explode') {
-            this.bombFragments = (this.bombFragments || 0) + r.fragments;
-            p.hold = timeBombHoldTicks(s.st ? s.st.count - s.st.base : 0);
-            if (p.hold <= 0) { p.tag = 0; delete p.hold; }
+            const extra = s.st ? s.st.count - s.st.base : 0;       // CS:0xA297-0xA29F
+            blastBoxes.push(s.blast.detonate(p.x, p.y, extra));
+            p.dir -= 1;                                           // CS:0xA2D8
           }
+          const b = s.blast.step(p, {
+            cam, grid, weapon: w, planeB,
+            hero: bombCtx && bombCtx.hero, health: bombCtx && bombCtx.health,
+            invuln: bombCtx ? bombCtx.invuln : true,
+            terrainStop: (f, row, col) => {
+              const o = { blocks, planeA, weaponIndex: s.weapon, pickupCount: s.st ? s.st.count : 0 };
+              if (terrainStop({ x: f.x, y: f.y, tag: 1 }, row, col, o, hits)) this.brokeBlocks = (this.brokeBlocks || 0) + 1;
+              this.hitTerrain += 1;
+            } });
+          blastFx.push(...b.drawn);
+          if (b.live === 0) p.tag = 0;                            // CS:0xA41C
           moved++;
           continue;
         }
@@ -395,7 +410,7 @@ export class Arsenal {
      * HUD, but a per-tick audio hook needs to know what happened just now,
      * which is exactly what frame.js's `projectiles` return value never
      * carried until this pass. */
-    return { moved, culled, hits, axeBounced, bombSfx };
+    return { moved, culled, hits, axeBounced, bombSfx, blastFx, blastBoxes };
   }
 
   /** Every live projectile, for the renderer. */
@@ -405,7 +420,11 @@ export class Arsenal {
       const w = this.weapons[s.weapon];
       for (let i = 0; i < ENTRIES_REACHABLE; i++) {
         const p = s.area[i];
-        if (p.tag !== 0) yield { ...p, weapon: w, slot: s.meta.name };
+        if (p.tag === 0) continue;
+        /* An exploded bomb (fuse < 0) is not drawn: CS:0xA273 skips the
+         * bomb's own blit; only its blast draws (bomb-blast.js). */
+        if (s.weapon === TIME_BOMB_WEAPON && p.dir < 0) continue;
+        yield { ...p, weapon: w, slot: s.meta.name };
       }
     }
   }

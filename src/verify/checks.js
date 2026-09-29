@@ -13,7 +13,8 @@ import { PayoffScreen, PAYOFF_PAGES, LINE_Y, lineX } from '../game/payoff.js';
 import { dclDecompress } from '../formats/dcl.js';
 import { applyObjectLoadMask, isBuilt, OBJECT_LOAD_MASKS, MASK_BITS } from '../formats/object-mask.js';
 import { DOOR_TILES, ZONE_TELEPORT, ZONE_EXIT, makeGates, makeActionContext,
-         runAction, fireTrigger, SFX } from '../game/trigger-actions.js';
+         runAction, fireTrigger, SFX, killCategory4InBox } from '../game/trigger-actions.js';
+import { BombBlast, REVIVE_VY, PUFF_DISABLED } from '../game/bomb-blast.js';
 import { RecordingAudioBus, SFX_VOICES, adlAccepts } from '../audio/audio-bus.js';
 import { parseMusContainer, isSmf, expandBlob } from '../audio/mus-container.js';
 import { parseMt32Bank, bankOffset, MT32_BANK_BYTES, MT32_RHYTHM_NAMES } from '../audio/mt32-bank.js';
@@ -6155,6 +6156,65 @@ export async function checkWeaponsProjectiles(fetchRaw) {
       + 'measured live), a re-fire is refused until then, and the same pickup throws again',
       refusedDuringHold && held === timeBombHoldTicks(0) && held === 9 && again !== null,
       `refusedDuringHold=${refusedDuringHold} held=${held} secondAllocation=${again !== null}`);
+  }
+
+  /* --- The blast itself, CS:0xA27B-0xA420 (game/bomb-blast.js) --------- */
+  {
+    const cam = { x: 0, y: 0 };
+    const b0 = new BombBlast();
+    const box = b0.detonate(200, 300, 0);
+    check('a plain bomb revives NO fragments (CS:0xA2A3 `jz` skips export 36)',
+      b0.fragments.every((f) => f.frame < 0));
+    check('the smoke column: 7 puffs 21 px apart ending at y-16, counters -12..0, only the bottom 2 kept (CS:0xA2BF, 0xA2F1)',
+      b0.puffs.map((u) => u.y).join(',') === [158, 179, 200, 221, 242, 263, 284].join(',')
+      && b0.puffs[6].counter === 0 && b0.puffs[5].counter === -2
+      && b0.puffs.slice(0, 5).every((u) => u.counter === PUFF_DISABLED) && b0.puffs[0].x === 192,
+      b0.puffs.map((u) => `${u.y}:${u.counter}`).join(' '));
+    check('the area-kill box is (x-16, y-20)-(x+16, y+4) (CS:0xA30E-0xA317)',
+      box.x0 === 184 && box.y0 === 280 && box.x1 === 216 && box.y1 === 304, JSON.stringify(box));
+    let ticks = 0;
+    const rec = { tag: 0x41, x: 200, y: 300 };
+    const sprites = new Set();
+    for (;;) { const r = b0.step(rec, { cam }); ticks++; r.drawn.forEach((d) => sprites.add(d.sprite)); if (r.live === 0) break; if (ticks > 50) break; }
+    check('a plain blast draws smoke sprites 108..114 and frees after 10 walks (detonation tick + 9 — the live measurement)',
+      ticks === 10 && [...sprites].sort((x, y) => x - y).join(',') === '108,109,110,111,112,113,114',
+      `${ticks} walks, sprites ${[...sprites].join(',')}`);
+
+    const b3 = new BombBlast();
+    b3.detonate(200, 300, 3);
+    const alive = b3.fragments.filter((f) => f.frame === 0);
+    check('extra 3 revives 3 pairs, +/-5 in x with vy -8, -6, -4 (export 36, VGA:0x024C)',
+      alive.length === 6 && alive.map((f) => `${f.vx}/${f.vy}`).join(',') === '5/-8,-5/-8,5/-6,-5/-6,5/-4,-5/-4'
+      && REVIVE_VY.join(',') === '-8,-6,-4,-2,-10', alive.map((f) => `${f.vx}/${f.vy}`).join(','));
+    const b9 = new BombBlast(); b9.detonate(200, 300, 9);
+    check('...capped at five pairs (the export has no sixth), and 7 puffs kept at extra >= 5',
+      b9.fragments.filter((f) => f.frame === 0).length === 10 && b9.puffs.every((u) => u.counter !== PUFF_DISABLED));
+
+    /* The hero: 1 point per qualifying puff tick, never while invulnerable. */
+    const hit = (invuln) => {
+      const b = new BombBlast(); b.detonate(200, 300, 0);
+      const health = { target: 20 };
+      const hero = { x: 200 - 16, y: 284 - 25 };                 // (x+16, y+25) on the bottom puff
+      for (let t = 0; t < 12; t++) b.step({ tag: 1 }, { cam, hero, health, invuln });
+      return health.target;
+    };
+    check('CS:0xA421: the bottom puff hurts an overlapping hero on sprites 0x6C and 0x70 only; invulnerable = no damage',
+      hit(false) < 20 && hit(true) === 20, `target ${hit(false)} / invulnerable ${hit(true)}`);
+
+    /* A fragment into a wall: stops, and the bomb's tag becomes 1. */
+    const bw = new BombBlast(); bw.detonate(64, 64, 1);
+    const planeB = new Uint8Array(128 * 64); planeB[4 * 128 + 2] = 1;   // the cell at (64..95, 64..79)
+    const recW = { tag: 0x41 };
+    let stops = 0;
+    bw.step(recW, { cam, planeB, weapon: { breaksTerrain: true }, terrainStop: () => { stops++; } });
+    check('a fragment that hits terrain dies and leaves the bomb\'s tag at 1 (CS:0xA3A2 `mov word [di],1`)',
+      stops > 0 && recW.tag === 1, `stops ${stops}, tag ${recW.tag}`);
+
+    /* The area kill is ACT6's body: a category-4 object inside the box dies. */
+    const objs = [{ x: 200, y: 290, type: 50, dead: false, flag6: 1 }, { x: 260, y: 290, type: 50, dead: false, flag6: 1 }];
+    const k = killCategory4InBox({ objects: objs, categoryOf: () => 4, sfx: () => {}, killSmoke: null }, 184, 280, 216, 304);
+    check('the blast\'s box kills category-4 objects through ACT6\'s own loop (CS:0x3BE8)',
+      k === 1 && objs[0].dead === true && !objs[1].dead);
   }
 
   check(`the time bomb's own SFX ids have synthesized voices`,

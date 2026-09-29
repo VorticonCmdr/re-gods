@@ -667,7 +667,7 @@ export const newWobble = () => new Int16Array(WOBBLE_ENTRIES);
  * the last two through the caller's `hits` — and the shot is consumed
  * (CS:0xA85B). Returns whether a block was hit.
  */
-function terrainStop(p, row, col, o, hits) {
+export function terrainStop(p, row, col, o, hits) {
   let broke = false;
   if (o.blocks && o.planeA) {
     const idx = row * 128 + col;
@@ -1058,8 +1058,8 @@ export const axeSprite = (weaponFrame, i, landed = false) =>
  *
  * SS:0x5450 is initialised data in the image (file 0x249B0, the same SS
  * base as guardian4.js's SS:0x5024), not live-only state as this header
- * used to say. The ten-fragment debris burst (`BOMB_FRAGMENTS`) is reported
- * as a count, not rendered as particles.
+ * used to say. What detonation does (fragments, the smoke column, the area
+ * kill, the hero damage) is game/bomb-blast.js.
  */
 export const FUSE_START = 0x2f;           // 47 ticks ~ 3.1 s
 export const FUSE_EXPLODE = -1;           // CS:0xa273 `cmp dx,0xffff / jz`
@@ -1131,7 +1131,9 @@ export function bombGroundAt(x, y, planeB) {
  * which neither a fragment (DS:0x8EDA, 10) nor a smoke puff (DS:0x8F3E, 7)
  * is still live; then `CS:0xA41C mov word [di],0` frees it. `CS:0xA289`
  * kills all 10 fragments at detonation (only the far call at `CS:0xA2A8`,
- * taken when the weapon has extra pickups, can revive them — not modelled).
+ * taken when the weapon has extra pickups, can revive them — export 36,
+ * modelled in game/bomb-blast.js, which now frees the record itself; this
+ * formula stays as the live measurement the simulation is checked against).
  * `CS:0xA2DC`-`0xA2FA` keeps the last n = extra+2 puffs (max 7) and
  * disables the rest; their counters start at 0, -2, -4 ... so the last kept
  * puff is live on detonation-relative ticks 2(n-1)..2(n-1)+6. The record is

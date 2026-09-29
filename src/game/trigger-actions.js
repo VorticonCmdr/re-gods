@@ -365,7 +365,16 @@ function makeZone(t, ctx, slots, kind) {
  *     3CB6  inc byte [0x3a6] / cmp 0x2 / jz done             ; the <= 2 bound
  * The appended record is {0, x - 8, y}. */
 function act6(t, ctx) {
-  const x0 = t.x - 12, y0 = t.y - 12, x1 = t.x + 12, y1 = t.y + 12;
+  const killed = killCategory4InBox(ctx, t.x - 12, t.y - 12, t.x + 12, t.y + 12);
+  return { verb: 6, ok: killed > 0, killed };
+}
+
+/**
+ * CS:0x3BE8-0x3CC6 — ACT6's body past its own box setup. The time bomb's
+ * blast jumps straight here (CS:0xA31A) with its own box, so the two share
+ * it. Returns how many objects it killed (at most KILL_MAX).
+ */
+export function killCategory4InBox(ctx, x0, y0, x1, y1) {
   let killed = 0;
   /* CS:0x3C02-0x3C18 — the free-slot search runs ONCE, before the object
    * scan, and each kill then writes at the cursor and advances it without
@@ -392,7 +401,7 @@ function act6(t, ctx) {
     ctx.sfx(SFX.ACT6_KILL);
     killed++;
   }
-  return { verb: 6, ok: killed > 0, killed };
+  return killed;
 }
 
 /* ACT7, CS:0x4144 — open a trap door. The `jc` guard is correct: a miss

@@ -30,7 +30,7 @@ import { PayoffScreen } from './game/payoff.js';
 import { FlashPool } from './game/flash.js';
 import { LineBarriers, parseLineBarrierRecords } from './game/line-barriers.js';
 import { makeActionContext, makeGates, DOOR_TILES,
-         ACTION_NAMES } from './game/trigger-actions.js';
+         ACTION_NAMES, killCategory4InBox } from './game/trigger-actions.js';
 import { cameraForSpawn, Camera, scriptedCameraStep } from './game/camera.js';
 import { spriteFor, STATE_INFO, UNMODELLED_PHASE_STATES } from './game/states.js';
 import { applyObjectLoadMask } from './formats/object-mask.js';
@@ -1058,6 +1058,7 @@ const SHOP_EXIT_MUSIC_DELAY = 5;
   let lastPatFx = [];
   let lastSpikeFx = [];
   let lastKillSmokeFx = [];
+  let lastBlastFx = [];
   let lastSparkleFx = [];
   /* CS:0x0495-0x04A1 — the real boot state: all 4 slots empty. Keys now
    * enter through CROUCH + FIRE (CS:0x6069 -> game/pickup.js's `scanForKey`/
@@ -3199,6 +3200,14 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
        * (hero-fire.js) already collects one entry per event this tick,
        * same shape as `hits`/`axeBounced` above. */
       for (const id of fr.projectiles.bombSfx) audio.play(id);
+      /* CS:0xA2FC -> CS:0x3BE8 — a detonation runs ACT6's area kill over its
+       * own box, inside the projectile step (CS:0x020F), so before the ACT6
+       * smoke walker (CS:0x0239): a puff it seeds draws this same tick. */
+      for (const box of fr.projectiles.blastBoxes || []) {
+        events.actionCtx.objects = level.drawObjects;
+        killCategory4InBox(events.actionCtx, box.x0, box.y0, box.x1, box.y1);
+      }
+      lastBlastFx = fr.projectiles.blastFx || [];
       for (const c of fr.consumed) {
         consumed++;
         if (window.__consumedLog) window.__consumedLog.push({ ...c, result: c.result && { ...c.result } });   // ?debug
@@ -4569,6 +4578,14 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
         const pf = hero && hero.frames[pid];
         if (pf) renderer.blitSprite(pf, sx, sy);
         else { outOfRange++; renderer.strokeRect(sx, sy, 8, 8, 13); }
+      }
+      /* THE TIME BOMB'S BLAST — game/bomb-blast.js: fragments (sprites
+       * 77-79, export 2) and the smoke column (108-114, export 1), drawn by
+       * the mover itself (CS:0xA3AF / 0xA3FE), in screen space. */
+      for (const d of lastBlastFx) {
+        const bf = hero && hero.frames[d.sprite];
+        if (bf) renderer.blitSprite(bf, d.x, d.y);
+        else { outOfRange++; renderer.strokeRect(d.x, d.y, 16, 16, 13); }
       }
 
       /* THE HERO. sprite = anim_base[state] + sign_extend(phase), then the

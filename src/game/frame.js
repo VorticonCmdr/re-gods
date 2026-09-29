@@ -149,7 +149,10 @@ export function stepHeroFrame({ input, arsenal, grid, player, map, cam,
    * its break animation until the next one. */
   const blockFx = blocks ? blocks.step(map.planeA, map.planeB) : [];  // 01DF
   const projectiles = arsenal.step(cam, grid, map.planeB, world,
-                                   map.planeA, blocks, debris);       // 020F
+                                   map.planeA, blocks, debris,        // 020F
+                                   /* the blast's hero test (CS:0xA3F4/0xA421)
+                                    * reads the hero BEFORE the player moves */
+                                   { hero: { x: player.x, y: player.y }, health, invuln });
   /* CS:0xA816 — a shot the terrain just stopped drops a stationary debris
    * puff at the point it stopped. Fires for ANY weapon whose `breaksTerrain`
    * (+0x48) is set, whether or not the cell was also a destructible block —
