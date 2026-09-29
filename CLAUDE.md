@@ -115,10 +115,11 @@ A sixth, `UNKNOWN_level_palette_source` (ranked item 24), CLOSED — and, like i
 
 **Item 63 is closed (`[PROVEN]` live, ported on purpose): a shipped bug, and objects in three worlds show the wrong picture.** A cleared bit in the `objects` load mask (`SS:0x51B2`) gives the frame the next built frame's arena bytes, read with its own width and height.
 - **World 2.** All 38 levers (type 24) read the 15-row gold chalice 16 rows deep, so the planes slip and the lever is a scrambled chalice. Pulling one changes nothing on screen, since type 25 is cleared too.
-- **World 1B.** The stone switches (type 62) and two scenery objects (type 55) look exactly like the clue tablet.
+- **World 1B.** The stone switches (type 62) and two scenery objects (type 55) look exactly like the clue tablet. Type 55's animated top sprite (316–318) is cleared too, so DOS shows a static #331 there.
 - **World 4A.** The flask looks like the bag of gold, and its lever is a scrambled jewel. `[STATIC]`: a knife dropped in 4A (System A group 5, System B group 35) would draw as weapon 1.
 - **Evidence.** Descriptors and screen captures come from `gods-web` `tools/attract-capture/mask63_live.py`. `object-mask-compare.mjs` matches all six objects pixel for pixel, and the arena encoder matches three live dumps byte for byte. See `docs/open-questions-history.md` item 63.
-- **Nothing registered is open now.**
+- **Fixed-id audit.** Every documented fixed-id sprite table (category 5, spikes, special levers, `SS:0x3602`, the nest) was checked against the masks, and only type 55's top sprite is affected.
+- **New open item 64 (port).** `gods-web` never drew category 5's extra sprites (types 55/81 top animation, 82's swap, 113/114's second tile). Their tick `DS:0x39d` depends on `UNKNOWN_36c_parity`.
 
 ## Tooling
 

@@ -277,7 +277,7 @@
     - ~~`UNKNOWN_8b4c_indirect_write`~~ — `[STATIC]`, a census complete over the decoded listings (drivers included); a byte-level scan is too noisy to call it exhaustive. ~~`UNKNOWN_ss432_indirect`~~ — `[STATIC, exhaustive]`, promoted from `[WF]`: the image holds `32 04` exactly 8 times, all decoded, and `SS:0x432` sits above the stack (SP starts at `0x400`).
     - Found on the way: the export-29 table in `docs/drivers-and-memory.md` now names the barriers, and `DS:0x3E6`'s demo numbering is 1 `PJOYL1`, 2 `PJOYG1` (the world-1 guardian demo; staged there, the activation box never recomputed, consistent with `CS:0x01FC` skipping the object walk when `DS:0x34 = 1` outside world 2, though `DS:0x34` itself wasn't read), 3 `PJOYL2`, 4 `PJOYG2`, 5 `PJOYL3`.
 63. ~~Placed object types that a world's object load mask doesn't load~~ — **CLOSED `[PROVEN]` live (2026-09-29): a shipped bug. DOS draws these objects with another frame's pixels, and in world 2 every lever looks broken.**
-    - **The mechanism.** A cleared bit in `SS:0x51B2 + (world − 1) × 40` writes a descriptor with the frame's own width and height but the current arena pointer. So the frame draws the bytes of the next frame that *is* built, read with its own geometry. Every object draw uses the descriptor `170 + type` (`FUN_1000_1d01`: `mov cx,[di]`, then `CS:0x1D91` draws it; the special-lever check only swaps in the animation table while a swing is running).
+    - **The mechanism.** A cleared bit in `SS:0x51B2 + (world − 1) × 40` writes a descriptor with the frame's own width and height but the current arena pointer. So the frame draws the bytes of the next frame that *is* built, read with its own geometry. The captures below prove that these five types draw through their own descriptor `170 + type`. The paths read here are the lever draw `FUN_1000_1d01` (`mov cx,[di]`, drawn at `CS:0x1D91`) and category 5's `CS:0x19BA` table.
     - **The arena layout** (16-pixel frames): five planes one after another, mask first, then colour planes 0–3, each `h` big-endian words, bit 15 = pixel x 0. A mask bit of 1 is transparent. `[PROVEN]`: encoding the shipped frames reproduces live dumps byte for byte (198–199 in world 2; 175–176 and 204–206 in world 4). 32-pixel frames were not read.
     - **What DOS shows**, read live (descriptors at `SS:0x1E00 + id × 8`, then screen captures with the camera parked; `gods-web` `tools/attract-capture/mask63_live.py`, world jumps via a `joyg` load):
 
@@ -289,9 +289,25 @@
       | 4A | 4 "flask", 1 placed | #175 | the bag of gold, exactly (198/198 px) |
       | 4A | 24 "lever off", 1 placed | #204's bytes at 16 rows | a scrambled jewel (164/164 px) |
 
-      Types 25/63 (the toggled states) are cleared too, so pulling one of these levers changes nothing on screen.
+      - **Toggled states.** Types 25 and 63 are cleared too. So a world-2 or world-4A lever looks the same after a pull: #195 was read live with #194's pointer and height.
+      - **World 1B's stone switch** (type 62, special). A pull plays world 1's own swing frames from `DS:0xe01e` (410, 411, 289, all built) and then settles on type 63, which is the tablet again (`[STATIC]`).
+      - **Type 55's second sprite.** Its handler (`CS:0x1A58`) also draws an animated sprite 16 px above it, from `DS:0xdfe6` = 316/317/318/317. All three are cleared in world 1 and alias #331, so DOS draws #331 there without animation (`[PROVEN]` live, 43/43 px).
+      - **World 4A's flask** is category 2. Its inventory icon comes from the same descriptor (`FUN_1000_1ee3`), so it would show the bag of gold too (`[STATIC]`).
+    - **Fixed-id audit.** Checked every documented table of fixed sprite ids that code draws for a placed type, read live:
+      - category 5's `DS:0xdfe6`/`0xdfee`/`0xdff6` and second tiles 448/449;
+      - the spike tables `DS:0xdffe`/`0xe006`/`0xe012`;
+      - the special levers `DS:0xe01e`, per world;
+      - `SS:0x3602` and the nest, 285.
+
+      Only type 55's top sprite is cleared in a world where the type is placed. Sprites drawn by fixed ids outside these tables were not audited.
     - **Census window.** Map records, trigger `ACT0`/`ACT1` spawns, and the drop ids of PAT, System A/B and selector-2 descriptors that a plane-B event references. Only one more reachable item lands on a cleared bit: the knife (weapon 192, #302) in world 4, dropped by 4A's System A group 5 and System B group 35 (reward id 0). Its descriptor aliases #303 (read live), so it would draw as weapon 1. The drop itself is `[STATIC]`. Not covered: fixed-id sprites drawn by other code in the `objects` range.
-    - **Ported on purpose**, matching item 60's call: `gods-web` `src/formats/object-mask.js` rebuilds the arena and decodes each alias, including its opaque colour-0 pixels. `object-mask-compare.mjs` matches all six captured objects pixel for pixel, and each object's own frame, as a control, does not.
+    - **Ported on purpose**, matching item 60's call: `gods-web` `src/formats/object-mask.js` rebuilds the arena and decodes each alias, including its opaque colour-0 pixels. `object-mask-compare.mjs` matches all six captured objects, and #331, pixel for pixel, and each object's own frame, as a control, does not.
+64. **Open (port): category 5's extra sprites are not drawn by `gods-web`.** The `CS:0x19BA` handlers draw more than the base sprite:
+    - types 55 and 81 add an animated sprite 16 px up (`DS:0xdfe6`/`0xdfee`);
+    - type 82 swaps its sprite (`DS:0xdff6`);
+    - types 113 and 114 add tile 448/449 32 px to the right.
+
+    All are listed in `docs/destructible-and-hazards.md`, and the port draws only the base. The animation index is `((x >> 5) + DS:0x39d) & 3`. `DS:0x39d` advances only on the `DS:0x36c`-parity branch of `CS:0x1450`, and that parity's rate is `UNKNOWN_36c_parity`. The `x` fed to `>> 5` (world or screen) was not traced. In world 1, type 55's top sprite is a static #331 (item 63), so that case needs neither.
 
 ⚠️ `UNKNOWN_openlist_field4` was listed here *and* in the resolved list below. It is **closed** — the resolved entry is correct.
 
