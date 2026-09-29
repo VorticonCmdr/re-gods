@@ -22,9 +22,10 @@
  * descriptor's +0xA it picks [+0x11], else a uniform member from a second
  * draw (CS:0xEB5C-0xEB7D). A living pick becomes rank 1; count 1, mask its
  * bit, tenure and cursor 0. ⚠️ The uniform pick loops `cmp ax,bx / jc` on a
- * wrapping `add bx,si`: a draw of 0xFFFF never exits (DOS hangs), and
- * 0xFFFC-0xFFFE can wrap to a garbage index. `pickHangs`/`pickWraps` count
- * them; the port gives up the election for that tick instead (see ELECT_GUARD).
+ * wrapping `add bx,si`. A draw of 0xFFFF never exits (DOS hangs) for any n;
+ * the port counts it in `pickHangs` and elects nobody that tick. A draw just
+ * below wraps and exits (n = 2, 4: member 0; n = 9, 10: an index past the
+ * group, `pickOutside`), ported as DOS runs it.
  *
  * ── JOINING, CS:0xE6F1-0xE745 (stage 1 with the strategy unset) ─────────
  * With a leader and this member's bit clear it draws; below
@@ -54,7 +55,7 @@ export const RING = 0x18, RING_BYTES = 0x190;
 export const TENURE_CAP = 0x64;           // CS:0xE042
 export const TRAIL_STRATEGY = 4;          // CS:0xE741, DS:0xD95C[4] = 0xE7DB
 export const FORMATION_TABLE_PLANE_A = 0x10ac;   // DS:0x40B0 - DS:0x3004
-export const ELECT_GUARD = 64;            // loop bound standing in for DOS's unbounded one
+export const ELECT_GUARD = 0x10000;       // BX has 65536 values: past this, DOS never exits
 /* DS:0xD940-0xD9CF from GAME.EXE (Ghidra 1ffd:d940); DS:0xD96E is at +0x2E.
  * Kept raw so an index the death quirk pushes outside its row reads what
  * DOS reads. */
@@ -75,7 +76,8 @@ export class GroupRuntimesA {
     this.bytes = new Uint8Array(SLOTS * STRIDE + RING + RING_BYTES);
     this.stray = 0;         // writes onto another slot's +0..+0xF, or past the buffer
     this.pickHangs = 0;     // CS:0xEB76 with a 0xFFFF draw: DOS never returns
-    this.pickWraps = 0;     // CS:0xEB76 wrapped: DOS picks a garbage index
+    this.pickWraps = 0;     // CS:0xEB76 wrapped and exited (n 2/4: member 0)
+    this.pickOutside = 0;   // ...with an index past the group (n 9/10 only)
   }
 
   #w(k, off) {
@@ -117,18 +119,25 @@ export class GroupRuntimesA {
     return pre;
   }
 
-  /** CS:0xEB5C-0xEB7F / CS:0xDEFF-0xDF1E: a uniform index from one draw.
-   *  null when DOS would spin forever or wrap (counted, see header). */
+  /** CS:0xEB5C-0xEB7F / CS:0xDEFF-0xDF1E: a member index from one draw,
+   *  the loop run as DOS runs it (unsigned `jc`, 16-bit wrap). A draw near
+   *  0xFFFF wraps BX and still exits — for n = 2 and 4 with DL = 0, so
+   *  member 0 — counted in `pickWraps`. A loop that never exits (0xFFFF for
+   *  any n) is DOS's hang: counted in `pickHangs`, returns null. */
   #pick(n, draw) {
     const r = draw() & 0xffff;
     const step = Math.floor(0xffff / (n & 0xff || 1)) & 0xffff;
-    let bx = step, dx = 0;
+    let bx = step, dx = 0, wrapped = false;
     for (let guard = 0; guard < ELECT_GUARD; guard++) {
-      if (r < bx) return dx;                           // `jc`, unsigned
-      bx = (bx + step) & 0xffff; dx++;
-      if (bx < step) break;                            // wrapped
+      if (r < bx) {                                    // `jc`, unsigned
+        if (wrapped) this.pickWraps++;
+        return dx & 0xff;                              // CS:0xEB7F `mov cl,dl`
+      }
+      const nb = (bx + step) & 0xffff;
+      if (nb < bx) wrapped = true;
+      bx = nb; dx = (dx + 1) & 0xffff;
     }
-    if (r === 0xffff) this.pickHangs++; else this.pickWraps++;
+    this.pickHangs++;
     return null;
   }
 
@@ -146,7 +155,8 @@ export class GroupRuntimesA {
       if (idx === null) return null;
     }
     const e = members[idx];
-    if (!e || !(e.state > 0)) return null;             // CS:0xEB8E `jz`/`js`
+    if (!e) { if (idx >= members.length) this.pickOutside++; return null; }   // another slot's record: not modelled
+    if (!(e.state > 0)) return null;                   // CS:0xEB8E `jz`/`js`
     e.rank = 1;                                        // CS:0xEB96
     this.#put(k, 0x12, 1, 1);
     this.#put(k, 0x14, 1 << idx);

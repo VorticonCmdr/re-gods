@@ -9300,6 +9300,12 @@ export async function checkWeaponsProjectiles(fetchRaw) {
         rh.elect(0, alive(3), { count: 3, leadWeight: 127 }, () => seq[q++]);
         check('a pick draw of 0xFFFF is where DOS hangs (CS:0xEB76 `jc` never taken); the port counts it and elects nobody',
           rh.pickHangs === 1 && rh.count(0) === 0);
+        const rw = new GroupRuntimesA();
+        rw.materialise(0, { flags: 0, count: 2 }, () => 0);
+        const seqW = [0, 0xfffe]; let qw = 0;
+        const iw = rw.elect(0, alive(2), { count: 2, leadWeight: 127 }, () => seqW[qw++]);
+        check('...while 0xFFFE in a pair wraps BX and exits with DL = 0: DOS elects member 0 (CS:0xEB76-0xEB7F)',
+          iw === 0 && rw.pickWraps === 1 && rw.pickHangs === 0, `index ${iw}`);
       }
       /* End to end through EntityA.tick: PLEV2B's descriptor 2 (3 members,
        * leadWeight 127, trail mode) standing by an idle hero, as staged live. */

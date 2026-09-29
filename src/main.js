@@ -3686,6 +3686,28 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
       }
 
       if (!gmLate) {
+        /* CS:0xFF93 -> 0xAC59, then the damage-grid scan, contact winning —
+         * run PER MEMBER inside each system's own pass, as DOS does: System B
+         * at CS:0xEDF4 (after the steal, CS:0xEDDA), System A at CS:0xE0AA
+         * (after its pipeline, before its carried item and the slot's
+         * election CS:0xEB37, which must see a member killed this tick as
+         * dead). Both flow through the SAME shared routine (CS:0xff93/0xac59
+         * are proven common to both systems). */
+        const damageCtx = {
+          grid, cam: { x: cam.snapX, y: cam.snapY },
+          hero: { x: player.x, y: player.y, state: player.stateIndex },
+          health, decodeTag, difficulty, arsenal,
+          /* CS:0xAC4C — a weapon hit that damages a creature WITHOUT killing it
+           * drops a stationary debris spark inside its own hitbox. */
+          rng: () => rng.next(), debris,
+          /* DS:0x172 — CS:0xACCC's `jnz` skips only the health subtraction, so
+           * while this is set the hero takes no damage AND STILL KILLS what he
+           * touches. Both the shield potion and spawn protection feed it. */
+          invuln: fx.invuln > 0 ? 1 : 0,
+          sfx: (id) => audio.play(id),
+          systemA: new Set(enemiesA),        // the DS:0x35E bracket, CS:0xE0A5
+          score,                              // CS:0xEFE7, the kill award
+        };
         runSpawns();
         /* THE HUNT. CS:0xf11f/0xf1e5 run the pathfinder only from the two walk
          * modes, only on a tile crossing, and only when standing on ground —
@@ -3740,16 +3762,17 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
            * dispatch (walk/fall/hop) — matching the original, where CS:0xEDDA
            * sits between the mode handler (CS:0xEDD3) and the contact test
            * (CS:0xEDF4), so a steal attempt sees the entity's POST-MOVE
-           * position for this tick. stepCreatureDamage (contact) runs later,
-           * after the whole `enemies` loop below, so the steal also sees
-           * PRE-CONTACT state — an entity that is about to take damage this
-           * tick still steals normally. */
+           * position for this tick. stepCreatureDamage (contact) runs right
+           * after it, per entity, so the steal also sees PRE-CONTACT state —
+           * an entity that is about to take damage this tick still steals
+           * normally. */
           if (e.alive) {
             stealAttemptB(e, markerList.entries, e.desc, { x: cam.snapX, y: cam.snapY },
                            level.drawObjects);
             const carriedB = stepCarriedItemB(e, e.desc, level.world, () => rng.next());
             if (carriedB) dropCarriedIntoWorld(carriedB.id, carriedB.x, carriedB.y);
           }
+          creaturesShot += stepCreatureDamage([e], damageCtx).killed;   // CS:0xEDF4
           if (e.deathDropId !== null) {
             popup.spawn(e.deathDropX, e.deathDropY, e.deathDropId, dropCarriedIntoWorld);
             e.deathDropId = null;
@@ -3786,6 +3809,7 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
             firedByA++;
             shots.fire(muzzle.x, muzzle.y, muzzle.dir, { x: cam.snapX, y: cam.snapY });
           }
+          creaturesShot += stepCreatureDamage([e], damageCtx).killed;   // CS:0xE0AA
           /* CS:0xE0C1-E198 — the carried-icon ease + probabilistic periodic
            * drop, a separate call site from tick()'s own six-stage pipeline
            * (entity-a.js's file header explains why) — only for a genuinely
@@ -3817,28 +3841,6 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
         }
         /* CS:0x028E — the materialise flash pool's walker (game/flash.js). */
         flashFx = flashPool.step({ x: cam.snapX, y: cam.snapY });
-        /* CS:0x0285 — contact, then the damage-grid scan, with contact winning.
-         * Also in game/frame.js, for the same reason. Both entity arrays flow
-         * through the SAME shared routine (CS:0xff93/0xac59 are proven common
-         * to both systems — see CLAUDE.md's "Entity contact" section) — a
-         * separate call here would silently make System-A creatures unable to
-         * hurt or be hurt by the hero. */
-        creaturesShot += stepCreatureDamage([...enemies, ...enemiesA], {
-          grid, cam: { x: cam.snapX, y: cam.snapY },
-          hero: { x: player.x, y: player.y, state: player.stateIndex },
-          health, decodeTag, difficulty, arsenal,
-          /* CS:0xAC4C — a weapon hit that damages a creature WITHOUT killing it
-           * drops a stationary debris spark inside its own hitbox. Closes the
-           * last of the five CS:0xA633 callers this port's debris pass tracked. */
-          rng: () => rng.next(), debris,
-          /* DS:0x172 — CS:0xACCC's `jnz` skips only the health subtraction, so
-           * while this is set the hero takes no damage AND STILL KILLS what he
-           * touches. Both the shield potion and spawn protection feed it. */
-          invuln: fx.invuln > 0 ? 1 : 0,
-          sfx: (id) => audio.play(id),
-          systemA: new Set(enemiesA),        // the DS:0x35E bracket, CS:0xE0A5
-          score,                              // CS:0xEFE7, the kill award
-        }).killed;
         /* CS:0x0288 -> 0x071D — the shopkeeper, between System B (0x0285)
          * and System A (0x028B). A reported contact gives the 5 back, pops
          * the main loop's return address and jumps into the mid-level shop
@@ -3936,8 +3938,8 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
        * tick, so a same-tick kill cannot complete a group until one tick
        * later. This port's flat (not per-group) entity loop makes that
        * one-tick deferral awkward to reproduce exactly, so a kill via
-       * stepCreatureDamage (run once per tick, after every entity's own
-       * tick()) can complete a group on the SAME tick here — a disclosed,
+       * stepCreatureDamage (run per entity, right after its own tick())
+       * can complete a group on the SAME tick here — a disclosed,
        * at-most-one-frame-early popup, not a mechanism error. */
       for (const g of groupsB) {
         if (g.rewardGiven) continue;
@@ -4783,9 +4785,18 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
             ['PAT', patGroups.lostActivations],
             ['turret', selectorTwo.refused],
           ].filter(([, n]) => n);
-          return lost.length
+          /* System A's leader chain (game/sysa-group.js): where DOS would
+           * hang in CS:0xEB76, and ring writes the port cannot follow onto
+           * another slot's header. Gods ranked item 68. */
+          const sysA = [
+            ['election hang (DOS freezes here)', groupRtA.pickHangs],
+            ['pick wrap', groupRtA.pickWraps],
+            ['pick past group', groupRtA.pickOutside],
+            ['ring stray writes', groupRtA.stray],
+          ].filter(([, n]) => n);
+          return (lost.length
             ? ` · activations lost: ${lost.map(([k, n]) => `${k} ${n}`).join(', ')} (pool full)`
-            : '';
+            : '') + (sysA.length ? ` · SysA ${sysA.map(([k, n]) => `${k} ${n}`).join(', ')}` : '');
         })();
       /* Every counter the fire chain can raise, surfaced rather than swallowed:
        * an undecoded or NULL spawn handler, an out-of-range projectile `dir`,
