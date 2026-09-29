@@ -344,6 +344,35 @@
       - `gods-web`'s "materialise never writes `+0x0E`": it does, so a shooter's first shot comes (16 − lo) × 4 ticks after it appears, not 65535 ticks.
     - **Ported.** `parseGroupsA` reads `+0x14` as `stagger`, and `runSpawnsA` staggers the members and seeds the timer. Attract parity, sweeps and scores are unchanged.
     - **Still a `[WF]` lead, not touched:** the leader/follower reroll (`CS:0xEB37`/`0xE6E4`/`0xEB4A`/`0xEBB9`) and the doubled-HP member (`[bp+0x11]` vs `SS:0x435`).
+68. ~~The audit's remaining `[WF]` leads~~ — **three CLOSED `[STATIC]` and ported (2026-09-29); System A is below.** Census tool: `gods-web/tools/wf-census.mjs`.
+    - **The 4A/4B turret score overflow.** `CS:0xAF7D` (callers `CS:0xAF77`, selector 2, `DL = [SI+0x11]`; `CS:0xBBCF`, selector 1, `DL = [SI+0xA]`) packs `n = (v>>1)+1` hundreds exactly like `CS:0xEFE7`. For a quotient above 9, `CS:0xAF8E`–`0xAFB7` makes a second `0x0C8B` call with `(q−9)<<4`, so v ≥ 198 scores 1000 more than n × 100. Shipped data reaches it once: `PALFILS.0A4`/`0B4` selector-2 class 2 has `entityState0` = 200, dispatched by `PLEV4A` trigger 5 (ACT5 → event 17, gated on lever 3, a placed type-58 object at (780,466)). Each of its three turrets scores **11,100**, not 10,100. No PAT key reaches 198.
+    - ⚠️ **World-4 PAT class 3 is placed, not cut.** The "fourth cut feature" (`destructible-and-hazards.md`) was measured only over the System A/B descriptor windows. The `DS:0x1FE` table is also selector 1's PAT class table, and `PALFILS` +5 selects class 3 in seven placed selector-1 descriptors of `PLEV4A` and `PLEV4B` each (9, 10, 11, 12, 17, 18, 23).
+      - **handlerA `CS:0xBD38`.** On a `DS:0x36D`-zero tick, phase ≤ 3 does `(phase+1)&3` (Ghidra mis-decodes `BD5E`; its bytes are `FF 45 0E 83 65 0E 03`). Otherwise phase += 1; at 9 it calls `CS:0x8B0E`, and at ≥ 12 it resets to 0. Sprite `0x213` + phase (531–542).
+      - **handlerB `CS:0xBD0B`.** The reload counts down every tick while lo ≠ 0. It arms (phase 3 → 4, reload (16−lo)×4) only on a `DS:0x36D`-zero tick at phase 3, which is the tick handlerA lands on 3.
+      - **The drop.** `CS:0x8B0E` seeds `DS:0xCFCC` at (x+11, y), vy 4. The walker `CS:0x8B57` (gate `CS:0x8B56`; called at `CS:0x0291` and `CS:0x92D8`, just before the PAT walk; cleared at level load `CS:0x8E52` → `0x8B4A` → `0x7F48`) does the following:
+        - It falls, gaining 1 per `DS:0x36D`-zero tick, up to 16.
+        - It has no terrain stop. A plane-A `0x6D` tile two rows below takes a 250 hit through `CS:0x73EC` (`DS:0x33F` forced to 0), and 4A/4B hold 120/103 such tiles.
+        - It hits the hero with a 5×16 box at (x, y+8), strength 3, and frees on a reported hit.
+        - It is culled at screen y ≥ 0xC0 and drawn as sprite 543 through export 2.
+      - **Sharing the pool.** It shares `DS:0xCFCC` with the world-2 nest, whose allocator refuses outside world 2 (`CS:0x8611`), so the two never meet.
+    - **PAT `CS:0xBC4B`'s line hazard aims at the exact hero.** `CS:0xDBC6` never reads BP. It loads the target from `[0x17A]+8`/`[0x17C]+6`, and `CS:0xDBD4 mov bp,0x13` makes BP its slot counter. The speed is `[0x1F0]` = (lo>>1)+4 (`CS:0xBC84`). So the high-nibble branch fires from (x+16, y+16) at the hero with no jitter and no random draw. `UNKNOWN_bc4b_line_hazard_bp` is closed. It is placed in 2A/2B descriptor 3, 4A descriptors 0, 1, 2, 5, 14, 24, and 4B descriptors 0, 1, 2, 24.
+    - **Ported** (`gods-web` `ca978d6`, `2664700`, `4be526f`). Attract parity, the four sweeps (1615 plays) and the scores (72 awards) are unchanged. ⚠️ Run `diff.js` and `sweep-compare.js` under plain `?debug`: under `?sound=roland`, joyg2 parts at c133 and joyl3 at c1468.
+    - **System A's leader and followers, read `[STATIC]`, live proof pending.**
+      - **Election, `CS:0xEB37`** (once per group per tick, `CS:0xDFB9`). With a leader (`[bp+0x12]` ≠ 0) it only steps `[bp+0xE2]` (mod 128). Without one it **always** draws a random number. If that is below descriptor `+0xA`, it picks `[bp+0x11]`, or else a uniform member from a second draw. A living pick gets rank `[+0x19]` = 1; `[bp+0x12]` = 1, `[bp+0x14]` = its bit, and the tenure `[bp+0x16]` and ring cursor `[bp+0xE0]` are reset to 0. The leader keeps its own strategy.
+      - **Joining, `CS:0xE6F1`–`0xE745`** (stage 1, strategy unset). A member joins as a follower only when all of these hold:
+        - a leader exists;
+        - its bit `[0x3C4]` is clear in `[bp+0x14]`;
+        - a random draw `& 0x7F` is below `CX` = `([bp+0x14] & 0xFF00) | weight`, since `CS:0x3836` preserves CX;
+        - the tenure ≥ 10 × `[bp+0x12]`.
+        
+        It then gets rank `++[bp+0x12]`, its bit and strategy 4 (`DS:0xD95C[4]` = `E7DB`).
+      - **The trail, `CS:0xE039`.** The rank-1 member bumps the tenure (cap 100) and writes its (x, y) into a 100-entry ring at group runtime `+0x18`, cursor `+0xE0` step 4.
+      - **Strategy 4, `CS:0xE7DB`.** It floors `+0x16` at 2. How the follower's goal is set depends on descriptor `+5 & 0xC0`:
+        - **Bits clear.** The goal is the ring entry `(rank−1)×4 − 2` back.
+        - **Bits set.** The goal is the leader's latest point plus `DS:0x40B0[(DS:0xD96E[(N−2)×10 + rank−2] + [bp+0xE2]) & 0x7F]`, each value `>> 10`. `DS:0xD96E` spaces the ranks evenly over 128 (N=3: 0/64; N=4: 0/42/85; N=5: 0/32/64/96), so this is a rotating circle. `DS:0x40B0` is zero in the image and built at run time.
+      - **Death, `CS:0xE283`.** Rank 1 calls `CS:0xEBB9`, the group-wide reset (every member's rank, `+0x25`, `+0x24` = 0xFF, `+0xA` = 1). Any other rank does `dec [bp+0x12]`, then clears bit **rank** (`ROL 0xFFFE, CL` with CL = rank), not the member's own index bit. `CS:0xEBE5` then decrements every higher rank.
+      - **The doubled-HP member is a shipped bug, and unreachable.** `CS:0xE30D` compares `[bp+0x11]` with `SS:[0x435]`, the **group-slot** counter (9 down to 0, `CS:0xDF4B`/`0xDF6E`), not the member index `[0x3C4]`. It is set only when descriptor `+4` bit 0 is set (`CS:0xDEFA`), and no placed or ACT5-reached descriptor has that bit.
+      - **Reachability.** Election is possible in 2A/2B (descriptors 0, 2, 3) and 4A/4B (0–3); formation mode only in 4A/4B descriptor 3 (`+5` = 0xA2). But `EB37`'s draw runs every leaderless tick for every live group in every world, weight 0 included. `gods-web` has none of this.
 
 ⚠️ `UNKNOWN_openlist_field4` was listed here *and* in the resolved list below. It is **closed** — the resolved entry is correct.
 

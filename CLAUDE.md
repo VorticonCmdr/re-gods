@@ -131,11 +131,13 @@ A sixth, `UNKNOWN_level_palette_source` (ranked item 24), CLOSED — and, like i
 - **Ranked item 65 is closed (`[STATIC]`, ported).** It covers the pickup sparkle (`CS:0x1239`/`0x1280`, `DS:0xb578`) and the four frozen PAT walk cycles (`CS:0xBED3`/`0xBEF4`/`0xBF15`/`0xBF36`). `CS:0xBF58` is a bare `RET`.
 - **Ranked item 66 is closed (`[STATIC]`, ported, parity re-checked).** It covers the time-bomb blast, the teleport stone (keyed on the stone's own x), the world-4 class-2 PAT walkers (the walk half of `CS:0xBDDB`) and the ladder-head direction gate.
 - **Ranked item 67 is closed (`[PROVEN]` live, ported).** VGA export 38 staggers System A members by `desc+0x14` and seeds their fire timer to (16 − lo) × 4, read live in PLEV1A. It corrects items 26/27: export 38 writes `+0xA` and `+0xC`.
-- **`[WF]` leads, not yet re-read:**
-  - System A's leader/follower reroll (`CS:0xEB37`/`0xE6E4`) and its doubled-HP member.
-  - World-4 PAT class 3 appears placed via PALFILS +5, contradicting `destructible-and-hazards.md`.
-  - `BC4B` should use exact-hero `CS:0xDBC6`, not a jittered spawn.
-  - The 4A turrets' score overflow at `CS:0xAF8E`.
+- **Ranked item 68 (2026-09-29) closes three of the four `[WF]` leads, `[STATIC]`, ported.**
+  - **The 4A/4B turrets' score overflow.** `CS:0xAF7D`'s second `0x0C8B` call means 11,100 per kill, not 10,100.
+  - ⚠️ **World-4 PAT class 3 is placed, not cut.** PALFILS +5 selects it in seven placed selector-1 descriptors of 4A and 4B each. `CS:0xBD38`/`0xBD0B` drop a falling shot through `CS:0x8B0E` into `DS:0xCFCC`. This refutes the "fourth cut feature" claim in `destructible-and-hazards.md`.
+  - **`CS:0xBC4B`'s line hazard aims at the exact hero.** `CS:0xDBC6` ignores BP, so there is no jitter and no random draw.
+- **System A's leader and followers, read `[STATIC]` in item 68, live proof pending before porting.**
+  - **What it is.** `CS:0xEB37` elects a leader and draws a random number on every leaderless tick. Stage 1 `CS:0xE6F1` recruits followers into strategy 4 (`CS:0xE7DB`), which follows a 100-entry trail ring or a rotating circle.
+  - **The doubled-HP member.** It compares the wrong counter (`SS:0x435` is the group slot), and it is unreachable in shipped data.
 
 ## Tooling
 
