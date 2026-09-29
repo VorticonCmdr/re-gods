@@ -64,6 +64,7 @@ import { stepHealthBarShimmer, drawHealthBar, GUARDIAN_BAR, GUARDIAN_BAR_X, guar
 import { sliceDigitFrames, clampMoneyForDisplay, drawScore, drawMoney, drawLives } from './game/hud-digits.js';
 import { LeverToggle, SFX_LEVER_TOGGLE } from './game/levers.js';
 import { KillSmoke } from './game/kill-smoke.js';
+import { Sparkles } from './game/sparkle.js';
 import { LoopSfx, spikeOnScreen } from './game/loop-sfx.js';
 import { SpikeClock, stepSpikes, spikeSprites, spike130Sprite,
          SPIKE_TYPE, SPIKE117_TYPE, SPIKE130_TYPE } from './game/spikes.js';
@@ -742,6 +743,9 @@ const guardianTables = {
    * it. It IS cleared per level, unlike leverToggle/spikeClock — CS:0x8EC2
    * and its three siblings free all four slots in the level-load routine. */
   const killSmoke = new KillSmoke();
+  /* DS:0xb578 — the pickup sparkle (game/sparkle.js). Seeded from the object
+   * pass inside stepHeroFrame, walked beside ACT6's smoke below. */
+  const sparkles = new Sparkles();
   /* THE ACTION CONTEXT — what makes a fired trigger actually do something.
    * planeA/planeB are the live map arrays (subarray views into the bulk), so a
    * door written here is visible to the renderer and to collision on the very
@@ -1054,6 +1058,7 @@ const SHOP_EXIT_MUSIC_DELAY = 5;
   let lastPatFx = [];
   let lastSpikeFx = [];
   let lastKillSmokeFx = [];
+  let lastSparkleFx = [];
   /* CS:0x0495-0x04A1 — the real boot state: all 4 slots empty. Keys now
    * enter through CROUCH + FIRE (CS:0x6069 -> game/pickup.js's `scanForKey`/
    * `collectKey`, wired into Player._crouch), so this no longer needs a
@@ -1689,6 +1694,8 @@ const SHOP_EXIT_MUSIC_DELAY = 5;
       /* CS:0x8EC2 and its three siblings free all four DS:0x8c3c slots on a
        * level load, so a puff never survives into the next level. */
       killSmoke.clear(); lastKillSmokeFx = [];
+      /* CS:0x8E3A `call 0x1221` — the level load frees all ten sparkles. */
+      sparkles.clear(); lastSparkleFx = [];
       /* A level change is not a restart, so lives carry; the timers do not.
        * ⚠️ CORRECTED: no invulnerability at level start. The loader clears
        * DS:0x172 (CS:0x8CC7) and parks the countdown DS:0x19C at 0xFFFF
@@ -1867,14 +1874,15 @@ const SHOP_EXIT_MUSIC_DELAY = 5;
            * sequence is gated `world != 3`; it is left untouched here. What
            * genuinely resets: System-A's entity-group runtime (the same
            * three-structure mirror of FUN_1000_de6f the teleport-zone branch
-           * uses) and the line-hazard pool (FUN_1000_dbfb). A "spawn flash"
-           * pool at DS:0xac90 and the pickup-sparkle array at DS:0xb578 have
-           * no port-side module yet; the world-2 nest pool (DS:0xcfcc) is not
-           * reset here either. */
+           * uses), the line-hazard pool (FUN_1000_dbfb) and the pickup
+           * sparkles (CS:0x69A4 -> 0x1221, game/sparkle.js). A "spawn flash"
+           * pool at DS:0xac90 has no port-side module yet; the world-2 nest
+           * pool (DS:0xcfcc) is not reset here either. */
           slotsA = new GroupSlots();
           groupsA = [];
           enemiesA = [];
           lineHazards = new LineHazards();
+          sparkles.clear(); lastSparkleFx = [];      // CS:0x69A4 `call 0x1221`
           break;
         case 'clearKeys': clearNonPotionInventory(inventory, level.cats); break;   // FUN_1000_6ad4
         case 'reshutDoors':                                                          // CS:0x6AD0 -> 0x41BC
@@ -3052,6 +3060,7 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
       {
       fr = stepHeroFrame({
         heroDead: !!deathSeq,                        // CS:0x09BB — see frame.js
+        sparkle: sparkles,                           // CS:0x1239, from the pickup test
         familiar: { entity: familiar, rng: () => rng.next(),
                     hero: { x: player.x, y: player.y, state: player.stateIndex } },
         input, arsenal, grid, player,
@@ -3554,6 +3563,10 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
        * the starburst step (CS:0x0212) and the player state machine
        * (CS:0x0254), so a puff draws UNDER the hero and under every entity,
        * which is where the draw loop below puts it. */
+      /* CS:0x0236 `call 0x1280` — the pickup sparkles, one call before the
+       * smoke and behind the same DS:0x34 gate (also CS:0x0A0B on death
+       * ticks and CS:0x92A4 on the respawn tick, both before 0x3CC7 too). */
+      if (!gm) lastSparkleFx = sparkles.step(camNow);
       if (!gm) lastKillSmokeFx = killSmoke.step(camNow);        // CS:0x0226 gate
 
       /* The selector-2 walker (below, `stepSelectorTwo`) runs inside
@@ -4300,6 +4313,13 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
        * because its walker runs at CS:0x0239 — before the player state
        * machine at CS:0x0254 and before the entities at CS:0x0285, so a puff
        * is under both. */
+      /* PICKUP SPARKLES — CS:0x1280, sprites 86 down to 80 through export 2,
+       * drawn at CS:0x0236, one call before the smoke below. */
+      for (const d of lastSparkleFx) {
+        const sf = hero && hero.frames[d.sprite];
+        if (sf) renderer.blitSprite(sf, d.x, d.y);
+        else { outOfRange++; renderer.strokeRect(d.x, d.y, 16, 16, 14); }
+      }
       for (const d of lastKillSmokeFx) {
         const kf = hero && hero.frames[d.sprite];
         if (kf) renderer.blitSprite(kf, d.x, d.y);

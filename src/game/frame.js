@@ -111,7 +111,7 @@ export function stepHeroFrame({ input, arsenal, grid, player, map, cam,
                                zoneScan = null, beforePlayer = null,
                                objectPass = true, effects = null,
                                heroDead = false, familiar = null,
-                               shopkeeper = null }) {
+                               shopkeeper = null, sparkle = null }) {
   /* `heroDead`: the death driver CS:0x09BB runs this same pre-player half of
    * the tick (grid clear, blocks, barriers, object pass, projectiles,
    * starburst, selector 2) WITHOUT the fire latch (CS:0x019D) and without the
@@ -135,7 +135,10 @@ export function stepHeroFrame({ input, arsenal, grid, player, map, cam,
      * was consumed with no burst — [PROVEN] against PJOYL3 1031, where DOS
      * bursts from CS:0x6205. */
     ? stepPickups(objects, player, arsenal, bar, { cats, health, treasure, effects })
-    : { taken: [], consumed: [], treasures: [] };
+    : { taken: [], consumed: [], treasures: [], sparkles: [] };
+  /* CS:0x1239, called from inside the pickup test: each collected object
+   * seeds a sparkle (game/sparkle.js), walked later this frame (CS:0x0236). */
+  if (sparkle) for (const p of picked.sparkles) sparkle.spawn(p.x, p.y);
   /* CS:0x132D, the chest burst. It sits in the same object pass, and it runs
    * AFTER the pickup walk that can spawn it — so an item thrown out of a chest
    * this tick does not move until the next one. */

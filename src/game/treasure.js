@@ -471,7 +471,8 @@ export class TreasureBurst {
  * object's sprite index handed to a 10-slot effect array at DS:0xb578, stride
  * 10, written as {x, y, sprite, 6, -12}.
  *
- * NOT PORTED (cosmetic), but one fact is worth recording: the updater
+ * Ported in game/sparkle.js (the walker, the spawn, the clear and the three
+ * spawn sites). One fact is worth recording here: the updater
  * CS:0x1280 draws `[si+6] + 0x50` — a seven-frame sequence, sprites 86 down
  * to 80 — and reads NEITHER `[si+4]` (the sprite just stored) NOR `[si+8]`.
  * So on the evidence in hand the animation does not depend on what was

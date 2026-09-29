@@ -239,7 +239,9 @@ export function consumableRank(type, cats) {
 export function stepPickups(objects, hero, arsenal, bar = 1,
                             { cats = null, health = null, treasure = null,
                               effects = null } = {}) {
-  const taken = [], consumed = [], treasures = [];
+  /* `sparkles`: the objects whose collection calls CS:0x1239 (game/
+   * sparkle.js), in walk order — the order decides which slot each takes. */
+  const taken = [], consumed = [], treasures = [], sparkles = [];
   for (const o of objects) {
     if (o.dead) continue;                            // CS:0x1929 `[si+6] = 0`
     /* ⚠️ A DEAD SLOT IS 0xFFFF, WHICH IS ALSO >= 0xC0 — see isWeaponPickup. */
@@ -259,6 +261,7 @@ export function stepPickups(objects, hero, arsenal, bar = 1,
       const w = weaponIndexOf(o.type);               // CS:0x192E
       const r = pickUpWeapon(arsenal, w);
       if (r) taken.push({ ...r, weapon: w, sfx: PICKUP_SFX });
+      sparkles.push({ x: o.x, y: o.y });             // CS:0x1949, whatever 94A7 did
       continue;
     }
     if (!cats) continue;                             // categories not modelled
@@ -271,6 +274,8 @@ export function stepPickups(objects, hero, arsenal, bar = 1,
       const value = treasure.values ? (treasure.values[o.type] ?? 0) : 0;
       const r = collectTreasure(o, { ...treasure, value });
       treasures.push(r);
+      /* CS:0x18D0 — ordinary treasure only; a chest bursts instead. */
+      if (r.outcome === 'collected') sparkles.push({ x: o.x, y: o.y });
       continue;
     }
     if (cat !== 0 || !health) continue;
@@ -279,6 +284,7 @@ export function stepPickups(objects, hero, arsenal, bar = 1,
     /* ⚠️ DEAD FIRST, THEN DISPATCH — CS:0x17F6 precedes CS:0x1829, so a
      * handler that refuses still leaves the object consumed. */
     o.dead = true;
+    sparkles.push({ x: o.x, y: o.y });               // CS:0x1848, after any handler
     const rank = consumableRank(o.type, cats);
     const h = CONSUMABLES[rank];
     /* CS:0x17EF and CS:0x181B both play 0x638 BEFORE the handler call at
@@ -300,7 +306,7 @@ export function stepPickups(objects, hero, arsenal, bar = 1,
                     banked: r ? (r.banked ?? 0) : 0, result: r,
                     sfx: PICKUP_SFX });
   }
-  return { taken, consumed, treasures };
+  return { taken, consumed, treasures, sparkles };
 }
 
 /* ── Keys (category 2) — CROUCH + FIRE, CS:0x6069 `[PROVEN]` ────────────────

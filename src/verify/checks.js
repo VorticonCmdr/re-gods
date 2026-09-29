@@ -24,6 +24,8 @@ import { ROL_SFX_REMAP, ROL_SFX_RECORDS, RolSfxDriver, RolRandom, RolMusic, rolR
 import { RolandSequencer, parseRolandTrack } from '../audio/roland-sequencer.js';
 import { adlVariantOffset, ADL_SFX_VARIANT } from '../audio/adl-random.js';
 import { parseSmf, notesFromEvents, buildTempoMap, ticksToSeconds } from '../audio/smf-parser.js';
+import { Sparkles, SLOTS as SPARKLE_SLOTS, FRAMES as SPARKLE_FRAMES,
+         SPRITE_FIRST as SPARKLE_FIRST, SPRITE_LAST as SPARKLE_LAST } from '../game/sparkle.js';
 import { KillSmoke, SLOTS as SMOKE_SLOTS, FRAMES as SMOKE_FRAMES,
          SPRITE_BASE as SMOKE_SPRITE_BASE,
          SPRITE_LAST as SMOKE_SPRITE_LAST } from '../game/kill-smoke.js';
@@ -100,7 +102,7 @@ import { parseLineBarrierRecords, LineBarriers, TABLE_OFF as BARRIER_TABLE_OFF,
          RECORD_COUNT as BARRIER_RECORD_COUNT, RECORD_STRIDE as BARRIER_RECORD_STRIDE,
          SELECTOR_TO_SLOT as BARRIER_SELECTOR_TO_SLOT } from '../game/line-barriers.js';
 import { GROUP_SLOTS as PAT_GROUP_SLOTS, SUBRECORDS_PER_GROUP, ABSOLUTE_TAG,
-         HOLD_BOX, reloadTicks, decodeDelta, parsePatDirectory, animSprite, stepAnimPhase,
+         HOLD_BOX, reloadTicks, decodeDelta, parsePatDirectory, animSprite, stepAnimPhase, stepCycle,
          parsePatSpawnDescriptor, CLASS_TABLE_A, PatGroups,
          DEATH_SPRITE_BASE as PAT_DEATH_SPRITE_BASE, DEATH_RETIRE_AT,
          scoreForKey } from '../game/pat-objects.js';
@@ -8863,6 +8865,50 @@ export async function checkWeaponsProjectiles(fetchRaw) {
         `and CS:0x18F4 are the decompile that promotes it`);
     }
 
+    /* ── The pickup sparkle, CS:0x1239 / CS:0x1280 (game/sparkle.js). ── */
+    {
+      const sp = new Sparkles();
+      sp.spawn(100, 200);
+      const seen = [];
+      for (let k = 0; k < 9; k++) { const d = sp.step({ x: 0, y: 0 }); if (d.length) seen.push(d[0].sprite); }
+      check('a sparkle draws SEVEN frames, sprites 86 down to 80 (CS:0x126C, CS:0x12AC, CS:0x12C0)',
+        seen.length === SPARKLE_FRAMES && seen[0] === SPARKLE_FIRST
+          && seen[seen.length - 1] === SPARKLE_LAST && sp.live === 0,
+        `${seen.length} frames: ${seen.join(',')}; live after: ${sp.live}`);
+
+      const mv = new Sparkles();
+      mv.spawn(100, 200);
+      const a = mv.step({ x: 0, y: 0 })[0], b = mv.step({ x: 40, y: 10 })[0];
+      check('the sparkle is stored in WORLD space and scrolled every tick (CS:0x1255 / CS:0x12A0)',
+        a.x === 100 && a.y === 200 && b.x === 60 && b.y === 190,
+        `(${a.x},${a.y}) then (${b.x},${b.y})`);
+
+      const full = new Sparkles();
+      for (let k = 0; k < SPARKLE_SLOTS; k++) full.spawn(k, k);
+      const extra = full.spawn(999, 999);
+      check('with all ten slots live a new sparkle is DROPPED, not overwritten (CS:0x1252)',
+        extra === null && full.dropped === 1 && full.slots.every((r) => r.x !== 999),
+        `dropped ${full.dropped}`);
+      full.clear();
+      check('CS:0x1221 frees every slot', full.live === 0, `live ${full.live}`);
+
+      /* Which pickups seed one: the three CS:0x1239 calls in FUN_1000_177d. */
+      const seed = (o, opts) => stepPickups([o], { x: o.x, y: o.y }, new Arsenal(w1), 12,
+                                            { cats, ...opts }).sparkles;
+      const emptyInv = () => [INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY];
+      const cat0 = cats.findIndex((c) => c === 0);
+      const sT = seed({ x: 100, y: 120, type: 10, flag6: 1 }, { treasure: ctx(emptyInv()) });
+      const sC = seed({ x: 100, y: 120, type: 12, flag6: 1 }, { treasure: ctx(emptyInv()) });
+      const sW = seed({ x: 100, y: 120, type: 0xc1, flag6: 1 }, {});
+      const sP = seed({ x: 100, y: 120, type: cat0, flag6: 1 },
+                      { health: new Health(HEALTH_MAX, HEALTH_MAX) });
+      check('ordinary treasure, a weapon and a consumable each seed ONE sparkle at the object (CS:0x18D0 / 0x1949 / 0x1848)',
+        [sT, sW, sP].every((l) => l.length === 1 && l[0].x === 100 && l[0].y === 120),
+        `treasure ${sT.length}, weapon ${sW.length}, consumable type ${cat0} ${sP.length}`);
+      check('a chest seeds NO sparkle (CS:0x188B returns, CS:0x1910 bursts instead)',
+        sC.length === 0, `locked chest: ${sC.length}`);
+    }
+
     {
       const t = ctx([INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY, INVENTORY_EMPTY]);
       const o = { x: 100, y: 100, type: 12, flag6: 1 };
@@ -11225,9 +11271,9 @@ export async function checkZones(fetchRaw) {
       'THREE only — a partial pool reset (FUN_1000_6992: System-A\'s entity-' +
       'group runtime and the line-hazard pool are reset; the destructible-' +
       'block sub-step is correctly a no-op here too, matching the ' +
-      'original\'s own world!=3 gate on it; two further sub-resets — a ' +
-      '"spawn flash" pool and the pickup-sparkle array — have no port-side ' +
-      'module at all, `UNKNOWN_pool_reset_unmodelled_subpools`). The ' +
+      'original\'s own world!=3 gate on it; the pickup-sparkle array is ' +
+      'cleared too (game/sparkle.js); one further sub-reset, a "spawn flash" ' +
+      'pool, has no port-side module, `UNKNOWN_pool_reset_unmodelled_subpools`). The ' +
       '"ENTER A PASSWORD" grid-entry screen to type a generated password ' +
       'back in is now reproduced too (`UNKNOWN_password_entry_ui` is ' +
       'CLOSED — game/title-menu.js\'s PasswordEntry, dispatched from the ' +
@@ -13544,7 +13590,7 @@ export async function checkPatObjects(fetchRaw) {
       CLASS_TABLE_A[4]?.[3]?.spriteBase === 531);
     check('World 1 classes 0 and 2 both wire handlerB to the generic BC4B fire',
       CLASS_TABLE_A[1]?.[0]?.handlerB === 'bc4b' && CLASS_TABLE_A[1]?.[2]?.handlerB === 'bc4b');
-    check('World 1 class 1 is the UN-READ third handler (CS:0xBF58) — animates, never fires, not guessed at',
+    check('World 1 class 1\'s handlerB is CS:0xBF58, a bare RET (C3) — it animates and never fires',
       CLASS_TABLE_A[1]?.[1]?.handlerB === 'unknown');
     /* Worlds 2/3, transcribed from entity-a.js's own CLASS_TABLES_A (the
      * SAME DS:0x1fe pointer) rather than re-read live — cross-checked
@@ -13559,9 +13605,9 @@ export async function checkPatObjects(fetchRaw) {
     check('every World 2/3 class still pairs with the bc4b shoot handler (the 11-of-14 census)',
       [...CLASS_TABLE_A[2], ...CLASS_TABLE_A[3]].every((c) => c.handlerB === 'bc4b'));
     check('World 2 is all walk4 (CS:0xBE60/0xBE66 pass a base to CS:0xBE3D); World 3 is walk4 only '
-      + 'for class 1 (CS:0xBE5A `mov cx,0x20b` = 523), the other two staying static on an unread handler',
+      + 'for class 1 (CS:0xBE5A `mov cx,0x20b` = 523), the other two on the CS:0xBEF4 cycle',
       CLASS_TABLE_A[2].every((c) => c.handlerA === 'walk4')
-      && CLASS_TABLE_A[3].map((c) => c.handlerA).join(',') === 'static,walk4,static');
+      && CLASS_TABLE_A[3].map((c) => c.handlerA).join(',') === 'cycle,walk4,cycle');
     check('the walk4 bases the stubs carry as immediates are exactly the class table\'s own: '
       + '0x1f8=504, 0x200=512, 0x20b=523',
       CLASS_TABLE_A[2][0].spriteBase === 0x1f8 && CLASS_TABLE_A[2][1].spriteBase === 0x200
@@ -13594,6 +13640,24 @@ export async function checkPatObjects(fetchRaw) {
       check('CS:0xBE49/0xBE51 — walk4 is a different shape: base + (phase & 7), facing +4',
         animSprite('walk4', 504, 0) === 504 && animSprite('walk4', 504, 2) === 506
         && animSprite('walk4', 504, 8 | 2) === 510);
+
+      /* The 'cycle' family, CS:0xBED3/0xBEF4/0xBF15/0xBF36: base + phase,
+       * phase 0..N-1, no facing. N and BASE are each handler's own
+       * immediates; every BASE equals the class table's spriteBase. The art
+       * bounds each run: the sprite after the last frame (504, 531, 492) is
+       * a different creature. */
+      const cyc = [[1, 1, 516, 6], [3, 0, 486, 6], [3, 2, 486, 6], [4, 0, 496, 8], [4, 1, 524, 7]];
+      const run = (len) => { const out = []; let p = 0; for (let t = 0; t < len + 1; t++) { out.push(p); p = stepCycle(p, 1, len); } return out; };
+      check('the cycle classes carry the handlers\' own BASE and N (BED3 516/6, BEF4 486/6, BF15 496/8, BF36 524/7)',
+        cyc.every(([w, i, base, n]) => { const c = CLASS_TABLE_A[w][i];
+          return c.handlerA === 'cycle' && c.spriteBase === base && c.cycleLen === n; }),
+        cyc.map(([w, i]) => `w${w}c${i}=${CLASS_TABLE_A[w][i].handlerA}/${CLASS_TABLE_A[w][i].spriteBase}/${CLASS_TABLE_A[w][i].cycleLen}`).join(' '));
+      check('...and each runs base..base+N-1 then wraps to base (`cmp byte [di+0xe],N / jl`, `mov [di+0xe],0`)',
+        run(8).join(',') === '0,1,2,3,4,5,6,7,0' && run(7).join(',') === '0,1,2,3,4,5,6,0'
+        && animSprite('cycle', 496, 7) === 503 && animSprite('cycle', 524, 6) === 530,
+        `N=8: ${run(8).join(',')}; N=7: ${run(7).join(',')}`);
+      check('a tock-zero tick holds the cycle, like every other PAT handlerA (`cmp byte [0x36c],0 / jz`)',
+        stepCycle(3, 0, 6) === 3 && stepCycle(5, 1, 6) === 0);
 
       /* The advance, CS:0xBE99. */
       check('CS:0xBE9E — a tock-ZERO tick advances nothing: no phase step, no facing re-evaluation',

@@ -116,9 +116,8 @@
  *   handlerA = CS:0xBE6B / CS:0xBE71 (generic, 11 of 14 live System-A
  *     classes per CLAUDE.md's own census) — a walk-cycle animation driver
  *     (`CS:0xBE99`) toggling a small facing/phase field. Purely cosmetic;
- *     this port implements it as a fixed `spriteBase` (see
- *     `UNKNOWN_pat_animation_frame` below) rather than chasing the exact
- *     4-entry table, since the actual ask this pass was the SHOOTING half.
+ *     ported since (`stepAnimPhase`/`animSprite`, see the handlerA section
+ *     below, which also covers the four 'cycle' handlers CS:0xBED3-0xBF36).
  *   handlerB = CS:0xBC4B (generic, fully decoded below) fires toward the
  *     sub-record's own direction of travel through the SAME shared emitters
  *     (`CS:0x1FE7`/`CS:0x2039`) this port's `enemy-shots.js` already models.
@@ -291,16 +290,13 @@
  * counter, matching the coordinator's own suspicion), and only `+0x10` is
  * genuinely new — added below as `deathDelta`.
  *
- * ── NOT PORTED THIS PASS, flagged rather than silently dropped ──────────
- *   - `UNKNOWN_pat_animation_frame` — handlerA's own 4-phase walk-cycle
- *     sprite selection (`CS:0xBE99`, `DS:0xdf68`/`DS:0xdf70`); this module
- *     draws `spriteBase` unmodified. A visual gap only.
- *   - `CS:0xBF58` — a THIRD handlerB found live at World-1 class index 1
- *     (`1ffd:e046+12`) while reading the class table for this module. Not
- *     BC4B, not the World-4 attack pair; its own body was not read this
- *     pass. A class wired to it (`spriteBase=516`) is skipped by this
- *     module's shoot dispatch — treated as `handlerB: 'unknown'`, animated
- *     but never made to fire, rather than guessed at.
+ * ── FORMERLY "NOT PORTED THIS PASS" ─────────────────────────────────────
+ *   - `UNKNOWN_pat_animation_frame` — CLOSED and ported, see the handlerA
+ *     section below.
+ *   - `CS:0xBF58` — the handlerB at World-1 class index 1 (`1ffd:e046+12`)
+ *     is a bare `RET` (byte C3), so that class (`spriteBase=516`) genuinely
+ *     never fires. The table still names it `'unknown'`, which the shoot
+ *     dispatch skips — exactly what the RET does.
    *   - ⚠️ CORRECTION: worlds 2/3 are now transcribed too, see `CLASS_TABLE_A`
  *     below — copied from entity-a.js's own `CLASS_TABLES_A` (the same
  *     `DS:0x1fe` pointer) and cross-checked byte-for-byte against this
@@ -387,9 +383,25 @@ const s16 = (v) => (v & 0x8000 ? v - 0x10000 : v);
  *            (world 2 class 0), 0x200=512 (world 2 class 1), 0x20b=523
  *            (world 3 class 1).
  *
- * NOT READ THIS PASS, so those classes stay on a static sprite and say so:
- * CS:0xBED3 (world 1 class 1), CS:0xBEF4 (world 3 classes 0/2), CS:0xBF15 /
- * CS:0xBF36 (world 4 classes 0/1). `UNKNOWN_pat_animA_bed3_bef4_bf15_bf36`.
+ *   'cycle'  CS:0xBED3 / 0xBEF4 / 0xBF15 / 0xBF36 — four copies of one body,
+ *            differing only in the wrap length and the base immediate
+ *            (`UNKNOWN_pat_animA_bed3_bef4_bf15_bf36`, CLOSED `[STATIC]`):
+ *                cmp byte [0x36c],0 / jz draw     ; the same tock gate
+ *                inc word [di+0xe]
+ *                cmp byte [di+0xe],N / jl draw    ; SIGNED byte compare
+ *                mov word [di+0xe],0              ; wrap
+ *         draw:  bp = [di+0xe] + BASE ; [0x8] = bp ; ret
+ *            -> sprite = base + phase, phase 0..N-1. NO facing: the whole
+ *            word is the counter and nothing tests the pre-tick X.
+ *              BED3  N=6  BASE 0x204 = 516   world 1 class 1
+ *              BEF4  N=6  BASE 0x1E6 = 486   world 3 classes 0/2
+ *              BF15  N=8  BASE 0x1F0 = 496   world 4 class 0  (Ghidra's
+ *                    listing mis-decodes BF2D; the bytes are 81 C5 F0 01)
+ *              BF36  N=7  BASE 0x20C = 524   world 4 class 1
+ *            Every BASE equals the class table's own spriteBase below, so
+ *            the table's spriteBase is used and `cycleLen` carries N.
+ *            World 3 places no selector-1 events, so BEF4 never runs in
+ *            shipped play; it is wired anyway, like the rest of its table.
  */
 const PING3 = Object.freeze([0, 1, 2, 1]);      // DS:0xdf68 / DS:0xdf70, base-relative
 
@@ -406,11 +418,21 @@ export function stepAnimPhase(phase, tock, newX, preTickX) {
   return p;
 }
 
-/** CS:0xBE78 ('ping3') / CS:0xBE3D ('walk4') — the sprite for a phase. */
+/** CS:0xBED3 family ('cycle') — advance the plain counter in +0xe. The
+ *  wrap test reads the LOW BYTE, signed (`cmp byte ... / jl`). */
+export function stepCycle(phase, tock, len) {
+  if (!tock) return phase;                                  // `jz` on [0x36c]
+  const p = (phase + 1) & 0xffff;                           // `inc word [di+0xe]`
+  return ((p << 24) >> 24) < len ? p : 0;                   // `cmp byte / jl` / `mov ...,0`
+}
+
+/** CS:0xBE78 ('ping3') / CS:0xBE3D ('walk4') / CS:0xBED3 ('cycle') — the
+ *  sprite for a phase. */
 export function animSprite(family, spriteBase, phase) {
   const facing = (phase & 8) !== 0;
   if (family === 'ping3') return spriteBase + PING3[phase & 3] + (facing ? 3 : 0);
   if (family === 'walk4') return spriteBase + (phase & 7) + (facing ? 4 : 0);
+  if (family === 'cycle') return spriteBase + phase;         // `add bp,BASE`
   return spriteBase;                                         // unread handler — static
 }
 
@@ -495,13 +517,14 @@ export function parsePatSpawnDescriptor(buf, index) {
  * `handlerA`/`handlerB` are named by BEHAVIOUR, not raw address, since this
  * module dispatches on behaviour: `'generic'` = CS:0xBE6B/0xBE71 (cosmetic
  * animation only), `'attack-state'` = CS:0xBDDB, `'bc4b'` = CS:0xBC4B,
- * `'attack-fire'` = CS:0xBD71, `'unknown'` = a real handler this pass did
- * not read (CS:0xBF58 at world 1 index 1) — animated, never fires.
+ * `'attack-fire'` = CS:0xBD71, `'cycle'` = CS:0xBED3/0xBEF4/0xBF15/0xBF36
+ * (base + phase, `cycleLen` frames), `'unknown'` = CS:0xBF58 at world 1
+ * index 1, a bare RET — animated, never fires.
  */
 export const CLASS_TABLE_A = {
   1: [
     { spriteBase: 450, w: 32, h: 32, handlerA: 'ping3',  handlerB: 'bc4b' },    // CS:0xBE6B, table df68
-    { spriteBase: 516, w: 32, h: 32, handlerA: 'static', handlerB: 'unknown' },  // CS:0xBED3 — unread
+    { spriteBase: 516, w: 32, h: 32, handlerA: 'cycle', cycleLen: 6, handlerB: 'unknown' },  // CS:0xBED3
     { spriteBase: 456, w: 32, h: 32, handlerA: 'ping3',  handlerB: 'bc4b' },    // CS:0xBE71, table df70
   ],
   /* Worlds 2/3, transcribed from entity-a.js's own CLASS_TABLES_A (the SAME
@@ -519,13 +542,13 @@ export const CLASS_TABLE_A = {
     { spriteBase: 504, w: 32, h: 32, handlerA: 'walk4',  handlerB: 'bc4b' },
   ],
   3: [
-    { spriteBase: 486, w: 32, h: 32, handlerA: 'static', handlerB: 'bc4b' },    // CS:0xBEF4 — unread
+    { spriteBase: 486, w: 32, h: 32, handlerA: 'cycle', cycleLen: 6, handlerB: 'bc4b' },    // CS:0xBEF4
     { spriteBase: 523, w: 32, h: 32, handlerA: 'walk4',  handlerB: 'bc4b' },    // CS:0xBE5A `mov cx,0x20b`
-    { spriteBase: 486, w: 32, h: 32, handlerA: 'static', handlerB: 'bc4b' },    // CS:0xBEF4 — unread
+    { spriteBase: 486, w: 32, h: 32, handlerA: 'cycle', cycleLen: 6, handlerB: 'bc4b' },    // CS:0xBEF4
   ],
   4: [
-    { spriteBase: 496, w: 32, h: 32, handlerA: 'static', handlerB: 'bc4b' },    // CS:0xBF15 — unread
-    { spriteBase: 524, w: 32, h: 32, handlerA: 'static', handlerB: 'bc4b' },    // CS:0xBF36 — unread
+    { spriteBase: 496, w: 32, h: 32, handlerA: 'cycle', cycleLen: 8, handlerB: 'bc4b' },    // CS:0xBF15
+    { spriteBase: 524, w: 32, h: 32, handlerA: 'cycle', cycleLen: 7, handlerB: 'bc4b' },    // CS:0xBF36
     { spriteBase: 504, w: 32, h: 48, handlerA: 'attack-state', handlerB: 'attack-fire' },
     { spriteBase: 531, w: 32, h: 32, handlerA: 'cut-hazard', handlerB: 'cut-hazard' }, // CS:0xbd38/0xbd0b, never placed — see CLAUDE.md
   ],
@@ -808,16 +831,16 @@ export class PatGroups {
          * `this.lastPretickX` is DS:0x200, written by #move for THIS
          * sub-record a few lines above, which is what makes the facing test
          * read its own pre-tick X rather than a neighbour's. */
-        /* ⚠️ ONLY for the two decoded walk-cycle families. `attackState` is
+        /* ⚠️ ONLY for the decoded animation families. `attackState` is
          * the shared +0xe field, and world 4 class 2's handlerA is the
          * CS:0xBDDB ATTACK STATE MACHINE, not an animation driver — that
          * class's handlerA owns the field and advancing a walk phase under
-         * it would drive its 3->4->5->6->7 sequence from the wrong place.
-         * A class whose handlerA this pass did not read keeps its static
-         * sprite and its untouched field. */
+         * it would drive its 3->4->5->6->7 sequence from the wrong place. */
         const fam = slot.cls.handlerA;
         if (fam === 'ping3' || fam === 'walk4') {
           s.attackState = stepAnimPhase(s.attackState, tock, s.x, this.lastPretickX);
+        } else if (fam === 'cycle') {
+          s.attackState = stepCycle(s.attackState, tock, slot.cls.cycleLen);   // CS:0xBED3 family
         }
         drawn.push({ x: screenX, y: screenY,
                      sprite: animSprite(fam, slot.cls.spriteBase, s.attackState) });
@@ -992,7 +1015,7 @@ export class PatGroups {
     } else if (slot.cls.handlerA === 'attack-state') {
       this.#attackState(slot, s, cam, shots, tock);
     }
-    /* 'unknown' (CS:0xBF58) and 'cut-hazard' (never placed) fire nothing —
+    /* 'unknown' (CS:0xBF58, a bare RET) and 'cut-hazard' fire nothing —
      * see this file's header. */
   }
 
