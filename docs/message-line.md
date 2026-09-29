@@ -422,11 +422,34 @@ their level's `PALFILS`** — `PLEV1B` objects at `x=348` and `x=329`, against
 is the string at `DS:0xed17`, `"Hint Error"`, reached through a 5-entry pointer
 table at `DS:0xe94a` whose entries are all the same pointer.
 
-`UNKNOWN_63d5_nomatch_runtime_effect` — what the machine actually does, frame by
-frame, after the underflow fires is established only statically; it has not been
-observed under a live debugger. `UNKNOWN_plev1b_nomatch_tablets_touchable` —
-whether the hero can physically reach either object in ordinary play was not
-checked.
+~~`UNKNOWN_63d5_nomatch_runtime_effect`~~ — **CLOSED `[PROVEN]` live (2026-09-29): the game hangs.**
+Staged in `PJOYL1` through the real A→B switch (item 60's staging), then the hero
+placed on the pocket floor beside the x=348 tablet
+(`gods-web/tools/attract-capture/tablet_live.py`):
+
+- The handler is entered from `CS:0x182B` with `SI = 0x63D5`, and takes the
+  no-match arm.
+- At the `RET` (`CS:0x646E`), `DS = ES = 0x63D5`, and the word popped is `0x0060`,
+  the tablet's screen Y (880 − 784 = 96), as the static reading predicted.
+- Execution resumes at `CS:0x0060`, the tail of `GAME.EXE`'s start-up code. It
+  zeroes `[0x43]` and `[0x38B]`–`[0x38D]` in segment `0x63D5` (the sprite-pixel
+  arena), then jumps to the boot atlas loader `CS:0x2882`, which calls export 22
+  with that `DS`.
+- The CPU ends up executing data at `0x69D8:xxxx` with `SS = 0x3AD`, bouncing
+  through the BIOS. The screen is frozen and the tape cursor stays at 304.
+
+The landing address is the tablet's screen Y, so it varies with the camera, but `DS`
+is always the handler's address, so no landing survives. `gods-web` shows the
+intended `"Hint Error"` line instead.
+
+~~`UNKNOWN_plev1b_nomatch_tablets_touchable`~~ — **CLOSED: both are reachable.**
+Tablets are category 0 and fall when activated. The x=348 one lands on the row-57
+floor (y 896) in a pocket reached by the ladder in column 7; a hero standing there
+(y 864, x 320–360) is in the pickup box. The x=329 one lands on the row-23 floor
+(y 352) beside the ladder in column 11 (hero y 320). This is `[STATIC]` from plane B
+and the pickup box `CS:0x177D`, and live for x=348: the hero on the pocket floor
+touched it at once. So a player who picks up either tablet in sublevel 1B hangs the
+game.
 
 ## Where the port implements this
 
