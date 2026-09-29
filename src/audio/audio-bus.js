@@ -14,7 +14,7 @@
  * call site for which CS: address each id traces back to.
  *
  * ⚠️ NOT a chip-accurate reproduction, and this is a scope decision, not a
- * shortcut: Gods/docs/drivers-and-memory.md's "13-slot sound interface"
+ * shortcut: docs/drivers-and-memory.md's "13-slot sound interface"
  * section documents the DISPATCH mechanism (which driver, which id ranges,
  * the Roland-only id-0x49 quirk) but nobody has decoded what any individual
  * id actually sounds like — there is no decoded per-id OPL2/SB/Beeper/Tandy
@@ -62,7 +62,7 @@
  * EXCEPT the world-3 `DS:0xce64` type, where a `DS:0x34` bracket
  * (`CS:0x7FD4`) makes the tag decoder's own third `0x0f22` emitter
  * (`CS:0x936D`, inside `FUN_1000_9320`) fire on every damaging hit, lethal
- * or not — see Gods/docs/combat-and-projectiles.md's own correction under
+ * or not — see docs/combat-and-projectiles.md's own correction under
  * "Weapon +0x49". This port does not model `DS:0x34`, so its ce64 creature
  * is silent on a non-lethal hit like every other creature — a disclosed
  * simplification, not an oversight — so "nothing plays on every hit" is
@@ -79,7 +79,7 @@
  * turn-arounds behind `_climb`'s own `tock===0` early return, so
  * `if (fr.footstep) audio.play(FOOTSTEP_SFX)` at the per-tick call site IS
  * the tuned version — there is no separate real-time cadence to build.
- * `CLIMB_STEP_SFX`'s id is also a correction: `Gods/docs/player-state-
+ * `CLIMB_STEP_SFX`'s id is also a correction: `docs/player-state-
  * machine.md` used to cite it as "the climb-step sound 0x5931", but 0x5931
  * is the CS: address of the 9-byte thunk that plays it
  * (`push ax / mov ax,0x240 / call 0x22ca / pop ax / ret`), not the id —
@@ -106,14 +106,14 @@
  * Roland-only alternate kill sound `0x0e49`
  * (CS:0xABB7/0xABD1, gated on `DS:0x35e`, audible on only 3 specific
  * creature classes and only under that one driver — see
- * Gods/docs/drivers-and-memory.md's "Sound: a 13-slot interface").
+ * docs/drivers-and-memory.md's "Sound: a 13-slot interface").
  * See checks.js's own "sound ids" note for the same list kept in sync.
  *
  * ⚠️ A still later pass wired the time bomb (`hero-fire.js`'s
  * `TIME_BOMB_WEAPON`, previously dead code — its spawn handler was
  * undecoded and its mover was never dispatched from `Arsenal.step()`).
  * That pass also caught and fixed a citation bug: this file used to list
- * `0x22` bomb detonation as a disclosed non-wire, taking `Gods/docs/
+ * `0x22` bomb detonation as a disclosed non-wire, taking `docs/
  * combat-and-projectiles.md`'s own citation at face value — but unlike
  * every OTHER bare-low-byte id already corrected in this project
  * (`0x1c`→`0x041c`, `0x1d`→`0x21d`, `0x09`→`0x209`), that one had never

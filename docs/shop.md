@@ -282,7 +282,7 @@ both captures and the source read agree.
 
 `{0,35,36,38,42,44,51,52,53,70,71,72}` — the full stable-core buy set from both
 runs above — is **exactly** the set of `type` values already present in
-`gods-web`'s own `game/consumables.js` `CONSUMABLES` table (ranks 0, 3, 4, 6,
+`gods-web`'s own `src/game/consumables.js` `CONSUMABLES` table (ranks 0, 3, 4, 6,
 10, 12, 14, 15, 16, 19, 20, 21 respectively: health, health, starburst,
 invulnerable, extraLife, freeze, three weaponArc ranks, and three more health
 ranks). Twelve items, twelve exact matches, zero misses. That table was built
@@ -612,7 +612,7 @@ are not named by either gate and pass unconditionally regardless.
 **Consequently, this port now ships the FULL 18-id raw candidate list for
 worlds 3/4** (`{0,2,3,35,36,37,38,39,40,41,42,44,51,52,53,70,71,72}`) and the
 full 13-id list for world 2 (`{0,2,35,36,38,42,44,51,52,53,70,71,72}`), not a
-pre-filtered subset — `ShopScreen#rebuildVisible` (`game/shop.js`) applies
+pre-filtered subset — `ShopScreen#rebuildVisible` (`src/game/shop.js`) applies
 both eligibility gates and the `0x25c` scroll truncation itself (see the next
 section), reading `state.arsenal.slots` and `state.health.familiarEnergy`
 directly, exactly as `FUN_1000_731b`/`FUN_1000_7336` do. An earlier revision
@@ -725,7 +725,7 @@ DOSBox.
 
 The shop does not show `DS:0x194`/`0x196` directly. It shows a copy at `DS:0x254`/`0x256`, set to the real money on both entries (`CS:0x6BED`, and `CS:0x0676` for the level-start shop). `FUN_1000_718B` runs once at entry (`CS:0x6C6F`) and on every loop pass that is not a FIRE press (`CS:0x6D60`, after the cursor sound `0x232` at `0x6D4F`; the FIRE path jumps to `CS:0x6E62` and skips it). Each call moves the shown money `0x2EE` (750) toward the real money, never past it, and plays **`0x111`** (`CS:0x71A3` counting down, `0x71CF` up). Equal: nothing, silent. So after a purchase the display counts down in 750 steps, one tick sound per pass: 108 ticks means 81,000 spent.
 
-Live: the `PJOYL2` and `PJOYL3` sweeps log exactly these runs (108 and 84 plays), each under the tape cursor of its own shop pass. `gods-web` drew the purse itself; `game/shop.js` now keeps `shownMoney` and plays `0x111` per step, and matches every play per cursor.
+Live: the `PJOYL2` and `PJOYL3` sweeps log exactly these runs (108 and 84 plays), each under the tape cursor of its own shop pass. `gods-web` drew the purse itself; `src/game/shop.js` now keeps `shownMoney` and plays `0x111` per step, and matches every play per cursor.
 
 **The shop's exit runs a respawn tick.** `CS:0x6DCB` calls `FUN_1000_921B` (the tick body a respawn uses, with a tape poll) before `jmp cx` (`CS:0x6DF3`, patched to `0x0696` for the level-start shop), and only then `CS:0x06A9` plays the level-start sound `0x7F12`; `0x0111`'s check at `0x0126` then plays the aura loop `0x280` if a shield was bought, else stops `0x80`. `gods-web` now runs that respawn tick and plays the sound after it (the sweeps' `0x7F12` lands one cursor after the exit pass).
 
@@ -741,13 +741,13 @@ The potion's handler (`CS:0x61E9`) writes only `DS:0x363 = 0x41`. The rest hangs
 - **The walker, `CS:0x0288` → `0x071D`,** between System B (`0x0285`) and System A (`0x028B`). While it is on, the player dispatch runs only its epilogue (`CS:0x49AA`), the spike loop does not start (`CS:0x14D3`) and contact hurt sounds are muted (`CS:0xACE5`). On ticks where `DS:0x36C` is set it moves 6 px; near a column boundary (`x & 0x1F` ≤ 4 or ≥ 0x1C) it turns when a wall (`== 1`) is in the next column's first three rows or that column's fourth row, the floor, is not solid (the fourth test's `jz 0x078C` is the only way past the `NEG`). On the other ticks it advances its phase (`& 7`) and plays footstep `0x020E` on phases 2 and 6. It draws sprite `0x1C2 + 4·dx + 4 + phase`.
 - **The contact, `CS:0x07D9`:** `CS:0xAC59` with a 0x20 × 0x30 box and strength 5 (5 damage, not scaled). A reported hit gives the 5 back unless invulnerable, switches the walker off, sets `SS:0x40A = 0xC0`, pops the main loop's return address and jumps to `CS:0x6BED`, so the rest of that tick never runs. The mid-level entry fades the music (`CS:0x6C0E`) and keeps the money; its exit (`CS:0x6D7B`) pays back the LEV3A camera nudge, restores `level<N>` over the shop sprites (`CS:0x21C2`), runs the respawn tick, sets `[0x3E8] = 5` and jumps to `CX = 0x011B`, the main loop's head, without the password path's `CS:0x0696` level-start sound.
 
-Live: `gods-web/tools/attract-capture/walker_live.py` pokes `[0x363] = 0x41` at `PJOYL1` cursor 300 and logs every tick. The hero walks right until state 1, phase 2, then holds; the countdown runs 65 ticks; at 365 the walker starts at (1664, 944, −1) with `[0x35D] = 1` and `[0x38A] = 1`; it walks and plays its footsteps from `CS:0x07FE`; moved beside the hero at 406, it touches him on tick 414 and `CS:0x6BED` runs on 415 with health unchanged and `SS:0x40A = 0xC0`. `gods-web` (`game/shopkeeper.js`, `tools/attract-capture/walker-compare.js`) matches all 115 ticks, sounds included, and opens the shop on 415. A second staging (`walker_live_wall.json`) puts the walker at x 1580 walking right: it turns seven times between the walls at columns 52 and 43 (x 1634 and 1436) through cursor 840, and the port matches all 541 ticks. The ledge turn (a missing floor) is `[STATIC]`: no staged path reached one.
+Live: `tools/attract-capture/walker_live.py` pokes `[0x363] = 0x41` at `PJOYL1` cursor 300 and logs every tick. The hero walks right until state 1, phase 2, then holds; the countdown runs 65 ticks; at 365 the walker starts at (1664, 944, −1) with `[0x35D] = 1` and `[0x38A] = 1`; it walks and plays its footsteps from `CS:0x07FE`; moved beside the hero at 406, it touches him on tick 414 and `CS:0x6BED` runs on 415 with health unchanged and `SS:0x40A = 0xC0`. `gods-web` (`src/game/shopkeeper.js`, `tools/attract-capture/walker-compare.js`) matches all 115 ticks, sounds included, and opens the shop on 415. A second staging (`walker_live_wall.json`) puts the walker at x 1580 walking right: it turns seven times between the walls at columns 52 and 43 (x 1634 and 1436) through cursor 840, and the port matches all 541 ticks. The ledge turn (a missing floor) is `[STATIC]`: no staged path reached one.
 
 Not established live: what the walker's frames look like on screen, and the mid-level exit. ⚠️ The sublevel switch's own `CS:0x05D7` call (`CS:0x4875`, with the RET patch and a `[0x35D]` decrement) is `[PROVEN]` live to overlay the shop group over `level<N>` for the whole of sublevel B, until a shop exit or a level entry: a shipped bug that turns sublevel B's creatures into shop sprites (some invisible, some the shopkeeper) and the small font's glyphs into shifted shop-font glyphs. See ranked item 60.
 
 ## What `gods-web` ports and what it discloses as not ported
 
-See the port's own `game/shop.js` header for the current state — built and
+See the port's own `src/game/shop.js` header for the current state — built and
 tested as a state machine (grid navigation, the two-press buy confirm, the
 `0x319` category lockout, the `0x5060` auto-use-vs-inventory branch, the
 selected-slot skip, the priority-`0x19` refusal message), fed the FULL raw
@@ -758,12 +758,12 @@ reproduces `FUN_1000_7276`/`FUN_1000_707d`'s own full pipeline — eligibility
 gates, per-visit category lockout, affordability, ascending-by-price sort,
 and the 17-slot scroll truncation — so both eligibility gates
 (`UNKNOWN_shop_eligibility_gates`, CLOSED) are genuinely wired: `game/
-weapons.js`'s `arsenal.slots` (gate 1) and `game/combat.js`'s
+weapons.js`'s `arsenal.slots` (gate 1) and `src/game/combat.js`'s
 `health.familiarEnergy` (gate 2, raised by a new `applyFamiliar` handler for
-the previously-unwired type-39/40/41 consumables, `game/consumables.js`).
+the previously-unwired type-39/40/41 consumables, `src/game/consumables.js`).
 All real, byte-grounded content from the actual `SS:0x51aa` per-world source
 lists, not invented placeholders. Real prices are shown and charged for all
-18 raw ids (`game/shop.js`'s `PRICES` table, `UNKNOWN_shop_prices` closed —
+18 raw ids (`src/game/shop.js`'s `PRICES` table, `UNKNOWN_shop_prices` closed —
 see above). Along the way, two pre-existing bugs in `main.js`'s own
 `switchLevel`/`fullRestart` were found and fixed: `switchLevel` was
 rebuilding `arsenal` (and silently dropping the familiar's own state) from
@@ -778,14 +778,14 @@ The weapon purchase/swap mechanic (`UNKNOWN_shop_tradein_value`, CLOSED
 above) is now ported: world 2's roster gained its 3 weapon ids, and worlds
 3/4 (which diverge in which weapons they sell, unlike their shared
 consumable set) each got their own weapon-id tail instead of reusing one
-roster constant. `game/weapons.js`'s `parseWeapons` now carries each
+roster constant. `src/game/weapons.js`'s `parseWeapons` now carries each
 weapon's own embedded name (`WEAPON_NAMES`, read from `rec+0x20` and
 cross-checked against `PWEAPONS.001`'s decompressed bytes) alongside its
 pre-existing `value`/`refundFor`, and `ShopScreen` gained the three-press
 warning/execute flow (`#buyWeapon`/`#wouldDisplace`/`#warningFor`) plus
 per-world live pricing (`#priceFor` — weapon prices, unlike consumable
 prices, come from the CURRENTLY LOADED world's own `PWEAPONS` file, not one
-static table). `pickUpWeapon` (`game/pickup.js`) and the slot selector it
+static table). `pickUpWeapon` (`src/game/pickup.js`) and the slot selector it
 uses were reused as-is for the ARM half, exactly as this doc predicted; the
 refund-then-charge orchestration in `#buyWeapon` and the warning/preview
 state machine in `#fire` were the only genuinely new surface. Every

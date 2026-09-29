@@ -248,7 +248,7 @@ function hexDump(bytes, maxBytes) {
 
 /* ════════════════════════════════════════════════════════════════════════
  * DCL (PKWARE "implode"/blast) decompressor
- * Direct transliteration of this project's verified gods-web/src/formats/dcl.js,
+ * Direct transliteration of this project's verified src/formats/dcl.js,
  * itself a port of zlib's contrib/blast.c. Every P-prefixed GODS asset opens
  * with header bytes 00 06 (uncoded literals, 4096-byte dictionary).
  * ════════════════════════════════════════════════════════════════════════ */
@@ -494,7 +494,7 @@ const ACTION_NAMES = [
 ];
 
 /* ════════════════════════════════════════════════════════════════════════
- * PWEAPONS.00x — mirrors gods-web/src/game/weapons.js exactly, including the
+ * PWEAPONS.00x — mirrors src/game/weapons.js exactly, including the
  * three EXE-pinned fields (the file's own +0x0c/+0x1e/+0x08 are discarded at
  * load time by GAME.EXE, so the port — and this viewer — serve the pinned
  * image values instead and keep the file's own bytes only for comparison).
@@ -624,7 +624,7 @@ function parseMusicContainer(buf) {
  * repeating 0x40,0xA0 (set time constant 0xA0=160) + 0x14,0x39,0x00 (8-bit
  * single-cycle DMA, 58-byte block) — giving the standard SB formula's
  * achieved rate 1,000,000/(256-160) = 1,000,000/96 ≈ 10417 Hz. See
- * Gods/docs/execution-and-boot.md's "PDEMOSB4.SB format and playback rate"
+ * docs/execution-and-boot.md's "PDEMOSB4.SB format and playback rate"
  * section for the full disassembly + live-capture writeup, and
  * src/formats/sb-voice.js / src/audio/pcm-player.js for the same decode
  * wired live into the port's own intro.

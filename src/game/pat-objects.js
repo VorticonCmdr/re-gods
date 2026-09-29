@@ -308,7 +308,7 @@
  *     spawn.js's own `CLASS_TABLES_B` convention), not a guess.
  *   - ⚠️ STALE NOTE REMOVED. This header used to claim no `PGOD0{1..4}.PAT`
  *     file was vendored and that the module was "INERT in the live game".
- *     Both halves are long out of date: `public/game/PGOD01..04.PAT` are
+ *     Both halves are long out of date: `game/PGOD01..04.PAT` are
  *     present, `main.js`'s level loader fetches one per world, and
  *     `main.js` calls `PatGroups.activate` from its selector-1 handler.
  *     The module is live on every level that dispatches selector 1.

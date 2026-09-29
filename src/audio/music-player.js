@@ -29,7 +29,7 @@
  * itself opens only `PGODS.MUS` (see `mus-container.js`'s own header for the
  * full citation), but which of its 70 real tracks plays at which moment in
  * play is UNKNOWN — no code path selecting a blob index was found this
- * session (`UNKNOWN_pgods_mus_cue_dispatch`, Gods/docs/drivers-and-memory.md).
+ * session (`UNKNOWN_pgods_mus_cue_dispatch`, docs/drivers-and-memory.md).
  * `main.js` exposes every track through a dev picker instead of inventing a
  * mapping — the same disclosed-affordance spirit as its own weapon picker
  * ("a CHEAT rather than the only way to arm").

@@ -2,7 +2,7 @@
  *
  * `[PROVEN]` — full disassembly of `CS:0x2DA6`-`0x2DEE`, this session (while
  * porting the title-screen/attract-mode system), not previously read in
- * this project past the summary Gods/docs/dynamic-trace-and-runtime-
+ * this project past the summary docs/dynamic-trace-and-runtime-
  * data.md's "The title screen" section already carried:
  *
  *   2DA6  AL = [0x3e6] ; INC [0x3e6]           ; state, then advance for next time

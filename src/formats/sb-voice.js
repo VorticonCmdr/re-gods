@@ -5,7 +5,7 @@
  * PDEMOSB4.SB is a SAMPLE-MUSIC SEQUENCE: 11 PCM clips plus a byte-code
  * script, played by PPLAYER.BIN's own sequencer. Read from the driver's
  * code (ndisasm of the blast.py-decompressed PPLAYER.BIN), then checked
- * live in DOSBox (Gods/docs/execution-and-boot.md, "PDEMOSB4.SB").
+ * live in DOSBox (docs/execution-and-boot.md, "PDEMOSB4.SB").
  *
  * LAYOUT (all little-endian, offsets into the decompressed file):
  *   byte 0          sequence count (1)

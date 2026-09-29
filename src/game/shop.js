@@ -1,7 +1,7 @@
 /* shop.js — the shop screen, `FUN_1000_6c19` (grid loop) / `FUN_1000_6e62`
  * (buy / weapon-swap dispatch) / `FUN_1000_7233`+`0x7276` (roster load/filter/sort).
  * Full disassembly and a live DOSBox confirmation of the grid geometry are in
- * `Gods/docs/shop.md` — read that file's own header before trusting a claim
+ * `docs/shop.md` — read that file's own header before trusting a claim
  * here; this module's own comments cite it rather than repeat it.
  *
  * SCOPE, disclosed rather than silently simplified:
@@ -131,7 +131,7 @@ export const GRID_ROWS = 3;
 export const GRID_SLOTS = GRID_COLS * GRID_ROWS;       // 18, CS:0x6cef "mov ax,0x11"
 export const EXIT_SLOT = GRID_SLOTS - 1;               // 17, CS:0x6e74-0x6e7e
 export const DATA_SLOTS = EXIT_SLOT;                   // 17 addressable grid cells
-/* Renamed from SELL_ID_BASE — UNKNOWN_shop_tradein_value (CLOSED, Gods/docs/
+/* Renamed from SELL_ID_BASE — UNKNOWN_shop_tradein_value (CLOSED, docs/
  * shop.md) found this is not a sell threshold at all. Every raw id at or
  * above this is a WEAPON TYPE to buy and equip (id - WEAPON_ID_BASE = the
  * weapon's own index into game/weapons.js's WEAPON_NAMES/parseWeapons
@@ -453,7 +453,7 @@ export class ShopScreen {
   }
 
   /* Not eligible once its price exceeds the purse (`FUN_1000_7392` via
-   * `CS:0x72c9`), or — `UNKNOWN_shop_eligibility_gates`, CLOSED (Gods/docs/
+   * `CS:0x72c9`), or — `UNKNOWN_shop_eligibility_gates`, CLOSED (docs/
    * shop.md) — one of the two gates the original's own roster rebuild
    * re-applies every time: `FUN_1000_731b` (ids 2/3, gated on the hero's
    * weapon slots) and `FUN_1000_7336` (ids 40/41, gated on the familiar's

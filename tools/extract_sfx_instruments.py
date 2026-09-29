@@ -22,14 +22,14 @@ scratch buffer for two different, independently-triggered SFX ids (title-
 menu cursor-move events) in a fresh session each time. Both captures matched
 this script's own extraction BYTE-FOR-BYTE (28/28), at the SAME blob-
 relative offset 52, for blob indices 4 and (separately) 49 — see
-Gods/docs/drivers-and-memory.md's `UNKNOWN_sfx_instrument_source` entry for
+docs/drivers-and-memory.md's `UNKNOWN_sfx_instrument_source` entry for
 the full trace and citations.
 
 The 8 functions that turn these 13-byte-per-operator PARAMETER blocks into
 actual 0x388/0x389 OPL2 REGISTER bytes (FUN_0000_1e9a/1e86/1640/1848/1807/
 17c6/176f/172f) are now ALSO fully disassembled — see
 `docs/drivers-and-memory.md`'s own register-formula table and
-`gods-web/src/formats/sfx-instrument.js`'s `instrumentToRegisters` for the
+`src/formats/sfx-instrument.js`'s `instrumentToRegisters` for the
 JS port that computes real register values from this script's own output.
 The one register that can't be recovered from any file is total output
 level (0x40/0x43) — proven to be per-CHANNEL runtime mixing state (two

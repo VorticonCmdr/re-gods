@@ -1,6 +1,6 @@
 /* smf-parser.js — a Standard MIDI File reader for `PGODS.MUS`'s own blobs.
  *
- * `Gods/docs/drivers-and-memory.md`: 70 of `PGODS.MUS`'s 73 blobs open with
+ * `docs/drivers-and-memory.md`: 70 of `PGODS.MUS`'s 73 blobs open with
  * `MThd` and are complete SMFs, division `0x01A4` (420) — this session's own
  * fuller census (format/ntrks/division/tempo-event-count per blob, not just
  * the `MThd` magic) confirms all 70 are format 0, exactly 1 track, division
@@ -68,7 +68,7 @@ function parseTrack(d, start, declaredEnd, bufferEnd) {
         events.push({ tick, type: 'tempo', usPerQuarter });
       } else if (mtype === 0x7f && length >= 6 && d[i + 2] === 0x3f) {
         /* The sequencer-specific meta `PPLAYER.BIN` reads. Body layout, from
-         * `Gods/docs/drivers-and-memory.md`'s own decode: `00 00 3F 00 TAG
+         * `docs/drivers-and-memory.md`'s own decode: `00 00 3F 00 TAG
          * CH` then TAG's payload. TAG=1 carries a 28-byte OPL2 instrument
          * (op1 13 + op2 13 + 2 wave bytes) BOUND TO CHANNEL `CH` — and,
          * critically, it is TICK-POSITIONED like any other event, so a blob

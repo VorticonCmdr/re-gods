@@ -31,7 +31,7 @@
  * `DS:0x382`'s own real shape.
  *
  * PROVENANCE
- *   The menu's DISPATCH is [PROVEN] — see Gods/docs/dynamic-trace-and-
+ *   The menu's DISPATCH is [PROVEN] — see docs/dynamic-trace-and-
  *   runtime-data.md's "The title screen — a 3-option menu..." section:
  *   `FUN_1000_2c82`/`FUN_1000_317d`, read in full under DOSBox. Three
  *   options, exactly:
@@ -48,7 +48,7 @@
  *   breakpoints, straight to a screenshot): a full-screen `PBACKSCR.PI1`
  *   backdrop (a brick wall with a large skull motif — NOT `PSTATUS.PI1`'s
  *   40-row status border, an earlier revision of this module's own wrong
- *   guess, reasoning only from load ORDER — see Gods/docs/drivers-and-
+ *   guess, reasoning only from load ORDER — see docs/drivers-and-
  *   memory.md's own corrected `UNKNOWN_backscr_pi1_loader` entry), the menu
  *   option's own text reading exactly `"ENTER PASSWORD"` (no `"A"` — see
  *   below), and the selected option flanked by inward-pointing arrows on
@@ -91,7 +91,7 @@
  *   grid (`A-H`/`I-P`/`Q-X`/`Y Z . <space> 0 1 2 3`/`4 5 6 7 8 9` then an
  *   erase icon then a distinct circular confirm icon (neither icon matched
  *   to a `PSMLFNT` glyph — their own sprite source not chased down)), read
- *   directly off a live capture and CROSS-VALIDATED against Gods/docs/
+ *   directly off a live capture and CROSS-VALIDATED against docs/
  *   dynamic-trace-and-runtime-data.md's own earlier, independent finding —
  *   a different session moved the cursor "from index 34 to 39" via "5x
  *   KBD_right" while completing a real hiscore entry, and row-major index
@@ -102,7 +102,7 @@
  *   game itself has), not a second, hand-copied literal array.
  *
  *   GLYPH SAFETY: every string this module draws is built ONLY from
- *   characters Gods/docs/message-line.md's own "notable slots" table names
+ *   characters docs/message-line.md's own "notable slots" table names
  *   individually — 0x11 (the solid diamond, reused here as the grid
  *   cursor/placeholder glyph), 0x20 (space) and 0x41-0x5A (A-Z) — plus
  *   `<`/`=`/`>`/digits/`.` , all checked live in a running port (each
@@ -189,7 +189,7 @@ export const MENU_ARROW_RIGHT_DESC = 166;  // 0xA6 = 128+38 — LEFT-pointing ar
 export const MENU_ARROW_LEFT_X = 0x18;     // 24
 export const MENU_ARROW_RIGHT_X = 0x118;   // 280
 
-/* Gods/docs/dynamic-trace-and-runtime-data.md's own title-screen trace:
+/* docs/dynamic-trace-and-runtime-data.md's own title-screen trace:
  * "UP -> cursor -1, clamp at 0, click sfx 0x119, redraw" / "FIRE -> confirm
  * sfx 0x233 (same sound the grid-entry widget uses to confirm)" — one
  * confirm id serves BOTH `TitleMenu` and `PasswordEntry`/`NameEntry`, not a
@@ -310,13 +310,13 @@ export class TitleMenu {
 /* `UNKNOWN_password_grid_layout` is CLOSED — 8 columns x 5 rows = 40 cells,
  * confirmed live in a DOSBox session (A-X across 3 full rows, then
  * Y/Z/./space/0/1/2/3, then 4-9/erase/confirm), and CROSS-VALIDATED against
- * Gods/docs/dynamic-trace-and-runtime-data.md's own earlier finding: that
+ * docs/dynamic-trace-and-runtime-data.md's own earlier finding: that
  * session moved the cursor "from index 34 to 39" via "5x KBD_right" — row-
  * major index 34 is column 2 of this grid's row 4 (the '6' cell) and index
  * 39 is column 7 of row 4 (confirm), exactly 5 columns apart.
  *
  * The exact PIXEL GEOMETRY and FONT are now `[PROVEN]` too, by decompiling
- * `FUN_1000_30d4` directly (Gods/docs/passwords.md's own UI section): 8
+ * `FUN_1000_30d4` directly (docs/passwords.md's own UI section): 8
  * columns of 32px starting at X=40, 5 rows of 24px starting at Y=40, each
  * cell blitting PGODFONT descriptor `0x80 + (row*8+col)` — i.e. PGODFONT's
  * own records 0-39 in row-major order, DIRECTLY (not the title menu's own
@@ -370,7 +370,7 @@ const BUFFER_ROW_X0 = 32, BUFFER_ROW_Y = 168, BUFFER_ROW_ADVANCE = 16, BUFFER_RO
  * 8px stride — narrower than this module's own default ADVANCE). Format is
  * the literal on-disk template `"pass N : "` with the digit and 3 letters
  * patched in — `"PASS 2 :PME"` for a real world-2 password, exactly. See
- * Gods/docs/passwords.md's own "Disk persistence" and "The generator"
+ * docs/passwords.md's own "Disk persistence" and "The generator"
  * sections. */
 const HINT_ROW_Y = 190, HINT_ROW_X = [10, 110, 210], HINT_ADVANCE = 8;
 

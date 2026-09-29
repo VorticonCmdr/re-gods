@@ -354,7 +354,7 @@ const JOYG_SHOWCASE_SPAWN = {
 
 const raw = (name) => {
   const p = join(ROOT, 'game', name);
-  if (!existsSync(p)) throw new Error(`missing asset: ${name} (run: npm run assets)`);
+  if (!existsSync(p)) throw new Error(`missing asset: ${name} (put the game files in game/)`);
   return new Uint8Array(readFileSync(p));
 };
 

@@ -444,7 +444,7 @@ implemented the correct `completedWorld - 1` / `slot + 2` mapping independently 
 this document's own now-fixed `FUN_1000_69d7` transcript error — the port was never
 affected by that bug.
 
-`game/title-menu.js`'s `PasswordEntry` originally used PSMLFNT throughout, wrong
+`src/game/title-menu.js`'s `PasswordEntry` originally used PSMLFNT throughout, wrong
 grid geometry, a per-cell text marker not present on the real screen, and had no
 `"PASS n :xxx"` hint line or real typed-buffer readout at all (its own header
 comment disclosed both the font and the buffer-row reading as open gaps). Fixed
@@ -473,7 +473,7 @@ the wrong-guess bounce back to the menu) in a running `gods-web` session.
   animation) is now identified as a twinkling star — CLOSED, see *The exact
   rendering*, above.
 - `FUN_1000_224e`'s own "space advances but does not blit" behavior (already
-  on record in `gods-web/src/game/title-menu.js`'s own header) is the reason
+  on record in `src/game/title-menu.js`'s own header) is the reason
   flowed text like `"ENTER A PASSWORD"` has a true gap between words while
   the password grid's own row-4 space CELL still shows a real glyph (record
   27) — two different call sites of the same font family, correctly

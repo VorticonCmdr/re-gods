@@ -17,7 +17,7 @@ hint tablet's own path.
 `PALFILS+0x1b58`, 40 `0x28`-byte ASCIIZ strings at `+0x1ba8`, keyed on the world
 X of object type 69 — and that finding stands unchanged. What did **not** exist
 anywhere was the *display* side, and the `gods-web` port recorded the gap as
-closed: `game/consumables.js`'s own `NOT_WIRED_REASON.hint` read `"already
+closed: `src/game/consumables.js`'s own `NOT_WIRED_REASON.hint` read `"already
 ported as the PALFILS hint system"`. Nothing drew a character. Walking over the
 first tablet in `PLEV1A` produced no text at all.
 
@@ -425,7 +425,7 @@ table at `DS:0xe94a` whose entries are all the same pointer.
 ~~`UNKNOWN_63d5_nomatch_runtime_effect`~~ — **CLOSED `[PROVEN]` live (2026-09-29): the game hangs.**
 Staged in `PJOYL1` through the real A→B switch (item 60's staging), then the hero
 placed on the pocket floor beside the x=348 tablet
-(`gods-web/tools/attract-capture/tablet_live.py`):
+(`tools/attract-capture/tablet_live.py`):
 
 - The handler is entered from `CS:0x182B` with `SI = 0x63D5`, and takes the
   no-match arm.
@@ -453,7 +453,7 @@ game.
 
 ## Where the port implements this
 
-`gods-web/src/game/message.js` (the engine and the blit),
+`src/game/message.js` (the engine and the blit),
 `message-compose.js` (the two composers, the gates, the seen bitmap) and
 `text-arena.js` (the `DS:0x1fc6` pool). `npm run messages` renders every shipped
 hint's pages onto the real panel; `node tools/frame-node.mjs 1A 12 out.ppm 178

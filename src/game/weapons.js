@@ -21,7 +21,7 @@ export const WEAPON_TABLE_DS = 0xe2b6;      // the runtime table CS:0x95ca index
  *  `blast.py` and reading the bytes directly (`"knife\0"`, `"time bomb\0"`,
  *  ...), byte-identical across every world. `CS:0x703A` reads this exact
  *  field to build the shop's own "Warning.. this weapon replaces the X"
- *  message (`Gods/docs/shop.md`'s `UNKNOWN_shop_tradein_value`, CLOSED) —
+ *  message (`docs/shop.md`'s `UNKNOWN_shop_tradein_value`, CLOSED) —
  *  the same "small record with an embedded name" idiom this project already
  *  knows from `POBJECTS`. Hardcoded here rather than parsed at runtime,
  *  matching `consumables.js`'s own `CONSUMABLES` table: the text is fixed

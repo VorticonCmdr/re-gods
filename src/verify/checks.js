@@ -1576,7 +1576,7 @@ export async function checkDescriptorAnchors(fetchRaw) {
         'CS:0x8676 zeroes the array only in world 2) and UNKNOWN_ce64_pool ' +
         '(CS:0x8681 jumps into the middle of CS:0x7F48\'s clear, whose tail ' +
         'disarms the DS:0xce64 walker) are all CLOSED — see ' +
-        'Gods/docs/destructible-and-hazards.md. Still open here: ' +
+        'docs/destructible-and-hazards.md. Still open here: ' +
         'UNKNOWN_nest_identity (the game never names type 115; "nest" is a label).',
     });
 
@@ -4221,7 +4221,7 @@ export async function checkSpawn(fetchRaw) {
    * live behaviour. CS:0x6384 gates it on DS:0x168 >= 0 — the FAMILIAR'S
    * energy — which is -1 at both full restarts and can only be lifted by a
    * "familiar" potion, type 39: placed ZERO times as a map pickup, but
-   * purchasable in world 3/4's own shop (Gods/docs/shop.md's UNKNOWN_shop_
+   * purchasable in world 3/4's own shop (docs/shop.md's UNKNOWN_shop_
    * eligibility_gates, CLOSED) — reachable in shipped play that way, just
    * not yet exercised by this port's own tick loop. */
   const withFamiliar = new Health(HEALTH_MAX, HEALTH_MAX);
@@ -4378,7 +4378,7 @@ export async function checkSpawn(fetchRaw) {
   check(`DS:0x34 non-zero hurts the hero but leaves the creature alive`,
     h5.target < HEALTH_MAX && survivor.state === 40,
     `hero hurt, creature state still ${survivor.state} — DS:0x34 ` +
-    '(UNKNOWN_DS_0034, CLOSED: Gods/docs/combat-and-projectiles.md)');
+    '(UNKNOWN_DS_0034, CLOSED: docs/combat-and-projectiles.md)');
 
   /* The walk -> fall TRANSITION is not inert. CS:0xf157 seeds v := 1 and
    * advances Y by one pixel in the same tick, before the fall handler ever
@@ -7788,7 +7788,7 @@ export async function checkWeaponsProjectiles(fetchRaw) {
       0x020e in SFX_VOICES && 0x0240 in SFX_VOICES,
     `FOOTSTEP_SFX=0x${FOOTSTEP_SFX.toString(16)} ` +
     `CLIMB_STEP_SFX=0x${CLIMB_STEP_SFX.toString(16)} — CLIMB_STEP_SFX is a ` +
-    `correction: Gods/docs/player-state-machine.md used to cite "0x5931" as ` +
+    `correction: docs/player-state-machine.md used to cite "0x5931" as ` +
     `the id, which is actually the CS: address of the thunk that plays it ` +
     `(FUN_1000_5931, disassembled fresh: push ax / mov ax,0x240 / ` +
     `call 0x22ca / pop ax / ret) — the real id is 0x240`);
@@ -7863,7 +7863,7 @@ export async function checkWeaponsProjectiles(fetchRaw) {
     `AXE_BOUNCE_SFX=0x${AXE_BOUNCE_SFX.toString(16)} — both used to be the ` +
     `bare low byte (0x1d/0x09), matching no SFX_VOICES key; ` +
     `CS:0xA7F7 mov ax,0x21d and CS:0xa7ae mov ax,0x209 are the real full ` +
-    `words, corrected in Gods/docs/combat-and-projectiles.md too`);
+    `words, corrected in docs/combat-and-projectiles.md too`);
 
   results.push({
     name: 'sound ids: most now play, a handful are still carried but not exercised',
@@ -7908,7 +7908,7 @@ export async function checkWeaponsProjectiles(fetchRaw) {
       'ids were ALSO wrong: exported as their bare low bytes (0x1d/0x09), ' +
       'the exact same bug class as the FIRE_SFX correction above — neither ' +
       'would have matched an SFX_VOICES key. Corrected in ' +
-      'Gods/docs/combat-and-projectiles.md too. Still genuinely unwired, ' +
+      'docs/combat-and-projectiles.md too. Still genuinely unwired, ' +
       'disclosed rather than silently dropped: 0x0e49 the Roland-only ' +
       'alternate kill sound (CS:0xABB7/0xABD1, gated on DS:0x35e, audible ' +
       'on only 3 creature classes and only under that one driver), and ' +
@@ -8258,7 +8258,7 @@ export async function checkWeaponsProjectiles(fetchRaw) {
       '(CS:0xC470). CS:0xC440 is called from CS:0x047D and CS:0x8DDF — the ' +
       'two FULL RESTARTS — so it is -1 from the start, and type 39 never ' +
       'ships as a MAP pickup (placed[39] above). But it does ship as a shop ' +
-      'purchase in worlds 3/4 (Gods/docs/shop.md, CLOSED) — the over-' +
+      'purchase in worlds 3/4 (docs/shop.md, CLOSED) — the over-' +
       'healing bank is reachable there, just not yet in this port\'s own ' +
       'tick loop, which has no familiar-summon effect wired');
   }
@@ -8567,7 +8567,7 @@ export async function checkWeaponsProjectiles(fetchRaw) {
       note: true, pass: true,
       detail: 'CLASS_TABLES is a TRANSCRIPTION of GAME.EXE at DS:0xdf80, and ' +
         'the suite cannot re-derive it: the executable is deliberately not ' +
-        'staged into public/game (copy-assets.mjs ships only game data, so ' +
+        'read by the suite (it loads only game data, so ' +
         'that every format claim is exercised against shipped assets rather ' +
         'than the binary). So "the emitter record holds handlers 0xbd38/' +
         '0xbd0b" rests on my transcription, and the check linter was right to ' +
@@ -11656,7 +11656,7 @@ export async function checkZones(fetchRaw) {
       p.pending);
   }
   {
-    /* The live A->B trace (Gods/docs/camera-and-world-nav.md): world 1A with
+    /* The live A->B trace (docs/camera-and-world-nav.md): world 1A with
      * DS:0x178 = 0xE6A6 and both counters 5, hero onto the (1440,944) marker. */
     const p = new Progress();
     p.reset(1, 0, 896);
@@ -15974,8 +15974,8 @@ export function checkTitleMenu() {
  * `hiscores.js`'s own `DEFAULT_TABLE` — the true shipped "TOP TEN GODS"
  * defaults (`git show HEAD:HISCORES.BIN` in the `Gods` repo), hardcoded
  * rather than fetched at runtime — see that export's own citation for why
- * `Gods/HISCORES.BIN` itself is mutable dev-session state, not a fetchable
- * asset, and is deliberately absent from `tools/copy-assets.mjs`.
+ * `game/HISCORES.BIN` itself is mutable dev-session state, not a fetchable
+ * asset, and is deliberately never fetched.
  */
 export function checkHiscoresFile() {
   const { results, check } = makeChecker();
@@ -17245,7 +17245,7 @@ export function checkTally() {
   return results;
 }
 
-/* ── the shop screen, CS:0x6c19/0x6e62 (Gods/docs/shop.md) ─────────────── */
+/* ── the shop screen, CS:0x6c19/0x6e62 (docs/shop.md) ─────────────── */
 export function checkShop() {
   const { results, check } = makeChecker();
 
@@ -17521,7 +17521,7 @@ export function checkShop() {
    * state.arsenal.slots (FUN_1000_731b, DS:0xdd10/0xdda2/0xde34); gate 2
    * reads state.health.familiarEnergy (FUN_1000_7336, DS:0x168). Both live
    * in #isEligible, re-applied by #rebuildVisible on every construction and
-   * purchase — Gods/docs/shop.md. ─────────────────────────────────────── */
+   * purchase — docs/shop.md. ─────────────────────────────────────── */
   {
     const fire = { up: false, down: false, left: false, right: false, fire: true };
     const release = { up: false, down: false, left: false, right: false, fire: false };
@@ -17640,7 +17640,7 @@ export function checkShop() {
    * weapon-purchase branch: buy and equip weapon `id - WEAPON_ID_BASE`,
    * crediting a refund for whatever DIFFERENT weapon it displaces from the
    * same physical slot (`chooseSlot`, mirroring FUN_1000_953e) and charging
-   * the new weapon's own price. Gods/docs/shop.md. Weapon index 2 is
+   * the new weapon's own price. docs/shop.md. Weapon index 2 is
    * skipped throughout — it is FIREBALL, hard-wired to slot C regardless of
    * slotAClass, a different mechanism already covered by pickup.js's own
    * tests. ─────────────────────────────────────────────────────────── */
@@ -17760,7 +17760,7 @@ export function checkShop() {
   /* ── Advisor-flagged gap: the negative (already-warned) preview is reset
    * by a FIRE press on a DIFFERENT cell (CS:0x6ea4), not by cursor movement
    * — LAB_1000_6cef, the cursor-move handler, never touches [0x258] at all
-   * (Gods/docs/shop.md's corrected claim). So warning on a weapon, moving
+   * (docs/shop.md's corrected claim). So warning on a weapon, moving
    * the cursor away WITHOUT firing, and moving back leaves the negative
    * preview intact: the very next press is the THIRD press, not a fresh
    * first press — no second warning. ──────────────────────────────────── */
@@ -17909,7 +17909,7 @@ export async function checkMusic(fetchRaw) {
     if (endCount < 1) allHaveEnd = false;
     totalNotes += notesFromEvents(events).length;
   }
-  check('all 70 SMF blobs are format 0 (Gods/docs\' own claim, checked on '
+  check('all 70 SMF blobs are format 0 (the docs\' own claim, checked on '
     + 'every blob rather than assumed from the one blob it verified)', allFormat0);
   check('all 70 use division 420 (0x01A4) — this session\'s tempo math must '
     + 'read this per file, not hardcode it', allDivision420);

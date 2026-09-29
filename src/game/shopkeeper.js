@@ -41,7 +41,7 @@
  *                off (cs:[0x71D] = RET), SS:0x40A = 0xC0, and the return
  *                address popped: JMP 0x6BED, the mid-level shop
  *
- * [STATIC] except where a check says otherwise; see Gods/docs/shop.md. */
+ * [STATIC] except where a check says otherwise; see docs/shop.md. */
 
 /* DS:0xE91A — {x, y, dx}, two visits per world. dx = 0 (world 4's second)
  * never moves and animates frames 4..11. Records 8 and 9 are what follows

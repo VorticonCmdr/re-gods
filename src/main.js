@@ -179,8 +179,8 @@ async function fetchRaw(url) {
   return b;
 }
 
-/* The shipped files are not part of this repository (`npm run assets` stages
- * them into public/game/). Without them, show "Load folder…" and wait until
+/* The shipped files are not part of this repository (in dev, Vite serves
+ * them from the git-ignored game/). Without them, show "Load folder…" and wait until
  * the user picks a GODS directory that holds them. */
 const PROBE_FILE = 'PLEV1A.MAP';
 async function ensureGameData() {
@@ -213,7 +213,7 @@ async function loadLevel(key) {
   const sheet = decodePI1(dclDecompress(bitsRaw).data);
 
   /* PALETTE SOURCE — `UNKNOWN_level_palette_source`, fully CLOSED live in
-   * DOSBox (Gods/docs/asset-formats.md). The level palette is the
+   * DOSBox (docs/asset-formats.md). The level palette is the
    * `DS:0x43E` buffer that graphics export 22 fills while loading the
    * `level<N>` sprite-atlas group — VGA.EXE's own group table
    * (`VGA:0x2188`) makes that group {PLEVEL<N>A, PLEVEL<N>B}, and export 22
@@ -407,7 +407,7 @@ async function loadSprites(world) {
    * array is built with real ASCII codes as keys for drawText/drawCentered's
    * own `charCodeAt` lookup — a port-side convenience, not a claim that the
    * original indexes it this way. Digits '0'-'9' are ALSO remapped here,
-   * since gods-web/game/tally.js builds its bonus-line strings with real
+   * since src/game/tally.js builds its bonus-line strings with real
    * ASCII digits — records 28-37, PIXEL-VERIFIED per-record this pass (an
    * earlier revision of this comment had them one off, at 29-38, having
    * mis-read record 29 as '0' from a cropped strip render; record 28 is the
@@ -618,7 +618,7 @@ async function main() {
    * pick a specific one of its 70 real tracks — UNKNOWN_pgods_mus_cue_
    * dispatch is CLOSED, live-confirmed in DOSBox: the real per-level music
    * is PGODSRL{A-G}.RL, dispatched by world number, but only under Roland
-   * (see Gods/docs/drivers-and-memory.md; this port plays them on the
+   * (see docs/drivers-and-memory.md; this port plays them on the
    * Roland path, audio/roland-player.js). So there is no level/event mapping
    * to port for PGODS.MUS itself — the same disclosed-affordance spirit as
    * the weapon picker below:
@@ -1379,7 +1379,7 @@ let lastDropFx = [];
    * the next level load — not only while DS:0x34 is set. An exhaustive byte
    * search for `88 AD` in GAME.EXE finds only those two; [PROVEN] live: C3
    * after a forced world-4 guardian death with [0x34] = 0, 90 after the next
-   * level load (Gods/docs/guardians.md). */
+   * level load (docs/guardians.md). */
   let turretWalkerRet = false;
   /* DS:0x2D2 — the camera-x shake counter the world-3 guardian's 0xFD sets
    * (CS:0xD7E1), and the committed-camera-y nudge it applies (CS:0xD7E7,
@@ -1414,7 +1414,7 @@ let lastDropFx = [];
           const { lives, gameOver } = loseLife(fx.lives);   // CS:0x093A/0x093E
           fx.lives = lives;
           if (gameOver) {
-            /* CS:0x0943 onward — the real game-over cascade (Gods/docs/
+            /* CS:0x0943 onward — the real game-over cascade (docs/
              * dynamic-trace-and-runtime-data.md's "hiscore name-entry
              * screen" + "TOP TEN GODS" sections), superseding the earlier
              * `gameOverPlaceholder()`/"press R" stand-in death.js's own
@@ -1736,7 +1736,7 @@ let lastDropFx = [];
        * this line unconditionally built a brand-new (unarmed) Arsenal on
        * EVERY level transition, silently disarming the hero every time,
        * which is what made the shop's own gate 1 (UNKNOWN_shop_eligibility_
-       * gates, CLOSED — Gods/docs/shop.md) unreachable through its one real
+       * gates, CLOSED — docs/shop.md) unreachable through its one real
        * entry path: entering a world 3/4 shop via password always calls
        * this function first. `reloadWorld` is the call that actually keeps
        * armed slots armed while re-pinning their counts under the new
@@ -2002,7 +2002,7 @@ let lastDropFx = [];
      * only, not every level entry. */
     inventoryPanel.selector = inventoryPanel.pending = 0;
     /* CS:0x914c — clears all three weapon slots (the hero starts UNARMED,
-     * Gods/docs/consumables-and-treasure.md). This is now the ONLY place
+     * docs/consumables-and-treasure.md). This is now the ONLY place
      * arsenal is rebuilt from scratch — switchLevel's own reloadWorld call
      * preserves it across an ordinary level change, matching CS:0x914c's
      * own two callers both being full restarts, never a level transition. */
@@ -2050,11 +2050,11 @@ let lastDropFx = [];
 
   /* CS:0x0643 — DS:0x194:=0x3880, DS:0x196:=1. The FULL 32-bit value (not
    * the low word alone, an arithmetic mistake this session's own docs
-   * correct — see Gods/docs/shop.md) is 0x1_3880 = 80000. */
+   * correct — see docs/shop.md) is 0x1_3880 = 80000. */
   const SHOP_STARTING_MONEY = 80000;
 
   /* World 2's shop roster — `SS:0x51aa`'s own full raw list for this world
-   * (Gods/docs/shop.md's `UNKNOWN_shop_roster_source`, CLOSED): the 12-id
+   * (docs/shop.md's `UNKNOWN_shop_roster_source`, CLOSED): the 12-id
    * "stable core" this project's own live captures agreed on, plus `2`
    * (gated on the hero's weapon slots, `UNKNOWN_shop_eligibility_gates`,
    * CLOSED — this is exactly the id that disagreed between the two live
@@ -2063,7 +2063,7 @@ let lastDropFx = [];
    * confirmed a real `game/consumables.js` `CONSUMABLES` type — shop.md's
    * own cross-check. `194,197,201` are weapon-purchase ids (`WEAPON_ID_BASE
    * + weaponIndex` — fireball, throwing star, magic axe): `UNKNOWN_shop_
-   * tradein_value`, CLOSED, Gods/docs/shop.md — every raw id `>=0xc0` buys
+   * tradein_value`, CLOSED, docs/shop.md — every raw id `>=0xc0` buys
    * and equips that weapon, not "sells" anything. */
   const SHOP_ROSTER_WORLD_2 = [0, 2, 35, 36, 38, 42, 44, 51, 52, 53, 70, 71, 72, 194, 197, 201];
 
@@ -2085,7 +2085,7 @@ let lastDropFx = [];
     0, 2, 3, 35, 36, 37, 38, 39, 40, 41, 42, 44, 51, 52, 53, 70, 71, 72,
   ];
   /* Weapon ids, per world — fireball/throwing star/spear for world 3,
-   * fireball/spear/axe/hunter/mace for world 4 (`Gods/docs/shop.md`'s own
+   * fireball/spear/axe/hunter/mace for world 4 (`docs/shop.md`'s own
    * roster-source table, `UNKNOWN_shop_roster_source` CLOSED). */
   const SHOP_ROSTER_WORLD_3 = [...SHOP_CONSUMABLES_WORLD_3_4, 194, 197, 198];
   const SHOP_ROSTER_WORLD_4 = [...SHOP_CONSUMABLES_WORLD_3_4, 194, 198, 199, 200, 202];
@@ -2104,7 +2104,7 @@ let lastDropFx = [];
    * into `FUN_1000_0643` (the shop's entry point) — the destination level
    * is already loaded and sitting in memory when the shop opens, and
    * leaving the shop does not load anything a second time. See
-   * Gods/docs/shop.md's own "Forcing shop entry live" section for how this
+   * docs/shop.md's own "Forcing shop entry live" section for how this
    * order was established (and why entering the shop directly, skipping
    * the level load, crashes). Real prices are charged — `UNKNOWN_shop_
    * prices` is closed, see shop.js's own `PRICES` table and shop.md. */
@@ -2322,7 +2322,7 @@ let lastDropFx = [];
    * Renderer.presentDosExit(). */
   /* Boots into 'intro' (INTROV.EXE's own pre-game sequence, game/intro.js)
    * rather than straight into 'menu' — GODS.EXE's real launch chain always
-   * runs INTROV.EXE before GAME.EXE ever gets control (Gods/docs/dynamic-
+   * runs INTROV.EXE before GAME.EXE ever gets control (docs/dynamic-
    * trace-and-runtime-data.md). Any key skips it (see the keydown handler
    * below), matching a live-confirmed DOSBox test. */
   let uiState = 'intro';   // 'intro'|'menu'|'password'|'name-entry'|'hiscore-table'|'game-over-fade'|'shop'|'game'|'exit'|'quitting'
@@ -2370,14 +2370,14 @@ let lastDropFx = [];
    * see the death/game-over block below. */
   let pendingHiscoreRank = -1, pendingHiscoreScoreBytes = null;
   let shopScreen = null;
-  /* CS:0x46E-onward — the live "TOP TEN GODS" table (Gods/docs/dynamic-
+  /* CS:0x46E-onward — the live "TOP TEN GODS" table (docs/dynamic-
    * trace-and-runtime-data.md's own corrected HISCORES.BIN layout: 10 x
    * {name: 16 bytes, score: 4-byte packed BCD}). Loaded once below from the
    * shipped file, then overridden by whatever this browser's own localStorage
    * already holds — `DS:0x384 >= 2` (hard-disk install) is what makes this
    * round-trip to disk at all in the original (`docs/passwords.md`'s own
    * citation, cross-checked this session against `CS:0x229A`'s `INT 21h
-   * AH=19h` "get default drive" source — see Gods/docs/dynamic-trace-and-
+   * AH=19h` "get default drive" source — see docs/dynamic-trace-and-
    * runtime-data.md's own correction); this port always models a hard-disk
    * install (the alternative makes the very feature the user asked to port
    * unreachable), so persisting via localStorage is the FAITHFUL behaviour
@@ -2493,7 +2493,7 @@ let quitFade = null;   // null | { snapshot: Uint8Array, palette: Uint8Array|num
 const GAME_OVER_FADE_MS = 600;
 let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-entry'|'hiscore-table' }
 
-  /* Gods/docs/dynamic-trace-and-runtime-data.md: UP/DOWN plays click sfx
+  /* docs/dynamic-trace-and-runtime-data.md: UP/DOWN plays click sfx
    * 0x119, FIRE plays confirm sfx 0x233 — see title-menu.js's own citation
    * for the LEFT/RIGHT generalisation. Every widget below plays these from
    * its OWN `step()` return value now (title-menu.js's own header explains

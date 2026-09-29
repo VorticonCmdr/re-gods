@@ -1,7 +1,7 @@
 /* progress.js — selector 6 (CS:0x38F5), the per-world progress-record chain
  * it drives, and the tally bit dispatch both it and the level-exit zone feed.
  *
- * See Gods/docs/camera-and-world-nav.md's "Selector 6" section for the full
+ * See docs/camera-and-world-nav.md's "Selector 6" section for the full
  * trace. In short:
  *
  * THE CHECKPOINT — CS:0x38F5, read in full.

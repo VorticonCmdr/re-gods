@@ -5,7 +5,7 @@
  * mover CS:0x810D-0x81E8, pool DS:0xCEC8, 10 x 12 bytes) were read from the
  * bytes, and this file's wander timer, attack window, spit legs ((rand&7)+2
  * toward the hero from x+4/y+12, (rand&7)+3 steps, rand&15 pauses) and spit
- * sprites (0x1ED + 4/8, frame & 3) all match them. See Gods/docs/
+ * sprites (0x1ED + 4/8, frame & 3) all match them. See docs/
  * destructible-and-hazards.md, UNKNOWN_ce64_identity.
  *
  * ── PROVENANCE, AND WHY THIS FILE IS TWO TIERS OF CONFIDENCE ─────────────

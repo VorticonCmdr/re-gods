@@ -31,7 +31,7 @@ const { parsePalfils, palfilsNameFor, EventRunner } = await import('../src/game/
 
 const raw = (n) => {
   const p = join(ROOT, 'game', n);
-  if (!existsSync(p)) throw new Error(`missing ${n} — run: npm run assets`);
+  if (!existsSync(p)) throw new Error(`missing ${n} — put the game files in game/`);
   return new Uint8Array(readFileSync(p));
 };
 

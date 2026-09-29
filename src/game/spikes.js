@@ -229,7 +229,7 @@ export function stepSpikes(objects, clock, hero, health, opts = {}) {
  * re-derives (`VGA.EXE:0x1BDB-0x1BE8`, identical `word[0xe] + spriteId*8`
  * formula, same `spriteId`), whose fields are `{+2: rows-1, +4: source
  * offset, +6: source segment}` — `AX = word[SI+2]; INC AX` is exactly this
- * port's `rows: pingpong + 1`. See `Gods/docs/destructible-and-hazards.md`
+ * port's `rows: pingpong + 1`. See `docs/destructible-and-hazards.md`
  * for the full trace, including why an earlier pass couldn't close this
  * (it assumed, instead of reading, what a 13-instruction helper did to a
  * register) and one small disclosed residual (the original may draw 17

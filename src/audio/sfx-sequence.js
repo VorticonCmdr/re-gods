@@ -1,7 +1,7 @@
 /* sfx-sequence.js — turns one `PGODS.MUS` SFX blob into a schedulable note
  * sequence: real pitches, real durations, real per-channel instruments.
  *
- * ⚠️ This module exists because of a CORRECTED finding. `Gods/docs/drivers-
+ * ⚠️ This module exists because of a CORRECTED finding. `docs/drivers-
  * and-memory.md` used to state, `[PROVEN]`-tagged, that this whole class of
  * sound effect "genuinely has no pitch of its own" — that it only configures
  * timbre and sounds at whatever frequency its OPL2 channel already happens

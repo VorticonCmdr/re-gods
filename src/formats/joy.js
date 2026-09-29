@@ -1,8 +1,8 @@
 /* joy.js — decodes P*.JOY{G,L}{1,2,3}.DAT: flat, headerless recordings of
  * joystick/button input that drove GAME.EXE's attract-mode demo.
  *
- * See Gods/docs/asset-formats.md's "recorded attract-mode input, not sprite
- * data" section and Gods/docs/player-state-machine.md's DS:0x382 row. The
+ * See docs/asset-formats.md's "recorded attract-mode input, not sprite
+ * data" section and docs/player-state-machine.md's DS:0x382 row. The
  * per-tick poller (FUN_1000_241d) writes one packed byte per frame:
  *   bit0 up, bit1 down, bit2 left, bit3 right, bit7 fire, bits 4-6 always 0
  * (in the live-computed value — which is what makes 0xFF an unambiguous

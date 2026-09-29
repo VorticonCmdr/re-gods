@@ -67,7 +67,7 @@
  *   exactly why respawn and teleport looked right and only level start did not.
  *
  *   DS:0xd818 entry 4 = {anim_base 9, handler 0x5DFE}, read as raw bytes at
- *   file offset 0x1d998 of Gods/analysis/unpacked/TGAME.unpacked.exe. The
+ *   file offset 0x1d998 of analysis/unpacked/TGAME.unpacked.exe. The
  *   epilogue at CS:0x5F77 gives sprite = 9 + CBW(cl) = 9, and 9 is NOT one of
  *   CS:0x5F8B's three remap keys (0x34/0x36/0x37) — so the remap this port
  *   applies was never the problem; being in state 26 at all was. Rendered
@@ -174,7 +174,7 @@ export const CLIMB_EVERY_OTHER_TICK = true;
  * same word by `docs/player-state-machine.md:81` from an earlier pass —
  * two independent reads agreeing, unlike CLIMB_STEP_SFX below. */
 export const FOOTSTEP_SFX = 0x020e;
-/* CLIMB_STEP_SFX — `[STATIC]`, corrected. `Gods/docs/player-state-machine.md`
+/* CLIMB_STEP_SFX — `[STATIC]`, corrected. `docs/player-state-machine.md`
  * used to cite this id as "0x5931", which is not a sound id at all — it's the
  * CS: address of `FUN_1000_5931`, a 9-byte thunk (`push ax / mov ax,0x240 /
  * call 0x22ca / pop ax / ret`) called from all four climb turn-arounds
@@ -953,7 +953,7 @@ export class Player {
    * Entry, also fresh: state 0 -> 2 at CS:0x5979 (CL:=0, an XOR); state
    * 1 -> 3 at CS:0x5bc1 (CL:=2 — asymmetric with 0->2's own entry). Hand-
    * computed render sequences from these exact bytes match the previously
-   * `[WF]`-tagged table in `Gods/docs/player-state-machine.md`, now
+   * `[WF]`-tagged table in `docs/player-state-machine.md`, now
    * independently confirmed: 0->2 renders sprites 9,10,17; 1->3 renders
    * 9,8,6. No X step, no fire/jump/crouch test anywhere in either body —
    * the turn is a stationary pivot, committed for its 2-3 ticks.

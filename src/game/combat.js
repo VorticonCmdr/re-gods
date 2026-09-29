@@ -135,7 +135,7 @@ export class Health {
   /* DS:0x168, the familiar's energy. -1 at both full restarts (CS:0xC470);
    * raised to 1000 by summoning one — reachable in shipped play by buying
    * type 39 in the world 3/4 shop, not just an unreachable map pickup — see
-   * the banking note below and Gods/docs/shop.md's UNKNOWN_shop_eligibility_
+   * the banking note below and docs/shop.md's UNKNOWN_shop_eligibility_
    * gates (CLOSED). Wired via consumables.js's `applyFamiliar` (CS:0xC2F6),
    * called from the shop's own buy dispatch when the purchased id is 39,
    * 40, or 41. */
@@ -163,7 +163,7 @@ export class Health {
      * CS:0xC470 sets it to -1 and is called from both full restarts, and the
      * only thing that lifts it is a "familiar" potion — type 39, placed ZERO
      * times as a map pickup but purchasable in world 3/4's own shop
-     * (Gods/docs/shop.md's UNKNOWN_shop_eligibility_gates, CLOSED). So the
+     * (docs/shop.md's UNKNOWN_shop_eligibility_gates, CLOSED). So the
      * banking IS reachable in shipped play via that purchase, and in this
      * port too (consumables.js applyFamiliar sets `familiarEnergy`). */
     const banked = this.familiarEnergy >= 0 ? excess * POTION_OVERFLOW_SCALE : 0;
@@ -280,7 +280,7 @@ export const damageFor = (strength) => (((strength + 1) >> 5) + 5);
  * DS:0x35E is set around exactly three calls into this routine — System A's
  * own pipeline (CS:0xE0A5-0xE0AD, around CS:0xFF93), the world-1 statue
  * (CS:0x7C8B-0x7C93) and the `PGOD0x.PAT` driver (CS:0xBCDF-0xBCE7); see
- * Gods/docs/drivers-and-memory.md's "Sound: a 13-slot interface". Callers
+ * docs/drivers-and-memory.md's "Sound: a 13-slot interface". Callers
  * inside one pass `alt35e: true`. Then the DEATH branch (`CS:0xAB98`) plays
  * THIS id and then `KILL_ALT_SFX` (`0xABAF`, `0xABB7`), and the CONTACT
  * branch (`CS:0xABC0`) plays `KILL_ALT_SFX` INSTEAD (`0xABD1`). ADL.EXE drops

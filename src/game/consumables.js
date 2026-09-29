@@ -264,7 +264,7 @@ export const UNIMPLEMENTED_TYPE = 43;
  *
  * ⚠️ None of the three is ever PLACED on a map (the census below still shows
  * that), but type 39 is purchasable in world 3/4's own shop
- * (Gods/docs/shop.md's UNKNOWN_shop_eligibility_gates, CLOSED) — a real,
+ * (docs/shop.md's UNKNOWN_shop_eligibility_gates, CLOSED) — a real,
  * reachable path, not the iron-chest's kind of dead placement. `applyFamiliar`
  * below wires the energy/power/wings STATE exactly as the disassembly reads
  * it (including the surprising order-dependent quirk: buying wings/claws
@@ -302,7 +302,7 @@ export const UNIMPLEMENTED_TYPE = 43;
 export const NOT_WIRED_REASON = Object.freeze({
   /* familiar/familiarWings/familiarClaws moved to WIRED — see the familiar
    * section above. They're placed as MAP pickups zero times, but type 39 is
-   * purchasable in world 3/4's own shop (Gods/docs/shop.md's UNKNOWN_shop_
+   * purchasable in world 3/4's own shop (docs/shop.md's UNKNOWN_shop_
    * eligibility_gates, CLOSED), a real reachable path. The energy/power/
    * wings state is wired exactly as CS:0xC2F6 reads it, and the entity is
    * game/familiar.js. */
@@ -337,7 +337,7 @@ export const NOT_WIRED_REASON = Object.freeze({
  * CS:0xC470 sets -1 and is called from both full restarts, and the only
  * thing that lifts it is a familiar potion (type 39) — an earlier revision
  * of this note said "which no map places" and stopped there, missing that
- * `39` is itself purchasable in world 3/4's own shop (Gods/docs/shop.md's
+ * `39` is itself purchasable in world 3/4's own shop (docs/shop.md's
  * UNKNOWN_shop_eligibility_gates, CLOSED). So the banking is real code that
  * a player who buys the familiar there CAN reach — `applyFamiliar` below
  * now wires that purchase, so this port's own over-heal path can exercise

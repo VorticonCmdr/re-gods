@@ -2,7 +2,7 @@
  * blobs, and turns it into real 0x388/0x389 register values.
  *
  * This is the JS port of `Gods/extract_sfx_instruments.py` — see that
- * script's own header and `Gods/docs/drivers-and-memory.md`'s
+ * script's own header and `docs/drivers-and-memory.md`'s
  * `UNKNOWN_sfx_instrument_source` entry for the full disassembly/live-
  * DOSBox-capture citation trail. Summary: `PPLAYER.BIN`'s OPL2 SFX handler
  * (`FUN_0000_1321`) selects a `PGODS.MUS` blob by DIRECT INDEX — the low

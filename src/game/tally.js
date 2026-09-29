@@ -14,7 +14,7 @@
  * (lives=2, health=24, money=0) produced, in order. "LEVEL ONE COMPLETED" /
  * "2 X 2000" / "24 X 80" / "BONUS 005920" (2*2000+24*80=5920, exact), then
  * "LEVEL 2 PASSWORD" / "PME" / "FIRE TO CONTINUE", then a "LOADING THE
- * TEMPLE" interstitial into live world-2 play. See Gods/docs/camera-and-
+ * TEMPLE" interstitial into live world-2 play. See docs/camera-and-
  * world-nav.md's own new section (search "tally/bonus screen body") for the
  * full disassembly this module ports.
  *

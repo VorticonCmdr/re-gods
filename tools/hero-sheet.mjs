@@ -24,7 +24,7 @@ const { spriteFor, STATE_INFO, jumpPhase, LADDER_JUMP_PHASE } = await import('..
 
 const raw = (n) => {
   const p = join(ROOT, 'game', n);
-  if (!existsSync(p)) throw new Error(`missing ${n} — run: npm run assets`);
+  if (!existsSync(p)) throw new Error(`missing ${n} — put the game files in game/`);
   return new Uint8Array(readFileSync(p));
 };
 

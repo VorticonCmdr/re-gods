@@ -447,7 +447,7 @@ export const DRAW_STYLES = [
  * moment it was wired. `CS:0xA7F7 mov ax,0x21d` is the FULL word actually
  * passed to `call 0x22ca`, matching this port's own convention (every
  * other exported id here is the full word — see FIRE_SFX's own citation
- * for the identical bug, caught first). Fixed in Gods/docs/combat-and-
+ * for the identical bug, caught first). Fixed in docs/combat-and-
  * projectiles.md's own citation too. */
 export const TERRAIN_SFX = 0x021d;
 /* Moved to game/destructible.js, which now owns the whole mechanism; re-
@@ -907,7 +907,7 @@ export const AXE_SPRITE_PHASES = 6;       // CS:0xa750/0xa758, and the weapon fr
 /* ⚠️ CORRECTED — same bug class as TERRAIN_SFX above (and FIRE_SFX before
  * both): this used to be the bare low byte 0x09. `CS:0xa7ae mov ax,0x209`
  * is the full word `call 0x22ca` actually receives (`CS:0xa7ad` itself is
- * only the `push ax` guarding the call, not the id). Fixed in Gods/docs/
+ * only the `push ax` guarding the call, not the id). Fixed in docs/
  * combat-and-projectiles.md's own citation too. */
 export const AXE_BOUNCE_SFX = 0x0209;
 
@@ -1014,7 +1014,7 @@ export const axeSprite = (weaponFrame, i, landed = false) =>
  * bare-low-byte citation in this file, that one was never actually re-checked
  * against a fresh `MOV AX,imm` read. `CS:0xA27C` is `mov ax,0x1022`: the FULL
  * word passed to `call 0x22ca` is **`0x1022`**, not `0x22`. Corrected here and
- * in `Gods/docs/combat-and-projectiles.md`.
+ * in `docs/combat-and-projectiles.md`.
  *
  * Its spawn handler seeds 0x2f = 47, so the fuse is 47 ticks ~ 3.1 s at 15 Hz.
  * The sprite is `0x153 + (fuse & 3)` and 0x153 is 339 = PINNED_SPRITE[1], the
@@ -1206,7 +1206,7 @@ export function stepTimeBomb(p, state, cam, wallAt, groundAt, cellAt = null) {
 
 /**
  * CS:0x9a51 (right) / CS:0x9a7a (left) — the time bomb's own spawn handler
- * (PWEAPONS handler indices 9/8, `Gods/docs/consumables-and-treasure.md`'s
+ * (PWEAPONS handler indices 9/8, `docs/consumables-and-treasure.md`'s
  * "Entries 8/9" closure). Unlike the shared `spawnVolley` table, the muzzle
  * offset and the initial `state.vx` differ by facing, so this weapon needs
  * its own spawner rather than a `HANDLER_TABLE` entry.

@@ -43,7 +43,7 @@ The four section sizes are hardcoded immediates in the parser (`0x2000` words, `
 
 This also confirms exactly *which* function threads `DS:0x15e` (the `.map` filename pointer `FUN_1000_36f8` consumes): `FUN_1000_2a37`'s own tail, `CS:0x2B0D`–`0x2B1B`, sets `SI := 0x298a` (the filename-template base, offset **0** — not `+0xAA`, which is the PALFILS entry a few instructions earlier at `CS:0x2A89`), stores it to `DS:0x15e`, then `call 0x1000:36f8` directly. So `FUN_1000_2a37` performs *both* loads in sequence — PALFILS first (`+0xAA`, `CS:0x2A97`), then the `.map` file (`+0`, `CS:0x2B1B`) — which sharpens this document's own earlier "correction" (*"the load it actually performs is template entry `+0xAA`… It is **not** the map load path"*): that was true of the code the earlier pass was looking at, but the same function goes on, a dozen instructions later, to also be the map load path. Both readings are needed to describe `FUN_1000_2a37` correctly.
 
-The port already parses and exposes both fields (`gods-web/src/formats/map.js`) without interpreting them; this closure says that is the correct behaviour — there is nothing to interpret.
+The port already parses and exposes both fields (`src/formats/map.js`) without interpreting them; this closure says that is the correct behaviour — there is nothing to interpret.
 
 **Tiles are 32×16 pixels, so a level world is 128×64 tiles = 4096×1024 px.** Proven from the accessor's index math (`x` masked to a multiple of 32, `y` to 16, row stride 128) and corroborated by the data: object-record `x` maxes at 3946–4048 (< 4096) and `y` at 936–984 (< 1024).
 

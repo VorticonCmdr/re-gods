@@ -19,7 +19,7 @@ const { JUMP_DELTAS } = await import('../src/game/player.js');
 
 const fetchRaw = async (url) => {
   const p = join(ROOT, url);
-  if (!existsSync(p)) throw new Error(`missing asset: ${url} (run: npm run assets)`);
+  if (!existsSync(p)) throw new Error(`missing asset: ${url} (put the game files in game/)`);
   return new Uint8Array(readFileSync(p));
 };
 

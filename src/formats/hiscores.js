@@ -3,7 +3,7 @@
  * letter grid, game/title-menu.js's `GRID_CELLS`), and the insertion-sort
  * ranking a new score goes through.
  *
- * FORMAT, `[PROVEN]` — see Gods/docs/dynamic-trace-and-runtime-data.md's own
+ * FORMAT, `[PROVEN]` — see docs/dynamic-trace-and-runtime-data.md's own
  * "HISCORES.BIN decoded" section and its later correction:
  *
  *   216 bytes total = 10 x 20-byte records, then a 16-byte trailing block.
@@ -144,7 +144,7 @@ export function numberToBcdBytes(n) {
 
 /**
  * The true shipped defaults — `git show HEAD:HISCORES.BIN` in the `Gods`
- * repo, decoded and cross-checked against `Gods/docs/dynamic-trace-and-
+ * repo, decoded and cross-checked against `docs/dynamic-trace-and-
  * runtime-data.md`'s own already-published table: 9 Greek deity/hero names
  * plus one generic placeholder (`AAAAAA`, the only non-zero score).
  *
@@ -155,9 +155,9 @@ export function numberToBcdBytes(n) {
  * working-tree content is this developer machine's own save, not the
  * floppy's real defaults. Hardcoded here instead, from the git-tracked
  * pristine version, so gods-web's own "first launch" table is stable and
- * reproducible regardless of what any contributor's local Gods checkout
- * happens to hold. See `tools/copy-assets.mjs`'s own citation for the
- * same reasoning applied to why this file is NOT in its `WANTED` list.
+ * reproducible regardless of what any contributor's local `game/HISCORES.BIN`
+ * happens to hold. The same reasoning kept it out of the old asset-staging
+ * list (the since-removed `tools/copy-assets.mjs`).
  */
 export const DEFAULT_TABLE = Object.freeze([
   { name: 'AAAAAA', score: 7819 },

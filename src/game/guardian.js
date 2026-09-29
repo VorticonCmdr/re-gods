@@ -41,7 +41,7 @@ const W1 = { hp: 1500, x: 0xf20, y: 0x230, script: W1_SCRIPT };   // CS:0xC4DD /
 const W3 = { hp: 0x8ca, x: 0x2c0, y: 0x70, script: W3_SCRIPT };   // CS:0xC527 / 0xC533 / 0xC539
 
 /* ── World 3 (entry CS:0xC516, driver CS:0xD53B) [PROVEN] structure, read
- * from the live code segment; see Gods/docs/guardians.md. The script is
+ * from the live code segment; see docs/guardians.md. The script is
  * 3-byte records (frame, signed dx, signed dy) interpreted by CS:0xD778: one
  * frame record per tick; 0xFD lifts the hero 16 px and nudges the camera;
  * any other command byte (0xFE) rewinds 0x5D bytes unless the guardian is
@@ -57,7 +57,7 @@ const s16 = (v) => ((v & 0xffff) ^ 0x8000) - 0x8000;
 
 /* ── World 2 (entry CS:0xC54C, respawn CS:0xC57B, driver CS:0xCD7B, gate
  * CS:0xD212) [STATIC], read from the live code segment; see
- * Gods/docs/guardians.md. A head on a three-ball neck that follows a script,
+ * docs/guardians.md. A head on a three-ball neck that follows a script,
  * a jaw, and an arm swung along a cubic Bezier (BEZIER.DAT, 10 samples) whose
  * claw fires zaps into the shared line-hazard pool (DS:0xD2BE). The body
  * moves toward a random point near the hero once the scripted camera
@@ -77,7 +77,7 @@ export const W2_REC6_XY = [0, 0];
  * (CS:0xD0F5/0xD0F9) and world 4's CBCB; no entry, respawn or level init
  * touches it, so it lives for the whole process and each fight starts where
  * the last one left it (static image: 0). [PROVEN] live: three PJOYG2 attract
- * cycles started from different jaw phases (Gods/docs/guardians.md). */
+ * cycles started from different jaw phases (docs/guardians.md). */
 let processJaw = 0;
 export const resetProcessJaw = () => { processJaw = 0; };
 /* World 4 shares the word: its rise hook writes its base y there every call

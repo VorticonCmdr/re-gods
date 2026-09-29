@@ -3,7 +3,7 @@
  * [STATIC], read from the live code segment dump (DOSBox 877:0000,
  * CS:0xC5EA-0xCD7A, every routine below disassembled in full). No shipped demo
  * reaches it, so nothing here is checked against a capture yet. See
- * Gods/docs/guardians.md's world-4 section.
+ * docs/guardians.md's world-4 section.
  *
  *   C5EA  entry: base y [0x250] = 0x180, driver [0x284] = C978, respawn
  *         [0x288] = C624, one-shot load [0x35C] = 1, health [0x28A] = 6000,
@@ -251,7 +251,7 @@ export class Guardian4 {
     if (b.hp < 0) return;                         // CA9A: exploding, no hit test
     /* CAB1-CABD: [0x34] forced to 0 around A9E4, and bp is NOT loaded: it is
      * whatever the last export-1 draw returned (export1Bp above; 0 in every
-     * reachable case, Gods/docs/guardians.md). */
+     * reachable case, docs/guardians.md). */
     const r = this.#a9e4(ax, bx, 0x18, 0x18, bp, 0, o);
     if (ax - cam.x < 0x110) {                     // CAC5
       b.hp = r;

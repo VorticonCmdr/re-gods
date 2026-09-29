@@ -1,6 +1,6 @@
 /* mus-container.js — the `.MUS`/`.RL` container format.
  *
- * `Gods/docs/drivers-and-memory.md`'s "Music formats" section, `[PROVEN]` on
+ * `docs/drivers-and-memory.md`'s "Music formats" section, `[PROVEN]` on
  * `PGODS.MUS`/`PMUSIC.MUS`/`PGODMUS2.MUS`/`PGODSRLA.RL`/`PTITLE.RL`:
  *
  *   u16 LE  count
@@ -12,7 +12,7 @@
  * exactly as `drivers-and-memory.md` verifies on `PGODS.MUS` (73 entries,
  * strictly increasing, last extent ending at the decompressed length).
  *
- * Extended this session (Gods/docs/drivers-and-memory.md's own music-format
+ * Extended this session (docs/drivers-and-memory.md's own music-format
  * section did not check this before): a full `MThd` census across every
  * shipped `.MUS`/`.RL` file. `PGODS.MUS` is the only one `GAME.EXE` itself
  * ever opens (its `pgods.mus`/`gods.mus` strings are the sole music-related
@@ -36,7 +36,7 @@ export const isSmf = (blob) => (
 /**
  * The non-SMF blobs (`PGODS.MUS` 19/20/40, `PGODMUS2.MUS`'s only blob, and
  * index 21 of every `PGODSRL?.RL`) are NOT a different music format: they are
- * ordinary SMF files, WORD-DICTIONARY COMPRESSED. `Gods/docs/drivers-and-
+ * ordinary SMF files, WORD-DICTIONARY COMPRESSED. `docs/drivers-and-
  * memory.md`'s `UNKNOWN_mus_type2` closure has the full citation; in short,
  * `PPLAYER.BIN`'s own byte accessor (`0000:12e8`, taken whenever the tag
  * byte stored at `[bp+0x8b]` by `0000:13ac` is `'C'`/`'c'`) reads logical

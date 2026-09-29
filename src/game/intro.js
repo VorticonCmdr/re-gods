@@ -90,7 +90,7 @@
  *     overlapping kerning, not a port approximation.
  *
  * ASSETS (confirmed live in DOSBox — `gods` launches GODS.EXE, which EXECs
- * INTROV.EXE before GAME.EXE, per Gods/docs/dynamic-trace-and-runtime-
+ * INTROV.EXE before GAME.EXE, per docs/dynamic-trace-and-runtime-
  * data.md — and by direct decode against this port's own pi1.js/atlas.js):
  *   PSTBACK.PI1  — the logo card's stone-wall/helmet backdrop.
  *   PONE.PI1     — the hero-portrait backdrop behind the story crawl.
@@ -102,7 +102,7 @@
  *                  records.
  *
  * STRING POOL — read byte-exact off `analysis/unpacked/INTROV.unpacked.exe`
- * (Gods/docs/execution-and-boot.md's own citation, `introv 0x2a3e-0x2cd5`),
+ * (docs/execution-and-boot.md's own citation, `introv 0x2a3e-0x2cd5`),
  * not retyped from prose. The eight story pages are separated in the
  * shipped bytes by a literal 0xFF marker.
  *
