@@ -703,7 +703,7 @@ export class PatGroups {
       s.stagger = stagger;                             // CS:0xBA09, BEFORE this iteration's own add
       s.key = slot.desc.key;                            // CS:0xBA21, zero_extend
       s.reload = reloadTicks(slot.desc.loNibble);        // CS:0xBA19
-      s.attackState = 0;
+      s.attackState = 0;                                 // CS:0xBA0C `mov word [di+0xe],0`
       stagger += slot.desc.staggerStep;                  // CS:0xBA24
     }
     slot.materialised = true;
