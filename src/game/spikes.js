@@ -123,9 +123,13 @@ export class SpikeClock {
 
   get pingpong() { return spikePingpong(this.raw39b); }
 
-  step() {
+  /** @param {number} [tock=1] DS:0x36c after CS:0x0172's flip. DS:0x39c
+   *  steps only when it is 0xFF (CS:0x1450), so type 50's overlay changes
+   *  every OTHER frame; 0x39b and 0x39f step every frame. [PROVEN] live
+   *  (Gods ranked item 64). */
+  step(tock = 1) {
     this.raw39b = (this.raw39b + 1) & 0x1f;
-    this.frame39c = (this.frame39c + 1) & 3;
+    if (tock) this.frame39c = (this.frame39c + 1) & 3;
     this.frame39f = (this.frame39f + 1) % 6;
   }
 }

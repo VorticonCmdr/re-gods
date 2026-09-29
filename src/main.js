@@ -40,7 +40,7 @@ import { spriteForType, parseObjectCategories, sortForDraw, isDeadType,
          isUnstamped, OBJECT_SLOTS, activationBox, buildDrawSequence,
          activateObjects, insertSpawned, newActivationGate, activationDue,
          stepObjectFall, isFallEligible, dropCarriedItem,
-         ObjectAnimClock, animatedObjectSprite, allocObject } from './game/objects.js';
+         ObjectAnimClock, animatedObjectSprite, category5Draws, allocObject } from './game/objects.js';
 import { parseObjectRecords, Score, Purse, TreasureBurst,
          INVENTORY_EMPTY } from './game/treasure.js';
 import { CONSUMABLES, WEAPON_ARCS, INVULN_TICKS_SPAWN, handlerSfx } from './game/consumables.js';
@@ -2993,13 +2993,11 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
        * counted them, and their loop stops on the NEXT tick. This block used
        * to sit after the player and stopped the loop a tick early. */
       if (objPass) {
-        spikeClock.step();
-        /* CS:0x148B `inc byte [0x3a0]` / CS:0x148F `and byte [0x3a0],0x7` —
-         * the SAME once-per-frame function (FUN_1000_1432) that advances the
-         * spike counters four instructions earlier, so it steps here. Unlike
-         * DS:0x39c/0x39d/0x39e it is NOT behind CS:0x1450's DS:0x36c gate:
-         * the crystal advances every tick. */
-        objectAnimClock.step();
+        spikeClock.step(tock);
+        /* CS:0x1450-0x148F, the same function: DS:0x39d (category-5
+         * scenery) steps with DS:0x39c when DS:0x36c is 0xFF, DS:0x39e (the
+         * shop potion) when it is 0, and DS:0x3a0 (the crystal) every tick. */
+        objectAnimClock.step(tock);
         lastSpikeFx = stepSpikes(level.drawObjects, spikeClock,
           { x: player.x, y: player.y }, health, { invuln: fx.invuln > 0 });
         /* CS:0x1AD6 counts on-screen spikes into DS:0x39A; CS:0x14C4 starts
@@ -4231,6 +4229,15 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
         }
         const sx = o.x - camX, sy = o.y - camY;
         if (sx < -64 || sy < -64 || sx > SCREEN_W || sy > SCREEN_H) continue;
+        /* CS:0x19BA — category 5 dispatches on the sprite id, and five
+         * handlers draw a second sprite or swap the base (game/objects.js). */
+        if (level.cats[o.type] === 5) {
+          for (const d of category5Draws(spriteForType(o.type), sx, sy, objectAnimClock)) {
+            const cf = hero && hero.frames[d.sprite];
+            if (cf) renderer.blitSprite(cf, d.x, d.y);
+          }
+          continue;
+        }
         /* CS:0x1D0E-0x1D86 — while a delayed special-lever toggle is
          * animating on THIS object, its sprite comes from the per-world
          * table (game/levers.js), not the ordinary `170+type` formula. */

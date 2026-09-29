@@ -616,12 +616,10 @@ export function dropCarriedItem(slots, id, x, y) {
  * object draw loop. That is the crystal the DOSBox comparison was made
  * against.
  *
- * ⚠️ THE OTHER THREE ARMS ARE READ BUT DELIBERATELY NOT WIRED.
- *   · sprite 253 (type 83, placed 8x): table DS:0xdfa6 = {253,433,434,435,436},
- *     index DS:0x39e mod 5. DS:0x39e only advances on the `[0x36c]==0` branch
- *     of CS:0x1450, and DS:0x36c's per-frame toggle site is not established
- *     (three `not byte [0x36c]` sites exist: CS:0x0172, CS:0x6C9E, CS:0x9221).
- *     Porting it would mean guessing the rate. UNKNOWN_36c_parity.
+ * THE OTHER THREE ARMS.
+ *   · sprite 253 (type 83, the shop potion, placed 8x): table DS:0xdfa6 =
+ *     {253,433,434,435,436}, index DS:0x39e mod 5, which steps every other
+ *     frame (ObjectAnimClock below). Wired.
  *   · sprites 279/280 (types 109/110): tables DS:0xdf9e = {279,397,398,399}
  *     and DS:0xdf96 = {280,400,401,402}, index DS:0x39d mod 4, `sub bx,8`,
  *     export 1; the 0x118 arm also `call 0x16f9` (side effects unread). Both
@@ -640,12 +638,27 @@ export const CRYSTAL_SPIN_BASE = 402;
 /** CS:0x148F `and byte [0x3a0],0x7`. */
 export const CRYSTAL_PERIOD = 8;
 
-/** DS:0x3a0 — CS:0x148B/0x148F. One global 0..7 counter, advanced once per
- *  frame, unconditional (outside CS:0x1450's DS:0x36c parity gate). */
+/** FUN_1000_1432's object animation counters, CS:0x1450-0x148F.
+ *  DS:0x3a0 steps every frame. DS:0x39d (category-5 scenery) and DS:0x39e
+ *  (the shop potion) sit behind CS:0x1450's DS:0x36c test: 0x39d steps on
+ *  a frame where DS:0x36c is 0xFF, 0x39e (mod 5) on the others. DS:0x36c is
+ *  the port's `tock`, which CS:0x0172 flips once per frame before the walk,
+ *  so each advances every OTHER frame. [PROVEN] live over 10 ticks
+ *  (Gods ranked item 64), closing UNKNOWN_36c_parity. */
 export class ObjectAnimClock {
-  constructor() { this.frame3a0 = 0; }
-  step() { this.frame3a0 = (this.frame3a0 + 1) & (CRYSTAL_PERIOD - 1); }
+  constructor() { this.frame3a0 = 0; this.frame39d = 0; this.frame39e = 0; }
+  /** @param {number} [tock=1] DS:0x36c after this frame's CS:0x0172 flip */
+  step(tock = 1) {
+    if (tock) this.frame39d = (this.frame39d + 1) & 3;              // CS:0x1460
+    else this.frame39e = (this.frame39e + 1) % SHOP_POTION_ANIM.length;  // CS:0x146B
+    this.frame3a0 = (this.frame3a0 + 1) & (CRYSTAL_PERIOD - 1);
+  }
 }
+
+/** Sprite 253 = type 83, the shop potion: CS:0x166B `cmp cx,0xfd` ->
+ *  CS:0x1699 draws DS:0xdfa6[DS:0x39e] (read live), no offset. */
+export const SHOP_POTION_SPRITE = 253;
+export const SHOP_POTION_ANIM = Object.freeze([253, 433, 434, 435, 436]);
 
 /** CS:0x16E5-0x16F7. Phase 0 is the BASE sprite (the `jz 0x1683` leaves CX
  *  alone); phases 1..7 are 402 + phase = 403..409. */
@@ -653,9 +666,61 @@ export function crystalSprite(frame3a0) {
   return frame3a0 === 0 ? CRYSTAL_SPRITE : CRYSTAL_SPIN_BASE + frame3a0;
 }
 
-/** CS:0x1669's sprite-id dispatch, the one arm this port wires: sprite 224
- *  animates, everything else draws its stamped id unchanged. The other three
- *  arms (253 / 279 / 280) are documented above and deliberately left out. */
+/** CS:0x1669's sprite-id dispatch: sprite 224 (the crystal) and 253 (the
+ *  shop potion) animate, everything else draws its stamped id unchanged.
+ *  279/280 are placed nowhere and stay out. */
 export function animatedObjectSprite(spriteId, clock) {
-  return spriteId === CRYSTAL_SPRITE ? crystalSprite(clock.frame3a0) : spriteId;
+  if (spriteId === CRYSTAL_SPRITE) return crystalSprite(clock.frame3a0);
+  if (spriteId === SHOP_POTION_SPRITE) return SHOP_POTION_ANIM[clock.frame39e];
+  return spriteId;
+}
+
+/* ── CATEGORY 5, CS:0x19BA ────────────────────────────────────────────────
+ * The scenery category dispatches on the sprite id through DS:0xdfb0 (13
+ * {sprite, handler} pairs, default CS:0x19D5). Most handlers draw the base
+ * sprite once. Five draw more (docs/destructible-and-hazards.md, tables read
+ * live):
+ *   CS:0x1A58  225 (type 55): base, then DS:0xdfe6[phase] 16 px up
+ *   CS:0x1A97  251 (type 81): base, then DS:0xdfee[phase] 16 px up
+ *   CS:0x1A36  252 (type 82): DS:0xdff6[phase] INSTEAD of the base
+ *   CS:0x19EC  283/284 (types 113/114): base, then 448/449 32 px right
+ * phase = ((screenX >> 5) + DS:0x39d) & 3, where screenX is the object's x
+ * minus the camera (CS:0x15F1 `sub ax,[0xa]` before the dispatch), shifted
+ * arithmetically (`sar`). So the phase moves as the camera scrolls.
+ *
+ * ⚠️ CS:0x1AB9 masks type 81's index with `and cl,3`, not `and cx,3`. For a
+ * screen x in -32..-1 the `sar`s leave CH = 0xFF, so the read lands at
+ * DS:0xdfee + 2 * (0xFF00 + i) = DS:0xDDEE + 2i instead of the table.
+ * TYPE81_NEGATIVE_X holds what those words read live (zero, in worlds 2
+ * and 4). Unreachable in shipped data: type 81 is placed only at x 3824 and
+ * 3973, and the camera stops at 4096 - 320 = 3776, so its screen x is never
+ * below 48. [PROVEN] live: CS:0x1AAB's CX was 148 = 3824 - camera 3676. */
+export const CAT5_TOP_ANIM = Object.freeze({
+  225: Object.freeze([316, 317, 318, 317]),    // DS:0xdfe6
+  251: Object.freeze([324, 325, 326, 325]),    // DS:0xdfee
+});
+export const CAT5_SWAP_ANIM = Object.freeze([252, 327, 328, 327]);   // DS:0xdff6
+export const CAT5_SECOND_TILE = Object.freeze({ 283: 448, 284: 449 }); // CS:0x1A01-0x1A0C
+export const TYPE81_SPRITE = 251;
+export const TYPE81_NEGATIVE_X = Object.freeze([0, 0, 0, 0]);   // DS:0xDDEE
+
+/**
+ * The sprites one category-5 object draws, in order.
+ * @param {number} spriteId  the stamped id (170 + type)
+ * @param {number} sx        screen x (world x - camera x)
+ * @param {number} sy        screen y
+ * @param {ObjectAnimClock} clock
+ * @returns {Array<{sprite:number, x:number, y:number}>}
+ */
+export function category5Draws(spriteId, sx, sy, clock) {
+  const phase = ((sx >> 5) + clock.frame39d) & 3;
+  if (spriteId === 252) return [{ sprite: CAT5_SWAP_ANIM[phase], x: sx, y: sy }];
+  const out = [{ sprite: spriteId, x: sx, y: sy }];
+  const top = CAT5_TOP_ANIM[spriteId];
+  if (top) {
+    const sprite = spriteId === TYPE81_SPRITE && sx < 0 ? TYPE81_NEGATIVE_X[phase] : top[phase];
+    out.push({ sprite, x: sx, y: sy - 16 });
+  }
+  if (CAT5_SECOND_TILE[spriteId]) out.push({ sprite: CAT5_SECOND_TILE[spriteId], x: sx + 32, y: sy });
+  return out;
 }

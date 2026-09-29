@@ -106,7 +106,7 @@ import { GROUP_SLOTS as PAT_GROUP_SLOTS, SUBRECORDS_PER_GROUP, ABSOLUTE_TAG,
          scoreForKey } from '../game/pat-objects.js';
 import { spriteForType, parseObjectCategories, isDeadType, isUnstamped,
          OBJECT_SPRITE_BASE, STAMPED_TYPES, ObjectAnimClock, crystalSprite,
-         animatedObjectSprite, CRYSTAL_SPRITE } from '../game/objects.js';
+         animatedObjectSprite, CRYSTAL_SPRITE, category5Draws, SHOP_POTION_ANIM } from '../game/objects.js';
 import { VERDICT, REACHABLE_VERDICTS, VERDICT_NONE, verdictAction, applyVerdict, search, searchable,
          OpenList, OPEN_SLOTS, OPEN_LIMIT, GRID_PITCH, GRID_CELLS, GRID_LIMIT,
          GRID_MARGIN, heroCell, entityCell, SEED_STRATEGIES, SEED_WEIGHT_MASK,
@@ -2259,6 +2259,38 @@ export async function checkSelectorsAndObjects(fetchRaw) {
   }
   check(`fixed-id object sprites: only world 1's type-55 top sprite is cleared, and it draws #331`,
     clearedFixed.join(' ') === '1:316->331 1:317->331 1:318->331', clearedFixed.join(' '));
+
+  /* --- CS:0x1450's DS:0x36c gate (Gods ranked item 64) ------------------ */
+  /* DS:0x39b..0x39f read live at CS:0x154 on ten consecutive world-4A
+   * ticks. DS:0x36c was 0xFF on row 0 and alternates, so row i's step ran
+   * with tock = i odd ? 0 : 1. */
+  const LIVE_39B = [[17, 3, 3, 1, 5], [18, 3, 3, 2, 0], [19, 0, 0, 2, 1], [20, 0, 0, 3, 2],
+    [21, 1, 1, 3, 3], [22, 1, 1, 4, 4], [23, 2, 2, 4, 5], [24, 2, 2, 0, 0], [25, 3, 3, 0, 1], [26, 3, 3, 1, 2]];
+  const sc = new SpikeClock(), ac = new ObjectAnimClock();
+  [sc.raw39b, sc.frame39c, ac.frame39d, ac.frame39e, sc.frame39f] = LIVE_39B[0];
+  const replay = [LIVE_39B[0].join(',')];
+  for (let i = 1; i < LIVE_39B.length; i++) {
+    const tock = i % 2 ? 0 : 1;
+    sc.step(tock); ac.step(tock);
+    replay.push([sc.raw39b, sc.frame39c, ac.frame39d, ac.frame39e, sc.frame39f].join(','));
+  }
+  check(`DS:0x39c/0x39d step only on DS:0x36c = 0xFF frames, 0x39e on the others: ten live ticks replay`,
+    replay.join(' ') === LIVE_39B.map((r) => r.join(',')).join(' '), replay.join(' '));
+
+  /* Category 5, CS:0x19BA, against two live world-2B captures
+   * (tools/attract-capture/mask63/w2b_cat5_*.png, every sprite 0 bad px). */
+  const at = (d) => d.map((e) => `${e.sprite}@${e.x},${e.y}`).join(' ');
+  const c81 = new ObjectAnimClock();       // DS:0x39d = 0 when that frame was drawn
+  check(`type 81's torch flame phase is ((screenX >> 5) + DS:0x39d) & 3, screenX = 148 and 297 live`,
+    at(category5Draws(251, 148, 27, c81)) === '251@148,27 324@148,11' &&
+    at(category5Draws(251, 297, 27, c81)) === '251@297,27 325@297,11',
+    `${at(category5Draws(251, 148, 27, c81))} / ${at(category5Draws(251, 297, 27, c81))}`);
+  check(`types 113/114 add tile 448/449 32 px to the right (CS:0x19EC)`,
+    at(category5Draws(284, 16, 16, c81)) === '284@16,16 449@48,16' &&
+    at(category5Draws(283, 229, 107, c81)) === '283@229,107 448@261,107');
+  check(`the shop potion (sprite 253) cycles DS:0xdfa6 on DS:0x39e`,
+    [0, 1, 2, 3, 4].map((f) => { const c = new ObjectAnimClock(); c.frame39e = f; return animatedObjectSprite(253, c); }).join(',')
+      === SHOP_POTION_ANIM.join(',') && SHOP_POTION_ANIM.length === 5);
 
   return results;
 }

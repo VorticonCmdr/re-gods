@@ -164,18 +164,26 @@ for (let row = camY >> 4; row <= Math.min(MAP_ROWS - 1, (camY + SCREEN_H) >> 4);
   }
 }
 
+const { category5Draws, ObjectAnimClock } = await import('../src/game/objects.js');
+const cat5Clock = new ObjectAnimClock();
 let drawn = 0;
 for (const o of drawObjects) {
   const sx = o.x - camX, sy = o.y - camY;
   if (sx < -64 || sy < -64 || sx > SCREEN_W || sy > SCREEN_H) continue;
-  const of_ = heroFrame(spriteForType(o.type));
+  /* Category 5 draws through CS:0x19BA like main.js (clock at phase 0). */
+  const parts = cats[o.type] === 5
+    ? category5Draws(spriteForType(o.type), sx, sy, cat5Clock)
+    : [{ sprite: spriteForType(o.type), x: sx, y: sy }];
   drawn++;
-  for (let y = 0; y < of_.h; y++) {
-    const py = sy + y; if (py < 0 || py >= SCREEN_H) continue;
-    for (let x = 0; x < of_.w; x++) {
-      const px = sx + x; if (px < 0 || px >= SCREEN_W) continue;
-      const v = of_.pixels[y * of_.w + x]; if (v) idx[py * SCREEN_W + px] = v;
-      else if (of_.opaque0 && of_.opaque0[y * of_.w + x]) idx[py * SCREEN_W + px] = 0;
+  for (const part of parts) {
+    const of_ = heroFrame(part.sprite);
+    for (let y = 0; y < of_.h; y++) {
+      const py = part.y + y; if (py < 0 || py >= SCREEN_H) continue;
+      for (let x = 0; x < of_.w; x++) {
+        const px = part.x + x; if (px < 0 || px >= SCREEN_W) continue;
+        const v = of_.pixels[y * of_.w + x]; if (v) idx[py * SCREEN_W + px] = v;
+        else if (of_.opaque0 && of_.opaque0[y * of_.w + x]) idx[py * SCREEN_W + px] = 0;
+      }
     }
   }
 }
