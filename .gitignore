@@ -12,3 +12,7 @@ dist/
 # from the sibling ../Gods checkout. Deliberately NOT tracked: they are the
 # shipped game files, versioned once in the Gods repository.
 public/game/
+
+# Python bytecode from the capture scripts
+__pycache__/
+*.pyc

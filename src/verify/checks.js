@@ -1561,27 +1561,22 @@ export async function checkDescriptorAnchors(fetchRaw) {
     }
 
     results.push({
-      name: 'what is still open around this creature', note: true, pass: true,
-      detail: 'UNKNOWN_nest_shot — CS:0x2039 and CS:0x1FE7, what the creature ' +
-        'actually fires and whether it can hurt the hero. UNKNOWN_8014_brood ' +
-        '— the brood walker CS:0x894E, so the port carries the two seeded ' +
-        'signed fields as field8/fieldA rather than calling them a velocity. ' +
-        'UNKNOWN_8014_world1 — CS:0x7CBD and CS:0x7EB6 gate on world 1 and ' +
-        'share the same 256 bytes, writing PLANE A at CS:0x7E62; the two ' +
-        'tenants are mutually exclusive by world, which is why the level-init ' +
-        'clear at CS:0x8676 zeroes the array only in world 2. UNKNOWN_ce64_pool ' +
-        '— CS:0x8681 clears this pool by jumping INTO the middle of a third ' +
-        'pool\'s clear routine at CS:0x7F48, whose tail disarms the DS:0xce64 ' +
-        'walker as a side effect.',
+      name: 'the questions around this creature, all closed', note: true, pass: true,
+      detail: 'UNKNOWN_nest_shot (CS:0x2039/CS:0x1FE7, the enemy-projectile ' +
+        'subsystem), UNKNOWN_8014_brood (the brood walker CS:0x894E, checked ' +
+        'below), UNKNOWN_8014_world1 (CS:0x7CBD/CS:0x7EB6, the world-1B ' +
+        'awakened statue sharing the same 256 bytes; the level-init clear at ' +
+        'CS:0x8676 zeroes the array only in world 2) and UNKNOWN_ce64_pool ' +
+        '(CS:0x8681 jumps into the middle of CS:0x7F48\'s clear, whose tail ' +
+        'disarms the DS:0xce64 walker) are all CLOSED — see ' +
+        'Gods/docs/destructible-and-hazards.md. Still open here: ' +
+        'UNKNOWN_nest_identity (the game never names type 115; "nest" is a label).',
     });
 
-    /* ══ THE BROOD WALKER, CS:0x894E — CLOSED, no longer out of scope ═══════
+    /* ══ THE BROOD WALKER, CS:0x894E — CLOSED ════════════════════════════════
      *
-     * The note pushed just above still calls UNKNOWN_8014_brood open, listing
-     * field8/fieldA as unlabelled. It is stale as of the checks below, and it
-     * is left in place rather than edited — see nest.js's own walker section
-     * for the up-to-date account, which this block re-derives from the real
-     * `Brood` class rather than restating in prose. */
+     * See nest.js's own walker section for the account; this block re-derives
+     * it from the real `Brood` class rather than restating it in prose. */
     {
       const camZero = { x: 0, y: 0 };
       const emptyPlaneB = () => new Uint8Array(128 * 64);
@@ -3775,12 +3770,13 @@ export async function checkSpawn(fetchRaw) {
     `si=${q2.si} cx=${q2.cx} count=${q2.count}; a plain queue would give cx=16 ` +
     '— UNKNOWN_f5ff_cx_desync');
 
-  /* The search must degrade to "no path" while the producers are unknown.
-   * That is the honest state and it should be visible, not asserted. */
+  /* With no producers wired in, the bare search degrades to "no path" — the
+   * original's own no-path case. The producers themselves are ported
+   * (pathfind-producers.js; UNKNOWN_pathfinder_producers is CLOSED). */
   const idle = Object.assign(new EntityB({ x: 100, y: 100, mode: MODE.WALK_L }), { state: 1 });
   check(`with no producers the search reports no path (enemies patrol)`,
     search(idle, 0, 0) === VERDICT_NONE,
-    "UNKNOWN_pathfinder_producers — the original's own no-path case");
+    "the original's own no-path case");
 
   /* An off-screen entity is culled before anything is cleared, so its verdict
    * stays 0xFFFF: off-screen enemies never hunt. */
@@ -4218,7 +4214,8 @@ export async function checkSpawn(fetchRaw) {
 
   check(`DS:0x34 non-zero hurts the hero but leaves the creature alive`,
     h5.target < HEALTH_MAX && survivor.state === 40,
-    `hero hurt, creature state still ${survivor.state} — UNKNOWN_DS_0034`);
+    `hero hurt, creature state still ${survivor.state} — DS:0x34 ` +
+    '(UNKNOWN_DS_0034, CLOSED: Gods/docs/combat-and-projectiles.md)');
 
   /* The walk -> fall TRANSITION is not inert. CS:0xf157 seeds v := 1 and
    * advances Y by one pixel in the same tick, before the fall handler ever
@@ -6888,9 +6885,9 @@ export async function checkWeaponsProjectiles(fetchRaw) {
     /* "I don't hear a sound when hitting an enemy" — CS:0xAB98 plays
      * KILL_SFX on the death branch only; a non-lethal hit is genuinely
      * silent in the original (only the spark above) for every creature
-     * except the world-3 DS:0xce64 type (CS:0x936D, gated on DS:0x34 —
-     * see Gods/docs/combat-and-projectiles.md's "Weapon +0x49" correction),
-     * which this port does not model — so a bare per-hit sound here would
+     * except while DS:0x34 is set (a guardian fight, or the world-3 DS:0xce64
+     * type's own bracket): CS:0x936D then plays 0x21D inside the tag decode,
+     * which main.js's decodeTag models — so a bare per-hit sound here would
      * have been WRONG for ordinary creatures, not merely missing. */
     const bus1 = new RecordingAudioBus();
     const survivor2 = { x: 200, y: 200, state: 50 };
@@ -7640,9 +7637,9 @@ export async function checkWeaponsProjectiles(fetchRaw) {
       'weapon-fire (corrected from a bare, non-matching low byte 0x1c — see ' +
       'projectiles.js\'s own citation). The live disassembly also showed a ' +
       'non-lethal weapon hit is SILENT in the original (only the CS:0xAC4C ' +
-      'debris spark plays) for every creature except the world-3 DS:0xce64 ' +
-      'type (CS:0x936D, gated on DS:0x34, not modelled by this port — see ' +
-      'Gods/docs/combat-and-projectiles.md) — so "nothing plays on every ' +
+      'debris spark plays) except while DS:0x34 is set (a guardian fight, or ' +
+      'the world-3 DS:0xce64 type\'s bracket), when CS:0x936D plays 0x21D — ' +
+      'modelled in main.js\'s decodeTag — so "nothing plays on every ' +
       'hit" is correct porting everywhere gods-web actually decodes a hit, ' +
       'not a residual gap. Every voice is a STYLIZED synthesis, not ' +
       'a chip-accurate one — see that module\'s own header for why. A still ' +
@@ -9663,10 +9660,11 @@ export async function checkWeaponsProjectiles(fetchRaw) {
       '`collectKey`) scans the same hot point the original does and stores ' +
       'into the selected slot (DS:0x366, moved by the crouch FIRE tap); the ' +
       'crouch drop (CS:0x61A1) puts an item back into the world. The inventory boots genuinely empty (CS:0x0495 ' +
-      '-0x04A1), no dev-seed. Still absent: the 40-entry destructible-tile ' +
-      'queue at DS:0xd0c6; UNKNOWN_tag_fd; the per-projectile animation ' +
-      'frame; and UNKNOWN_DS_0168 — which now has four behaviours and still ' +
-      'no meaning.',
+      '-0x04A1), no dev-seed. Also ported since: the 40-entry destructible-' +
+      'tile queue at DS:0xd0c6 (destructible.js), the per-projectile ' +
+      'animation frame (projectiles.js, CS:0x9D74), and DS:0x168, the ' +
+      'familiar\'s energy (UNKNOWN_DS_0168, CLOSED). UNKNOWN_tag_fd is CLOSED ' +
+      'as dead: GAME.EXE has no producer for it.',
   });
 
   /* ── Object fall physics — CS:0x1511-0x1631 ───────────────────────────
@@ -11061,7 +11059,8 @@ export async function checkZones(fetchRaw) {
       'System-A entity group-runtime array — NOW PORTED (main.js\'s own ' +
       'teleport branch resets slotsA/groupsA/enemiesA, checked above) — and ' +
       '0x1015 is the already-ported per-tick object-activation-box pass. ' +
-      'UNKNOWN_zone_scan_caller still stands.',
+      'UNKNOWN_zone_scan_caller is CLOSED too: CS:0x4A6D\'s one caller is ' +
+      'idle\'s UP arm (CS:0x4A08).',
   });
 
   /* --- hero mechanics pinned by the DOSBox attract captures --------------
