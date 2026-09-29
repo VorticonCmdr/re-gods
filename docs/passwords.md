@@ -392,8 +392,8 @@ they make:
    couldn't distinguish the correct formula from the wrong one.
 
 **This machine's own real save, decoded.** This project's own working copy of
-`HISCORES.BIN` (216 bytes; `git status` shows it locally modified, not the
-pristine shipped file, which is all zero at this offset) has its trailing 16 bytes
+`HISCORES.BIN` (216 bytes; a local save, committed as such — the pristine
+shipped file is in the initial import and is all zero at this offset) had its trailing 16 bytes
 (file offset `0xc8`–`0xd7` = live `DS:0x526`–`0x535`) as:
 
 ```
@@ -407,8 +407,10 @@ plaintext both times: codes `16,13,5` = `P,M,E`, an exact match for the
 live-displayed `"PME"` above. Two independently-keyed encodings of the same
 plaintext decoding to the same answer is a clean self-consistency check that this
 XOR scheme is understood correctly, not just plausible. The trailing 8 bytes
-(world-3/world-4 slots) are all zero — this save predates any world-2/world-3
-completion having been persisted to disk.
+(world-3/world-4 slots) were all zero — that save predated any world-2/world-3
+completion having been persisted to disk. Later live sessions have since
+written them (the committed file ends `47 60 74 69 66 68 6F 65`); those 8 bytes
+have not been decoded.
 
 On a disk-write failure (`JC` back in `69d7`), a template at `1ffd:0xed48` —
 `"\x11\x11 disk error - password not saved..."` — posts through the project's
