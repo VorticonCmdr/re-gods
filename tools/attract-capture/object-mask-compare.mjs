@@ -10,6 +10,10 @@
  *
  * It also checks the arena encoder against the live arena dumps.
  *
+ * The mask63/*.bin arena dumps are git-ignored (raw bytes out of the
+ * commercial binary's own memory) — recapture with mask63_live.py before
+ * re-running the arena-encoder half of this check.
+ *
  *   node tools/attract-capture/object-mask-compare.mjs
  */
 import { readFileSync } from 'node:fs';

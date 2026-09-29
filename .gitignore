@@ -33,3 +33,8 @@ __pycache__/
 .claude/*
 !.claude/skills/
 .scratch_ignore/
+
+# Raw memory dumps captured live from the running game (mask63_live.py) —
+# bytes read straight out of the commercial binary, same reasoning as game/.
+# object-mask-compare.mjs needs them to re-run; recapture with mask63_live.py.
+tools/attract-capture/mask63/*.bin
