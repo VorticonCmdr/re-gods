@@ -491,6 +491,7 @@ export class Player {
     this.facing = 1;
     this.doubleJump = false; // DS:0x174 != 0
     this.fromLadder = false; // seeds the ladder-jump phase, see _ground
+    this.ladderPhaseCache = 0; // DS:0x344, BSS 0, written only at CS:0x571B
     /* DS:0x1b4 — the X the CURRENT jump launched from. Its only four writers
      * in the original are the two ground take-offs (CS:0x5A14/0x5C58) and the
      * two ladder jump-offs (CS:0x590F/0x5924); its only readers are the
@@ -1229,6 +1230,9 @@ export class Player {
         this.state = ST.CLIMB;
         this.stateIndex = S.CLIMB;
         this.phase = 0;
+        /* CS:0x4A45 (idle) / CS:0x5A50, CS:0x5C94 (walk) `mov cl,0x1A/0x1C`:
+         * the first open tick steps up whatever is held (see _climb). */
+        this.climbForce = true;
         this.ladderPingPong = false;
         this.dismountHold = 0;
         this.fromLadder = true;
@@ -1689,11 +1693,21 @@ export class Player {
      * half. */
     if (tock === 0) return;
 
+    /* CS:0x54C3 (state 13) / CS:0x5711 (state 14) — `cmp cl,0x14 / jl`,
+     * tested BEFORE any input is read: every ground mount seeds cl >= 0x14
+     * (UP: CS:0x4A45/0x5A50 0x1A, CS:0x5C94 0x1C; DOWN: CS:0x59BF 0x1A,
+     * CS:0x5C07 0x1C), so the first open tick on a ladder clears cl and
+     * jumps straight to the step block (0x564B / 0x58A5), skipping jump-off,
+     * dismount and fire, whatever is held. The ascend path also skips the
+     * DS:0x344 cache at CS:0x571B. UNKNOWN_ladder_mount_free_tick. */
+    const forced = !!this.climbForce;
+    this.climbForce = false;
+
     /* Jump OFF the ladder — CS:0x550c/0x557c (state 13, descending) and
      * CS:0x575e/0x57d6 (state 14, ascending): UP + a direction is the SAME
      * jump-off regardless of which climb state you're in, and it seeds the
      * same "left a ladder" phase the ground-state jump entry already uses. */
-    if (input.up && (input.left || input.right)) {
+    if (!forced && input.up && (input.left || input.right)) {
       const dir = input.right ? +1 : -1;
       this.facing = dir;
       this.state = ST.JUMP;
@@ -1716,7 +1730,7 @@ export class Player {
      * a ladder onto a platform short of jumping — there is no auto-land at
      * the top, which is the bug this was all chasing: the port used to
      * invent a landing (or a fall) the original doesn't have. */
-    if (input.down && (input.left || input.right)) {
+    if (!forced && input.down && (input.left || input.right)) {
       const dir = input.right ? +1 : -1;
       this.dismountHold = (this.dismountHold || 0) + 1;
       if (this.dismountHold >= DISMOUNT_HOLD_TICKS
@@ -1734,7 +1748,7 @@ export class Player {
       }
       return;   // still holding (or blocked): no movement either way this tick
     }
-    this.dismountHold = 0;
+    if (!forced) this.dismountHold = 0;
 
     /* DS:0x378 — the ladder facing, and it is set by THIS handler, one branch
      * above the entry it gates:
@@ -1753,8 +1767,8 @@ export class Player {
      * mount, CS:0x59B5, clears it). [PROVEN] against PJOYL3 861/862: FIRE
      * held with no direction re-enters state 25; the port used to demand a
      * direction on every shot. */
-    if (input.fire && (input.left || input.right)) this.ladderFacing = input.right ? 1 : -1;
-    if (input.fire && this.ladderFacing !== 0) {
+    if (!forced && input.fire && (input.left || input.right)) this.ladderFacing = input.right ? 1 : -1;
+    if (!forced && input.fire && this.ladderFacing !== 0) {
       const id = this.ladderFacing > 0 ? 24 : 25;
       /* CS:0x55E7 — the entry saves Y and the phase, and nudges Y up 4 when
        * that phase is EVEN (CS:0x55F1 `test cl,1 / jnz`). */
@@ -1780,8 +1794,6 @@ export class Player {
     const desc = this.stateIndex === S.CLIMB_DOWN;
     const exactly = (k) => ['up', 'down', 'left', 'right', 'fire']
       .every((n) => !!input[n] === (n === k));
-    const forced = !!this.climbForce;
-    this.climbForce = false;
     if (!forced && !(desc ? exactly('down') : exactly('up'))) {
       if (desc ? input.up : input.down) {
         this.ladderPingPong = !this.ladderPingPong;          // `not byte [0x347]`
@@ -1800,7 +1812,10 @@ export class Player {
      * against PJOYL3 899/900 (the sound's ADL draws) and 930 (the ladder-fire
      * entry's even-phase nudge). An earlier revision ran 1,2,3*,2,1,0*, a
      * sound every third step. */
-    const phaseBefore = this.phase;                           // DS:0x344 (CS:0x571B)
+    /* DS:0x344, CS:0x571B — its only writer, on the ascend path's input
+     * branch; a forced (mount) tick leaves the previous climb's value. */
+    if (!forced && !desc) this.ladderPhaseCache = this.phase;
+    const phaseBefore = this.ladderPhaseCache;
     for (;;) {
       if (!this.ladderPingPong) {
         this.phase++;

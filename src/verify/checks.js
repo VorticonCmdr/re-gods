@@ -212,7 +212,7 @@ import { JUMP_ARC_END, JUMP_ARC_EXIT, fireGuardBefore,
          fireGuardAfter } from '../game/fire-states.js';
 import { Player, ST, S as PS, JUMP_ARC_EARLY_LAND_CURSOR,
          WALK_STEP, fallDamageFor, FALL_DAMAGE_THRESHOLD,
-         FOOTSTEP_SFX, CLIMB_STEP_SFX } from '../game/player.js';
+         FOOTSTEP_SFX, CLIMB_STEP_SFX, CLIMB_STEP } from '../game/player.js';
 import { CELL_SOLID, CELL_CLIMBABLE, MAP_COLS as MC, attrAt } from '../formats/map.js';
 import { parseWeapons, allocateShots, MAX_SUBSLOTS, WEAPON_SLOTS, tagFor,
          WEAPON_COUNT, PINNED_08, PINNED_SPRITE, PINNED_SPRITE2,
@@ -9304,6 +9304,30 @@ export async function checkWeaponsProjectiles(fetchRaw) {
         far.tick(ladderMap, I({ left: true, down: true }), null, 1, { objects: [farObj], cats, inventory: [] });
         check('a live object OUTSIDE the hot-point box still lets the hero descend',
           far.state === ST.CLIMB);
+      }
+
+      {
+        /* UNKNOWN_ladder_mount_free_tick — CLOSED. Every ground mount seeds
+         * cl >= 0x14 (idle UP CS:0x4A45 `mov cl,0x1A`), and state 14 tests
+         * `cmp cl,0x14 / jl` at CS:0x5711 before reading any input: the first
+         * open tick steps up 6 with nothing held, and ignores FIRE+direction.
+         * Live: an idle-UP mount at y=944 read y=938 one tick later, no key. */
+        const lm = { planeA: new Uint8Array(N), planeB: new Uint8Array(N), widthPx: 4096, heightPx: 1024 };
+        for (let r = 2; r < 12; r++) lm.planeB[r * MAP_COLS + 2] = 2;   // CELL_CLIMBABLE
+        for (let c = 0; c < 6; c++) lm.planeB[12 * MAP_COLS + c] = 1;
+        const after = (second) => {
+          const q = new Player(64, 144); q.state = ST.GROUND; q.stateIndex = PS.IDLE;
+          q.tick(lm, I({ up: true }), null, 1, null);
+          const mounted = q.state === ST.CLIMB && q.y === 144;
+          q.tick(lm, second, null, 1, null);
+          return { mounted, y: q.y, st: q.stateIndex };
+        };
+        const idle = after(I());
+        check('CS:0x4A45/0x5711: the tick after an idle-UP mount steps up 6 with no key held',
+          idle.mounted && idle.y === 144 - CLIMB_STEP && idle.st === PS.CLIMB, JSON.stringify(idle));
+        const fired = after(I({ fire: true, right: true }));
+        check('...and the forced tick skips the ladder-fire branch (no state 24, same step)',
+          fired.y === 144 - CLIMB_STEP && fired.st === PS.CLIMB, JSON.stringify(fired));
       }
 
       {
