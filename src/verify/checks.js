@@ -2233,6 +2233,33 @@ export async function checkSelectorsAndObjects(fetchRaw) {
     reached.every((s) => { const [w, t] = s.split(':').map(Number); return !masked[w].unresolved.includes(spr(t)); }),
     reached.join(' '));
 
+  /* Fixed-id sprites in the objects range, drawn by code for a placed type.
+   * Tables read live (tools/attract-capture/mask63/fixed_id_tables.json):
+   * category 5's DS:0xdfe6 (type 55), 0xdfee (81), 0xdff6 (82) and second
+   * tiles 448/449 (113/114, CS:0x19EC); the spikes; the special levers
+   * (DS:0xe01e, per world); SS:0x3602 (type 96) and the nest (285). Only
+   * type 55's top sprite is cleared where it is placed: all four frames land
+   * on #331, which DOS draws, live, above 1B's type-55 objects (43/43 px). */
+  const placedIn = { 1: new Set(), 2: new Set(), 3: new Set(), 4: new Set() };
+  for (const k of keys) {
+    for (const o of parseMap(dclDecompress(await fetchRaw(`game/PLEV${k}.MAP`)).data).objects) placedIn[+k[0]].add(o.type);
+  }
+  const FIXED = [[[55], [316, 317, 318, 317]], [[81], [324, 325, 326, 325]], [[82], [252, 327, 328, 327]],
+    [[113], [448]], [[114], [449]], [[SPIKE_TYPE], SPIKE_OVERLAY], [[SPIKE117_TYPE], SPIKE117_OVERLAY],
+    [[SPIKE130_TYPE], SPIKE130_ANIM], [[96], [266, 445, 446, 447]], [[115], [285]]];
+  const clearedFixed = [];
+  for (const w of [1, 2, 3, 4]) {
+    const tables = [...FIXED, [[62, 118, 120, 122], SPECIAL_LEVER_ANIM[w]]];
+    for (const [types, ids] of tables) {
+      if (!types.some((t) => placedIn[w].has(t))) continue;
+      for (const id of new Set(ids)) {
+        if (!isBuilt(w, id - 170)) clearedFixed.push(`${w}:${id}->${aliasTo(w, id)}`);
+      }
+    }
+  }
+  check(`fixed-id object sprites: only world 1's type-55 top sprite is cleared, and it draws #331`,
+    clearedFixed.join(' ') === '1:316->331 1:317->331 1:318->331', clearedFixed.join(' '));
+
   return results;
 }
 

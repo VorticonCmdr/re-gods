@@ -94,11 +94,17 @@ for (const g of ['always', 'objects', `level${world}`]) {
 const { map: dmap } = buildDescriptorMap(['always', 'objects', `level${world}`], (s) => atlases[s].count);
 const cats = parseObjectCategories(dclDecompress(raw(`POBJECTS.00${key[0]}`)).data);
 const drawObjects = sortForDraw(map.objects.filter((o) => !isDeadType(o.type)), cats);
-const heroFrame = (id) => {
-  const d = dmap[id];
+/* Built once, then the world's objects load mask applied the way main.js's
+ * loadSprites does (formats/object-mask.js, Gods ranked item 63). */
+const builtFrames = dmap.map((d) => {
   const f = atlases[d.stem].frames[d.frame];
   return { ...f, pixels: cutFrame(images[d.stem], f) };
-};
+});
+{
+  const { applyObjectLoadMask } = await import('../src/formats/object-mask.js');
+  applyObjectLoadMask(builtFrames, 170, GROUP_STEMS.objects.reduce((n, s) => n + atlases[s].count, 0), world);
+}
+const heroFrame = (id) => builtFrames[id];
 
 /* Same table as main.js's SPAWN_TABLE: GAME.EXE's hardcoded per-world spawn
  * point, DS:0xe8ca, read directly off the image (FUN_1000_2a37,
@@ -169,6 +175,7 @@ for (const o of drawObjects) {
     for (let x = 0; x < of_.w; x++) {
       const px = sx + x; if (px < 0 || px >= SCREEN_W) continue;
       const v = of_.pixels[y * of_.w + x]; if (v) idx[py * SCREEN_W + px] = v;
+      else if (of_.opaque0 && of_.opaque0[y * of_.w + x]) idx[py * SCREEN_W + px] = 0;
     }
   }
 }

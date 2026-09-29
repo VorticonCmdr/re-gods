@@ -65,7 +65,9 @@ function diff(shot, pal, f, sx, sy) {
 /* Object positions are the map's, except the world-4 flask, which falls
  * 7 px from its authored y 105 before it settles (DOS draws it at 112). */
 const CAPTURES = [
-  { file: 'w1b_type55.png', world: 1, cam: [36, 720], objs: [{ type: 55, x: 160, y: 752 }] },
+  { file: 'w1b_type55.png', world: 1, cam: [36, 720], objs: [{ type: 55, x: 160, y: 752 },
+    /* CS:0x1A58: type 55's second sprite, 16 px up, DS:0xdfe6[phase] = 316-318 */
+    { id: 316, x: 160, y: 736 }] },
   { file: 'w1b_type62.png', world: 1, cam: [796, 415], objs: [{ type: 62, x: 1031, y: 448 }, { type: 62, x: 1095, y: 448 }] },
   { file: 'w2b_lever.png', world: 2, cam: [1208, 736], objs: [{ type: 24, x: 1350, y: 841 }] },
   { file: 'w4a_flask_lever.png', world: 4, cam: [3236, 108], objs: [{ type: 4, x: 3495, y: 112 }, { type: 24, x: 3403, y: 176 }] },
@@ -77,12 +79,12 @@ for (const c of CAPTURES) {
   const s = (cache[c.world] ??= sprites(c.world));
   const pal = palette(c.world), shot = png(here + 'mask63/' + c.file);
   for (const o of c.objs) {
-    const id = 170 + o.type, sx = o.x - c.cam[0], sy = o.y - c.cam[1];
+    const id = o.id ?? 170 + o.type, sx = o.x - c.cam[0], sy = o.y - c.cam[1];
     const port = diff(shot, pal, s.frames[id], sx, sy);
     const ctrl = diff(shot, pal, s.own[id], sx, sy);
-    const ok = port.n > 100 && port.bad === 0 && ctrl.bad > 20;
+    const ok = port.n > (o.id ? 40 : 100) && port.bad === 0 && ctrl.bad > 20;
     if (!ok) fails++;
-    console.log(`${ok ? 'ok  ' : 'FAIL'} ${c.file} type ${o.type} (#${id} -> #${s.frames[id].aliasOf ?? id})` +
+    console.log(`${ok ? 'ok  ' : 'FAIL'} ${c.file} ${o.id ? 'sprite' : 'type ' + o.type} (#${id} -> #${s.frames[id].aliasOf ?? id})` +
       `  port ${port.n - port.bad}/${port.n}   own frame ${ctrl.n - ctrl.bad}/${ctrl.n}`);
   }
 }
