@@ -11112,6 +11112,15 @@ export async function checkZones(fetchRaw) {
   check('unpackTeleportDest(0) is the (16, 0) tile-centre origin, not (0,0)',
     d0.x === 16 && d0.y === 0, `got (${d0.x}, ${d0.y})`);
 
+  /* --- VGA export 38: System A's per-member stagger and fire timer -------- */
+  {
+    const { parseGroupsA } = await import('../game/spawn.js');
+    const g = parseGroupsA(dclDecompress(await fetchRaw('game/PALFILS.0A1')).data)[0];
+    check('PLEV1A System-A descriptor 0 carries stagger 10 at +0x14 and fire nibble 6 — the live read was 0/10/20 and a fire timer of (16-6)*4 = 40',
+      g.stagger === 10 && (g.fireByte & 0xf) === 6 && g.count === 3,
+      `stagger ${g.stagger}, fire ${g.fireByte & 0xf}, n ${g.count}`);
+  }
+
   /* --- CS:0x6217: the teleport stone's destination ----------------------- */
   {
     const pal = async (k) => dclDecompress(await fetchRaw(`game/PALFILS.0${k[1]}${k[0]}`)).data;

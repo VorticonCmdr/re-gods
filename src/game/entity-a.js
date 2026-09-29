@@ -875,8 +875,12 @@ export function stageApply(e, frozen) {
  * after it has arrived and its own velocity has decayed to zero.
  */
 /* DS:0xE96 + group*0x190 + member*0x28 + 0x0E — System A's fire timers.
- * Nothing but CS:0xE66B/0xE67A writes them (the materialise at CS:0xDE8D
- * does not), and the array is never cleared, so each of the 100 slots keeps
+ * ⚠️ CORRECTED (2026-09-29, [PROVEN] live): the materialise DOES write
+ * them — not in GAME.EXE but in VGA export 38 (VGA:0x01B5-0x01C6), called
+ * per member from CS:0xDEE3: (16 - lo) * 4 when the fire nibble lo is
+ * nonzero (40 read live for PLEV1A descriptor 0). main.js runSpawnsA seeds
+ * the slot. With lo == 0 the slot is left alone. Otherwise only
+ * CS:0xE66B/0xE67A write them, and the array is never cleared, so each of the 100 slots keeps
  * its timer across spawns and levels for the whole process (BSS 0 at boot).
  * An entity reads and writes its own slot through `e.slot` (set at spawn by
  * the host). [STATIC] + a live read (DS:0xE96: 0 in almost every slot, a
@@ -891,13 +895,10 @@ export function stageFacingAndFire(e, desc) {
 
   /* CS:0xE66B `dec word [di+0xe] / jnz` — 16-bit, fires only on reaching
    * exactly zero (a timer left at 0 wraps and waits 65535 ticks). */
-  /* System A's materialise (CS:0xDE8D-0xDEE0) never writes +0x0E, and its
-   * entity array DS:0xE96 is never bulk-cleared (the only reference is the
-   * per-tick base load at CS:0xDF42), so a fresh slot holds its BSS zero —
-   * read live: +0x0E is 0 in nearly every slot — and the first shot waits
-   * 65535 ticks unless the slot fired before. [STATIC] + a live memory read;
-   * no attract demo has a System-A shooter, so it is not replay-checked.
-   * The per-slot carry-over is modelled through `sysAFireTimers` below. */
+  /* ⚠️ CORRECTED: the slot is seeded at materialise by VGA export 38 (see
+   * sysAFireTimers above), so a shooter's first shot comes (16 - lo) * 4
+   * ticks after it appears, not 65535. The per-slot carry-over (lo == 0,
+   * or a slot re-used) is modelled through `sysAFireTimers`. */
   if (e.slot !== undefined) e.reloadTimer = sysAFireTimers[e.slot];   // the slot's carried +0x0E
   e.reloadTimer = (e.reloadTimer - 1) & 0xffff;
   if (e.reloadTimer !== 0) {

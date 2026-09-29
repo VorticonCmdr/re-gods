@@ -55,7 +55,7 @@ DEATH_SPRITE_BASE, DEATH_FRAMES, stealAttemptB, stepCarriedItemB,
 groupRewardPosition, SFX_MATERIALISE } from './game/entity.js';
 import { EntityA, CLASS_TABLES_A, spriteForEntityA, EST as ESTA,
 groupRewardPositionA,
-isDyingA, DEATH_SPRITE_BASE_A, DEATH_FRAMES_A, stepCarriedItem } from './game/entity-a.js';
+isDyingA, DEATH_SPRITE_BASE_A, DEATH_FRAMES_A, stepCarriedItem, sysAFireTimers } from './game/entity-a.js';
 import { VERDICT_NONE } from './game/pathfind.js';
 import { runSearch } from './game/pathfind-producers.js';
 import { GodsRandom } from './game/random.js';
@@ -1560,12 +1560,21 @@ const SHOP_EXIT_MUSIC_DELAY = 5;
       const x = d.tileX * 32, y = d.tileY * 16;
       const members = [];
       for (let i = 0; i < n; i++) {
+        /* CS:0xDED9 `mov [di+6],dx`, then VGA export 38 adds desc+0x14 to
+         * DX per member (VGA:0x01F8): member i waits i*stagger ticks. Only
+         * member 0 (DX = 0) flashes at once (CS:0xDEE0). [PROVEN] live. */
         const e = Object.assign(
-          new EntityA({ x, y, cls: d.cls, hp: d.hp || 1, delay: 0 }),
+          new EntityA({ x, y, cls: d.cls, hp: d.hp || 1, delay: (i * (d.stagger || 0)) & 0xffff }),
           /* DS:0xE96 + g*0x190 + i*0x28 — the entity's slot, whose fire timer
            * +0x0E carries over (entity-a.js sysAFireTimers). */
           { desc: d, slot: g * 10 + i });
-        playFlash(e);        // CS:0xDEE0 — every System-A entity materialises at spawn
+        /* VGA:0x01B5-0x01C6 — export 38 seeds the fire timer +0x0E with
+         * (16 - lo) * 4 when the descriptor's fire nibble lo is nonzero, and
+         * leaves the slot's carried value otherwise. [PROVEN] live: 40 for
+         * PLEV1A descriptor 0 (lo 6), then counting down. */
+        const lo = (d.fireByte || 0) & 0xf;
+        if (lo !== 0) sysAFireTimers[e.slot] = (0x10 - lo) * 4;
+        playFlash(e);        // CS:0xDEE0 — only a zero wait (member 0) flashes at spawn; the rest at CS:0xE322
         e.spawnTick = true;  // CS:0xDF37 `jmp 0xdf62` — not ticked until the next tick
         enemiesA.push(e);
         members.push(e);

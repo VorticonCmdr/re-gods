@@ -118,6 +118,11 @@ export function parseGroupsA(buf) {
       rewardId: signWord((b[0x10] << 8) | b[0x11]),
       tileX:   b[0x12],
       tileY:   b[0x13],
+      /* VGA export 38 (VGA:0x01F8 `add dx,[si+0x14]`), called once per
+       * member from CS:0xDEE3: each member's +6 wait is the previous one's
+       * plus this byte, so member i appears i*stagger ticks after the first.
+       * [PROVEN] live: PLEV1A descriptor 0 (stagger 10) wrote 0, 10, 20. */
+      stagger: b[0x14],
       live:    b[0x00] !== 0,
     });
   }
