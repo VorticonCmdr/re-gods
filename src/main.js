@@ -1134,8 +1134,11 @@ const SHOP_EXIT_MUSIC_DELAY = 5;
        * 46 shipped tablets reach it — PLEV1B's objects at x=348 and x=329,
        * against PALFILS.0B1's only live keys 1521/1611. What the corrupt path
        * was WRITTEN to show is the string at DS:0xed17, so that is what this
-       * port shows; emulating the crash would gain nothing and make the port
-       * non-deterministic. `UNKNOWN_63d5_nomatch_runtime_effect`. */
+       * port shows. [PROVEN] live (tools/attract-capture/tablet_live.py, the
+       * x=348 tablet after the real A->B switch): the RET lands on CS:0x0060
+       * (the tablet's screen Y, 96) with DS = 0x63D5, runs the start-up tail
+       * into the boot atlas loader CS:0x2882 and ends executing data at
+       * 0x69D8:xxxx — the game HANGS, screen frozen. Not reproduced. */
       const hint = off >= 0 ? stringAt(level.textPool.arena, off) : null;
       messages.post(composeHint(hint), PRIORITY.hint);
       return;                               // CS:0x646C `sub dx,dx`
