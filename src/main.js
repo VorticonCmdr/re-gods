@@ -4163,7 +4163,7 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
        * itself since it fills gaps IN that tilemap (plane A never carries
        * these tiles; this system draws over plane A's own "empty" cells). */
       if (!frozenBg) {
-        renderer.drawExtraTiles(lineBarriers.cells(), level.tiles, camX, camY);
+        renderer.drawBarrierSprites(lineBarriers.sprites(), level.tiles, camX, camY);
         if (camScript.mode > 2) bgSnap = renderer.buf.slice();
       }
       /* World 4's rise (game/guardian4.js hook): export 19 saves the clean

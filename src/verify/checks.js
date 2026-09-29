@@ -15752,10 +15752,13 @@ export async function checkLineBarriers(fetchRaw) {
       map.planeB[cell] === 1);
     const cells = [...lineBarriers.cells()];
     const filled = cells.find((c) => c.col === 5 && c.row === 52);
-    check('the barrier draws exactly the missing cell, with a resolved tile '
-      + '(the visual half of the fix — not a guess at the unknown sprite-'
-      + 'type dispatch, see line-barriers.js\'s own header)',
-      !!filled && filled.tileId !== null, JSON.stringify(filled));
+    const drawn = [...lineBarriers.sprites()];
+    check('the barrier covers exactly the missing cell, and draws record 2\'s '
+      + 'own +0x04 tile (95, plane-A 96: export 29, VGA:0x07C1) at its pixel '
+      + 'position — UNKNOWN_189c_field04',
+      !!filled && drawn.length === 1 && drawn[0].tileId === 96
+        && drawn[0].x === lineBarriers.slots[2].x && drawn[0].y === lineBarriers.slots[2].y,
+      JSON.stringify({ filled, drawn }));
 
     /* Second entry point on the same level, predicted from the tables and '
      * confirmed live under DOSBox this session by teleporting the hero '
@@ -15807,7 +15810,7 @@ export async function checkLineBarriers(fetchRaw) {
        * 25-slot runtime pool) are different counts; only the former is
        * expected to hit 83. */
       totalArmedRecords += lineBarriers.live;
-      unresolved += lineBarriers.unresolvedTile;
+      for (const sp of lineBarriers.sprites()) if (sp.tileId > 255) unresolved++;
       for (const { col, row } of lineBarriers.cells()) {
         if (col < 0 || col >= MC || row < 0 || row >= 64) outOfMap++;
       }
@@ -15820,11 +15823,10 @@ export async function checkLineBarriers(fetchRaw) {
       outOfMap === 0, `${outOfMap} out of range`);
     results.push({
       name: 'distinct armed RECORDS across the 8 levels (<=83, since several '
-        + 'shipped events can share one record) and how many of those found '
-        + 'no borrowable neighbour tile (drawn as collision-only — solid, '
-        + 'but nothing rendered; see line-barriers.js\'s own header for why '
-        + 'this port does not guess the unresolved cases)',
-      note: true, pass: true, detail: `${totalArmedRecords} armed records, ${unresolved} unresolved`,
+        + 'shipped events can share one record) and how many drawn cells carry '
+        + 'tile 0xFF (export 29 copies VRAM from past the tile cache there; '
+        + 'not reproducible, so drawn as collision-only)',
+      note: true, pass: true, detail: `${totalArmedRecords} armed records, ${unresolved} tile-0xFF cells`,
     });
   }
 

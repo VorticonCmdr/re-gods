@@ -19,7 +19,16 @@
  *     anchored at the displayed position, forced solid (skipped when the
  *     record's own bit 7 is set) — read live: plane B at the barrier cell is
  *     0 in the `.MAP` file and 1 in live memory.
- *   - `FUN_1000_7779`'s per-frame sprite draw over the same footprint.
+ *   - `FUN_1000_7779`'s per-rescan sprite draw: every armed slot, a
+ *     `width x rows` block of 32x16 masked sprites at the PIXEL position
+ *     (x + 32c, y + 16r) (CS:0x77A7-0x77C0), sprite `[0x78] + record index`
+ *     (CS:0x777A, SS:0x434 is the rescan's own record counter). Graphics
+ *     export 29 (VGA:0x0788) built those 26 sprites at level load by copying
+ *     tile `record[+0x04]` out of the level's VRAM tile cache (VGA:0x07C1
+ *     `mov dl,[si+4]`, x64 bytes from segment 0xA672), so +0x04 is the
+ *     barrier's TILE, plane-A numbering minus one. [PROVEN] live: all 18
+ *     PALFILS.0B2 records with a tile < 120 read back byte-identical to
+ *     PBITS2B's tile. 0xFF reads past the cache (VRAM garbage): not drawn.
  *
  * THE MOTION, read from `CS:0x75FC`-`0x7B2C` and [PROVEN] live on 2026-09-28
  * (tools/attract-capture/barrier_live.py + barrier-compare.mjs: PLEV2B
@@ -54,21 +63,8 @@
  *     records each in PLEV4A and PLEV4B); what becomes of the freed slot's
  *     plane-B stamp is not established, so the port leaves the barrier as
  *     it was (UNKNOWN_barrier_disable_free).
- *   - The exact sprite `FUN_1000_7779` draws. It goes through graphics
- *     export 1 (the same masked blit `selector2.js`'s turrets use),
- *     selected by the record's own `+0x16..+0x19` "obstacle type" byte —
- *     now fully decoded (see doc), but a specific atlas descriptor index
- *     for what it actually draws was never established. Guessing one with
- *     no evidentiary basis would risk looking
- *     WORSE than the gap it replaces, so this port instead borrows the
- *     level's OWN adjacent solid platform tile — the tile immediately
- *     touching the barrier's footprint whose plane B was ALREADY 1 before
- *     this system's own stamp — so the fill is always the correct texture
- *     FAMILY for that level, even where it doesn't reproduce GAME.EXE's own
- *     exact tile choice. See `#resolveTile`. For a CYCLING barrier this is
- *     now re-resolved every tick against its current footprint, so it keeps
- *     borrowing whatever it is currently passing, rather than staying
- *     pinned to whatever bordered its starting cell.
+ *   - Tile 0xFF (the sprite export 29 copies from past the tile cache):
+ *     whatever VRAM held there, not reproducible, so nothing is drawn.
  */
 
 import { MAP_COLS, MAP_ROWS } from '../formats/map.js';
@@ -171,6 +167,7 @@ export function parseLineBarrierRecords(buf) {
       index: i,
       srcX: dv.getUint16(o, false),
       srcY: dv.getUint16(o + 2, false),
+      tile: dv.getUint8(o + 4),              // +0x04, read by VGA:0x07C1 (export 29)
       stepSeed: dv.getUint8(o + 5),          // n = stepSeed + 1, CS:0x765A -- cycling speed, px/tick
       targets, types,
       width: (wh & 7) + 1,                   // cells -- record's own +0x1a low 3 bits
@@ -192,17 +189,12 @@ export class LineBarriers {
   constructor(map, records) {
     this.map = map;
     this.records = records;
-    /* Frozen BEFORE any barrier ever stamps plane B, so the tile-borrowing
-     * heuristic below only ever matches genuine pre-existing level
-     * geometry, never another barrier's own stamp. */
-    this.originalPlaneB = map.planeB.slice();
     /* Runtime mirror, DS:0x1ca6 -- 25 slots, index == record index (both
      * live-tested records this session read back at exactly this offset).
      * null = free. */
     this.slots = new Array(RECORD_COUNT).fill(null);
     this.stampedCells = new Set();   // the cells stamped by the last rescan
     this.saved = [];                 // [cell, old value], the list at DS:0x1EFE
-    this.unresolvedTile = 0;   // armed barriers whose footprint borrowed no neighbour tile
     /* DS:0x364, the arm count, and the rescan's own entry byte CS:0x767A
      * (RET until an arm writes NOP at CS:0x7635). The level init CS:0x8D11/
      * 0x8D17 resets both, silently. */
@@ -265,8 +257,7 @@ export class LineBarriers {
     };
     this.#seed(state, from.x, from.y, rec.targets[pointIdx]);
     state.x = state.walker.line.x; state.y = state.walker.line.y;   // CS:0x7674
-    state.tileId = this.#resolveTile(state);
-    if (state.tileId === null) this.unresolvedTile++;
+    state.tileId = rec.tile + 1;                     // plane-A numbering, see header
     this.slots[recordIndex] = state;
     /* No stamp here: CS:0x77D6 runs only in the rescan, so plane B changes
      * at the next one. */
@@ -357,7 +348,6 @@ export class LineBarriers {
         }
       }
       if (state.x !== x0 || state.y !== y0) {
-        state.tileId = this.#resolveTile(state);
         if (cam && barrierOnScreen(state.x - cam.x, state.y - cam.y, state.rec.rawWh, state.rec.rawRows)) {
           movedOnScreen = true;                         // CS:0x76D7 -> 0x7720
         }
@@ -369,33 +359,6 @@ export class LineBarriers {
 
   /** DS:0x364 != 0 — some barrier has been armed since the level loaded. */
   get active() { return this.count !== 0; }
-
-  /** See the file header -- borrow whichever pre-existing, already-solid
-   *  neighbour tile touches this barrier's footprint. Checked in the order
-   *  right/left/below/above at each footprint cell in turn (matching how
-   *  every shipped 1-wide barrier in this project's census sits at the LEFT
-   *  end of a platform run, so "right" resolves correctly first for the
-   *  common case) until one is found. Returns null (nothing drawn, but the
-   *  solid stamp below still applies) if no footprint cell borders one. */
-  #resolveTile(state) {
-    const { col0, row0 } = anchorCell(state);
-    const probe = (c, r) => {
-      if (c < 0 || c >= MAP_COLS || r < 0 || r >= MAP_ROWS) return null;
-      const cell = r * MAP_COLS + c;
-      const a = this.map.planeA[cell];
-      if (a === 0 || this.originalPlaneB[cell] !== 1) return null;
-      return a;
-    };
-    for (let r = 0; r < state.rows; r++) {
-      for (let c = 0; c < state.width; c++) {
-        const col = col0 + c, row = row0 + r;
-        const found = probe(col + 1, row) ?? probe(col - 1, row)
-                   ?? probe(col, row + 1) ?? probe(col, row - 1);
-        if (found !== null) return found;
-      }
-    }
-    return null;
-  }
 
   /** `FUN_1000_77d6` — every rescan, for every armed slot (settled ones
    *  too) unless the record's +0x1A bit 7 is set: a `width x rows` block of
@@ -460,6 +423,19 @@ export class LineBarriers {
           if (col < 0 || col >= MAP_COLS || row < 0 || row >= MAP_ROWS) continue;
           yield { col, row, tileId: s.tileId };
         }
+      }
+    }
+  }
+
+  /** `FUN_1000_7779` (CS:0x77A7-0x77C0) — what the rescan DRAWS for every
+   *  armed slot, bit 7 of +0x1A or not: `width x rows` copies of the
+   *  record's tile, each 32x16, at the displayed PIXEL position plus
+   *  (32c, 16r). World coordinates; the caller applies the camera. */
+  *sprites() {
+    for (const s of this.slots) {
+      if (!s) continue;
+      for (let r = 0; r < s.rows; r++) {
+        for (let c = 0; c < s.width; c++) yield { x: s.x + c * 32, y: s.y + r * 16, tileId: s.tileId };
       }
     }
   }
