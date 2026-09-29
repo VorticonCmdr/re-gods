@@ -299,7 +299,7 @@ export function stepPickups(objects, hero, arsenal, bar = 1,
                       notWired: NOT_WIRED_REASON[h.effect] || 'not modelled', sfx: PICKUP_SFX });
       continue;
     }
-    const r = applyConsumable(h, { health, arsenal, ...(effects || {}) });
+    const r = applyConsumable(h, { health, arsenal, obj: o, ...(effects || {}) });
     consumed.push({ type: o.type, x: o.x, y: o.y, rank, effect: h.effect, name: h.name,
                     desc: h.desc, health: h.health, dx: h.dx,
                     taken: r ? (r.taken ?? true) : false,

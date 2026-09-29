@@ -100,7 +100,7 @@ export const CONSUMABLES = Object.freeze([
 export const WIRED = Object.freeze([
   'health', 'weaponPower', 'invulnerable', 'extraLife', 'freeze', 'giantJump',
   'weaponArc', 'shop', 'noop34c', 'starburst',
-  'familiar', 'familiarWings', 'familiarClaws',
+  'familiar', 'familiarWings', 'familiarClaws', 'teleport',
 ]);
 
 /* ── The three "weapon arc" potions, CS:0x95B5 / 0x62A1 / 0x62AB ──────────
@@ -274,8 +274,9 @@ export const UNIMPLEMENTED_TYPE = 43;
  * death, the carried weapon slot and the target-list gate) is
  * game/familiar.js, which notices the summon on its next tick.
  *
- * TELEPORT STONE (type 54, CS:0x6217) is decoded and PROVEN, just not
- * actionable in a port with no level transitions. It sets three variables:
+ * TELEPORT STONE (type 54, CS:0x6217) — wired (`teleportStoneDest` below,
+ * executed by main.js through the same path as a teleport zone). It sets
+ * three variables:
  *     [0x370] = 1     "a teleport is pending"   (consumed at CS:0x0324)
  *     [0x3a8] = 1     the kind
  *     [0x22e] = the destination, packed (col << 8) | row
@@ -283,7 +284,13 @@ export const UNIMPLEMENTED_TYPE = 43;
  * (col * 32). The destination comes from the 30-record {key, x, y} table at
  * DS:0xa778 — the PALFILS +0x1770 window this project had recorded only as
  * "a lookup at 0x6241" — searched by a key read through DS:0x20a, with
- * world 2 sublevel 'a' and hero x in [0x5c0,0x640] hard-coded to 0x202e.
+ * world 2 sublevel 'a' and x in [0x5c0,0x640] hard-coded to 0x202e.
+ * ⚠️ DS:0x20a is the object walk's CURRENT RECORD (CS:0x1513 `mov [0x20a],
+ * si`), so the key is the STONE's own world x, not the hero's. The table
+ * confirms it: 13 of the 15 placed stones find their own x as a key.
+ * With no key match, CS:0x627B reads the word at DS:0x19E (progress.js's
+ * `teleportCursor`, a per-world list) and steps the cursor one word — the
+ * two keyless 1A/1B stones at x=1031 take that path.
  * ⚠️ The SAME three variables are written by the ACT3 trigger at CS:0x4AA5,
  * which is what confirms the meaning: the stone and the teleport zone are one
  * mechanism reached two ways.
@@ -299,7 +306,6 @@ export const NOT_WIRED_REASON = Object.freeze({
    * eligibility_gates, CLOSED), a real reachable path. The energy/power/
    * wings state is wired exactly as CS:0xC2F6 reads it, and the entity is
    * game/familiar.js. */
-  teleport:      'decoded and proven; needs level transitions the port lacks',
   /* ⚠️ THIS ENTRY USED TO READ "already ported as the PALFILS hint system",
    * and that was FALSE — the hint TABLE had been decoded (docs/asset-formats
    * .md's 40 keys / 40 strings), but nothing in this port ever rendered it, so
@@ -409,6 +415,37 @@ export function handlerSfx(entry, health = null) {
  * `state` carries only what the wired effects touch, so a caller that does not
  * model a field simply does not get that effect.
  */
+/* PALFILS +0x1770 (DS:0xa778): 30 records {key, x, y}, big-endian. */
+export const TELEPORT_TABLE_OFF = 0x1770;
+export const TELEPORT_TABLE_RECORDS = 30;          // CS:0x6245 `mov cx,0x1e`
+export const TELEPORT_W2A_DEST = 0x202e;           // CS:0x6237
+
+/**
+ * CS:0x6217-0x628A — where a teleport stone sends the hero, packed
+ * `(col << 8) | row` for CS:0x0FDF (zones.js `unpackTeleportDest`).
+ * @param {number} stoneX   the stone's world x (DS:0x20a -> [si])
+ * @param {number} world    DS:0x42
+ * @param {number} sublevel DS:0x43 (0 = A)
+ * @param {Uint8Array} palfils the level's decompressed PALFILS
+ * @param {object} progress  progress.js Progress (DS:0x19E), stepped on the fallback
+ * @returns {{packed:number, via:string}}
+ */
+export function teleportStoneDest(stoneX, world, sublevel, palfils, progress) {
+  if (world === 2 && sublevel === 0 && stoneX >= 0x5c0 && stoneX <= 0x640) {
+    return { packed: TELEPORT_W2A_DEST, via: 'w2a' };           // CS:0x6237
+  }
+  const dv = new DataView(palfils.buffer, palfils.byteOffset, palfils.byteLength);
+  for (let i = 0; i < TELEPORT_TABLE_RECORDS; i++) {            // CS:0x624A
+    const o = TELEPORT_TABLE_OFF + i * 6;
+    if (dv.getUint16(o, false) !== (stoneX & 0xffff)) continue;
+    const x = dv.getInt16(o + 2, false), y = dv.getInt16(o + 4, false);
+    const col = (x >> 5) & 0xff, row = (y >> 4) & 0xff;         // CS:0x6258-0x626A
+    return { packed: (col << 8) | row, via: 'table' };
+  }
+  const w = progress.takeTeleportWord();                         // CS:0x627B-0x6286
+  return { packed: w === null ? null : w, via: 'list' };
+}
+
 export function applyConsumable(entry, state) {
   switch (entry.effect) {
     case 'health':
@@ -446,6 +483,13 @@ export function applyConsumable(entry, state) {
       if (!state.starburst || !state.hero) return null;
       return { placed: state.starburst.spawn(state.hero.x + 8,
                                              state.hero.y + 0x20) };
+    case 'teleport': {                               // CS:0x6217
+      if (!state.obj || !state.palfils || !state.progress) return null;
+      /* [0x370] = 1, [0x3a8] = 1, [0x22e] = packed — acted on after the
+       * player tick (CS:0x0324 -> 0x0FDF), which is main.js's job. */
+      return teleportStoneDest(state.obj.x, state.world, state.sublevel,
+                               state.palfils, state.progress);
+    }
     case 'noop34c':                                  // CS:0x62BF — writes only
       state.shieldFlagWritten = true;
       return { noop: true };

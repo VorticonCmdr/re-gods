@@ -80,6 +80,29 @@ export const EXIT_RECORD_ADDR = [0xe6ea, 0xe796, 0xe7fe, 0xe8a8];
 /* DS:0xE62E — each world's teleport-destination list (bit 6, CS:0x6973). */
 export const TELEPORT_LIST_BASE = [0xe636, 0xe646, 0xe650, 0xe660];
 
+/* DS:0xE636-0xE66F as little-endian words, read out of GAME.EXE (Ghidra,
+ * 1ffd:e636). Each is a packed teleport destination `(col << 8) | row`,
+ * consumed by the teleport stone's no-key fallback (CS:0x627B-0x6286).
+ * World 3's list is zeros, and world 4's "list" at 0xE660 is really the
+ * words that follow it (0x000E ... then WORLD_CHAIN_START) — the original
+ * reads them all the same. The cursor only ever takes world 1 base +0/+4
+ * and world 2 base +8 (the three bit-6 records' +0x20), plus 2 per stone,
+ * so this window covers everything shipped play can reach. */
+const TELEPORT_LIST_WORDS = [
+  0x182c, 0x2027, 0x3129, 0x4804, 0x5009, 0x3129, 0x3129, 0x3129,   // 0xE636 world 1
+  0x282c, 0x282c, 0x282c, 0x282c, 0x350c,                           // 0xE646 world 2
+  0, 0, 0, 0, 0, 0, 0, 0,                                            // 0xE650 world 3
+  0x000e, 0x0016, 0x0022, 0xe684, 0xe70e, 0xe7ba, 0xe820, 0xe6ea,   // 0xE660 world 4
+];
+const TELEPORT_LIST_START = 0xe636;
+
+/** The word at a DS address in the transcribed window, or null outside it. */
+export function teleportListWord(addr) {
+  const i = (addr - TELEPORT_LIST_START) >> 1;
+  if ((addr & 1) || i < 0 || i >= TELEPORT_LIST_WORDS.length) return null;
+  return TELEPORT_LIST_WORDS[i];
+}
+
 export const RING_SLOTS = 6;                // DS:0x8B34..0x8B4A
 export const RING_NEAR = 0x40;              // CS:0x398A / 0x399B
 
@@ -152,7 +175,7 @@ export class Progress {
     this.pending = false;                // DS:0x36A
     this.ring = Array.from({ length: RING_SLOTS }, () => ({ x: 0, y: 0 }));
     this.respawn = { x: 0, y: 0 };       // DS:0x16E / 0x170
-    this.teleportCursor = 0;             // DS:0x19E — no teleport stone in the port yet
+    this.teleportCursor = TELEPORT_LIST_BASE[0];   // DS:0x19E — the teleport stone's fallback list
   }
 
   /** CS:0x8C34's share. */
@@ -161,6 +184,7 @@ export class Progress {
     this.count368 = 0; this.count369 = 0; this.pending = false;
     for (const r of this.ring) { r.x = spawnX & 0xff80; r.y = spawnY & 0xff80; }
     this.respawn = { x: spawnX, y: spawnY };
+    this.teleportCursor = TELEPORT_LIST_BASE[world - 1];   // CS:0x8E79-0x8E88
   }
 
   /**
@@ -200,6 +224,14 @@ export class Progress {
     const rec = recordAt(this.addr);
     this.addr += RECORD_STRIDE;
     return rec;
+  }
+
+  /** CS:0x627B-0x6286 — the stone's no-key fallback: read the word at the
+   *  cursor, then step the cursor one word. */
+  takeTeleportWord() {
+    const w = teleportListWord(this.teleportCursor);
+    this.teleportCursor += 2;
+    return w;
   }
 
   /** CS:0x6973: DS:0x19E := word[0xE62E+(world-1)*2] + ([0x178]-0x22)[+0x20]. */

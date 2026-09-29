@@ -3070,7 +3070,11 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
         objects: level.drawObjects, bar: health.bar,
         cats: level.cats, health, invuln: fx.invuln > 0,
         effects: { ...fx, starburst, shopkeeper,
-                   hero: { x: player.x, y: player.y } },
+                   hero: { x: player.x, y: player.y },
+                   /* the teleport stone (CS:0x6217): its key table is the
+                    * level's PALFILS +0x1770, its fallback DS:0x19E */
+                   palfils: level.palfilsRaw, progress,
+                   world: levelInfo.world, sublevel: levelInfo.sublevel },
         treasure: { values: level.objValues, inventory, purse, score, burst },
         starburst, blocks, debris,
         burst, tock, tock36d, inventory,
@@ -3309,8 +3313,19 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
        * The hit is acted on here, as CS:0x0324 acts on `[0x370]` after the
        * player tick. `fr` is null on death ticks, where the player didn't run. */
       const zoneHit = fr ? player.zoneHit : null;
-      if (zoneHit && zoneHit.kind === ZONE_TELEPORT) {
-        const dest = unpackTeleportDest(zoneHit.arg);
+      /* The teleport stone (CS:0x6217) sets the SAME [0x370]/[0x3a8]/[0x22e]
+       * from the object pass (CS:0x0206), earlier in the frame than the
+       * player's zone scan — so a zone hit on the same tick overwrites it,
+       * and only one teleport (or exit) runs. */
+      let stonePacked = null;
+      if (fr) for (const c of fr.consumed) {
+        if (c.effect === 'teleport' && c.result && c.result.packed !== null) stonePacked = c.result.packed;
+      }
+      const teleportArg = zoneHit && zoneHit.kind === ZONE_TELEPORT ? zoneHit.arg
+        : zoneHit && zoneHit.kind === ZONE_EXIT ? null
+        : stonePacked;
+      if (teleportArg !== null) {
+        const dest = unpackTeleportDest(teleportArg);
         player.teleportTo(dest.x, dest.y);
         /* CORRECTION to an earlier revision of this comment, which claimed
          * the camera is NOT re-centred on teleport. CS:0x100F, inside
@@ -3348,7 +3363,7 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
         slotsA = new GroupSlots();
         groupsA = [];
         enemiesA = [];
-        $('event').textContent = `teleport zone -> (${dest.x}, ${dest.y})`;
+        $('event').textContent = `${zoneHit ? 'teleport zone' : 'teleport stone'} -> (${dest.x}, ${dest.y})`;
       } else if (zoneHit && zoneHit.kind === ZONE_EXIT && !transitioning && !tallyScreen) {
         /* CS:0x0FAC-0x0FDC only sets DS:0x178 (from DS:0xE67C[arg-2]) and
          * DS:0x36A — the tally and its bit walk run from the main loop's own

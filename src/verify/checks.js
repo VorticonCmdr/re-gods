@@ -35,7 +35,7 @@ import { scanZones, unpackTeleportDest, resolveExitDestination,
          passwordWorldForSlot, passwordToString, PASSWORD_LENGTH,
          PASSWORD_SLOTS } from '../game/zones.js';
 import { Progress, progressActions, reshutDoors, recordAt, WORLD_CHAIN_START,
-         EXIT_RECORD_ADDR, RECORD_STRIDE } from '../game/progress.js';
+         EXIT_RECORD_ADDR, RECORD_STRIDE, TELEPORT_LIST_BASE } from '../game/progress.js';
 import { TitleMenu, PasswordEntry, NameEntry, HiscoreTable, HISCORE_TABLE_TICKS,
          MENU_OPTIONS, MENU_CLICK_SFX, MENU_CONFIRM_SFX } from '../game/title-menu.js';
 import { ALPHABET_CHARS, charToCode, codeToChar, encodeName, decodeName,
@@ -137,7 +137,7 @@ import { CONSUMABLES, WIRED, WEAPON_ARCS, NOT_WIRED_REASON, applyConsumable,
          SHIELD_NOOP_DS, SHIELD_NOOP_SITES, UNIMPLEMENTED_TYPE,
          FAMILIAR_ENERGY_DS, FAMILIAR_CLEAR_SITES, FAMILIAR_START_ENERGY,
          FAMILIAR_TOPUP_ENERGY, FAMILIAR_FRESH_POWER, FAMILIAR_FRESH_WINGS,
-         applyFamiliar, banksOverheal } from '../game/consumables.js';
+         applyFamiliar, banksOverheal, teleportStoneDest } from '../game/consumables.js';
 
 import { stepHeroFrame, stepCreatureDamage, FRAME_ORDER,
          HUNTER_WEAPON, targetGateOpen } from '../game/frame.js';
@@ -11020,6 +11020,30 @@ export async function checkZones(fetchRaw) {
   const d0 = unpackTeleportDest(0);
   check('unpackTeleportDest(0) is the (16, 0) tile-centre origin, not (0,0)',
     d0.x === 16 && d0.y === 0, `got (${d0.x}, ${d0.y})`);
+
+  /* --- CS:0x6217: the teleport stone's destination ----------------------- */
+  {
+    const pal = async (k) => dclDecompress(await fetchRaw(`game/PALFILS.0${k[1]}${k[0]}`)).data;
+    const p3a = await pal('3A'), p1a = await pal('1A'), p2a = await pal('2A');
+    const pr = new Progress(); pr.reset(3, 0, 0);
+    const t = teleportStoneDest(70, 3, 0, p3a, pr);           // PLEV3A's stone at x=70
+    check('a stone keys the PALFILS +0x1770 table on ITS OWN x (DS:0x20a = the object record)',
+      t.via === 'table' && t.packed === 0x0f3c && pr.teleportCursor === TELEPORT_LIST_BASE[2],
+      `x=70 -> ${t.via} 0x${t.packed.toString(16)} (table record {0x46, 509, 960}: col 15, row 60)`);
+    const p1 = new Progress(); p1.reset(1, 0, 0);
+    const a1 = teleportStoneDest(1031, 1, 0, p1a, p1);        // PLEV1A's keyless stone
+    const a2 = teleportStoneDest(1031, 1, 0, p1a, p1);
+    check('a keyless stone takes the DS:0x19E list and steps it one word (CS:0x627B-0x6286)',
+      a1.via === 'list' && a1.packed === 0x182c && a2.packed === 0x2027
+        && p1.teleportCursor === TELEPORT_LIST_BASE[0] + 4,
+      `1st 0x${a1.packed.toString(16)}, 2nd 0x${a2.packed.toString(16)}, cursor 0x${p1.teleportCursor.toString(16)}`);
+    check('the level load resets the cursor to the world\'s list (CS:0x8E79-0x8E88)',
+      (p1.reset(2, 0, 0), p1.teleportCursor === TELEPORT_LIST_BASE[1]));
+    const w = teleportStoneDest(0x600, 2, 0, p2a, new Progress());
+    const wB = teleportStoneDest(0x600, 2, 1, p2a, new Progress());
+    check('world 2 sublevel A, x in [0x5c0,0x640] is hard-wired to 0x202e (CS:0x6237); sublevel B is not',
+      w.via === 'w2a' && w.packed === 0x202e && wB.via !== 'w2a', `${w.via} / ${wB.via}`);
+  }
 
   /* --- CS:0x0FB8-0x0FD4: the level-exit destination table --------------- */
   check('resolveExitDestination: arg 2..5 all resolve (4 destinations)',
