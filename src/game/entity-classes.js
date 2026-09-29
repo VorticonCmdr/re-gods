@@ -100,11 +100,12 @@ export const CLASS_TABLES = Object.freeze([
  * `call 0xbd0b` occur ZERO times image-wide, so the class table is the only
  * way in.
  *
- * ⚠️ AND NO SHIPPED DESCRIPTOR SELECTS IT. System A in world 4 uses class 0
- * and nothing else, across both PALFILS.0A4 and .0B4. The hazard is CUT
- * CONTENT — the fourth such feature in this game, after the `flame` weapon
- * (null handlers), the iron chest (placed nowhere) and the whole familiar
- * chain (three potions, none placed).
+ * System A in world 4 uses class 0 and nothing else, across both
+ * PALFILS.0A4 and .0B4 — which this project once read as "the hazard is CUT
+ * CONTENT". ⚠️ CORRECTED (2026-09-29): the same table (DS:0x1fe) is also
+ * selector 1's PAT class table, and PALFILS +5 selects class 3 in seven
+ * placed selector-1 descriptors of each of PLEV4A/4B. It is a live creature
+ * that lets drops fall; see pat-objects.js #bd38 and falling-drop.js.
  */
 export const HAZARD_CLASS = Object.freeze({ world: 4, system: 0, cls: 3 });
 export const HAZARD_HANDLERS = Object.freeze([0xbd38, 0xbd0b]);
@@ -121,13 +122,14 @@ export const HAZARD_SPRITE_BASE = 531;   // 0x213, matching CS:0xBD68 `add bp,0x
  *
  * The two seed different offsets (0x8B0E: x += 11; 0x8619: x += 3, y -= 0x18)
  * and read `+0x04`/`+0x06` with incompatible meanings. Nothing interlocks
- * them. Since the hazard side is never instantiated, the conflict cannot
- * arise in shipped data — which is also why it was never found.
+ * them. The nest allocator refuses outside world 2 (CS:0x8611) and the drop
+ * creature exists only in world 4, so the conflict cannot arise in shipped
+ * data.
  */
 export const POOL_DS = 0xcfcc;
 export const POOL_SLOTS = 10;
 export const POOL_STRIDE = 10;
 export const POOL_TENANTS = Object.freeze([
-  { alloc: 0x8b0e, walker: 0x8b57, gate: 0x8b56, disarm: 0x8b4a, role: 'falling hazard' },
+  { alloc: 0x8b0e, walker: 0x8b57, gate: 0x8b56, disarm: 0x8b4a, role: 'falling drop (W4 PAT class 3)' },
   { alloc: 0x8619, walker: 0x8688, gate: 0x8687, disarm: 0x8681, role: 'UNKNOWN_cfcc_cotenant' },
 ]);

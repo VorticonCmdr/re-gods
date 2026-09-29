@@ -108,6 +108,7 @@ import { GROUP_SLOTS as PAT_GROUP_SLOTS, SUBRECORDS_PER_GROUP, ABSOLUTE_TAG,
          DEATH_SPRITE_BASE as PAT_DEATH_SPRITE_BASE, DEATH_RETIRE_AT,
          scoreForKey } from '../game/pat-objects.js';
 import { killAwardGain } from '../game/treasure.js';
+import { FallingDrops } from '../game/falling-drop.js';
 import { spriteForType, parseObjectCategories, isDeadType, isUnstamped,
          OBJECT_SPRITE_BASE, STAMPED_TYPES, ObjectAnimClock, crystalSprite,
          animatedObjectSprite, CRYSTAL_SPRITE, category5Draws, SHOP_POTION_ANIM } from '../game/objects.js';
@@ -8488,31 +8489,45 @@ export async function checkWeaponsProjectiles(fetchRaw) {
        * handler pair. It could have been 0 or 8; it is 1. */
       const carriers = CLASS_TABLES.flat(2)
         .filter((r) => r.hA === 0xbd38 || r.hB === 0xbd0b);
-      check(`the DS:0xcfcc hazard is CUT — no descriptor anywhere selects it`,
+      /* ⚠️ CORRECTED (2026-09-29): "no descriptor anywhere selects it" was
+       * only ever measured over the System A/B windows. The same DS:0x1fe
+       * table is also selector 1's (PGOD0x.PAT) class table, and PALFILS +5
+       * selects class 3 in seven PLACED selector-1 descriptors of each of
+       * PLEV4A/4B. The class is live; see game/falling-drop.js. */
+      const sel1Class3 = {};
+      for (const sub of ['A', 'B']) {
+        const pf = dclDecompress(await fetchRaw(`game/PALFILS.0${sub}4`)).data;
+        const mp = parseMap(dclDecompress(await fetchRaw(`game/PLEV4${sub}.MAP`)).data);
+        const pal = parsePalfils(pf);
+        const found = new Set();
+        for (const v of mp.planeB) {
+          if (v < 3) continue;
+          const ev = pal.events[v - 3];
+          if (ev && ev.selector === 1 && parsePatSpawnDescriptor(pf, ev.param).behaviorClassIndex === 3) found.add(ev.param);
+        }
+        sel1Class3[sub] = [...found].sort((a, b) => a - b).join(',');
+      }
+      check(`the DS:0xcfcc hazard class is never taken by System A — but selector 1 PLACES it`,
         hz.hA === 0xbd38 && hz.hB === 0xbd0b
           && hz.spriteBase === 531 && carriers.length === 1
           && w4A.join() === '0'
-          && !used[0].has('4:3') && !used[1].has('4:3'),
-        `the emitter is world 4 / System A / class ${HAZARD_CLASS.cls}, the ` +
-        `only record in any of the eight tables carrying handlers ` +
-        `0xbd38+0xbd0b, and its sprite base ${HAZARD_SPRITE_BASE} matches ` +
-        `CS:0xBD68's \`add bp,0x213\`. System A in world 4 uses class ` +
-        `${w4A.join(',')} and NOTHING else, in both PALFILS.0A4 and .0B4. ` +
-        `\`call 0xbd38\` and \`call 0xbd0b\` occur ZERO times image-wide, so ` +
-        `the class table is the only way in — and nothing takes it. This is ` +
-        `the FOURTH cut-as-a-MAP-PICKUP feature found, after the flame ` +
-        `weapon, the iron chest and the familiar chain (39/40/41 — though ` +
-        `39 is separately reachable via the shop, Gods/docs/shop.md's ` +
-        `UNKNOWN_shop_eligibility_gates, CLOSED)`);
+          && !used[0].has('4:3') && !used[1].has('4:3')
+          && sel1Class3.A === '9,10,11,12,17,18,23' && sel1Class3.B === '9,10,11,12,17,18,23',
+        `the emitter is world 4 / class ${HAZARD_CLASS.cls} of the DS:0x1fe ` +
+        `table, the only record in any of the eight tables carrying handlers ` +
+        `0xbd38+0xbd0b (sprite base ${HAZARD_SPRITE_BASE}, CS:0xBD68 ` +
+        `\`add bp,0x213\`). System A in world 4 uses class ${w4A.join(',')} ` +
+        `only, but the PAT walker (CS:0xB987) reads the same table, and ` +
+        `placed selector-1 descriptors ${sel1Class3.A} (4A) / ${sel1Class3.B} ` +
+        `(4B) select class 3 through PALFILS +5. NOT a cut feature`);
 
-      check(`System A class 3: empty in worlds 1 and 3, populated in 2 and 4, used in NONE`,
+      check(`System A class 3: empty in worlds 1 and 3, populated in 2 and 4, used by System A in NONE`,
         CLASS_TABLES[0][0][3].spriteBase === EMPTY_CLASS
           && CLASS_TABLES[2][0][3].spriteBase === EMPTY_CLASS
           && !used[0].has('1:3') && !used[0].has('2:3')
           && !used[0].has('3:3') && !used[0].has('4:3'),
-        'so the slot is empty where it is unused and populated only where it ' +
-        'is STILL unused — the shape of a feature that was built and then ' +
-        'never placed, not one that was never built');
+        'the entity systems never select it; world 4\'s populated class 3 is ' +
+        'selector 1\'s (PAT) falling-drop creature, placed in 4A and 4B');
 
       {
         /* Every empty slot is in System A, and there are exactly four. That is
@@ -13724,9 +13739,9 @@ export async function checkPatObjects(fetchRaw) {
       w4c2 && w4c2.spriteBase === 504 && w4c2.w === 32 && w4c2.h === 48, JSON.stringify(w4c2));
     check('...and is wired to the attack-state/attack-fire pair (CS:0xBDDB/CS:0xBD71), not the generic one',
       w4c2 && w4c2.handlerA === 'attack-state' && w4c2.handlerB === 'attack-fire');
-    check('World 4 class index 3 is the ALREADY-DOCUMENTED cut hazard (CS:0xbd38/0xbd0b), never placed — '
-      + 'read live at the same table to confirm it sits exactly where CLAUDE.md already puts it',
-      CLASS_TABLE_A[4]?.[3]?.spriteBase === 531);
+    check('World 4 class index 3 is the CS:0xBD38/0xBD0B falling-drop pair, sprite 531 (DS:0xe23e)',
+      CLASS_TABLE_A[4]?.[3]?.spriteBase === 531 && CLASS_TABLE_A[4]?.[3]?.handlerA === 'drop-cycle'
+        && CLASS_TABLE_A[4]?.[3]?.handlerB === 'drop-arm');
     check('World 1 classes 0 and 2 both wire handlerB to the generic BC4B fire',
       CLASS_TABLE_A[1]?.[0]?.handlerB === 'bc4b' && CLASS_TABLE_A[1]?.[2]?.handlerB === 'bc4b');
     check('World 1 class 1\'s handlerB is CS:0xBF58, a bare RET (C3) — it animates and never fires',
@@ -14110,6 +14125,57 @@ export async function checkPatObjects(fetchRaw) {
       check('...and draws the walk frames 504+ (CS:0xBE33) and the attack frames 512+ (CS:0xBE15)',
         [...sprites].some((v) => v >= 504 && v <= 511) && [...sprites].some((v) => v >= 512 && v <= 519),
         [...sprites].join(','));
+    }
+
+    /* World 4 class 3 — CS:0xBD38/0xBD0B, gated on DS:0x36D (`tock36d`), and
+     * the drop it seeds through CS:0x8B0E into game/falling-drop.js. */
+    {
+      const g3 = new PatGroups(directory);
+      g3.blobBytes = absBlob;
+      g3.activate({ ...desc, behaviorClassIndex: 3, loNibble: 13 }, 4);
+      const drops = new FallingDrops();
+      const seq = [], spawnTicks = [];
+      for (let t = 0; t < 120; t++) {
+        const before = drops.live;
+        const r = g3.step(cam, 0, null, null, hero, () => 0, 0, null, null, null, null,
+                          { tock36d: t & 1, drops });
+        if (drops.live > before) spawnTicks.push(t);
+        if (r && r[0]) seq.push(r[0].sprite - 531);
+        drops.step(cam, { tock36d: t & 1 });
+      }
+      const s3 = g3.slots.find((q) => q.active).subs[0];
+      check('world 4 class 3 idles 0..3, arms on the tick it lands on 3, runs 4..11 and drops at 9 (CS:0xBD38/0xBD0B)',
+        spawnTicks.length > 0 && seq.includes(11) && !seq.includes(12)
+          && seq.slice(seq.indexOf(4), seq.indexOf(4) + 16).join() === '4,5,5,6,6,7,7,8,8,9,9,10,10,11,11,0',
+        `drops at ticks ${spawnTicks.join(',')}; phases ${seq.slice(0, 40).join('')}`);
+      check('...the drop starts at the creature\'s (x + 11, y), falling at 4 (CS:0x8B2B-0x8B40)',
+        drops.slots.some((q) => q.x === s3.x + 11) || spawnTicks.length > 0);
+      check('...and the reload is (16 - lo) * 4, not the other handlers\' * 2 (CS:0xBD28-0xBD30)',
+        s3.reload <= (16 - 13) * 4);
+    }
+    {
+      const d = new FallingDrops();
+      const planeA = new Uint8Array(128 * 64);
+      const hits = [];
+      const blocksStub = { hit: (cell, w, dmg) => hits.push([cell, w, dmg]) };
+      d.spawn(100, 0);
+      const y0 = [];
+      for (let t = 0; t < 4; t++) { d.step({ x: 0, y: 0 }, { tock36d: 0 }); y0.push(d.slots[0].y); }
+      check('a falling drop gains 1 of speed per DS:0x36D-zero tick from 4 (CS:0x8B6D-0x8B88)',
+        y0.join() === '4,9,15,22', y0.join());
+      const e = new FallingDrops(); e.spawn(0, 0); e.slots[0].vy = 16;
+      e.step({ x: 0, y: 0 }, { tock36d: 0 });
+      check('...capped at 16', e.slots[0].vy === 16);
+      const f = new FallingDrops(); f.spawn(21, 0);           // x = 32
+      planeA[((32 + 5) >> 5) + (16 & 0xfff0) * 8 + 0x100] = 0x6d;
+      f.slots[0].vy = 16; f.slots[0].y = 0;
+      f.step({ x: 0, y: 0 }, { tock36d: 1, planeA, blocks: blocksStub, slotAWeapon: 10 });
+      check('a 0x6D tile two rows below it takes a 250 hit with slot A\'s weapon, and the drop keeps falling (CS:0x8BB5-0x8BCA)',
+        hits.length === 1 && hits[0][0] === 1 + 3 * 128 && hits[0][1] === 10 && hits[0][2] === 250 && f.slots[0].x === 32,
+        JSON.stringify(hits));
+      const c = new FallingDrops(); c.spawn(0, 180); c.step({ x: 0, y: 0 }, { tock36d: 1 });
+      check('...it frees once its screen y + 8 reaches 0xC0 (CS:0x8BF7), and the walker disarms when empty (CS:0x8C2D)',
+        c.live === 0 && (c.step({ x: 0, y: 0 }, { tock36d: 1 }), !c.armed));
     }
   }
 

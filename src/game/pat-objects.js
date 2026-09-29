@@ -523,7 +523,8 @@ export function parsePatSpawnDescriptor(buf, index) {
  * module dispatches on behaviour: `'generic'` = CS:0xBE6B/0xBE71 (cosmetic
  * animation only), `'attack-state'` = CS:0xBDDB, `'bc4b'` = CS:0xBC4B,
  * `'attack-fire'` = CS:0xBD71, `'cycle'` = CS:0xBED3/0xBEF4/0xBF15/0xBF36
- * (base + phase, `cycleLen` frames), `'unknown'` = CS:0xBF58 at world 1
+ * (base + phase, `cycleLen` frames), `'drop-cycle'`/`'drop-arm'` =
+ * CS:0xBD38/0xBD0B (world 4 class 3), `'unknown'` = CS:0xBF58 at world 1
  * index 1, a bare RET — animated, never fires.
  */
 export const CLASS_TABLE_A = {
@@ -538,7 +539,7 @@ export const CLASS_TABLE_A = {
    * set needed a fresh live read: this file's own header census already
    * covers all 14 live classes across all 4 worlds ("generic, 11 of 14"),
    * and 11 == 14 minus the 3 already-named specials (world1 idx1 'unknown',
-   * world4 idx2 'attack-state', world4 idx3 'cut-hazard') — so every class
+   * world4 idx2 'attack-state', world4 idx3 'drop-cycle') — so every class
    * not already special IS the generic walk-cycle/bc4b pair, not a guess. */
   2: [
     { spriteBase: 504, w: 32, h: 32, handlerA: 'walk4',  handlerB: 'bc4b' },    // CS:0xBE60 `mov cx,0x1f8`
@@ -555,7 +556,7 @@ export const CLASS_TABLE_A = {
     { spriteBase: 496, w: 32, h: 32, handlerA: 'cycle', cycleLen: 8, handlerB: 'bc4b' },    // CS:0xBF15
     { spriteBase: 524, w: 32, h: 32, handlerA: 'cycle', cycleLen: 7, handlerB: 'bc4b' },    // CS:0xBF36
     { spriteBase: 504, w: 32, h: 48, handlerA: 'attack-state', handlerB: 'attack-fire' },
-    { spriteBase: 531, w: 32, h: 32, handlerA: 'cut-hazard', handlerB: 'cut-hazard' }, // CS:0xbd38/0xbd0b, never placed — see CLAUDE.md
+    { spriteBase: 531, w: 32, h: 32, handlerA: 'drop-cycle', handlerB: 'drop-arm' },  // CS:0xBD38/0xBD0B — placed, see #bd38
   ],
 };
 
@@ -835,6 +836,8 @@ export class PatGroups {
         let sprite;
         if (fam === 'attack-state') {
           sprite = this.#bddb(slot, s, cam, shots, tock);            // CS:0xBDDB
+        } else if (fam === 'drop-cycle') {
+          sprite = this.#bd38(slot, s, opts.tock36d || 0, opts.drops || null);   // CS:0xBD38
         } else {
           if (fam === 'ping3' || fam === 'walk4') {
             s.attackState = stepAnimPhase(s.attackState, tock, s.x, this.lastPretickX);
@@ -844,7 +847,7 @@ export class PatGroups {
           sprite = animSprite(fam, slot.cls.spriteBase, s.attackState);
         }
 
-        this.#dispatch(slot, s, cam, hero, shots, lineHazards, rngNext, tock);   // handlerB
+        this.#dispatch(slot, s, cam, hero, shots, lineHazards, rngNext, tock, opts.tock36d || 0);   // handlerB
 
         /* CS:0xBB35-0xBB43 — the contact/damage test, right after the
          * handlers and before the draw. A kill THIS tick still falls
@@ -1019,14 +1022,52 @@ export class PatGroups {
     slot.killedThisFrame += 1;                               // slot+0x1a
   }
 
-  #dispatch(slot, s, cam, hero, shots, lineHazards, rngNext, tock) {
+  #dispatch(slot, s, cam, hero, shots, lineHazards, rngNext, tock, tock36d) {
     if (slot.cls.handlerB === 'bc4b') {
       this.#bc4b(slot, s, cam, hero, shots, lineHazards, rngNext);
     } else if (slot.cls.handlerB === 'attack-fire') {
       this.#bd71(slot, s, tock);
+    } else if (slot.cls.handlerB === 'drop-arm') {
+      this.#bd0b(slot, s, tock36d);
     }
-    /* 'unknown' (CS:0xBF58, a bare RET) and 'cut-hazard' fire nothing —
-     * see this file's header. */
+    /* 'unknown' (CS:0xBF58, a bare RET) fires nothing — see this file's
+     * header. */
+  }
+
+  /**
+   * CS:0xBD38 — handlerA for world 4 class 3 (DS:0xe23e). Returns the
+   * sprite (DS:0x8), 0x213 + phase. Both halves step only on a DS:0x36D
+   * zero tick (`tock36d`, NOT the DS:0x36C `tock` the other handlers use):
+   *     BD3F  phase <= 3: phase = (phase + 1) & 3       (BD5E, which Ghidra
+   *           mis-decodes; its bytes are FF 45 0E 83 65 0E 03)
+   *     BD45  else phase += 1 ; == 9 -> CALL 0x8B0E (a falling drop,
+   *           falling-drop.js) ; >= 12 -> phase = 0
+   * Since handlerA runs first, the idle loop wraps 3 -> 0 on its own tick,
+   * so CS:0xBD0B can only arm on the tick handlerA LANDS on 3.
+   */
+  #bd38(slot, s, tock36d, drops) {
+    if (!tock36d) {                                          // BD38 `jnz bd65`
+      if (s.attackState <= 3) {                              // BD3F `jle bd5e`
+        s.attackState = (s.attackState + 1) & 3;             // BD5E-BD61
+      } else {
+        s.attackState += 1;                                  // BD45
+        if (s.attackState === 9 && drops) drops.spawn(s.x, s.y);   // BD48-BD4E
+        if (s.attackState >= 12) s.attackState = 0;          // BD51-BD57
+      }
+    }
+    return 0x213 + s.attackState;                            // BD65-BD6C
+  }
+
+  /** CS:0xBD0B — handlerB for world 4 class 3: arm the drop. The reload
+   *  counts down every tick while the low nibble is non-zero, and is reseeded
+   *  to (16 - lo) * 4 (two SHLs — not the other handlers' * 2). */
+  #bd0b(slot, s, tock36d) {
+    if (slot.desc.loNibble === 0) return;                    // BD0B `jz`
+    s.reload -= 1;                                           // BD12
+    if (s.reload >= 0) return;                               // BD15 `jns`
+    if (s.attackState !== 3 || tock36d) return;              // BD17-BD22
+    s.reload = (0x10 - slot.desc.loNibble) * 4;              // BD25-BD30
+    s.attackState += 1;                                      // BD33
   }
 
   /** CS:0xBC4B, fully decoded. */

@@ -65,6 +65,7 @@ import { sliceDigitFrames, clampMoneyForDisplay, drawScore, drawMoney, drawLives
 import { LeverToggle, SFX_LEVER_TOGGLE } from './game/levers.js';
 import { KillSmoke } from './game/kill-smoke.js';
 import { Sparkles } from './game/sparkle.js';
+import { FallingDrops } from './game/falling-drop.js';
 import { LoopSfx, spikeOnScreen } from './game/loop-sfx.js';
 import { SpikeClock, stepSpikes, spikeSprites, spike130Sprite,
          SPIKE_TYPE, SPIKE117_TYPE, SPIKE130_TYPE } from './game/spikes.js';
@@ -746,6 +747,9 @@ const guardianTables = {
   /* DS:0xb578 — the pickup sparkle (game/sparkle.js). Seeded from the object
    * pass inside stepHeroFrame, walked beside ACT6's smoke below. */
   const sparkles = new Sparkles();
+  /* DS:0xcfcc — the drops world 4's PAT class 3 lets fall (CS:0x8B0E, walker
+   * CS:0x8B57; game/falling-drop.js). */
+  const fallingDrops = new FallingDrops();
   /* THE ACTION CONTEXT — what makes a fired trigger actually do something.
    * planeA/planeB are the live map arrays (subarray views into the bulk), so a
    * door written here is visible to the renderer and to collision on the very
@@ -1060,6 +1064,7 @@ const SHOP_EXIT_MUSIC_DELAY = 5;
   let lastKillSmokeFx = [];
   let lastBlastFx = [];
   let lastSparkleFx = [];
+let lastDropFx = [];
   /* CS:0x0495-0x04A1 — the real boot state: all 4 slots empty. Keys now
    * enter through CROUCH + FIRE (CS:0x6069 -> game/pickup.js's `scanForKey`/
    * `collectKey`, wired into Player._crouch), so this no longer needs a
@@ -1708,6 +1713,8 @@ const SHOP_EXIT_MUSIC_DELAY = 5;
       killSmoke.clear(); lastKillSmokeFx = [];
       /* CS:0x8E3A `call 0x1221` — the level load frees all ten sparkles. */
       sparkles.clear(); lastSparkleFx = [];
+      /* CS:0x8E52 -> 0x8B4A -> 0x7F48 — disarm the drop walker, free its pool. */
+      fallingDrops.clear(); lastDropFx = [];
       /* A level change is not a restart, so lives carry; the timers do not.
        * ⚠️ CORRECTED: no invulnerability at level start. The loader clears
        * DS:0x172 (CS:0x8CC7) and parks the countdown DS:0x19C at 0xFFFF
@@ -3647,13 +3654,23 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
        * ce64Creatures.step() call already use), so a PAT object can now be
        * killed by the hero's touch or by a weapon hit, and awards score on
        * death via pat-objects.js's own `scoreForKey`. */
+      /* CS:0x0291 `call 0x8b56` (and CS:0x92D8 on the respawn tick) — the
+       * falling drops, one call before the PAT walk, so a drop CS:0xBD38
+       * seeds this tick first moves on the next. */
+      if (!gmLate) {
+        lastDropFx = fallingDrops.step(camNow, {
+          tock36d, planeA: level.map.planeA, blocks,
+          slotAWeapon: arsenal.slots[0] ? arsenal.slots[0].weapon : -1,
+          hero: { x: player.x, y: player.y, state: player.stateIndex }, health,
+          invuln: fx.invuln > 0, sfx: (id) => audio.play(id) });
+      }
       if (!gmLate) {
         lastPatFx = patGroups.step(
           camNow, fx.freeze, shots, lineHazards,
           { x: player.x, y: player.y, state: player.stateIndex }, () => rng.next(), tock, null,
           health, grid, decodeTag,
           { invuln: fx.invuln > 0, difficulty, rng: () => rng.next(), debris, score,
-            sfx: (id) => audio.play(id) });
+            sfx: (id) => audio.play(id), tock36d, drops: fallingDrops });
       }
 
       if (!gmLate) {
@@ -4537,6 +4554,14 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
       /* PGOD0x.PAT SCRIPTED OBJECTS — CS:0xB987, sprite a fixed spriteBase
        * per class (UNKNOWN_pat_animation_frame — the per-tick walk-cycle
        * offset is not ported, see pat-objects.js's own header). */
+      /* The class-3 drops — CS:0x8C17, sprite 543 through export 2, drawn
+       * at CS:0x0291, before the PAT walk's own draws (CS:0x0294), so a drop
+       * still inside its creature is drawn under it. */
+      for (const d of lastDropFx) {
+        const df = hero && hero.frames[d.sprite];
+        if (df) renderer.blitSprite(df, d.x, d.y);
+        else { outOfRange++; renderer.strokeRect(d.x, d.y, 8, 16, 15); }
+      }
       for (const d of lastPatFx) {
         const pf = hero && hero.frames[d.sprite];
         if (pf) renderer.blitSprite(pf, d.x, d.y);
