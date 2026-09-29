@@ -13686,11 +13686,11 @@ export async function checkPatObjects(fetchRaw) {
       /* The advance, CS:0xBE99. */
       check('CS:0xBE9E — a tock-ZERO tick advances nothing: no phase step, no facing re-evaluation',
         stepAnimPhase(0, 0, 100, 0) === 0 && stepAnimPhase(5, 0, 100, 0) === 5);
-      check('CS:0xBEA8-0xBEA9 — the phase advances (phase+1) & 3, wrapping 3 -> 0 without touching '
-        + 'the facing bit or the world-4 attack bit',
+      check('CS:0xBEA3-0xBEAE — the phase advances (phase+1) & 3, wrapping 3 -> 0, keeping the facing '
+        + 'bit and ONLY that (`and bp,8 / or cx,bp`: bit 2 is dropped)',
         stepAnimPhase(0, 1, 5, 5) === 1 && stepAnimPhase(3, 1, 5, 5) === 0
         && stepAnimPhase(8 | 3, 1, 5, 5) === (8 | 0)
-        && stepAnimPhase(4 | 1, 1, 5, 5) === (4 | 2));
+        && stepAnimPhase(4 | 1, 1, 5, 5) === 2);
       /* The asymmetry, reproduced rather than tidied: CS:0xBEC8's `dec cx /
        * cmp / jle` gives the RIGHT branch a 1px deadband, and the LEFT
        * branch's `inc cx / cmp / jg` can never be taken, so it has none. */
@@ -13944,11 +13944,14 @@ export async function checkPatObjects(fetchRaw) {
     check('CS:0xBD71 does NOT arm the attack without the tock toggle, even at phase 3 with reload expired',
       (sub.attackState & 4) === 0, `attackState=${sub.attackState}`);
 
-    sub.attackState = 3;
+    /* handlerA (CS:0xBB2E) runs BEFORE handlerB (CS:0xBB33): on a tock
+     * tick CS:0xBE99 first walks 2 -> 3, then CS:0xBD71 sees 3 and arms. */
+    sub.attackState = 2;
     sub.reload = 0;
-    g.step(cam, 0, shots, lineHazards, hero, () => 0, 1, null);      // reload->-1, tock=1 -> ARMS
-    check('CS:0xBD71 arms on the tock tick once phase===3 and reload has expired (3 -> 4, sets bit 2)',
-      (sub.attackState & 4) !== 0 && sub.attackState === 4, `attackState=${sub.attackState}`);
+    g.step(cam, 0, shots, lineHazards, hero, () => 0, 1, null);      // BE99 2->3, then BD71 arms
+    check('CS:0xBD71 arms on the tock tick the walk LANDS on phase 3 (handlerA first), 3 -> 4 sets bit 2',
+      (sub.attackState & 4) !== 0 && sub.attackState === 4 && sub.reload === (0x10 - 4) * 2,
+      `attackState=${sub.attackState} reload=${sub.reload}`);
 
     /* ⚠️ CS:0xBDDB's own phase advance is ITSELF gated on tock (`CS:0xBDEC
      * JZ be02` skips the whole increment on a non-tock tick) — a non-tock
@@ -13971,6 +13974,28 @@ export async function checkPatObjects(fetchRaw) {
     g.step(cam, 0, shots, lineHazards, hero, () => 0, 1, null);      // 7 -> 8 -> clears to bit3 only, ends
     check('the transition past 7 CLEARS bit 2 — the attack ends, walk resumes',
       (sub.attackState & 4) === 0, `attackState=${sub.attackState}`);
+
+    /* End to end, no pokes: the walk alone must reach the attack. Before
+     * handlerA (CS:0xBE99) was wired for this class, its phase never left
+     * 0 and it never fired at all. */
+    {
+      const g2 = new PatGroups(directory);
+      g2.blobBytes = absBlob;
+      g2.activate(desc, 4);
+      const shots2 = new EnemyShots();
+      let fired = 0, sprites = new Set();
+      for (let t = 0; t < 200; t++) {
+        const before = shots2.live;
+        const r = g2.step(cam, 0, shots2, new LineHazards(), hero, () => 0, t & 1, null);
+        if (shots2.live > before) fired++;
+        for (const d of r || []) sprites.add(d.sprite);
+      }
+      check('world 4 class 2 walks into its own attack and FIRES with no state poked (CS:0xBE1F -> BE99 -> BD71 -> BD9F)',
+        fired > 0, `${fired} shots in 200 ticks; sprites ${[...sprites].sort((x, y) => x - y).join(',')}`);
+      check('...and draws the walk frames 504+ (CS:0xBE33) and the attack frames 512+ (CS:0xBE15)',
+        [...sprites].some((v) => v >= 504 && v <= 511) && [...sprites].some((v) => v >= 512 && v <= 519),
+        [...sprites].join(','));
+    }
   }
 
   /* (j) parsePatDirectory against the REAL shipped, decompressed

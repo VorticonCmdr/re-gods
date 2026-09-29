@@ -163,16 +163,20 @@
  * is read DIRECTLY off the sub-record's own animation-state bit 3
  * (`[di+0xe] & 8`), not from a movement comparison — matching CLAUDE.md's
  * own "a fire routine using [di+0xe]'s bit3 directly as the facing test
- * rather than a movement comparison" exactly. ⚠️ What SETS bit 3 was not
- * found in the region read this pass (`CS:0xBDDB`'s own animation-phase
- * update explicitly PRESERVES it, `CS:0xBE02 AND [di+0xe],8` before OR-ing in
- * the new phase) — `UNKNOWN_pat_attack_facing_setter`. This port derives it
- * from the SAME "direction of last travel" comparison CS:0xBC4B itself uses
- * (`currentX >= DS:0x200`), which is the only facing signal this exact
- * subsystem is otherwise seen to use — flagged as this port's own choice,
- * not a re-derivation of the missing byte.
+ * rather than a movement comparison" exactly. What SETS bit 3 is
+ * CS:0xBE99, the shared walk-phase advance, which CS:0xBDDB calls itself
+ * (CS:0xBE1F) whenever bit 2 is clear — `UNKNOWN_pat_attack_facing_setter`
+ * is CLOSED. The attack half preserves it (`CS:0xBE02 AND [di+0xe],8`).
  *
  * ── THE ATTACK STATE MACHINE, CS:0xBDDB/CS:0xBD71 ────────────────────────
+ * ⚠️ CORRECTED (2026-09-29 audit): CS:0xBDDB has a WALK half too. With
+ * bit 2 clear it calls CS:0xBE99 (phase 0..3 and facing, tock-gated) and
+ * draws 0x1F8 + (phase & 3) + (facing ? 4 : 0). The port used to skip that
+ * half, so the phase never reached 3, CS:0xBD71 never armed, and these
+ * walkers never fired. The attack half draws 0x200 + (phase - 4) + (facing
+ * ? 4 : 0). handlerA runs BEFORE handlerB (CS:0xBB2E, then CS:0xBB33), so
+ * the arm happens on the tick the walk LANDS on 3, and CS:0xBD71's reload
+ * counts down on every tick, attack or not.
  * `[di+0xe]` packs: bits 0-2 = a phase counter (0..7, wrapping via
  * `AND 0x7`), bit 2 (0x4) = "in attack mode", bit 3 (0x8) = the sticky
  * facing bit CS:0xBD9F reads. `CS:0xBD71` (handlerB) is what starts an
@@ -408,7 +412,7 @@ const PING3 = Object.freeze([0, 1, 2, 1]);      // DS:0xdf68 / DS:0xdf70, base-r
 /** CS:0xBE99 — advance phase and facing in the shared +0xe field. */
 export function stepAnimPhase(phase, tock, newX, preTickX) {
   if (!tock) return phase;                                  // CS:0xBE9E `jz`
-  let p = (((phase + 1) & 3) | (phase & 8)) | (phase & 4);   // CS:0xBEA8-BEAE
+  let p = ((phase + 1) & 3) | (phase & 8);                   // CS:0xBEA3-BEAE — keeps bit 3 ONLY
   if (newX === preTickX) return p;                           // CS:0xBEB7 `jz`
   if (newX > preTickX) {                                     // CS:0xBEB9 `jg`
     if (newX - 1 > preTickX) p |= 8;                         // CS:0xBEC8 `jle` deadband
@@ -817,7 +821,29 @@ export class PatGroups {
           huntTargets.push({ x: screenX, y: screenY, key: s.key });   // CS:0xBB0F-BB1A
         }
 
-        this.#dispatch(slot, s, cam, hero, shots, lineHazards, rngNext, tock);
+        /* handlerA, CS:0xBB2B — FIRST, as in the original: handlerA
+         * (CS:0xBB2E), then handlerB (CS:0xBB33), then contact (CS:0xBB40),
+         * then the draw (CS:0xBB49), which blits whatever DS:0x8 handlerA
+         * left (neither emitter nor CS:0xBCCF writes DS:0x8). ⚠️ This used
+         * to run AFTER contact, so on a kill tick it advanced the -1 that
+         * CS:0xBCFA had just written and shifted the death-frame count.
+         * `s.attackState` IS the original's +0xe field (see stepAnimPhase);
+         * `this.lastPretickX` is DS:0x200, written by #move for THIS
+         * sub-record a few lines above. */
+        const fam = slot.cls.handlerA;
+        let sprite;
+        if (fam === 'attack-state') {
+          sprite = this.#bddb(slot, s, cam, shots, tock);            // CS:0xBDDB
+        } else {
+          if (fam === 'ping3' || fam === 'walk4') {
+            s.attackState = stepAnimPhase(s.attackState, tock, s.x, this.lastPretickX);
+          } else if (fam === 'cycle') {
+            s.attackState = stepCycle(s.attackState, tock, slot.cls.cycleLen);   // CS:0xBED3 family
+          }
+          sprite = animSprite(fam, slot.cls.spriteBase, s.attackState);
+        }
+
+        this.#dispatch(slot, s, cam, hero, shots, lineHazards, rngNext, tock);   // handlerB
 
         /* CS:0xBB35-0xBB43 — the contact/damage test, right after the
          * handlers and before the draw. A kill THIS tick still falls
@@ -826,24 +852,7 @@ export class PatGroups {
          * `s.key < 0` branch at the top of this loop. */
         if (health) this.#contactAndDamage(slot, s, cam, hero, health, grid, decodeTag, opts);
 
-        /* handlerA, CS:0xBB2B — advance the walk cycle and pick the frame.
-         * `s.attackState` IS the original's +0xe field (see stepAnimPhase);
-         * `this.lastPretickX` is DS:0x200, written by #move for THIS
-         * sub-record a few lines above, which is what makes the facing test
-         * read its own pre-tick X rather than a neighbour's. */
-        /* ⚠️ ONLY for the decoded animation families. `attackState` is
-         * the shared +0xe field, and world 4 class 2's handlerA is the
-         * CS:0xBDDB ATTACK STATE MACHINE, not an animation driver — that
-         * class's handlerA owns the field and advancing a walk phase under
-         * it would drive its 3->4->5->6->7 sequence from the wrong place. */
-        const fam = slot.cls.handlerA;
-        if (fam === 'ping3' || fam === 'walk4') {
-          s.attackState = stepAnimPhase(s.attackState, tock, s.x, this.lastPretickX);
-        } else if (fam === 'cycle') {
-          s.attackState = stepCycle(s.attackState, tock, slot.cls.cycleLen);   // CS:0xBED3 family
-        }
-        drawn.push({ x: screenX, y: screenY,
-                     sprite: animSprite(fam, slot.cls.spriteBase, s.attackState) });
+        drawn.push({ x: screenX, y: screenY, sprite });
       }
 
       /* CS:0xBB75-0xBBAD — THE GROUP DROP. This is where level 1A's flying
@@ -1012,8 +1021,8 @@ export class PatGroups {
   #dispatch(slot, s, cam, hero, shots, lineHazards, rngNext, tock) {
     if (slot.cls.handlerB === 'bc4b') {
       this.#bc4b(slot, s, cam, hero, shots, lineHazards, rngNext);
-    } else if (slot.cls.handlerA === 'attack-state') {
-      this.#attackState(slot, s, cam, shots, tock);
+    } else if (slot.cls.handlerB === 'attack-fire') {
+      this.#bd71(slot, s, tock);
     }
     /* 'unknown' (CS:0xBF58, a bare RET) and 'cut-hazard' fire nothing —
      * see this file's header. */
@@ -1046,47 +1055,46 @@ export class PatGroups {
     else shots.fire(s.x + 8, muzzleY, -speed, cam);
   }
 
-  /** CS:0xBDDB (walk/attack state machine) + CS:0xBD71 (arms it) +
-   *  CS:0xBD9F (the actual fire), collapsed into one step since they only
-   *  ever run together for this one class.
-   *  `attackState` packs: bits 0-2 a phase counter, bit 2 (4) "in attack
-   *  mode", bit 3 (8) the sticky facing flag CS:0xBD9F reads. */
-  #attackState(slot, s, cam, shots, tock) {
-    const inAttack = (s.attackState & 4) !== 0;
+  /** CS:0xBD71 — handlerB for world 4 class 2: arm the attack. Runs every
+   *  tick, attack or not: the reload counts down regardless, and only a walk
+   *  phase of exactly 3 on a tock tick turns an expired reload into an
+   *  attack (`inc word [di+0xe]`, 3 -> 4, which sets bit 2). */
+  #bd71(slot, s, tock) {
+    if (slot.desc.loNibble === 0) return;                    // BD71 `jz`
+    s.reload -= 1;                                           // BD78
+    if (s.reload >= 0) return;                               // BD7B `jns`
+    if ((s.attackState & 7) !== 3 || !tock) return;          // BD80-BD8D
+    s.reload = (0x10 - slot.desc.loNibble) * 2;              // BD8F-BD98
+    s.attackState += 1;                                      // BD9B
+  }
 
-    if (!inAttack) {
-      /* CS:0xBD71 — arm. Only from phase 3, only on the tock tick, only once
-       * the reload has expired. */
-      if (slot.desc.loNibble !== 0) {
-        s.reload -= 1;
-        if (s.reload < 0 && (s.attackState & 7) === 3 && tock) {
-          s.reload = (0x10 - slot.desc.loNibble) * 2;
-          s.attackState += 1;                              // 3 -> 4, sets bit 2
-        }
+  /** CS:0xBDDB — handlerA for world 4 class 2. Returns the sprite
+   *  (DS:0x8). `attackState` (+0xe): bits 0-1 walk phase, bit 2 attack
+   *  mode (bits 0-2 then count 4..7), bit 3 facing. */
+  #bddb(slot, s, cam, shots, tock) {
+    const walkSprite = () => 0x1f8 + (s.attackState & 3) + ((s.attackState & 8) >> 1);   // BE23-BE33
+    if ((s.attackState & 4) === 0) {                         // BDDE `jz be1e`
+      s.attackState = stepAnimPhase(s.attackState, tock, s.x, this.lastPretickX);   // BE1F -> BE99
+      return walkSprite();
+    }
+    let bp = s.attackState & 7;                              // BDE4
+    if (tock) {                                              // BDE7 `jz be02`
+      bp += 1;                                               // BDEE
+      if (bp === 6 && shots) this.#bd9f(slot, s, cam, shots);   // BDEF-BDF4
+      if (bp >= 8) {                                         // BDF7
+        s.attackState &= 8;                                  // BDFC — attack over, phase 0
+        return walkSprite();                                 // BE00 `jmp be23`
       }
-      return;
     }
+    s.attackState = (s.attackState & 8) | bp;                // BE02-BE06
+    return 0x200 + (bp - 4) + ((s.attackState & 8) ? 4 : 0);   // BE09-BE15
+  }
 
-    /* CS:0xBDDB's own attack-substate cycle. ⚠️ GATED ON TOCK, exactly like
-     * CS:0xBD71's own arm above (`CS:0xBDEC JZ be02` skips the WHOLE
-     * increment-fire-wraparound block on a non-tock tick, writing the phase
-     * back unchanged) — first found missing when this port's own test for
-     * "fires exactly on phase 6" failed, because without the gate the phase
-     * advances every tick instead of every OTHER tick. Firing happens on
-     * the TRANSITION that lands on 6 (current phase 5, tock fires -> 6,
-     * `CS:0xBDEF CMP BP,6` tests the INCREMENTED value, not the phase the
-     * call was entered with), not on a tick that merely FINDS phase===6. */
-    if (!tock) return;
-    const phase = s.attackState & 7;
-    const next = phase + 1;
-    if (next === 6 && shots) {
-      const speed = (slot.desc.loNibble >> 1) + 4;
-      const facingRight = (s.attackState & 8) !== 0
-        ? true
-        : s.x >= this.lastPretickX;                        // UNKNOWN_pat_attack_facing_setter — see header
-      if (facingRight) shots.fire(s.x + 0x1b, s.y + 9, speed, cam);
-      else shots.fire(s.x - 0xc, s.y + 9, -speed, cam);
-    }
-    s.attackState = next >= 8 ? (s.attackState & 8) : ((s.attackState & 8) | next);
+  /** CS:0xBD9F — the shot. Facing is bit 3 alone (BDB6 `test [di+0xe],8`),
+   *  which CS:0xBE99 sets from the walk. */
+  #bd9f(slot, s, cam, shots) {
+    const speed = (slot.desc.loNibble >> 1) + 4;             // BDAD-BDB3
+    if (s.attackState & 8) shots.fire(s.x + 0x1b, s.y + 9, speed, cam);   // BDCF, CS:0x2039
+    else shots.fire(s.x - 0xc, s.y + 9, -speed, cam);                     // BDBC, CS:0x1FE7
   }
 }
