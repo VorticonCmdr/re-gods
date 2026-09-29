@@ -3,6 +3,25 @@
 An evidence-grounded HTML5/JS port of **GODS** (The Bitmap Brothers, DOS 1991), and the
 reverse-engineering record it is built from. Vanilla JS, no framework. Vite + npm.
 
+## Playing it
+
+![GODS running in the port: world 1, the hero beside a hint tablet and a ladder](screenshots/gods.png)
+
+Start the dev server (below) and open `http://localhost:5173/`. The intro plays first;
+any key skips to the title menu.
+
+| Key | Action |
+|---|---|
+| ←/→ or A/D | walk |
+| ↑/↓ or W/S | jump, climb ladders, crouch |
+| Space or Enter | fire / confirm |
+| P | pause (any key resumes) |
+| Esc | quit to the title menu |
+
+Fire does more than shoot, as in the original. The hero has to be walking to fire. Pressing it
+while standing still pulls a lever, and pressing it while crouched picks up or drops an
+item. Add `?sound=roland` to the URL for the MT-32 music instead of AdLib.
+
 This repository ships no game data. Put your own copy of the DOS release's files (the
 directory with `GODS.EXE`, `GAME.EXE` and the `P*` files) into `game/`:
 
