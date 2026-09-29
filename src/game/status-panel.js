@@ -50,33 +50,37 @@
  *   opposed to export 3's full-screen, 44-byte-padded conversion) matches a
  *   tight 320x40 result with no virtual-scanline slack.
  *
- *   `stat3.pi1` — CS:0x05a0, inside `FUN_1000_0524` — which is the MAIN
- *   GAME LOOP itself (its body is a near-verbatim match of every per-tick
- *   routine this project's frame.js already documents: FUN_1000_9455
- *   (projectile step), FUN_1000_0dff (health-bar chase), FUN_1000_ed15
- *   (System-B entities), the CS:0x35ad frame-sync tail, ...). The load is
- *   gated by a one-time latch:
+ *   `stat3.pi1` — CS:0x05a0, inside `FUN_1000_0524`, the GUARDIAN FIGHT's
+ *   one-shot setup. ⚠️ An earlier revision called 0524 "the main game loop"
+ *   and DS:0x38A a once-per-process latch, and so drew PSTAT3 for all of
+ *   gameplay. Both were wrong: 0524's only caller is CS:0x0321, taken when
+ *   DS:0x35C (selector 11's guardian request) is set, and DS:0x38A is the
+ *   sprite-overlay latch (2 = the guard<N> group, which 0524 loads just
+ *   before this):
  *
- *     0529  cmp byte [0x38a],0x2 / jnz 0x533   ; already run? -> skip to the
- *                                              ;   loop body entirely
+ *     0529  cmp byte [0x38a],0x2 / jnz 0x533   ; guardian already set up?
+ *     0596  mov byte [0x38a],0x2
+ *     059b  mov byte [0x3e0],0x1               ; PSTAT3 is in the buffer
  *     05a0  mov dx,0xeb1b                      ; "stat3.pi1"
- *     05a3  call 0x1000:2a09                   ; the SAME shared body above,
- *                                              ;   entered PAST the DX setup
- *     0596  mov byte [0x38a],0x2                ; latch set (before the load,
- *                                              ;   but never cleared again)
+ *     05a3  call 0x1000:2a09                   ; the SAME body as above,
+ *                                              ;   entered past its DX setup
  *
- *   `call 0x1000:2a09` is CS:0x2a01 + 8 — it skips straight past `status.
- *   pi1`'s own `mov dx,0xeab6`, reusing the identical decompress/convert
- *   body with DX already pointed at "stat3.pi1". So both files load into
- *   the SAME staging buffer (0x351b:0) and convert into the SAME destination
- *   (0xac7a:0) — PSTAT3 physically overwrites PSTATUS there. Since this
- *   latch is set once per process and never reset by any restart path (the
- *   "new game" reset inside this same function clears world/health/weapons/
- *   inventory but never touches DS:0x38a), the overwrite is permanent for
- *   the rest of the session: PSTATUS is visible only before the main loop
- *   has ever run once (this port has no title/menu/hiscore screen, so it is
- *   not modelled — see PSTATUS_PATH below), and PSTAT3 is what a player
- *   actually sees for the whole game from the moment gameplay begins.
+ *   Both files convert into the same destination (0xac7a:0), so one
+ *   replaces the other. `DS:0x3E0` says which is in: 2a01 clears it, 059b
+ *   sets it. PSTATUS comes back at the next level entry (CS:0x0075 ->
+ *   0x21C2 -> 0x2205 `cmp [0x3e0],0` / 0x220C `call 2a01`) and at every
+ *   shop exit (CS:0x6D97, unconditional). While DS:0x3E0 is set the money
+ *   (CS:0x0B40) and score (CS:0x0BBF) draws return at once, so a guardian
+ *   fight shows the skull panel with no money or score; the lives
+ *   (CS:0x0AB1) still draw.
+ *
+ *   [PROVEN] live (tools/attract-capture/panel_*_live.png): in PJOYL2's
+ *   world-2 play DS:0x3E0 = 0 and the panel matches PSTATUS on 1621 of the
+ *   1906 pixels where the files differ (PSTAT3: 2; the rest lie under the
+ *   digits). Poking DS:0x35C = 1 hit CS:0x05A6 with DS:0x3E0 = 1, and the
+ *   panel then matched PSTAT3 on 1867 (PSTATUS: 1), with no money or score
+ *   drawn. The next level entry hit CS:0x220C with DS:0x3E0 = 1 and left it
+ *   0.
  *
  *   PALETTE. Neither load site is followed by a DAC-install call (no export
  *   7/8/9, no `INT 10h AX=1012h`) — the converted bytes are written straight
@@ -95,24 +99,17 @@
  *   THE TWO IMAGES DIFFER IN ONE 89x29 REGION (x 226-314, y 160-188 of the
  *   full frame — i.e. near the right end of the 40-row band): PSTATUS shows
  *   an amber circular icon beside a horizontal track; PSTAT3 shows a skull
- *   icon beside a small digit tile. Everything else — the weapon/item
- *   alcove on the left, the portrait frame, the row of empty pillar-flanked
- *   slots, the black health-bar trough along the bottom, the ornate stone
- *   border — is pixel-identical between the two. `UNKNOWN_status_panel_
- *   right_icon` — what that region actually represents (and whether it is
- *   itself later overdrawn by something dynamic) is not established; only
- *   its bounding box and the fact that it is baked differently into the two
- *   shipped files.
+ *   icon beside a small digit tile. In play the score (panel row 5) and the
+ *   money (row 17) draw over PSTATUS's part of it; during a guardian fight
+ *   they are not drawn. Everything else — the weapon/item alcove on the
+ *   left, the portrait frame, the row of empty pillar-flanked slots, the
+ *   black health-bar trough along the bottom, the ornate stone border — is
+ *   pixel-identical between the two. Not established: whether anything
+ *   draws on PSTAT3's digit tile during the fight (39 of the 1906 differing
+ *   pixels matched neither file in the live capture).
  *
- *   NOT PORTED (disclosed, not silently dropped): the health-bar FILL, the
- *   score/weapon-slot/key-icon digits and sprites drawn on top of this
- *   static frame each frame are a separate, unlocated mechanism (this pass
- *   only chased the frame's own load/convert path) — this module renders
- *   the static backdrop only. The black trough this project's own already-
- *   documented health-bar chase (`DS:0x19a`, game/combat.js's `Health`)
- *   would fill spans the full 320px width across roughly y=161..199 of the
- *   panel (index 15, pure black, in both files) — a plausible future
- *   anchor, not yet wired to anything.
+ *   The dynamic overlay (health bar, lives, money, score, inventory,
+ *   message line) lives in its own modules; this one renders the backdrop.
  *
  *   PSTATUS_PATH: `main.js` has a title screen (game/title-menu.js) but does
  *   NOT draw PSTATUS.PI1 on it — an earlier revision tried that, reasoning
@@ -123,10 +120,8 @@
  *   PSTATUS's boot-time VRAM write is still real (CS:0x2a01 genuinely runs),
  *   just transient: PBACKSCR's own full-screen load evidently happens AFTER
  *   it and overwrites rows 160-199 along with everything else, before a
- *   player ever actually sees the menu. `main.js` still loads and draws
- *   PSTAT3 for gameplay proper, matching what a player sees from the moment
- *   "BEGIN QUEST" (or a correct password) actually starts a level — that
- *   half of this file's own claim was never in question.
+ *   player ever actually sees the menu. `main.js` draws PSTATUS during play
+ *   and PSTAT3 while `panelStat3` (DS:0x3E0) is set.
  */
 
 import { decodePI1 } from '../formats/pi1.js';

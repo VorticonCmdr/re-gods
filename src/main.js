@@ -441,12 +441,13 @@ async function overlayGroupSprites(sprites, world, group) {
   }
 }
 
-/* The status panel. CS:0x38a's own latch loads PSTAT3 exactly once, the
- * first time the real per-tick game loop runs (game/status-panel.js) — not
- * per level and not per world, so this port loads it once at startup too. */
-async function loadStatusPanel() {
-  const raw = dclDecompress(await fetchRaw('game/PSTAT3.PI1')).data;
-  return decodeStatusPanel(raw);
+/* The status panel's two backdrops (game/status-panel.js). PSTATUS is the
+ * ordinary one (boot CS:0x2A01, reloaded at every level entry CS:0x220C and
+ * shop exit CS:0x6D97); PSTAT3 replaces it for a guardian fight (CS:0x05A3).
+ * Both convert into the same buffer, so only one is ever on screen. */
+async function loadStatusPanels() {
+  const load = async (name) => decodeStatusPanel(dclDecompress(await fetchRaw(`game/${name}.PI1`)).data);
+  return { status: await load('PSTATUS'), stat3: await load('PSTAT3') };
 }
 
 /* The title screen's own full-320x200 backdrop — PBACKSCR.PI1, confirmed
@@ -662,11 +663,11 @@ const guardianTables = {
     digitFrames = sliceDigitFrames(hero.frames);
   } catch (e) { console.error('sprites failed to load', e); }
 
-  /* Loaded once, world-independent, exactly like the original (CS:0x38a's
-   * latch never resets across levels or restarts — see status-panel.js). */
-  let statusPanel = null;
+  /* Both backdrops, world-independent. DS:0x3E0 (panelStat3 below) says
+   * which one the panel buffer holds. */
+  let statusPanels = null;
   try {
-    statusPanel = await loadStatusPanel();
+    statusPanels = await loadStatusPanels();
   } catch (e) { console.error('status panel failed to load', e); }
 
   /* PBACKSCR.PI1 — the title screen's own full-screen backdrop, confirmed
@@ -818,7 +819,8 @@ const guardianTables = {
    * sites are GAME.EXE's, docs/drivers-and-memory.md. */
   let musicStartTicks = 0;        // DS:0x3E8: CS:0x013C starts the level music on reaching 0
   let levelMusicOnLoad = true;    // cleared while a password entry goes to the shop (CS:0x00C4)
-  let guardianMusic = false;      // DS:0x38A == 2: CS:0x0529 skips a second guardian load
+  let panelStat3 = false;        // DS:0x3E0: PSTAT3 is in the panel buffer (CS:0x05A3), not PSTATUS
+let guardianMusic = false;      // DS:0x38A == 2: CS:0x0529 skips a second guardian load
   let titleLoopOnMenu = false;    // game over: CS:0x0993 jumps to CS:0x2C82 after the table
   const LEVEL_START_SFX = 0x7f12; // CS:0x00F7 (level load) and CS:0x0902 (respawn)
   const GAME_OVER_SFX = 0x6413;   // CS:0x0953
@@ -1424,6 +1426,7 @@ const SHOP_EXIT_MUSIC_DELAY = 5;
        * out, load context 5 (PGODSRLF.RL) and start it at 0x96. */
       if (!guardianMusic) {
         guardianMusic = true;
+        panelStat3 = true;                                         // CS:0x059B/0x05A3
         audio.music('fadeOut');
         loadMusic(MUSIC_CONTEXT.GUARDIAN);
         audio.music('start', GUARDIAN_MUSIC_VOLUME);
@@ -1684,6 +1687,9 @@ const SHOP_EXIT_MUSIC_DELAY = 5;
       /* CS:0x8CEB/0x8D06/0x8D0C: [0x35D] = 0, the walker off, [0x363] = -1;
        * the level load itself resets DS:0x38A (CS:0x2BFB). */
       shopkeeper.reset(); shopSpritesIn = false; lastShopkeeperFx = null;
+      /* CS:0x0075 -> 0x2205/0x220C: a level entry after a guardian fight
+       * reloads PSTATUS over PSTAT3. */
+      panelStat3 = false;
       /* Not the original's own state (there is no "mid-death-sequence level
        * exit" in the shipped game — the death test and a level-exit trigger
        * are mutually exclusive events), but defensive: a level switch while
@@ -2060,6 +2066,8 @@ const SHOP_EXIT_MUSIC_DELAY = 5;
         uiState = 'game'; shopScreen = null; paused = false;
         /* CS:0x6D7B-0x6D87: the LEV3A camera latch's nudge is paid back. */
         if (cam.lev3aLatch) { cam.lev3aLatch = false; cam.y += 0x20; }
+        /* CS:0x6D97: the shop exit always reloads PSTATUS. */
+        panelStat3 = false;
         /* CS:0x6D94 -> 0x21C2: level<N> goes back over the shop sprites. */
         if (shopSpritesIn) {
           shopSpritesIn = false;
@@ -4531,7 +4539,7 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
        * without also clipping the world draw above. Coloured through
        * level.palette like everything else this port draws (the panel's own
        * embedded palette is never installed in the original either). */
-      if (statusPanel) renderer.blitStatusPanel(statusPanel, STATUS_PANEL_Y0);
+      if (statusPanels) renderer.blitStatusPanel(panelStat3 ? statusPanels.stat3 : statusPanels.status, STATUS_PANEL_Y0);
 
       /* THE CROUCH/INVENTORY PANEL — CS:0x02C0/0x02C3, game/inventory-
        * panel.js. Drawn every frame regardless of player state (not a
@@ -4553,9 +4561,14 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
        * of whatever the backdrop's own VRAM already held. */
       drawHealthBar(renderer, hero && hero.frames, health.bar, healthBarShimmer.phase, STATUS_PANEL_Y0);
       drawLives(renderer, digitFrames, fx.lives, STATUS_PANEL_Y0);
-      clampMoneyForDisplay(purse);
-      drawMoney(renderer, digitFrames, purse, STATUS_PANEL_Y0);
-      drawScore(renderer, digitFrames, score, STATUS_PANEL_Y0);
+      /* CS:0x0B40/0x0BBF return at once while PSTAT3 is in (DS:0x3E0): a
+       * guardian fight shows no money or score, and the money clamp
+       * (CS:0x0B7B) waits too. The lives (CS:0x0AB1) are not gated. */
+      if (!panelStat3) {
+        clampMoneyForDisplay(purse);
+        drawMoney(renderer, digitFrames, purse, STATUS_PANEL_Y0);
+        drawScore(renderer, digitFrames, score, STATUS_PANEL_Y0);
+      }
       /* THE MESSAGE LINE — game/message.js. Panel-local row 0x1d (absolute
        * screen row 189), drawn last because the original draws it into the
        * same panel page every overlay above writes to, after them. */

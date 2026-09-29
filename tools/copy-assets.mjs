@@ -68,10 +68,9 @@ const WANTED = [
   // The world-4 guardian's worm head list (game/guardian4.js), DCL, loaded
   // at CS:0x0588 into SS:0x4F20.
   'PBUMLIST.BIN',
-  // The status panel (game/status-panel.js). PSTATUS.PI1 is the boot-time
-  // placeholder (Table 2 disk id 1); PSTAT3.PI1 is loaded once when real
-  // gameplay starts and overwrites it (disk ids 2,3 — the world data disks),
-  // and is what a player actually sees during play. Both are full 320x200
+  // The status panel (game/status-panel.js). PSTATUS.PI1 is the panel during
+  // play; PSTAT3.PI1 replaces it for a guardian fight (CS:0x05A3) until the
+  // next level entry or shop exit reloads PSTATUS. Both are full 320x200
   // DEGAS images whose only real content is rows 160-199 — the rest is
   // never converted (CS:0x2a23's own SI=0x6422 skips straight to it).
   'PSTATUS.PI1','PSTAT3.PI1',

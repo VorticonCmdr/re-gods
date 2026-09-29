@@ -477,9 +477,8 @@ export async function runAllChecks(fetchRaw) {
       !bandHasZero);
   }
 
-  /* The two files load into the SAME destination (0xac7a) — PSTAT3 physically
-   * overwrites PSTATUS at runtime, and only PSTAT3 is ever visible once real
-   * gameplay starts. Confirm they are genuinely different assets (not one
+  /* The two files load into the SAME destination (0xac7a): PSTATUS during
+   * play, PSTAT3 over it for a guardian fight (DS:0x3E0, proven live). Confirm they are genuinely different assets (not one
    * file copied under two names) and that the difference sits where the
    * disassembly-free visual diff found it. */
   {

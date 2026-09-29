@@ -3,7 +3,7 @@
  *
  * Every row is one page of one real message, composed by game/message-compose
  * .js from the shipped bytes and laid out by game/message.js's own paginator,
- * blitted onto the shipped PSTAT3 panel at the engine's own coordinates. If
+ * blitted onto the shipped PSTATUS panel at the engine's own coordinates. If
  * the glyph mapping, the 10-px advance, the 28-character field, the word-wrap
  * break or the centring arithmetic were wrong, this sheet would show it.
  *
@@ -43,7 +43,7 @@ const LEVELS = ['1A', '1B', '2A', '2B', '3A', '3B', '4A', '4B']
 const fontAtlas = parseAtlas(dclDecompress(raw('PSMLFNT.DAT')).data);
 const fontImg = decodePI1(dclDecompress(raw('PSMLFNT.PI1')).data);
 const glyphs = cutAll(fontImg, fontAtlas);
-const panel = decodeStatusPanel(dclDecompress(raw('PSTAT3.PI1')).data);
+const panel = decodeStatusPanel(dclDecompress(raw('PSTATUS.PI1')).data);
 
 const asText = (b) => [...b].filter((c) => c !== 0)
   .map((c) => (c === 0x11 ? '◆' : c === 0x26 ? '→' : String.fromCharCode(c))).join('');

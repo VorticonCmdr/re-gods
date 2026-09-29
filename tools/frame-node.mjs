@@ -205,7 +205,7 @@ for (let y = 0; y < f.h; y++) {
  * with, so this frame is the port's real output and not a mock-up. */
 let msgText = null;
 if (tabletX !== null) {
-  const panel = decodeStatusPanel(dclDecompress(raw('PSTAT3.PI1')).data);
+  const panel = decodeStatusPanel(dclDecompress(raw('PSTATUS.PI1')).data);
   idx.set(panel.indices.subarray(0, PANEL_W * PANEL_H), PANEL_Y0 * SCREEN_W);
 
   const world = +key[0];

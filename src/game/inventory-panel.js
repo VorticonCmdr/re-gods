@@ -120,7 +120,7 @@
  *   THE BUFFER'S BACKDROP is painted ONCE, not per frame: VGA.EXE graphics
  *   export 28 (table word #28 = 0x0888, VGA memory 0x888) sets all six HUD
  *   dirty flags to 0xff and copies 40 rows x 40 bytes from 0xac7a:0 (the
- *   converted PSTAT3, 40 B/row contiguous — see status-panel.js) into
+ *   converted PSTATUS or PSTAT3, 40 B/row contiguous — see status-panel.js) into
  *   0xacde:0 emitting 4 pad bytes per row (`rep movsb`+`stosw`+`stosw`),
  *   turning a 40-byte pitch into 44; then the same into 0xad4c:0 with the
  *   per-byte `ror al,1` x4 page shift. Its GAME.EXE thunk is FUN_1000_9020
