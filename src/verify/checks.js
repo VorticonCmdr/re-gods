@@ -215,7 +215,7 @@ import { JUMP_ARC_END, JUMP_ARC_EXIT, fireGuardBefore,
          fireGuardAfter } from '../game/fire-states.js';
 import { Player, ST, S as PS, JUMP_ARC_EARLY_LAND_CURSOR,
          WALK_STEP, fallDamageFor, FALL_DAMAGE_THRESHOLD,
-         FOOTSTEP_SFX, CLIMB_STEP_SFX, CLIMB_STEP } from '../game/player.js';
+         FOOTSTEP_SFX, CLIMB_STEP_SFX, CLIMB_STEP, ladderHeadCol } from '../game/player.js';
 import { CELL_SOLID, CELL_CLIMBABLE, MAP_COLS as MC, attrAt } from '../formats/map.js';
 import { parseWeapons, allocateShots, MAX_SUBSLOTS, WEAPON_SLOTS, tagFor,
          WEAPON_COUNT, PINNED_08, PINNED_SPRITE, PINNED_SPRITE2,
@@ -6597,6 +6597,29 @@ export async function checkWeaponsProjectiles(fetchRaw) {
       grabbed && p.x === 21 * 32, `state=${p.state} x=${p.x}`);
   }
 
+  /* ── DOWN at a ladder head: the per-state direction gate ─────────────────
+   * CS:0x599D-0x59E3 (state 0) vs CS:0x5BE5-0x5C27 (state 1). Hero on row 9
+   * (y = 144), the ladder cell three rows below at row 12. */
+  {
+    const mk = (cols) => { const planeB = new Uint8Array(MC * 64);
+      for (const c of cols) planeB[12 * MC + c] = CELL_CLIMBABLE; return { planeB }; };
+    const y = 9 * 16;
+    const m1 = mk([21]);        // only col+1 is a ladder (hero in col 20)
+    const m0 = mk([20]);        // only col 0 is a ladder
+    const x1 = 20 * 32 + 0x10;  // sub 0x10: both columns are in reach
+    check('state 0, col+1 ladder: DOWN alone descends, DOWN + a direction CROUCHES (CS:0x59A4 `and al,0xc / jnz`)',
+      ladderHeadCol(m1, x1, y, false, false) === 1 && ladderHeadCol(m1, x1, y, false, true) === null);
+    check('state 0, col 0 ladder: descends with or without a direction (no test on that branch)',
+      ladderHeadCol(m0, x1, y, false, false) === 0 && ladderHeadCol(m0, x1, y, false, true) === 0);
+    check('state 1, col+1 ladder: descends with or without a direction (CS:0x5BE5 has no test)',
+      ladderHeadCol(m1, x1, y, true, false) === 1 && ladderHeadCol(m1, x1, y, true, true) === 1);
+    check('state 1, col 0 ladder: DOWN alone descends, DOWN + a direction CROUCHES (CS:0x5C1B)',
+      ladderHeadCol(m0, x1, y, true, false) === 0 && ladderHeadCol(m0, x1, y, true, true) === null);
+    check('state 1 past sub 0x14 with no col+1 ladder crouches without looking at col 0 (CS:0x5BEC `jg`)',
+      ladderHeadCol(m0, 20 * 32 + 0x18, y, true, false) === null
+      && ladderHeadCol(m0, 20 * 32 + 0x18, y, false, false) === null);
+  }
+
   /* ── ladder-entry X snap is NOT unconditional (CS:0x4A36/0x59AB/0x5A3C/
    * 0x5BF3/0x5C80) — reported live as "instead of standing on top the
    * character stands in it". `add word [0x17a],0x20` runs ONLY on the col+1
@@ -9485,15 +9508,23 @@ export async function checkWeaponsProjectiles(fetchRaw) {
           q.state = ST.GROUND; q.stateIndex = PS.WALK_L; q.facing = -1;
           return q;
         };
+        /* DOWN alone: x=56 is sub 24 >= 0xc, so col+1 (column 2) is the
+         * ladder. ⚠️ These used to hold LEFT too and expect a descent —
+         * which is the port bug CS:0x59A4 refutes: in state 0 a held
+         * direction at a col+1 ladder CROUCHES. */
         const sanity = forceGround();
-        sanity.tick(ladderMap, I({ left: true, down: true }), null, 1, null);
-        check('sanity: with no nearby object, down+moving descends the ladder',
+        sanity.tick(ladderMap, I({ down: true }), null, 1, null);
+        check('sanity: with no nearby object, DOWN alone descends the ladder',
           sanity.state === ST.CLIMB);
+        const held = forceGround();
+        held.tick(ladderMap, I({ left: true, down: true }), null, 1, null);
+        check('...and DOWN + LEFT in state 0 at a col+1 ladder crouches instead (CS:0x59A4)',
+          held.state === ST.CROUCH);
 
         const p = forceGround();
-        const hot = keyHotPoint({ x: 56 - WALK_STEP, y: 9 * 16 });   // post-`_walk` position
+        const hot = keyHotPoint({ x: 56, y: 9 * 16 });
         const nearby = { x: hot.x, y: hot.y, type: 0, dead: false, flag6: 1 };
-        p.tick(ladderMap, I({ left: true, down: true }), null, 1, { objects: [nearby], cats, inventory: [] });
+        p.tick(ladderMap, I({ down: true }), null, 1, { objects: [nearby], cats, inventory: [] });
         check('...but an object near the hot point sends the hero to CROUCH instead',
           p.state === ST.CROUCH);
 
@@ -9504,7 +9535,7 @@ export async function checkWeaponsProjectiles(fetchRaw) {
          * (i.e. always, in real play) and nothing here would fail. */
         const far = forceGround();
         const farObj = { x: hot.x + 200, y: hot.y + 200, type: 0, dead: false, flag6: 1 };
-        far.tick(ladderMap, I({ left: true, down: true }), null, 1, { objects: [farObj], cats, inventory: [] });
+        far.tick(ladderMap, I({ down: true }), null, 1, { objects: [farObj], cats, inventory: [] });
         check('a live object OUTSIDE the hot-point box still lets the hero descend',
           far.state === ST.CLIMB);
       }

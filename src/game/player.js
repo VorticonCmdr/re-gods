@@ -465,6 +465,28 @@ function climbableThreeBelowCol(map, x, y) {
   if (sub <= 0x14 && cellAt(map, si) === CELL_CLIMBABLE) return 0;
   return null;
 }
+/* CS:0x599D-0x59E3 (state 0, walk left) / CS:0x5BE5-0x5C27 (state 1, walk
+ * right) — DOWN at a ladder head, with the DIRECTION gate each state really
+ * has (`mov al,[0x382] / and al,0xc / jnz crouch`). The two are not mirrors:
+ *   state 0: col+1 (sub >= 0xc) — a held direction crouches, else descend;
+ *            then col 0 (sub <= 0x14) descends with NO direction test.
+ *   state 1: col+1 (sub >= 0xc) descends with NO direction test; sub > 0x14
+ *            crouches; otherwise a held direction crouches, else col 0.
+ * Returns the column to descend into (1 or 0), or null to crouch. */
+export function ladderHeadCol(map, x, y, state1, dirHeld) {
+  const si = mapCursor(x, y) + 3 * MAP_COLS;
+  const sub = x & 0x1f;
+  const col1 = sub >= 0x0c && cellAt(map, si + 1) === CELL_CLIMBABLE;
+  if (!state1) {
+    if (col1) return dirHeld ? null : 1;                        // 59A4-59A9
+    if (sub <= 0x14 && cellAt(map, si) === CELL_CLIMBABLE) return 0;   // 59D9-59E3
+    return null;
+  }
+  if (col1) return 1;                                           // 5BE5-5BEA
+  if (sub > 0x14) return null;                                  // 5BEC-5BEF
+  if (dirHeld) return null;                                     // 5C1B-5C20
+  return cellAt(map, si) === CELL_CLIMBABLE ? 0 : null;         // 5C22-5C27
+}
 function climbableThreeBelow(map, x, y) {
   return climbableThreeBelowCol(map, x, y) !== null;
 }
@@ -1125,37 +1147,16 @@ export class Player {
        * near the crouch hot point sends the hero straight to crouch without
        * the map ever being consulted. */
       const nearObject = pickup ? objectNearHotPoint(pickup.objects, this) : false;
-      const descendCol = nearObject ? null : climbableThreeBelowCol(map, this.x, this.y);
-      /* ⚠️ NOT PORTED, confirmed by fresh disassembly of BOTH handlers this
-       * pass (a real fix attempted here first got the polarity backwards —
-       * caught before shipping). The direction gate around the col+1/col-0
-       * priority is a genuine, CONFIRMED ASYMMETRY between the two states,
-       * not a simple "direction held -> crouch" rule either state applies
-       * uniformly:
-       *   state 0 (CS:0x59a4-0x59a9): col+1 climbable -> test direction ->
-       *     HELD -> crouch, NOT held -> descend (col=1, snap). col-0 is
-       *     reached only when col+1 doesn't match and is NEVER direction-
-       *     gated.
-       *   state 1 (CS:0x5be5/0x5c1b-0x5c20): col+1 climbable -> descend
-       *     UNCONDITIONALLY, no direction test at all. Direction is instead
-       *     tested BEFORE col-0 is even consulted: HELD -> crouch outright
-       *     (col-0 never checked), NOT held -> check col-0, descend if
-       *     climbable else crouch.
-       * i.e. state 0 gates its col+1 branch; state 1 gates its col-0 branch
-       * — the mirror is not a mirror here. `climbableThreeBelowCol`'s
-       * existing col-0/col-1 priority (verified against both handlers'
-       * sub-tile thresholds, 0xc and 0x14) is correct on its own; porting
-       * the direction gate needs it to know WHICH state's rule applies, not
-       * a single post-hoc `descendCol === 1 ? ...` check. Left as this
-       * priority alone, ungated — the same simplification since before this
-       * session, now precisely characterized instead of vaguely disclosed.
-       * This does NOT affect the new stopped-pose crouch-entry path below:
-       * that path only runs with `!moving` (no direction held), which is
-       * the "NOT held" arm for BOTH states above, and both states' "NOT
-       * held" arm is exactly "defer to col-priority, no override" — so the
-       * ungated code already gives the right answer whenever it's reached
-       * with no direction held. The unfixed case (a direction ALSO held)
-       * was already reachable before this session and remains as it was. */
+      /* Which handler is running: state 1 (walk right) or state 0. A port
+       * tick can arrive here from a non-walk index with a direction held;
+       * the facing then names the walk state the original would be in. */
+      const state1 = this.stateIndex === S.WALK_R
+        || (this.stateIndex !== S.WALK_L && this.facing > 0);
+      const descendCol = nearObject ? null
+        : ladderHeadCol(map, this.x, this.y, state1, !!(input.left || input.right));
+      /* The direction gate is ported (ladderHeadCol above). It was the
+       * last divergence here: DOWN plus a direction at a ladder head
+       * crouched in DOS where the port climbed down. */
       if (descendCol !== null) {
         /* CS:0x59ab (walk-left) / CS:0x5bf3 (walk-right) — descend onto a
          * ladder three rows (48 px) below. The port's ladder is simplified
