@@ -2246,7 +2246,8 @@ export async function checkSelectorsAndObjects(fetchRaw) {
   }
   const FIXED = [[[55], [316, 317, 318, 317]], [[81], [324, 325, 326, 325]], [[82], [252, 327, 328, 327]],
     [[113], [448]], [[114], [449]], [[SPIKE_TYPE], SPIKE_OVERLAY], [[SPIKE117_TYPE], SPIKE117_OVERLAY],
-    [[SPIKE130_TYPE], SPIKE130_ANIM], [[96], [266, 445, 446, 447]], [[115], [285]]];
+    [[SPIKE130_TYPE], SPIKE130_ANIM], [[96], [266, 445, 446, 447]], [[115], [285]],
+    [[83], SHOP_POTION_ANIM], [[54], [224, 403, 404, 405, 406, 407, 408, 409]]];
   const clearedFixed = [];
   for (const w of [1, 2, 3, 4]) {
     const tables = [...FIXED, [[62, 118, 120, 122], SPECIAL_LEVER_ANIM[w]]];
@@ -2257,6 +2258,11 @@ export async function checkSelectorsAndObjects(fetchRaw) {
       }
     }
   }
+  /* CS:0x166B's potion arm sits on the category < 3 path (CS:0x1611). */
+  const potionCats = [];
+  for (const w of [1, 2, 3, 4]) potionCats.push(parseObjectCategories(dclDecompress(await fetchRaw(`game/POBJECTS.00${w}`)).data)[83]);
+  check(`type 83 (the shop potion) is category < 3 in every world, so it reaches CS:0x166B`,
+    potionCats.every((c) => c < 3), potionCats.join(','));
   check(`fixed-id object sprites: only world 1's type-55 top sprite is cleared, and it draws #331`,
     clearedFixed.join(' ') === '1:316->331 1:317->331 1:318->331', clearedFixed.join(' '));
 
@@ -2280,11 +2286,17 @@ export async function checkSelectorsAndObjects(fetchRaw) {
   /* Category 5, CS:0x19BA, against two live world-2B captures
    * (tools/attract-capture/mask63/w2b_cat5_*.png, every sprite 0 bad px). */
   const at = (d) => d.map((e) => `${e.sprite}@${e.x},${e.y}`).join(' ');
-  const c81 = new ObjectAnimClock();       // DS:0x39d = 0 when that frame was drawn
-  check(`type 81's torch flame phase is ((screenX >> 5) + DS:0x39d) & 3, screenX = 148 and 297 live`,
-    at(category5Draws(251, 148, 27, c81)) === '251@148,27 324@148,11' &&
-    at(category5Draws(251, 297, 27, c81)) === '251@297,27 325@297,11',
-    `${at(category5Draws(251, 148, 27, c81))} / ${at(category5Draws(251, 297, 27, c81))}`);
+  /* CS:0x1ACA, CX = the flame id about to be drawn, read live at 8 hits
+   * with its [0x4] (screen x) and DS:0x39d: [sx, 39d, drawn]. */
+  const LIVE_81 = [[297, 2, 325], [148, 2, 326], [297, 2, 325], [148, 2, 326],
+    [297, 3, 324], [148, 3, 325], [297, 3, 324], [148, 3, 325]];
+  const got81 = LIVE_81.map(([sx, d]) => {
+    const c = new ObjectAnimClock(); c.frame39d = d;
+    return category5Draws(251, sx, 27, c)[1].sprite;
+  });
+  check(`type 81's flame is DS:0xdfee[((screenX >> 5) + DS:0x39d) & 3]: 8 live draws at CS:0x1ACA`,
+    got81.join(',') === LIVE_81.map((r) => r[2]).join(','), got81.join(','));
+  const c81 = new ObjectAnimClock();
   check(`types 113/114 add tile 448/449 32 px to the right (CS:0x19EC)`,
     at(category5Draws(284, 16, 16, c81)) === '284@16,16 449@48,16' &&
     at(category5Draws(283, 229, 107, c81)) === '283@229,107 448@261,107');
