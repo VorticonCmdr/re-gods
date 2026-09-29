@@ -305,12 +305,12 @@
 64. ~~Category 5's extra sprites are not drawn by `gods-web`~~ — **CLOSED `[PROVEN]` live and ported (2026-09-29).** It also closes `UNKNOWN_36c_parity`, which had left the shop potion's animation unwired.
     - **The clock.** `CS:0x1450` steps `DS:0x39c`/`0x39d` on frames where `DS:0x36c` = 0xFF, and `DS:0x39e` (mod 5) on the others. `CS:0x0172` flips `DS:0x36c` once per frame, before the walk. Read live over ten ticks; `checks.js` replays them.
     - ⚠️ **A port bug found on the way.** `gods-web` stepped `DS:0x39c` every frame, so type 50's spike overlay ran twice too fast.
-    - **The phase** is `((screenX >> 5) + DS:0x39d) & 3`. `CS:0x15F1` subtracts the camera before the dispatch, and `CS:0x1AAB` read `CX` = 148 live, for the torch at 3824 with the camera at 3676. This corrects "worldX" in `docs/destructible-and-hazards.md`.
-    - **What's now drawn**, fitted live in world 2B with 0 bad pixels:
-      - types 81 (torch flames, 324/325 at the phases predicted) and 113/114 (second tiles 448/449, 32 px right);
-      - type 55's top sprite (#331 in world 1, item 63);
-      - type 82's swap, which is placed nowhere.
-    - **The shop potion** (sprite 253) now cycles `DS:0xdfa6` on `DS:0x39e`. `[STATIC]` as a picture, since only the clock is proven live.
+    - **The phase** is `((screenX >> 5) + DS:0x39d) & 3`. `CS:0x15F1` subtracts the camera before the dispatch, and `CS:0x1AAB` read `CX` = 148 live, for the torch at 3824 with the camera at 3676. At `CS:0x1ACA`, the drawn flame id matched the formula on 8 of 8 live hits, over both parities and two counter values. This corrects "worldX" in `docs/destructible-and-hazards.md`.
+      - ⚠️ A counter read at a pause can't be attributed to the frame a screen capture shows. The capture's 324/325 fits the counter at 0, one step behind the value read.
+    - **What's now drawn**:
+      - fitted live in world 2B with 0 bad pixels: type 81 (the torch base and flames) and 113/114 (second tiles 448/449, 32 px right);
+      - also: type 55's top sprite (#331 in world 1, fitted live under item 63) and type 82's swap (`[STATIC]`, placed nowhere).
+    - **The shop potion** (sprite 253, category 0 in every world) now cycles `DS:0xdfa6` on `DS:0x39e`. `[STATIC]` as a picture, since only the clock is proven live. The fixed-id audit (item 63) also covers its frames 433–436 and the crystal's 403–409: all are built wherever those types are placed.
     - **A dormant DOS bug.** Type 81's `and cl,3` reads `DS:0xDDEE` (zeros) at a negative screen x. That's unreachable: the camera stops at 3776.
     - **Captures**: `gods-web` `tools/attract-capture/mask63/w2b_cat5_*.png`.
 
