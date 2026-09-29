@@ -111,7 +111,7 @@ export function stepHeroFrame({ input, arsenal, grid, player, map, cam,
                                zoneScan = null, beforePlayer = null,
                                objectPass = true, effects = null,
                                heroDead = false, familiar = null,
-                               shopkeeper = null, sparkle = null }) {
+                               shopkeeper = null, sparkle = null, areaKill = null }) {
   /* `heroDead`: the death driver CS:0x09BB runs this same pre-player half of
    * the tick (grid clear, blocks, barriers, object pass, projectiles,
    * starburst, selector 2) WITHOUT the fire latch (CS:0x019D) and without the
@@ -153,6 +153,10 @@ export function stepHeroFrame({ input, arsenal, grid, player, map, cam,
                                    /* the blast's hero test (CS:0xA3F4/0xA421)
                                     * reads the hero BEFORE the player moves */
                                    { hero: { x: player.x, y: player.y }, health, invuln });
+  /* CS:0xA2FC -> CS:0x3BE8 — a detonation's area kill runs INSIDE the
+   * projectile step, so the player tick below (its crouch scan included)
+   * already sees the killed hazards gone. */
+  if (areaKill) for (const b of projectiles.blastBoxes) areaKill(b);
   /* CS:0xA816 — a shot the terrain just stopped drops a stationary debris
    * puff at the point it stopped. Fires for ANY weapon whose `breaksTerrain`
    * (+0x48) is set, whether or not the cell was also a destructible block —

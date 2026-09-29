@@ -3062,6 +3062,13 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
       fr = stepHeroFrame({
         heroDead: !!deathSeq,                        // CS:0x09BB — see frame.js
         sparkle: sparkles,                           // CS:0x1239, from the pickup test
+        /* CS:0xA2FC -> CS:0x3BE8: a time bomb's blast runs ACT6's kill over
+         * its own box, inside the projectile step (before the player, and
+         * before the ACT6 smoke walker CS:0x0239 — its puffs draw this tick). */
+        areaKill: (box) => {
+          events.actionCtx.objects = level.drawObjects;
+          killCategory4InBox(events.actionCtx, box.x0, box.y0, box.x1, box.y1);
+        },
         familiar: { entity: familiar, rng: () => rng.next(),
                     hero: { x: player.x, y: player.y, state: player.stateIndex } },
         input, arsenal, grid, player,
@@ -3200,13 +3207,6 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
        * (hero-fire.js) already collects one entry per event this tick,
        * same shape as `hits`/`axeBounced` above. */
       for (const id of fr.projectiles.bombSfx) audio.play(id);
-      /* CS:0xA2FC -> CS:0x3BE8 — a detonation runs ACT6's area kill over its
-       * own box, inside the projectile step (CS:0x020F), so before the ACT6
-       * smoke walker (CS:0x0239): a puff it seeds draws this same tick. */
-      for (const box of fr.projectiles.blastBoxes || []) {
-        events.actionCtx.objects = level.drawObjects;
-        killCategory4InBox(events.actionCtx, box.x0, box.y0, box.x1, box.y1);
-      }
       lastBlastFx = fr.projectiles.blastFx || [];
       for (const c of fr.consumed) {
         consumed++;
@@ -3372,6 +3372,12 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
         slotsA = new GroupSlots();
         groupsA = [];
         enemiesA = [];
+        /* CS:0x1030-0x103F — the teleport tail then runs the respawn tick
+         * CS:0x921B behind a fade (CS:0x359D out, CS:0x3596 in with
+         * SI=0x43E) and jumps back to the loop head (CS:0x1042). The tick
+         * is ported (respawnTick); the palette fade is not, as for every
+         * other fade in this port. */
+        respawnTick = true;
         $('event').textContent = `${zoneHit ? 'teleport zone' : 'teleport stone'} -> (${dest.x}, ${dest.y})`;
       } else if (zoneHit && zoneHit.kind === ZONE_EXIT && !transitioning && !tallyScreen) {
         /* CS:0x0FAC-0x0FDC only sets DS:0x178 (from DS:0xE67C[arg-2]) and
