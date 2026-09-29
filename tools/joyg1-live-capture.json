@@ -41,7 +41,7 @@
     "building one honest tick=T record pairs the camera field from the",
     "cursor=T read with the hero/state fields from the cursor=T+1 read.",
     "This correction is also what exposed and let that pass FIX two real port",
-    "bugs, both in gods-web/src/game/player.js's _ground(): (1) the original",
+    "bugs, both in re-gods/src/game/player.js's _ground(): (1) the original",
     "enters the TURN_LR/TURN_RL pivot (CS:0x5DFE) on ANY first press from",
     "ARRIVAL, not just a reversal -- ticks 14-15 (state 2 then 1, hero frozen)",
     "were read by the OLD, wrongly-labelled capture as state 4 then 2, hiding",

@@ -7885,7 +7885,7 @@ export async function checkWeaponsProjectiles(fetchRaw) {
       'debris spark plays) except while DS:0x34 is set (a guardian fight, or ' +
       'the world-3 DS:0xce64 type\'s bracket), when CS:0x936D plays 0x21D — ' +
       'modelled in main.js\'s decodeTag — so "nothing plays on every ' +
-      'hit" is correct porting everywhere gods-web actually decodes a hit, ' +
+      'hit" is correct porting everywhere re-gods actually decodes a hit, ' +
       'not a residual gap. Every voice is a STYLIZED synthesis, not ' +
       'a chip-accurate one — see that module\'s own header for why. A still ' +
       'later pass closed the footstep/climb-step gap: 0x20e footstep and ' +

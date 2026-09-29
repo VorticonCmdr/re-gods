@@ -2336,6 +2336,8 @@ let lastDropFx = [];
    * for that install type, not an arbitrary port addition — same reasoning
    * for `passwordSlots`' own persistence below, which gets it for the first
    * time in this same pass. */
+  /* The keys keep the project's old name, so saves made before the rename
+   * to re-gods still load. */
   const HISCORES_STORAGE_KEY = 'gods-web:hiscores:v1';
   const PASSWORDS_STORAGE_KEY = 'gods-web:passwordSlots:v1';
   function persistHiscores() {

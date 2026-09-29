@@ -1,5 +1,5 @@
 /* payoff.js — the game-completion screen, CS:0x037A. [PROVEN] live in DOSBox
- * (gods-web tools/attract-capture/w4payoff.py): the world-4 ending sets
+ * (re-gods tools/attract-capture/w4payoff.py): the world-4 ending sets
  * DS:0x34A once the hero has banked the ten gifts, and the main loop's
  * CS:0x032E `jnz 0x37a` lands here.
  *

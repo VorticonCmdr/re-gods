@@ -96,12 +96,12 @@ order, every tick this screen is open):
   cell's own position (`X=(cursor&7)*32+40, Y=(cursor>>3)*24+40`) — the SAME
   grid geometry `FUN_1000_30d4` uses, confirming both functions share one
   coordinate scheme. Descriptors 87-90 are PALWAYS2 records 48-51 (`tools/
-  atlas-render.mjs PALWAYS2` in `gods-web`): a 4-frame white/gold twinkling
+  atlas-render.mjs PALWAYS2` in `re-gods`): a 4-frame white/gold twinkling
   sparkle-star animation, rotating through its points — a sensible, legible
   cursor icon for a letter grid, drawn ON TOP of the selected cell's own
   letter (overlapping it), not offset beside it.
 
-Live-confirmed visually in a `gods-web` port session this pass: matching a
+Live-confirmed visually in a `re-gods` port session this pass: matching a
 user-supplied screenshot of the real screen pixel-for-pixel in layout (title font,
 grid font/geometry, the row-4 "space" cell's own faint mark, the erase/confirm
 icons, and the `"PASS n :xxx"` hint line below).
@@ -433,7 +433,7 @@ hint until a world-2 password actually exists.
 None of the disk-save/load path has a port-side equivalent — a browser port has no
 disk write to fail.
 
-`gods-web`'s `zones.js` originally carried a header comment stating "there is no
+`re-gods`'s `zones.js` originally carried a header comment stating "there is no
 'ENTER A PASSWORD' screen here to type this back into," as if the game never shows
 one. It does — see *The generator*, above. `zones.js`'s own `generatePassword()`
 is a reasonable simplification of `FUN_1000_6a6b` (three `random/2521+1` draws)
@@ -453,7 +453,7 @@ title/grid/buffer-row, the real pixel geometry, the erase/confirm icons via
 `main.js`'s new `gridEraseIcon`/`gridConfirmIcon` (descriptors 166/167), and the
 `"PASS n :xxx"` hint line reading `passwordSlots` directly. Live-verified against
 a real screenshot of the DOS screen and functionally (menu navigation, typing,
-the wrong-guess bounce back to the menu) in a running `gods-web` session.
+the wrong-guess bounce back to the menu) in a running `re-gods` session.
 
 ## Residual open ends
 
@@ -480,4 +480,4 @@ the wrong-guess bounce back to the menu) in a running `gods-web` session.
   behaving differently, not a contradiction. Worth stating explicitly here
   since a first port-side implementation conflated the two and blitted
   record 27 for every space in flowed text too, producing a visible mark
-  between every word — fixed in `gods-web`.
+  between every word — fixed in `re-gods`.

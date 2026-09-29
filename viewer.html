@@ -712,7 +712,7 @@ function parseJoy(buf) {
 /* ════════════════════════════════════════════════════════════════════════
  * PALFILS.0{A,B}{1-4} — all nine front-region windows now have decoded field
  * layouts. `spawn` (PAT/selector-1 spawn table) and `spawner2` (selector-2
- * turret spawner) are transcribed verbatim from gods-web's own ported
+ * turret spawner) are transcribed verbatim from re-gods's own ported
  * parsers (`game/pat-objects.js`'s `parsePatSpawnDescriptor`, `game/
  * selector2.js`'s `parseClasses`) — this viewer used to show both as raw
  * hex even though the game engine already decodes them. `driverTbl`
@@ -828,7 +828,7 @@ function parsePalfilsGroup(buf, which) {
 }
 
 /** `+0x0000`, 8 bytes/record — the PGOD0x.PAT / selector-1 spawn table
- *  consumed by CS:0xB908. Field layout transcribed verbatim from gods-web's
+ *  consumed by CS:0xB908. Field layout transcribed verbatim from re-gods's
  *  own `game/pat-objects.js` (`parsePatSpawnDescriptor`) — see that file's
  *  header for the full CS:0xB90D-0xB976 trace. */
 function parsePalfilsSpawn(buf) {
@@ -856,7 +856,7 @@ function parsePalfilsSpawn(buf) {
 
 /** `+0x0718`, 16 bytes/record — the selector-2 stationary-turret class
  *  descriptor consumed by CS:0xAD0D. Field layout transcribed verbatim from
- *  gods-web's own `game/selector2.js` (`parseClasses`) — see that file's
+ *  re-gods's own `game/selector2.js` (`parseClasses`) — see that file's
  *  header for the full CS:0xAD0D-0xAD61 trace. */
 function parsePalfilsSpawner2(buf) {
   const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);

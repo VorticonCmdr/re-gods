@@ -1,4 +1,4 @@
-# gods-web
+# re-gods
 
 An evidence-grounded HTML5/JS port of **GODS** (The Bitmap Brothers, DOS 1991), and the
 reverse-engineering record it is built from. Vanilla JS, no framework. Vite + npm.

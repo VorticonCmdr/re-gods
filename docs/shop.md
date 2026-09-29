@@ -104,7 +104,7 @@ grid-table lookup, `[PROVEN]`.
 ⚠️ **Correction, 2026-09-28** `[STATIC]`: this section used to say every
 direction clamps at the grid *edge* ("moving past the last populated column …
 does nothing") and called that `[PROVEN]` live. The live capture only showed
-the grid's shape; the listing above has no per-row test, and `gods-web`'s
+the grid's shape; the listing above has no per-row test, and `re-gods`'s
 `ShopScreen` had shipped the row clamp. Both are corrected.
 
 **Held-direction auto-repeat, `CS:0x6CAA`–`0x6CEA`** `[STATIC]`, ported.
@@ -242,7 +242,7 @@ set once, at roster-rebuild time, from the count alone. So a shop with 18
 eligible survivors doesn't let the player scroll to see the 18th; it
 permanently shows only the 17 MOST EXPENSIVE ones and drops the single
 CHEAPEST survivor outright, silently, every time the roster is rebuilt.
-`gods-web`'s `ShopScreen#rebuildVisible` reproduces this exactly (sort
+`re-gods`'s `ShopScreen#rebuildVisible` reproduces this exactly (sort
 ascending by price, then keep only the last `DATA_SLOTS`) and a synthetic
 test confirms it: feeding worlds 3/4's full 18-id list with both gates open
 and unlimited money drops exactly id `70` — the single cheapest of the 18
@@ -278,11 +278,11 @@ session — see `UNKNOWN_shop_roster_source` below — and its own 16-entry list
 for world 1/2 is exactly the union of these two filtered samples, confirming
 both captures and the source read agree.
 
-### The 12 buy ids are exactly 12 `gods-web` `CONSUMABLES` types — independent cross-check
+### The 12 buy ids are exactly 12 `re-gods` `CONSUMABLES` types — independent cross-check
 
 `{0,35,36,38,42,44,51,52,53,70,71,72}` — the full stable-core buy set from both
 runs above — is **exactly** the set of `type` values already present in
-`gods-web`'s own `src/game/consumables.js` `CONSUMABLES` table (ranks 0, 3, 4, 6,
+`re-gods`'s own `src/game/consumables.js` `CONSUMABLES` table (ranks 0, 3, 4, 6,
 10, 12, 14, 15, 16, 19, 20, 21 respectively: health, health, starburst,
 invulnerable, extraLife, freeze, three weaponArc ranks, and three more health
 ranks). Twelve items, twelve exact matches, zero misses. That table was built
@@ -364,12 +364,12 @@ names a **weapon type to buy and equip** (`id - 0xc0` = weapon index 0-10);
 the "sell" framing this file used until this session came from mirroring
 `FUN_1000_7392`'s own two-branch shape (id `<0xc0` reads the consumable
 price table, id `≥0xc0` reads a *different* table) without yet knowing what
-that second table actually drove. `gods-web`'s `SELL_ID_BASE`/"sell" naming
+that second table actually drove. `re-gods`'s `SELL_ID_BASE`/"sell" naming
 inherited the same misreading and should be renamed if this gets ported.
 
 `FUN_1000_953e(weaponIndex)` (fully disassembled this session — the earlier
 "not chased further" note above is stale) is the SAME slot-selector
-`docs/combat-and-projectiles.md`/`gods-web`'s own `pickup.js` already port
+`docs/combat-and-projectiles.md`/`re-gods`'s own `pickup.js` already port
 as `chooseSlot`/`weapons.js`'s `WEAPON_SLOTS` logic: weapon index `2`
 (fireball) is hard-wired to slot C; otherwise a weapon whose own record
 `+0x00` field is `0` goes to slot A; otherwise it competes for slots B/C,
@@ -405,7 +405,7 @@ mis-rendered (a truncated, wrong-looking `if (BX==2) ...; return;` body);
       price = byteswap((DS:0xe2b6 + (id-0xc0)*0x50)[+0x4a])   ; the NEW weapon's own price
       money -= price                                     ; a real 32-bit subtract
       FUN_1000_94a7(id-0xc0)                             ; the ARM routine -- already
-                                                          ;   ported in gods-web as
+                                                          ;   ported in re-gods as
                                                           ;   pickup.js's real pickup path
       FUN_1000_7233()                                    ; rebuild the roster
 ```
@@ -593,7 +593,7 @@ and this project's own reconstruction of it) is understood correctly.
 **Worlds 3 and 4 share an identical buy-id candidate set**, `{0,2,3,35,36,
 37,38,39,40,41,42,44,51,52,53,70,71,72}` (18 ids) — world 1/2's 12 plus six
 new ones: `2,3,37,39,40,41`. Cross-checked exactly like the original 12: all
-six are real `gods-web` `CONSUMABLES` types (`2`→rank 1 weaponPower, `3`→
+six are real `re-gods` `CONSUMABLES` types (`2`→rank 1 weaponPower, `3`→
 rank 2 weaponPower, `37`→rank 5 noop34c, `39`→rank 7 familiar, `40`→rank 8
 familiarWings, `41`→rank 9 familiarClaws) — six items, six exact matches,
 zero misses, the same signal that validated the original 12.
@@ -677,7 +677,7 @@ is itself a purchasable item in worlds 3 and 4's own shop roster**
 (`SS:0x51aa`'s raw list, `UNKNOWN_shop_roster_source` above; priced
 `30000`, the single most expensive of all 18 raw ids this port now ships).
 `FUN_1000_6e62`'s buy dispatch runs the identical category-0 consumable
-handler a map pickup would (`safeApplyConsumable`'s `gods-web` equivalent
+handler a map pickup would (`safeApplyConsumable`'s `re-gods` equivalent
 already mirrors this — see below), so buying id 39 in world 3 or 4's shop
 sets `DS:0x168` to `1000` exactly as a (never-shipped) map pickup would have.
 **Gate 2 is reachable in shipped play — a two-stage unlock (buy the
@@ -725,9 +725,9 @@ DOSBox.
 
 The shop does not show `DS:0x194`/`0x196` directly. It shows a copy at `DS:0x254`/`0x256`, set to the real money on both entries (`CS:0x6BED`, and `CS:0x0676` for the level-start shop). `FUN_1000_718B` runs once at entry (`CS:0x6C6F`) and on every loop pass that is not a FIRE press (`CS:0x6D60`, after the cursor sound `0x232` at `0x6D4F`; the FIRE path jumps to `CS:0x6E62` and skips it). Each call moves the shown money `0x2EE` (750) toward the real money, never past it, and plays **`0x111`** (`CS:0x71A3` counting down, `0x71CF` up). Equal: nothing, silent. So after a purchase the display counts down in 750 steps, one tick sound per pass: 108 ticks means 81,000 spent.
 
-Live: the `PJOYL2` and `PJOYL3` sweeps log exactly these runs (108 and 84 plays), each under the tape cursor of its own shop pass. `gods-web` drew the purse itself; `src/game/shop.js` now keeps `shownMoney` and plays `0x111` per step, and matches every play per cursor.
+Live: the `PJOYL2` and `PJOYL3` sweeps log exactly these runs (108 and 84 plays), each under the tape cursor of its own shop pass. `re-gods` drew the purse itself; `src/game/shop.js` now keeps `shownMoney` and plays `0x111` per step, and matches every play per cursor.
 
-**The shop's exit runs a respawn tick.** `CS:0x6DCB` calls `FUN_1000_921B` (the tick body a respawn uses, with a tape poll) before `jmp cx` (`CS:0x6DF3`, patched to `0x0696` for the level-start shop), and only then `CS:0x06A9` plays the level-start sound `0x7F12`; `0x0111`'s check at `0x0126` then plays the aura loop `0x280` if a shield was bought, else stops `0x80`. `gods-web` now runs that respawn tick and plays the sound after it (the sweeps' `0x7F12` lands one cursor after the exit pass).
+**The shop's exit runs a respawn tick.** `CS:0x6DCB` calls `FUN_1000_921B` (the tick body a respawn uses, with a tape poll) before `jmp cx` (`CS:0x6DF3`, patched to `0x0696` for the level-start shop), and only then `CS:0x06A9` plays the level-start sound `0x7F12`; `0x0111`'s check at `0x0126` then plays the aura loop `0x280` if a shield was bought, else stops `0x80`. `re-gods` now runs that respawn tick and plays the sound after it (the sweeps' `0x7F12` lands one cursor after the exit pass).
 
 ## The shop potion's shopkeeper — the mid-level entry, `[PROVEN]` live (2026-09-28)
 
@@ -741,11 +741,11 @@ The potion's handler (`CS:0x61E9`) writes only `DS:0x363 = 0x41`. The rest hangs
 - **The walker, `CS:0x0288` → `0x071D`,** between System B (`0x0285`) and System A (`0x028B`). While it is on, the player dispatch runs only its epilogue (`CS:0x49AA`), the spike loop does not start (`CS:0x14D3`) and contact hurt sounds are muted (`CS:0xACE5`). On ticks where `DS:0x36C` is set it moves 6 px; near a column boundary (`x & 0x1F` ≤ 4 or ≥ 0x1C) it turns when a wall (`== 1`) is in the next column's first three rows or that column's fourth row, the floor, is not solid (the fourth test's `jz 0x078C` is the only way past the `NEG`). On the other ticks it advances its phase (`& 7`) and plays footstep `0x020E` on phases 2 and 6. It draws sprite `0x1C2 + 4·dx + 4 + phase`.
 - **The contact, `CS:0x07D9`:** `CS:0xAC59` with a 0x20 × 0x30 box and strength 5 (5 damage, not scaled). A reported hit gives the 5 back unless invulnerable, switches the walker off, sets `SS:0x40A = 0xC0`, pops the main loop's return address and jumps to `CS:0x6BED`, so the rest of that tick never runs. The mid-level entry fades the music (`CS:0x6C0E`) and keeps the money; its exit (`CS:0x6D7B`) pays back the LEV3A camera nudge, restores `level<N>` over the shop sprites (`CS:0x21C2`), runs the respawn tick, sets `[0x3E8] = 5` and jumps to `CX = 0x011B`, the main loop's head, without the password path's `CS:0x0696` level-start sound.
 
-Live: `tools/attract-capture/walker_live.py` pokes `[0x363] = 0x41` at `PJOYL1` cursor 300 and logs every tick. The hero walks right until state 1, phase 2, then holds; the countdown runs 65 ticks; at 365 the walker starts at (1664, 944, −1) with `[0x35D] = 1` and `[0x38A] = 1`; it walks and plays its footsteps from `CS:0x07FE`; moved beside the hero at 406, it touches him on tick 414 and `CS:0x6BED` runs on 415 with health unchanged and `SS:0x40A = 0xC0`. `gods-web` (`src/game/shopkeeper.js`, `tools/attract-capture/walker-compare.js`) matches all 115 ticks, sounds included, and opens the shop on 415. A second staging (`walker_live_wall.json`) puts the walker at x 1580 walking right: it turns seven times between the walls at columns 52 and 43 (x 1634 and 1436) through cursor 840, and the port matches all 541 ticks. The ledge turn (a missing floor) is `[STATIC]`: no staged path reached one.
+Live: `tools/attract-capture/walker_live.py` pokes `[0x363] = 0x41` at `PJOYL1` cursor 300 and logs every tick. The hero walks right until state 1, phase 2, then holds; the countdown runs 65 ticks; at 365 the walker starts at (1664, 944, −1) with `[0x35D] = 1` and `[0x38A] = 1`; it walks and plays its footsteps from `CS:0x07FE`; moved beside the hero at 406, it touches him on tick 414 and `CS:0x6BED` runs on 415 with health unchanged and `SS:0x40A = 0xC0`. `re-gods` (`src/game/shopkeeper.js`, `tools/attract-capture/walker-compare.js`) matches all 115 ticks, sounds included, and opens the shop on 415. A second staging (`walker_live_wall.json`) puts the walker at x 1580 walking right: it turns seven times between the walls at columns 52 and 43 (x 1634 and 1436) through cursor 840, and the port matches all 541 ticks. The ledge turn (a missing floor) is `[STATIC]`: no staged path reached one.
 
 Not established live: what the walker's frames look like on screen, and the mid-level exit. ⚠️ The sublevel switch's own `CS:0x05D7` call (`CS:0x4875`, with the RET patch and a `[0x35D]` decrement) is `[PROVEN]` live to overlay the shop group over `level<N>` for the whole of sublevel B, until a shop exit or a level entry: a shipped bug that turns sublevel B's creatures into shop sprites (some invisible, some the shopkeeper) and the small font's glyphs into shifted shop-font glyphs. See ranked item 60.
 
-## What `gods-web` ports and what it discloses as not ported
+## What `re-gods` ports and what it discloses as not ported
 
 See the port's own `src/game/shop.js` header for the current state — built and
 tested as a state machine (grid navigation, the two-press buy confirm, the

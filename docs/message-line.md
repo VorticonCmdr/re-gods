@@ -6,7 +6,7 @@ hint tablet's own path.
 
 > **How this was established.** Every routine below was disassembled directly
 > (`disassemble_bytes`, not decompiled) and then re-confirmed **by
-> reconstruction**: rendering `PLEV1A`'s `x=178` tablet through the `gods-web`
+> reconstruction**: rendering `PLEV1A`'s `x=178` tablet through the `re-gods`
 > port's own re-implementation reproduces both pages of the message a DOSBox
 > capture of the real game shows, glyph for glyph. Where a claim rests only on
 > reading, it is tagged `[STATIC]`.
@@ -16,7 +16,7 @@ hint tablet's own path.
 `docs/asset-formats.md` decoded the hint table — 40 big-endian `int16` keys at
 `PALFILS+0x1b58`, 40 `0x28`-byte ASCIIZ strings at `+0x1ba8`, keyed on the world
 X of object type 69 — and that finding stands unchanged. What did **not** exist
-anywhere was the *display* side, and the `gods-web` port recorded the gap as
+anywhere was the *display* side, and the `re-gods` port recorded the gap as
 closed: `src/game/consumables.js`'s own `NOT_WIRED_REASON.hint` read `"already
 ported as the PALFILS hint system"`. Nothing drew a character. Walking over the
 first tablet in `PLEV1A` produced no text at all.
@@ -401,7 +401,7 @@ Three consequences a port must get right:
    sharing only the buffer allocator.
 2. **It returns `DX = 0`,** which makes the pickup dispatcher's tier decode at
    `CS:0x182D` (`or dx,dx / jz`) skip the generic composer — so the player never
-   also sees the tablet's own `"tablet"` / `"reveals clues"`. The `gods-web`
+   also sees the tablet's own `"tablet"` / `"reveals clues"`. The `re-gods`
    port had this row recorded as `dx: 1`, which is refuted by `CS:0x646C`.
 3. **It touches neither the once-per-type bitmap nor the world gate.** That is
    what lets all 46 placed tablets each show their own distinct line, in every
@@ -439,7 +439,7 @@ placed on the pocket floor beside the x=348 tablet
   through the BIOS. The screen is frozen and the tape cursor stays at 304.
 
 The landing address is the tablet's screen Y, so it varies with the camera, but `DS`
-is always the handler's address, so no landing survives. `gods-web` shows the
+is always the handler's address, so no landing survives. `re-gods` shows the
 intended `"Hint Error"` line instead.
 
 ~~`UNKNOWN_plev1b_nomatch_tablets_touchable`~~ — **CLOSED: both are reachable.**

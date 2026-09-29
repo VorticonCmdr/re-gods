@@ -24,7 +24,7 @@
  * next field starts, which an 18-byte name could never produce. Confirmed
  * against every record in both that file and the pristine shipped one:
  * bytes 16-19 read as big-endian are all-BCD-nibble in every case. This
- * also matches `gods-web`'s own pre-existing, independently-arrived-at
+ * also matches `re-gods`'s own pre-existing, independently-arrived-at
  * `game/treasure.js` `Score` class — `SCORE_BYTES = 4`, packed BCD — the
  * SAME 4-byte encoding the live in-memory running score already uses; this
  * module just confirms it round-trips to disk unchanged, byte-reversed
@@ -154,7 +154,7 @@ export function numberToBcdBytes(n) {
  * with real play data (see that repo's own git history), so its CURRENT
  * working-tree content is this developer machine's own save, not the
  * floppy's real defaults. Hardcoded here instead, from the git-tracked
- * pristine version, so gods-web's own "first launch" table is stable and
+ * pristine version, so re-gods's own "first launch" table is stable and
  * reproducible regardless of what any contributor's local `game/HISCORES.BIN`
  * happens to hold. The same reasoning kept it out of the old asset-staging
  * list (the since-removed `tools/copy-assets.mjs`).

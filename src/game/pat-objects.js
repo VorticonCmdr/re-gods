@@ -4,7 +4,7 @@
  * CLAUDE.md already closed the FILE FORMAT (`UNKNOWN_pat_payload — CLOSED`)
  * and the GROUP/SUB-RECORD FIELD MAP (`UNKNOWN_pat_class_fields`, and its
  * follow-up under "The five other emitter-pair owners"). This module is the
- * first thing in this port to actually RUN that system — nothing in gods-web
+ * first thing in this port to actually RUN that system — nothing in re-gods
  * referenced PGOD0x.PAT, CS:0xb908, CS:0xb987, or CS:0xBC4B before this pass
  * (`grep -rn "PGOD0\|b987\|b6b8" src/` returned nothing).
  *

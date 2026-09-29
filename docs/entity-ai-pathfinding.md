@@ -210,7 +210,7 @@ So descriptor **`+0x08` carries two strategy ids, one per nibble**, and **`+0x09
 14bf  mov byte [0x398],0x1            ;   under the override, only marker 0 (the potion) counts
 ```
 
-So the list holds only this tick's on-screen category-0/1/2 objects. It also re-arms the override each tick while an attract potion stays on screen. A live trace at `PJOYL2` cursor 2092 (`CS:0xF5C3`) read `[0x398]` = 1 with a single marker, and goal cells 250/270 painted from it. `gods-web` had cleared the list only on level load. Its pathfinder chased 20 stale copies of one falling object, and that was the last random-stream divergence in `PJOYL2`.
+So the list holds only this tick's on-screen category-0/1/2 objects. It also re-arms the override each tick while an attract potion stays on screen. A live trace at `PJOYL2` cursor 2092 (`CS:0xF5C3`) read `[0x398]` = 1 with a single marker, and goal cells 250/270 painted from it. `re-gods` had cleared the list only on level load. Its pathfinder chased 20 stale copies of one falling object, and that was the last random-stream divergence in `PJOYL2`.
 
 ⚠️ **Strategy 2 is NOT inert when there are no markers — it retries the other nibble.** `0xf799` jumps to `0xf71a`, which is `xchg cx,dx` followed by the dispatch. The same fallback fires when every marker lands off-grid (`0xf7d2` tests `DS:0x3cf`). Since markers exist only after an attract potion, that fallback is the *common* case, and implementing it is what took the port's hero-relative coverage from **72.5% to 97.4%** of shipped descriptors.
 

@@ -47,7 +47,7 @@
  * levers, starburst, the seven trigger-action ids, death, tally) are
  * Node-verified for DISPATCH only (checks.js's own "#11 audio" block:  the
  * right id reaches the right game event) — not personally heard, since
- * gods-web's own automated-Chrome tick throttle (see project memory) makes
+ * re-gods's own automated-Chrome tick throttle (see project memory) makes
  * driving real gameplay through this harness unreliable for anything beyond
  * a few ticks.
  *
@@ -66,7 +66,7 @@
  * "Weapon +0x49". This port does not model `DS:0x34`, so its ce64 creature
  * is silent on a non-lethal hit like every other creature — a disclosed
  * simplification, not an oversight — so "nothing plays on every hit" is
- * correct porting everywhere in `gods-web`, even though it is not what the
+ * correct porting everywhere in `re-gods`, even though it is not what the
  * original does for that one creature.
  *
  * `player.js`'s per-tick `footstep`/`climbStep` flags (`FOOTSTEP_SFX` =
