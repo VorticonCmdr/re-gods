@@ -1,17 +1,39 @@
 # gods-web
 
-An evidence-grounded HTML5/JS port of **GODS** (The Bitmap Brothers, DOS 1991).
-Vanilla JS, no framework. Vite + npm.
+An evidence-grounded HTML5/JS port of **GODS** (The Bitmap Brothers, DOS 1991), and the
+reverse-engineering record it is built from. Vanilla JS, no framework. Vite + npm.
+
+This repository ships no game data. Put your own copy of the DOS release's files (the
+directory with `GODS.EXE`, `GAME.EXE` and the `P*` files) into `game/`:
 
 ```bash
 npm install
-npm run dev       # stages assets, serves on :5173
+npm run dev       # serves on :5173; the game files come straight from game/
 npm run verify    # headless invariant run (no browser needed)
-npm run build
+npm run build     # dist/ holds no game data
 ```
 
-The original release directory (`../Gods`) is treated as **read-only**. `npm run assets`
-copies out; nothing is ever written back.
+A built page has no `game/` to serve. `index.html` then shows **Load folder…** in its
+header and reads your copy straight from disk. Nothing is uploaded, and nothing is ever
+written back to `game/`.
+
+`index.html` shows the game alone. Add `?debug` to the URL for the HUD, the dev pickers
+and the live verification panel.
+
+## Project layout
+
+```
+game/        your own copy of the game files (git-ignored, never bundled)
+ghidra/      the Ghidra project (git-ignored, machine-local)
+analysis/    derived listings, unpacked EXEs, decompressed dumps (git-ignored)
+docs/        subsystem-by-subsystem reverse-engineering findings, with evidence tags
+src/         the web port: game/, audio/, formats/, render/, editor/, verify/
+tools/       verify-node.mjs and the other check/render tools, attract-capture/, blast.py
+```
+
+`CLAUDE.md` holds the evidence conventions (`[PROVEN]`, `[STATIC]`, `[WF]`, `[UNKNOWN]`)
+and the index of `docs/`. Until 2026-09-29 the findings lived in a separate `Gods`
+repository; its history is merged into this one, without the game files.
 
 ## The rule this project runs on
 
@@ -34,8 +56,8 @@ Two consequences you will see in the source:
 
 ## Assets are decompressed in the browser
 
-The shipped `P*` files are staged in their original **PKWARE DCL-compressed** form and
-decoded at load time by `formats/dcl.js`. This is deliberate: pre-extracting to
+The shipped `P*` files are read from `game/` in their original **PKWARE DCL-compressed**
+form and decoded at load time by `src/formats/dcl.js`. This is deliberate: pre-extracting to
 PNG/JSON would launder every format claim through an offline tool. Decoding the
 shipped bytes in-process is what makes the claims checkable.
 
@@ -855,14 +877,16 @@ Deliberately not done, with the reason:
 | ladder animation | the phase ping-pongs 0↔3 with the step sound only at the turn-arounds; which arm is up and which is down is not settled — `UNKNOWN_ladder_anim_phase` |
 | status panel | `UNKNOWN_playfield_height`: the backdrop region is 160 scanlines and the tile renderer covers 144, and `VGA.EXE` never writes CRTC index `0x18`, so there is no hardware split to read the boundary from |
 | **destructible blocks** | **done** (`game/destructible.js`) — tile `0x6d` in worlds 3-4, the 40-entry damage queue, the mace's +50, the four-frame break at half speed, and the restore on level load |
-| **debris** | **done** (`game/debris.js`) — 20 chunks, straight-line, 11 ticks, and provably **inert**: its whole body makes one call, the blitter. Instantiated in `main.js`. ⚠️ **A prior revision of this row named the wrong callers** ("block-breaking, the familiar's death, the starburst chain") for `CS:0xA633` — that was a guess, never checked against the binary, and none of the three turned out to be right. Traced fresh with Ghidra: `CS:0xA633` has only **5** direct callers, not 11 as this project's own earlier note claimed (also uncorrected until now), and **all five are now wired**: `CS:0xA816` (a shot the terrain stops), `CS:0x4561` (an enemy shot that hits the hero — see the enemy-shots row), `CS:0xA00D` (the hunter's own no-target arm — see the hunter row), `CS:0xA7A1` (the magic axe's own trailing spark on expiry — see the magic-axe row), and `CS:0xAC4C`, a "hit landed and the target survived" spark. ⚠️ **`CS:0xAC4C` was misattributed in the previous revision of this row too** — it was said to sit "inside the shared `CS:0xac59` damage routine", blocked on `attackHero()` not modelling a difficulty-scalar/survival distinction. Both halves were wrong: tracing the real call chain (`Gods/CLAUDE.md`, separate commit) shows `CS:0xac59` is a small, self-contained hero-contact box test that returns normally, and `CS:0xAC4C` sits in the SEPARATE weapon-vs-creature grid-scan tail (`CS:0xa9ef`-`0xac58`) that only runs when `ac59` finds no contact — so the difficulty scalar and the survive-a-hit case apply exclusively to weapon-vs-creature damage, never to hero-contact, and `attackHero()` needed no changes at all. `combat.js`'s `creatureScansGrid` (the weapon-vs-creature path) had already implemented the scalar and the survival branch correctly in an earlier session — the only real gap was the debris spark itself, now added via `hitSparkAxis`. `CS:0xDBBB`/`CS:0xDC2F` sit inside the `DS:0xd2be` line-hazard pool — see the row below, now closed and ported. **All five `CS:0xA633` callers are wired** |
+| **debris** | **done** (`game/debris.js`) — 20 chunks, straight-line, 11 ticks, and provably **inert**: its whole body makes one call, the blitter. Instantiated in `main.js`. ⚠️ **A prior revision of this row named the wrong callers** ("block-breaking, the familiar's death, the starburst chain") for `CS:0xA633` — that was a guess, never checked against the binary, and none of the three turned out to be right. Traced fresh with Ghidra: `CS:0xA633` has only **5** direct callers, not 11 as this project's own earlier note claimed (also uncorrected until now), and **all five are now wired**: `CS:0xA816` (a shot the terrain stops), `CS:0x4561` (an enemy shot that hits the hero — see the enemy-shots row), `CS:0xA00D` (the hunter's own no-target arm — see the hunter row), `CS:0xA7A1` (the magic axe's own trailing spark on expiry — see the magic-axe row), and `CS:0xAC4C`, a "hit landed and the target survived" spark. ⚠️ **`CS:0xAC4C` was misattributed in the previous revision of this row too** — it was said to sit "inside the shared `CS:0xac59` damage routine", blocked on `attackHero()` not modelling a difficulty-scalar/survival distinction. Both halves were wrong: tracing the real call chain (`CLAUDE.md`, separate commit) shows `CS:0xac59` is a small, self-contained hero-contact box test that returns normally, and `CS:0xAC4C` sits in the SEPARATE weapon-vs-creature grid-scan tail (`CS:0xa9ef`-`0xac58`) that only runs when `ac59` finds no contact — so the difficulty scalar and the survive-a-hit case apply exclusively to weapon-vs-creature damage, never to hero-contact, and `attackHero()` needed no changes at all. `combat.js`'s `creatureScansGrid` (the weapon-vs-creature path) had already implemented the scalar and the survival branch correctly in an earlier session — the only real gap was the debris spark itself, now added via `hitSparkAxis`. `CS:0xDBBB`/`CS:0xDC2F` sit inside the `DS:0xd2be` line-hazard pool — see the row below, now closed and ported. **All five `CS:0xA633` callers are wired** |
 | **the `DS:0xd2be` line-hazard pool** | **ported, pool mechanics only** (`game/line-hazard.js`) — 20 fragments flying an integer Bresenham line from a spawner's position toward the hero. Fed by a previously-undocumented divert inside the shared `CS:0xE659` facing/fire routine (`attackBits = (desc+0x4>>4)&3 != 0`), live and shipped: a `blast.py` census over all 8 `PALFILS` files found 89 of 344 live group descriptors reach it. ⚠️ **The most consequential finding: it is a RAY, not a segment.** Four near-identical Bresenham loop-body copies exist (the seed's own, at `0xdd04`/`0xdd43`/`0xdd95`/`0xddd3`, and a second set inside the per-tick walker `CS:0x7a0b`) glued together with a "resume address stored in the record" trick — and the per-tick resume always lands back in the SEED's copy, whose loops have NO check against the destination, unlike `7A0B`'s own (otherwise byte-identical) loops, which do and never run. So a fragment keeps flying past its target at a fixed step count per frame until solid terrain, the hero, or the off-screen cull stops it. Caught re-reading all four finalize sites against each other before writing any port code — a plausible "stops at the target" port would have looked right and been wrong. **Wired for BOTH entity systems**: `entity-a.js`'s `stageFacingAndFire` (`CS:0xE659`) and `entity.js`'s `fireB` (the same `CS:0xE659`, called first instead of last — see `fireB`'s own header for why the call order differs) both read `attackBits` (`desc.flags` bits [5:4]) and return a hazard-spawn descriptor instead of a muzzle when it is nonzero; `main.js` routes both to `spawnJittered`/`spawnAtHero`. ⚠️⚠️ CORRECTION, a later session: this row previously said "System B still fires nothing at all" — that gap has since been closed (`fireB` exists and `main.js` calls it), so of the census's 89 live descriptors, all are now reachable, not just the 24 belonging to System A. `FUN_1000_b1c2`, `db4e`'s other caller, is a separate, unrelated hazard that reuses the same hero-hit helper — flagged, not ported |
 | **the magic axe** (weapon 9) | **spawns and bounces** (`game/projectiles.js`'s `stepMagicAxe`, wired into `hero-fire.js`'s `Arsenal.step()`) — the 7th spawnable weapon. Its spawn handlers (table indices 14/15) are newly decoded: unlike every other pair they don't mirror `dir` by facing (`stepMagicAxe` never reads a projectile's own `dir` — movement comes entirely from a companion `{vx,vy,life}` state record the spawn handler ALSO seeds, one per shot, `Slot.axeState` alongside `Slot.area`), and `vy` is read live off the shared, potion-mutable `PROJECTILE_VELOCITY` table rather than a baked constant. The wall probe (`CS:0xA5A5`/`0xA5D9`) turned out to need the axe's Y position too — a diagonal look-ahead that depends on the Y sub-tile remainder — which an earlier revision of this port's `wallAt(x, dir)` signature couldn't have reproduced; now `axeWallAt(x, y, dirSign, planeB)`. Expiry drops a moving debris spark, closing `CS:0xA7A1` above |
 | **the hunter** (weapon 8) | **spawns and homes** (`game/projectiles.js`'s `stepHunterArray`, wired into `hero-fire.js`'s `Arsenal.step()`) — the 6th spawnable weapon. Its spawn handlers (table indices 10/11, a 3-shot packed-velocity fan) are newly decoded, along with the stamp (`CS:0x9FC8`, the shared terrain-aware stamp `0xa7b6`) and the target search (`CS:0x9E36`) — which turned out to pick the **largest** key in the list, not the smallest as this project's own notes said in two places until this pass (traced concretely: the running-best sentinel starts at -1 and the compare only replaces it when exceeded, walking UP). ⚠️ **Simplified on purpose**: the original spawns each shot with a NEGATIVE tag and flies a brief ballistic 3-shot spread that decays before a single sign-flip hands it over to homing (`CS:0x9E9E`'s coast/re-aim cycle, which layers a cyclic cooldown this pass could not read with confidence — `UNKNOWN_hunter_ballistic_launch`). This port skips the launch phase and homes from the muzzle on tick 1 instead of porting a mechanism it doesn't yet trust its own reading of. A shot that loses its target (no live creature on screen) drops a moving debris spark and despawns, matching `CS:0xA00D` |
 | the `DS:0xcfcc` hazard | decoded and **proven CUT** — it is world 4 / System A / class 3 in the `DS:0xdf80` class tables, and no shipped descriptor selects it. Not ported, because it cannot happen. The game's fourth cut feature, after the `flame` weapon, the iron chest and the familiar chain |
 | sound | drivers and the SMF containers are decoded, nothing wired |
 
-## Layout
+## Source layout (the early core)
+
+The top-level layout is at the top of this file. The early core of the port:
 
 ```
 src/formats/   dcl.js pi1.js map.js atlas.js descriptors.js   shipped-byte decoders
@@ -880,8 +904,7 @@ src/game/      states.js                     the 29-state table + sprite selecti
                frame.js                      THE PER-TICK CALL ORDER (see above)
 src/render/    renderer.js                   320x200 indexed software renderer
 src/verify/    checks.js                     the live invariant suite
-tools/         copy-assets.mjs               stage the shipped files
-               verify-node.mjs   npm run verify
+tools/         verify-node.mjs   npm run verify
                hero-sheet.mjs    npm run hero     every hero sprite, labelled
                frame-node.mjs    npm run frame    one composited game frame
                object-sheet.mjs  npm run objects  every object type + its name

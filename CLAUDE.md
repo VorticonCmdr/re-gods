@@ -2,17 +2,32 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-> **Evidence discipline.** This directory is a reverse-engineering target, not a source repo. Every claim in this project is tagged with how it was established. Do not add unverified claims — label unknowns `UNKNOWN_<identifier>` instead.
+> **Evidence discipline.** The game in `game/` is a reverse-engineering target; the port in `src/` is built only from what was recovered from it. Every claim in this project is tagged with how it was established. Do not add unverified claims — label unknowns `UNKNOWN_<identifier>` instead.
 > `[PROVEN]` = verified by executing something (decompressed the bytes, ran the code, or traced it live under DOSBox).
 > `[STATIC]` = read out of the binary (strings/disassembly) but **not** confirmed at runtime.
 > `[WF]` = **produced by a subagent workflow and not yet re-read by the maintainer.** Plausible and adversarially reviewed, but nobody in this project has personally executed a check on it. That workflow's own error rate was demonstrably nonzero — fifteen of its findings were refuted on bytes by its own verifiers, and a histogram it reported was wrong. **Treat `[WF]` as a lead, not a fact, and promote it to `[PROVEN]` only by reading the bytes.**
 > `[UNKNOWN]` = not established.
 >
-> **The DOSBox bridge is working** (mount `C:\Users\...\Gods`, launch with `gods`). The full launcher chain — `GODS.EXE` → `INTROV.EXE` → `GAME.EXE`, config parse, drive-check bypass, EXEC patching, overlay loads, first Table-2 asset open — has been traced live with `INT 21h` breakpoints and matches the static disassembly exactly, down to individual register values. See `docs/dynamic-trace-and-runtime-data.md`. The game renders and plays correctly through this path.
+> **The DOSBox bridge is working** (mount this project's `game/` as `C:`, launch with `gods`). The full launcher chain — `GODS.EXE` → `INTROV.EXE` → `GAME.EXE`, config parse, drive-check bypass, EXEC patching, overlay loads, first Table-2 asset open — has been traced live with `INT 21h` breakpoints and matches the static disassembly exactly, down to individual register values. See `docs/dynamic-trace-and-runtime-data.md`. The game renders and plays correctly through this path.
 
 ## What this is
 
-A complete file dump of the DOS release of **GODS** (The Bitmap Brothers / Millennium Interactive, 1991/92) — raw floppy-disk contents, `GODS.INI` records "Version 1.0". 140 files, **no source code, build system, or tests**. There is nothing to build, lint, or test; treat all work here as software archaeology.
+Two things in one project:
+- **The target.** `game/` holds a complete file dump of the DOS release of **GODS** (The Bitmap Brothers / Millennium Interactive, 1991/92): raw floppy-disk contents, 140 files, and `GODS.INI` records "Version 1.0". The game ships no source code. All work on it is software archaeology, recorded in `docs/`.
+- **The port.** `src/` is an evidence-grounded HTML5/JS port (vanilla ES modules + Vite) that decodes the shipped files in the browser. `npm run verify` runs its invariant suite headless.
+
+`game/` is git-ignored and never bundled: the files are commercial software. Until the two repositories were merged (2026-09-29), the dump lived in a separate `Gods` repository and the port in a sibling `gods-web`, which is why older entries say "`gods-web`" for the port.
+
+## Project layout
+
+```
+game/        the shipped game files (git-ignored, never bundled); DOSBox mounts this as C:
+ghidra/      the Ghidra project, gods.gpr + gods.rep (git-ignored, machine-local)
+analysis/    derived listings, unpacked EXEs, decompressed dumps (git-ignored; recipes in analysis/README.md)
+docs/        subsystem-by-subsystem reverse-engineering findings, with evidence tags
+src/         the web port (game/, audio/, formats/, render/, editor/, verify/)
+tools/       verify-node.mjs and the other check/render tools, attract-capture/ (live DOSBox drivers and captures), blast.py
+```
 
 `READ.ME` (the game's own release notes) states SoundBlaster/Roland music and high-score/password saving work only when installed to hard disk, not from the low-density 3.5" floppy.
 
