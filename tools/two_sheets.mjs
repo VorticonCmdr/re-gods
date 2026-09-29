@@ -2,7 +2,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 const { dclDecompress } = await import('../src/formats/dcl.js');
 const { decodePI1, sliceTiles, TILE_W, TILE_H } = await import('../src/formats/pi1.js');
 const { parseMap, MAP_COLS, MAP_ROWS } = await import('../src/formats/map.js');
-const raw = (n) => new Uint8Array(readFileSync(new URL('../public/game/' + n, import.meta.url)));
+const raw = (n) => new Uint8Array(readFileSync(new URL('../game/' + n, import.meta.url)));
 const key = process.argv[2] || '1A';
 
 const map = parseMap(dclDecompress(raw(`PLEV${key}.MAP`)).data);

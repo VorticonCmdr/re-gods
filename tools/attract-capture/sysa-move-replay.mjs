@@ -18,8 +18,8 @@ const sw = (b, o) => { const v = b[o] | (b[o + 1] << 8); return v & 0x8000 ? v -
 const sb = (b, o) => (b[o] & 0x80 ? b[o] - 0x100 : b[o]);
 for (const [file, pf, mp, di] of [['sys2b.json', 'PALFILS.0B2', 'PLEV2B.MAP', 2], ['sys4b.json', 'PALFILS.0B4', 'PLEV4B.MAP', 3]]) {
   const log = JSON.parse(readFileSync(R + 'tools/attract-capture/' + file));
-  const d = parseGroupsA(dclDecompress(new Uint8Array(readFileSync(R + 'public/game/' + pf))).data)[di];
-  const planeA = parseMap(dclDecompress(new Uint8Array(readFileSync(R + 'public/game/' + mp))).data).planeA;
+  const d = parseGroupsA(dclDecompress(new Uint8Array(readFileSync(R + 'game/' + pf))).data)[di];
+  const planeA = parseMap(dclDecompress(new Uint8Array(readFileSync(R + 'game/' + mp))).data).planeA;
   let n = 0, ok = 0; const bad = [];
   const rt = new GroupRuntimesA();
   for (let t = 0; t + 1 < log.ticks.length; t++) {

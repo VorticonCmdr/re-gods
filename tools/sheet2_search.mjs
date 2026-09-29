@@ -2,7 +2,7 @@ import { readFileSync, existsSync } from 'node:fs';
 const { dclDecompress } = await import('../src/formats/dcl.js');
 const { decodePI1, sliceTiles } = await import('../src/formats/pi1.js');
 const { parseMap } = await import('../src/formats/map.js');
-const url = (n) => new URL('../public/game/' + n, import.meta.url);
+const url = (n) => new URL('../game/' + n, import.meta.url);
 const has = (n) => existsSync(url(n));
 const raw = (n) => new Uint8Array(readFileSync(url(n)));
 const sheet = (n) => sliceTiles(decodePI1(dclDecompress(raw(n)).data));

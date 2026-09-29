@@ -22,7 +22,7 @@ const { decodePI1 } = await import(root + 'src/formats/pi1.js');
 const { parseAtlas, cutFrame } = await import(root + 'src/formats/atlas.js');
 const { buildDescriptorMap, GROUP_STEMS, LEVEL_LOAD_ORDER } = await import(root + 'src/formats/descriptors.js');
 const { applyObjectLoadMask, encodeFrame16 } = await import(root + 'src/formats/object-mask.js');
-const raw = (n) => new Uint8Array(readFileSync(root + 'public/game/' + n));
+const raw = (n) => new Uint8Array(readFileSync(root + 'game/' + n));
 
 function sprites(world) {
   const groups = LEVEL_LOAD_ORDER(world), atl = {}, img = {};

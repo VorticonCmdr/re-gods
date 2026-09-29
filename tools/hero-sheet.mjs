@@ -13,7 +13,7 @@ import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const PUB  = resolve(here, '..', 'public');
+const ROOT  = resolve(here, '..');
 const out  = process.argv[2] || '/tmp/gods_hero.ppm';
 
 const { dclDecompress }  = await import('../src/formats/dcl.js');
@@ -23,7 +23,7 @@ const { buildDescriptorMap, GROUP_STEMS } = await import('../src/formats/descrip
 const { spriteFor, STATE_INFO, jumpPhase, LADDER_JUMP_PHASE } = await import('../src/game/states.js');
 
 const raw = (n) => {
-  const p = join(PUB, 'game', n);
+  const p = join(ROOT, 'game', n);
   if (!existsSync(p)) throw new Error(`missing ${n} — run: npm run assets`);
   return new Uint8Array(readFileSync(p));
 };

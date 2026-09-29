@@ -8,7 +8,7 @@ import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const PUB  = resolve(here, '..', 'public');
+const ROOT  = resolve(here, '..');
 
 const { runAllChecks } = await import('../src/verify/checks.js');
 const { dclDecompress } = await import('../src/formats/dcl.js');
@@ -18,7 +18,7 @@ const { Player } = await import('../src/game/player.js');
 const { JUMP_DELTAS } = await import('../src/game/player.js');
 
 const fetchRaw = async (url) => {
-  const p = join(PUB, url);
+  const p = join(ROOT, url);
   if (!existsSync(p)) throw new Error(`missing asset: ${url} (run: npm run assets)`);
   return new Uint8Array(readFileSync(p));
 };

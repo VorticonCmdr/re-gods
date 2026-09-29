@@ -32,7 +32,7 @@ import { LineBarriers, parseLineBarrierRecords } from '../../src/game/line-barri
 import { LoopSfx } from '../../src/game/loop-sfx.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const raw = (n) => new Uint8Array(readFileSync(join(resolve(here, '..', '..', 'public', 'game'), n)));
+const raw = (n) => new Uint8Array(readFileSync(join(resolve(here, '..', '..', 'game'), n)));
 const [key = '2B', file = 'barrier_live.json', ...pairs] = process.argv.slice(2);
 /* `rec:sel` arms at the first post showing the slot; `rec:sel:free` is a
  * type-0xFF dispatch, applied before the first post where an armed slot is

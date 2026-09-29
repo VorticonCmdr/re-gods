@@ -2,7 +2,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 const { dclDecompress } = await import('../src/formats/dcl.js');
 const { decodePI1 } = await import('../src/formats/pi1.js');
 const { parseAtlas, cutAll } = await import('../src/formats/atlas.js');
-const raw = (n) => new Uint8Array(readFileSync(new URL('../public/game/' + n, import.meta.url)));
+const raw = (n) => new Uint8Array(readFileSync(new URL('../game/' + n, import.meta.url)));
 const name = process.argv[2] || 'POBJ1';
 const dat = dclDecompress(raw(`${name}.DAT`)).data;
 const img = decodePI1(dclDecompress(raw(`${name}.PI1`)).data);

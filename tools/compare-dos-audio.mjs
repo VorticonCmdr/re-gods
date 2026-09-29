@@ -106,7 +106,7 @@ if (!refPath) {
   process.exit(2);
 }
 
-const musPath = new URL('../public/game/PGODS.MUS', import.meta.url);
+const musPath = new URL('../game/PGODS.MUS', import.meta.url);
 const blobs = parseMusContainer(dclDecompress(fs.readFileSync(musPath)).data);
 const seq = buildSfxSequence(blobs[blobIndex]);
 const mine = renderSequence(seq);

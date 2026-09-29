@@ -13,7 +13,7 @@ captures and arena dumps in mask63/ came from this; object-mask-compare.mjs
 diffs them against the port.
 """
 import sys, time
-sys.path.insert(0, '/Users/valentin.pletzer/Downloads/dosgames/gods-web/tools/attract-capture')
+sys.path.insert(0, __file__.rsplit('/', 1)[0])
 from sweep import DS, CS, SS, call, mem, word, wait_stop
 
 def since():

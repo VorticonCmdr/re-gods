@@ -13,7 +13,7 @@ import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const PUB  = resolve(here, '..', 'public');
+const ROOT  = resolve(here, '..');
 const world = +(process.argv[2] || 1);
 const out   = process.argv[3] || `/tmp/gods_objects_${world}.ppm`;
 
@@ -25,7 +25,7 @@ const { buildDescriptorMap, GROUP_STEMS } = await import('../src/formats/descrip
 const { spriteForType, isDeadType, STAMPED_TYPES } = await import('../src/game/objects.js');
 
 const raw = (n) => {
-  const p = join(PUB, 'game', n);
+  const p = join(ROOT, 'game', n);
   if (!existsSync(p)) throw new Error(`missing ${n} — run: npm run assets`);
   return new Uint8Array(readFileSync(p));
 };

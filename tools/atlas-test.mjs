@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 const { dclDecompress } = await import('../src/formats/dcl.js');
 const { decodePI1 } = await import('../src/formats/pi1.js');
 const { parseAtlas, cutAll, atlasStats } = await import('../src/formats/atlas.js');
-const raw = (n) => new Uint8Array(readFileSync(new URL('../public/game/' + n, import.meta.url)));
+const raw = (n) => new Uint8Array(readFileSync(new URL('../game/' + n, import.meta.url)));
 
 const PAIRS = ['PALWAYS1','POBJ1','PGODFONT','PSMLFNT'];
 console.log('atlas          count  bytes  2+10*n  maxRight  maxBottom  OOB  word2!=0');

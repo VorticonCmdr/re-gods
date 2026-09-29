@@ -14,7 +14,7 @@ import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const PUB  = resolve(here, '..', 'public');
+const ROOT  = resolve(here, '..');
 const key  = process.argv[2] || '1A';
 const out  = process.argv[3] || `/tmp/gods_enemies_${key}.ppm`;
 const world = +key[0];
@@ -30,7 +30,7 @@ const { EntityB, MODE_TABLE, groundBelow } = await import('../src/game/entity.js
 const { parsePalfils, palfilsNameFor, EventRunner } = await import('../src/game/events.js');
 
 const raw = (n) => {
-  const p = join(PUB, 'game', n);
+  const p = join(ROOT, 'game', n);
   if (!existsSync(p)) throw new Error(`missing ${n} — run: npm run assets`);
   return new Uint8Array(readFileSync(p));
 };

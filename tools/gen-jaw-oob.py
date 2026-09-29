@@ -10,7 +10,7 @@ filename records. SS's image is GAME.EXE at file offset SS + 0x1F560
 """
 import struct, pathlib
 here = pathlib.Path(__file__).resolve().parent
-d = (here.parent.parent / 'Gods' / 'GAME.EXE').read_bytes()
+d = (here.parent / 'game' / 'GAME.EXE').read_bytes()
 rows = []
 for y in range(0xB0, 0x182, 2):
     off, dy = struct.unpack_from('<2h', d, 0x57D0 + 4 * y + 0x1F560)

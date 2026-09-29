@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 const { dclDecompress } = await import('../src/formats/dcl.js');
 const { decodePI1, sliceTiles } = await import('../src/formats/pi1.js');
 const { parseMap, MAP_COLS, MAP_ROWS } = await import('../src/formats/map.js');
-const raw = (n) => new Uint8Array(readFileSync(new URL('../public/game/' + n, import.meta.url)));
+const raw = (n) => new Uint8Array(readFileSync(new URL('../game/' + n, import.meta.url)));
 
 console.log('Does PLEVEL<key>.PI1 supply tile indices 120-239?');
 console.log('For each map: which HIGH tile indices are used, and are those tiles blank');

@@ -19,7 +19,7 @@ import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const PUB = resolve(here, '..', 'public');
+const ROOT = resolve(here, '..');
 const key = process.argv[2] || '1A';
 
 const { dclDecompress } = await import('../src/formats/dcl.js');
@@ -31,7 +31,7 @@ const { parseGroupsB, DESC_B_OFF, DESC_STRIDE } = await import('../src/game/spaw
 const { palfilsNameFor } = await import('../src/game/events.js');
 
 const raw = (n) => {
-  const p = join(PUB, 'game', n);
+  const p = join(ROOT, 'game', n);
   if (!existsSync(p)) throw new Error(`missing ${n} — run: npm run assets`);
   return new Uint8Array(readFileSync(p));
 };

@@ -15,7 +15,7 @@ import { dclDecompress } from '../../src/formats/dcl.js';
 import { Guardian4 } from '../../src/game/guardian4.js';
 
 const here = new URL('.', import.meta.url).pathname;
-const game = new URL('../../../Gods/', import.meta.url).pathname;
+const game = new URL('../../game/', import.meta.url).pathname;
 const log = [...JSON.parse(readFileSync(here + 'w4live.json')), ...JSON.parse(readFileSync(here + 'w4live2.json'))];
 const rd = (f) => dclDecompress(new Uint8Array(readFileSync(game + f))).data;
 const g = new Guardian4({ pat: rd('PGOD04.PAT'), bumlist: rd('PBUMLIST.BIN') });

@@ -19,8 +19,8 @@ import { dirname, resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const PUB = resolve(here, '..', 'public', 'game');
-const raw = (n) => new Uint8Array(readFileSync(join(PUB, n)));
+const GAME = resolve(here, '..', 'game');
+const raw = (n) => new Uint8Array(readFileSync(join(GAME, n)));
 
 const { dclDecompress } = await import('../src/formats/dcl.js');
 const { parseMap, MAP_COLS, MAP_ROWS } = await import('../src/formats/map.js');

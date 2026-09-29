@@ -17,7 +17,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const GAME = resolve(here, '..', 'public', 'game');
+const GAME = resolve(here, '..', 'game');
 const raw = (n) => new Uint8Array(readFileSync(resolve(GAME, n)));
 
 const { dclDecompress } = await import('../src/formats/dcl.js');

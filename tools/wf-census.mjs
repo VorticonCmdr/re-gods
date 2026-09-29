@@ -4,7 +4,7 @@
  *       >= 198, the CS:0xAF7D overflow range ((v>>1)+1 >= 100).
  * "Placed" = referenced by a plane-B event cell of that level's own map. */
 import { readFileSync } from 'node:fs';
-const here = (n) => new URL('../public/game/' + n, import.meta.url);
+const here = (n) => new URL('../game/' + n, import.meta.url);
 const raw = (n) => new Uint8Array(readFileSync(here(n)));
 const { dclDecompress } = await import('../src/formats/dcl.js');
 const { parseMap } = await import('../src/formats/map.js');

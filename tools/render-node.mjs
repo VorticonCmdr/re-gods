@@ -9,7 +9,7 @@ import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const PUB  = resolve(here, '..', 'public');
+const ROOT  = resolve(here, '..');
 
 const { dclDecompress } = await import('../src/formats/dcl.js');
 const { decodePI1, sliceTiles, TILE_W, TILE_H } = await import('../src/formats/pi1.js');
@@ -19,7 +19,7 @@ const key = process.argv[2] || '1A';
 const out = process.argv[3] || `/tmp/gods_${key}.ppm`;
 
 const raw = (n) => {
-  const p = join(PUB, 'game', n);
+  const p = join(ROOT, 'game', n);
   if (!existsSync(p)) throw new Error(`missing ${n} — run: npm run assets`);
   return new Uint8Array(readFileSync(p));
 };

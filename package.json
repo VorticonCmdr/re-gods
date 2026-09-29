@@ -5,9 +5,8 @@
   "type": "module",
   "description": "Evidence-grounded HTML5/JS port of GODS (The Bitmap Brothers, DOS 1991)",
   "scripts": {
-    "assets": "node tools/copy-assets.mjs",
-    "dev": "npm run assets && vite",
-    "build": "npm run assets && vite build",
+    "dev": "vite",
+    "build": "vite build",
     "preview": "vite preview",
     "verify": "node tools/lint-checks.mjs && node tools/verify-node.mjs",
     "hero": "node tools/hero-sheet.mjs",

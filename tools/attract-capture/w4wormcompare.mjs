@@ -22,7 +22,7 @@ import { GodsRandom } from '../../src/game/random.js';
 import { sfxDrawsRandom } from '../../src/audio/adl-random.js';
 
 const here = new URL('.', import.meta.url).pathname;
-const game = new URL('../../../Gods/', import.meta.url).pathname;
+const game = new URL('../../game/', import.meta.url).pathname;
 const log = JSON.parse(readFileSync(here + (process.argv[2] || 'w4escape.json')));
 log.tagOk = process.argv.includes('--tags');
 const rd = (f) => dclDecompress(new Uint8Array(readFileSync(game + f))).data;

@@ -25,7 +25,7 @@ const sb = (b, o) => (b[o] & 0x80 ? b[o] - 0x100 : b[o]);
 let failures = 0;
 for (const [file, map, flags] of [['sys2b.json', 'PLEV2B.MAP', 0x0010], ['sys4b.json', 'PLEV4B.MAP', 0x00a2]]) {
   const log = JSON.parse(readFileSync(here(file)));
-  const planeA = parseMap(dclDecompress(new Uint8Array(readFileSync(new URL('../../public/game/' + map, import.meta.url)))).data).planeA;
+  const planeA = parseMap(dclDecompress(new Uint8Array(readFileSync(new URL('../../game/' + map, import.meta.url)))).data).planeA;
   const desc = { flags, count: 0 };
   const snaps = log.ticks.map((t) => { const g = t.groups.find((q) => q.k === 0); return g && { rt: hex(g.rt), e: hex(g.ents) }; });
   let ticks = 0, goals = 0, goalOk = 0, bytesOk = 0, skipped = 0;

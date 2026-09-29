@@ -307,7 +307,7 @@ import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const PUB  = resolve(here, '..', 'public');
+const ROOT  = resolve(here, '..');
 
 const { dclDecompress } = await import('../src/formats/dcl.js');
 const { parseMap } = await import('../src/formats/map.js');
@@ -353,7 +353,7 @@ const JOYG_SHOWCASE_SPAWN = {
 };
 
 const raw = (name) => {
-  const p = join(PUB, 'game', name);
+  const p = join(ROOT, 'game', name);
   if (!existsSync(p)) throw new Error(`missing asset: ${name} (run: npm run assets)`);
   return new Uint8Array(readFileSync(p));
 };

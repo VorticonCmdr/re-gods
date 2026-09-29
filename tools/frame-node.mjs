@@ -17,7 +17,7 @@ import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const PUB  = resolve(here, '..', 'public');
+const ROOT  = resolve(here, '..');
 const key   = process.argv[2] || '1A';
 const ticks = +(process.argv[3] || 12);
 const out   = process.argv[4] || `/tmp/gods_frame_${key}.ppm`;
@@ -46,7 +46,7 @@ const { composeHint } = await import('../src/game/message-compose.js');
 const { buildObjectArena, appendHints, hintOffsetForX, stringAt } = await import('../src/game/text-arena.js');
 
 const raw = (n) => {
-  const p = join(PUB, 'game', n);
+  const p = join(ROOT, 'game', n);
   if (!existsSync(p)) throw new Error(`missing ${n} — run: npm run assets`);
   return new Uint8Array(readFileSync(p));
 };

@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 const { dclDecompress } = await import('../src/formats/dcl.js');
 const { parseMap, MAP_COLS } = await import('../src/formats/map.js');
-const raw = (n) => new Uint8Array(readFileSync(new URL('../public/game/' + n, import.meta.url)));
+const raw = (n) => new Uint8Array(readFileSync(new URL('../game/' + n, import.meta.url)));
 console.log('Actual plane-A values >= 120, per map:\n');
 const allHi = new Set();
 for (const key of ['1A','1B','2A','2B','3A','3B','4A','4B']) {
