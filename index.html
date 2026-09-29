@@ -4,6 +4,9 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <title>GODS — web port</title>
+<script>
+  if (new URLSearchParams(location.search).has('debug')) document.documentElement.classList.add('debug');
+</script>
 <style>
   :root {
     --bg:#0e0d12; --panel:#17161d; --line:#2a2833;
@@ -11,12 +14,30 @@
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   }
   * { box-sizing: border-box; }
-  body { margin:0; background:var(--bg); color:var(--ink); display:flex; min-height:100vh; }
-  #stage { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:.75rem; padding:1rem; min-width:0; }
-  canvas { background:#000; image-rendering:pixelated; width:100%; max-width:960px; aspect-ratio:320/200; border:1px solid var(--line); }
-  #hud { display:flex; gap:1rem; flex-wrap:wrap; font-size:12px; color:var(--dim); }
+  html, body { height:100%; }
+  body { margin:0; background:var(--bg); color:var(--ink); display:flex; flex-direction:column; }
+  header {
+    display:flex; align-items:center; gap:.75rem; padding:.6rem 1rem; flex:none;
+    background:var(--panel); border-bottom:1px solid var(--line);
+  }
+  header h1 { margin:0; white-space:nowrap; }
+  header label { font-size:12px; color:var(--dim); display:flex; gap:.4em; align-items:center; }
+  header .spacer { flex:1; }
+  #status { font-size:11px; color:var(--dim); }
+  button.primary { background:#5a3f12; border-color:var(--accent); color:#ffe2b0; cursor:pointer; }
+  [hidden] { display:none !important; }
+  #app { flex:1; display:flex; min-height:0; }
+  #stage { flex:1; display:flex; flex-direction:column; gap:.75rem; min-width:0; min-height:0; }
+  /* margin:auto, not justify-content, so a canvas bigger than the view
+     scrolls instead of being clipped on its left/top side */
+  #view { flex:1; display:flex; min-height:0; overflow:auto; }
+  #screen { margin:auto; flex:none; display:block; }
+  canvas { background:#000; image-rendering:pixelated; }
+  /* The HUD and the evidence panel are dev affordances: shown only with ?debug. */
+  html:not(.debug) .debug-only { display:none !important; }
+  #hud { display:flex; gap:1rem; flex-wrap:wrap; font-size:12px; color:var(--dim); padding:0 1rem 1rem; }
   #hud b { color:var(--ink); font-weight:600; }
-  aside { width:380px; flex:none; background:var(--panel); border-left:1px solid var(--line); padding:1rem; overflow-y:auto; max-height:100vh; }
+  aside { width:380px; flex:none; background:var(--panel); border-left:1px solid var(--line); padding:1rem; overflow-y:auto; }
   h1 { font-size:14px; margin:0 0 .25rem; letter-spacing:.08em; text-transform:uppercase; }
   .sub { font-size:11px; color:var(--dim); margin:0 0 1rem; line-height:1.5; }
   h2 { font-size:11px; text-transform:uppercase; letter-spacing:.08em; color:var(--accent); margin:1.25rem 0 .5rem; }
@@ -35,9 +56,24 @@
 </style>
 </head>
 <body>
+<header>
+  <h1>GODS — web port</h1>
+  <button id="btnFolder" class="primary" hidden>Load folder…</button>
+  <input type="file" id="inpFolder" webkitdirectory multiple hidden>
+  <span id="status"></span>
+  <div class="spacer"></div>
+  <label>scale
+    <select id="scale">
+      <option value="1">1x</option><option value="2">2x</option>
+      <option value="3">3x</option><option value="4">4x</option>
+      <option value="max" selected>max</option>
+    </select>
+  </label>
+</header>
+<div id="app">
   <div id="stage">
-    <canvas id="screen" width="1280" height="800"></canvas>
-    <div id="hud">
+    <div id="view"><canvas id="screen" width="1280" height="800"></canvas></div>
+    <div id="hud" class="debug-only">
       <span>level <select id="level"></select></span>
       <span>logic <b id="hz">15.000</b> Hz</span>
       <span>display <b id="fps">–</b> fps</span>
@@ -65,7 +101,7 @@
         MT-32 stand-in from PTITLE.RL's own sound bank</span>
     </div>
   </div>
-  <aside>
+  <aside class="debug-only">
     <h1>GODS — evidence-grounded port</h1>
     <p class="sub">
       Assets are read from the shipped <code>P*</code> files and
@@ -91,6 +127,30 @@
     <div class="msg">music <b>50.001 Hz</b> — ISR skips 1 in 6</div>
     <div class="msg">logic <b>15.000 Hz</b> — export 14 waits for <code>[0x39] &gt; 3</code></div>
   </aside>
+</div>
+  <script>
+    /* Game canvas scale: 1x-4x of the 320x200 screen, or "max" — the largest
+     * size that fits the view, aspect kept. The choice is remembered. */
+    (() => {
+      const sel = document.getElementById('scale');
+      const view = document.getElementById('view');
+      const canvas = document.getElementById('screen');
+      try { const s = localStorage.getItem('gods.scale'); if (s && sel.querySelector(`option[value="${s}"]`)) sel.value = s; } catch {}
+      const fit = () => {
+        const max = sel.value === 'max';
+        /* a fitted canvas never needs scrollbars; a fixed scale may */
+        view.style.overflow = max ? 'hidden' : 'auto';
+        const k = max
+          ? Math.min(view.clientWidth / 320, view.clientHeight / 200)
+          : Number(sel.value);
+        canvas.style.width = `${Math.floor(320 * k)}px`;
+        canvas.style.height = `${Math.floor(200 * k)}px`;
+      };
+      sel.onchange = () => { try { localStorage.setItem('gods.scale', sel.value); } catch {} sel.blur(); fit(); };
+      new ResizeObserver(fit).observe(view);
+      fit();
+    })();
+  </script>
   <script type="module" src="/src/main.js"></script>
 </body>
 </html>
