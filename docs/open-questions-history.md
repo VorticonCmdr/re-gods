@@ -318,6 +318,24 @@
     - **Four PAT walk animations** were frozen (`UNKNOWN_pat_animA_bed3_bef4_bf15_bf36`). `CS:0xBED3`/`0xBEF4`/`0xBF15`/`0xBF36` are one body: on a tock tick, `inc word [di+0xe]`, wrap to 0 at `cmp byte ...,N / jl`, then sprite = `[di+0xe]` + BASE. No facing. N/BASE: 6/516 (world 1 class 1), 6/486 (world 3), 8/496 (world 4 class 0; Ghidra mis-decodes `BF2D`, the bytes are `81 C5 F0 01`), 7/524 (world 4 class 1). Every BASE equals the class table's `spriteBase`, and the sprite after each run is a different creature (504, 531, 492). `gods-web` `pat-objects.js` `stepCycle`.
     - **Also settled:** world 1 class 1's handlerB `CS:0xBF58` is a bare `RET`, so that creature never fires in DOS either.
     - **Not re-checked live.** Neither is exercised by a DOSBox capture; the attract-demo parity harness was not re-run (neither change touches the hero, camera or random stream).
+66. ~~Four gameplay gaps found by the 2026-09-29 port audit~~ — **CLOSED `[STATIC]` and ported (2026-09-29).** Each was read from the bytes; none was re-checked live in DOSBox. All six attract demos, the four AdLib sweeps (1615 plays) and the Roland score comparison still match exactly afterwards.
+    - **The time bomb's blast** (`CS:0xA273`–`0xA420`) was a no-op in the port.
+      - **Area kill.** It jumps into ACT6 at `CS:0x3BE8` with the box (x−16, y−20)–(x+16, y+4), and so runs inside the projectile step.
+      - **Smoke column.** Seven puffs, 21 px apart. The bottom `extra+2` are kept, with counters −12..0. Each live puff stamps the 3×3 grid, and `CS:0xA421` costs the hero 1 health on sprites 0x6C/0x70 when DS:0x172 is clear.
+      - **Fragments.** Export 36 (`VGA:0x024C`) revives up to five ±5 pairs, with vy −8/−6/−4/−2/−10. Gravity applies every 3rd tick. A fragment's terrain stop leaves the bomb's tag at **1** (`CS:0xA3A2`).
+      - **Freeing the record.** It is freed on the first tick with nothing live. The simulation reproduces item 39's live 9-tick hold.
+    - **The teleport stone** (`CS:0x6217`).
+      - **The key.** It is the stone's own x (`DS:0x20a` = the object record, `CS:0x1513`), not the hero's. The docs are corrected.
+      - **No-key fallback.** `CS:0x627B` reads the per-world list at `DS:0x19E` (`DS:0xE636`, reset at `CS:0x8E79`).
+      - **The teleport tail.** A teleport (zone or stone) also runs the respawn tick `CS:0x921B` (`CS:0x1033`). The fade stays unported.
+    - **World-4 class-2 PAT walkers now shoot.**
+      - **The walk half.** `CS:0xBDDB` calls `CS:0xBE99` (the phase and the facing) whenever bit 2 is clear. The port had skipped it, so `CS:0xBD71` never armed. Sprites: walking 0x1F8 + phase + facing×4, attacking 0x200 + phase−4 + facing×4.
+      - **The order.** The per-sub-record order is handlerA, handlerB, contact, draw (`CS:0xBB2B`–`0xBB49`). On a kill tick the port used to advance the −1 from `CS:0xBCFA`.
+      - **`stepAnimPhase`.** It keeps bit 3 only (`CS:0xBEA5`–`BEAE`).
+      - `UNKNOWN_pat_attack_facing_setter` is `CS:0xBE99`.
+    - **The ladder-head direction gate** (`CS:0x599D` / `CS:0x5BE5`).
+      - **State 0.** A held direction crouches at a col+1 ladder, while col 0 has no direction test.
+      - **State 1.** Col+1 has no direction test. Sub > 0x14 crouches, and a held direction crouches before col 0 is looked at.
 
 ⚠️ `UNKNOWN_openlist_field4` was listed here *and* in the resolved list below. It is **closed** — the resolved entry is correct.
 
