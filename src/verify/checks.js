@@ -14153,6 +14153,26 @@ export async function checkPatObjects(fetchRaw) {
       check('...and the reload is (16 - lo) * 4, not the other handlers\' * 2 (CS:0xBD28-0xBD30)',
         s3.reload <= (16 - 13) * 4);
     }
+    /* CS:0xBC4B's high-nibble branch -> CS:0xDBC6: an exact-hero line
+     * hazard, no jitter, no random draw (UNKNOWN_bc4b_line_hazard_bp). */
+    {
+      const gh = new PatGroups(directory);
+      gh.blobBytes = absBlob;
+      gh.activate({ ...desc, behaviorClassIndex: 0, hiNibble: 1, loNibble: 5 }, 1);
+      const lh = new LineHazards();
+      const heroH = { x: 200, y: 300 };
+      let draws = 0, at = null;
+      for (let t = 0; t < 60 && !at; t++) {
+        gh.step(cam, 0, null, lh, heroH, () => { draws++; return 0x1234; }, t & 1, null);
+        const live = lh.slots.find((q) => q.active);
+        if (live) at = { line: live.line, n: live.n, sub: { ...gh.slots.find((q) => q.active).subs[0] } };
+      }
+      const src = at && { x: at.sub.x + 16, y: at.sub.y + 16 };
+      check('CS:0xBC4B with a high nibble aims a line hazard from (x+16, y+16) at the hero\'s exact (+8, +6), drawing no random number (CS:0xDBC6)',
+        at && draws === 0 && at.n === (5 >> 1) + 4
+          && at.line.dx === Math.abs(heroH.x + 8 - src.x) && at.line.dy === Math.abs(heroH.y + 6 - src.y),
+        at ? `n ${at.n}, dx ${at.line.dx}, dy ${at.line.dy}, rng draws ${draws}` : 'never fired');
+    }
     {
       const d = new FallingDrops();
       const planeA = new Uint8Array(128 * 64);

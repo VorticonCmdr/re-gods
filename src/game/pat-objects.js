@@ -137,20 +137,19 @@
  * reseeded to `(16-loNibble)*2` on every shot. Then branches on the HIGH
  * nibble (`DS:0x232`):
  *   - nonzero: ALWAYS diverts into the Bresenham line-hazard seed
- *     (`CS:0xdbc6`, the exact routine this port's `line-hazard.js` already
- *     implements as `LineHazards.spawnJittered`/`spawnAtHero`), muzzle
- *     `(pos+16, pos+16)`, unconditionally LEFT-shaped in the source (no
- *     direction test at all) — reload reseeded via a BYTE-only doubling
- *     (`ADD AL,AL`), where the zero-nibble branch below uses a full 16-bit
- *     one (`ADD AX,AX`); both land on the same numeric result since the
- *     value is always < 128, but the asymmetry is real in the bytes and
- *     reproduced verbatim rather than unified.
- *     ⚠️ `CS:0xBC88`'s own `CALL 0xdbc6` does NOT set `BP` beforehand (unlike
- *     `selector2.js`'s own `CS:0xB667`, which explicitly seeds `BP:=1`) —
- *     what `BP` holds at this exact call site was not traced this pass
- *     (`UNKNOWN_bc4b_line_hazard_bp`). This port calls `spawnJittered`
- *     (the `BP=1` shape, the only one this project has independently
- *     confirmed anywhere) rather than guess a different variant.
+ *     (`CS:0xdbc6`), source `(pos+16, pos+16)`, unconditionally — no
+ *     direction test at all — with the reload reseeded via a BYTE-only
+ *     doubling (`ADD AL,AL`), where the zero-nibble branch below uses a full
+ *     16-bit one (`ADD AX,AX`); both land on the same number since the value
+ *     is always < 128, but the asymmetry is real and reproduced verbatim.
+ *     ⚠️ CORRECTED (2026-09-29): this used to call `spawnJittered`, on the
+ *     theory that CS:0xDBC6 took a jitter mode in BP. It does not read BP at
+ *     all: CS:0xDBC6-0xDBD1 loads the target from the hero, `[0x17A]+8,
+ *     [0x17C]+6`, and CS:0xDBD4 `mov bp,0x13` makes BP the slot counter. The
+ *     speed comes from `[0x1F0]`, which CS:0xBC84 sets to (lo >> 1) + 4. So
+ *     the shot aims at the hero exactly and draws no random number
+ *     (`UNKNOWN_bc4b_line_hazard_bp` is CLOSED, `[STATIC]`). Placed users:
+ *     2A/2B descriptor 3, 4A descriptors 0, 1, 2, 5, 14, 24, 4B 0, 1, 2, 24.
  *   - zero: fires an ordinary projectile through the shared emitter, muzzle
  *     Y = pos.y+12 (both directions), X = pos.x+8 (left) / pos.x+24
  *     (right), direction chosen by `currentX >= DS:0x200 ? right : left`
@@ -1081,10 +1080,9 @@ export class PatGroups {
     if (slot.desc.hiNibble !== 0) {
       s.reload = ((0x10 - slot.desc.loNibble) * 2) & 0xff; // CS:0xBC6B `add al,al` — byte-only double
       if (lineHazards && hero) {
-        /* CS:0xBC88 -> dbc6, BP not set at this call site — see the header's
-         * own UNKNOWN_bc4b_line_hazard_bp. Using the BP=1 (jittered) shape,
-         * the only one this project has independently confirmed anywhere. */
-        lineHazards.spawnJittered(s.x + 16, s.y + 16, hero.x, hero.y, speed, rngNext);
+        /* CS:0xBC70-0xBC88 -> CS:0xDBC6: from (x+16, y+16) at the hero's
+         * exact (+8, +6), no jitter, no random draw. */
+        lineHazards.spawn(s.x + 16, s.y + 16, hero.x + 8, hero.y + 6, speed);
       }
       return;
     }
