@@ -74,13 +74,10 @@
  *   real `camera` and `grid`, and `tick()`'s own body calls `stageAttack`
  *   whenever both are present (see `tick()` below). System-A entities DO now
  *   attack in the live port. `UNKNOWN_sysA_attack_not_wired` is CLOSED.
- *   - The per-group "how many members may reroll their strategy this tick"
- *     throttle (a bitmask at [bp+0x14]/DS:0x3c4, plus a [si+0xa]-vs-random
- *     gate) that CS:0xe6e4 applies before the nibble/weight roll. This port
- *     rolls a fresh strategy for every entity whose strategy is unset,
- *     unthrottled — the SELECTION probabilities this file measures are
- *     unaffected (they come from the nibble/weight roll alone), only the
- *     PACING of when a whole group reconsiders is not reproduced.
+ *   - ⚠️ CORRECTED (2026-09-29, Gods ranked item 68): what this list called
+ *     a "reroll throttle" is the leader/follower machinery — the [bp+0x14]
+ *     mask and [si+0xa] gate recruit followers into strategy 4 behind a
+ *     leader CS:0xEB37 elects. Ported, [PROVEN] live: game/sysa-group.js.
  *   - The waiting -> materialising -> alive pre-life sequencing is modelled
  *     BY ANALOGY with System B's proven CS:0xff20 state machine, not from a
  *     System-A-specific read: the materialise loop (CS:0xde42-0xdf37, read
@@ -685,11 +682,9 @@ export function stageAccelerate(e, stepCap) {
     e.vx = decayToward(e.vx, cap);
     e.vy = decayToward(e.vy, cap);
     e.arrivedCoarse = true;
-    /* CS:0xe3fa: the fine (8px) check runs only when +0x19 is NEITHER 0 NOR
-     * 1. This port defaults fineGate to 0, so the fine check — and hence
-     * stage 5's snap-to-goal — never fires. See UNKNOWN_sysA_field_0x19 in
-     * CLAUDE.md. */
-    if (e.fineGate !== 0 && e.fineGate !== 1) {
+    /* CS:0xe3fa: the fine (8px) check runs only when +0x19 (the rank) is
+     * NEITHER 0 NOR 1 — i.e. only for a follower (game/sysa-group.js). */
+    if (e.rank !== 0 && e.rank !== 1) {
       const cell8 = (v) => (v + 4) & ~7;
       if (cell8(e.x) === cell8(e.goalX) && cell8(e.y) === cell8(e.goalY)) {
         e.arrivedFine = true;
@@ -981,8 +976,8 @@ export function spriteForEntityA(world, cls, entity, tables) {
  * Per CLAUDE.md's "which table belongs to which entity system" census, the
  * classes actually REFERENCED by live shipped descriptors are: world 1 -
  * {0,2}; world 2 - {0,2}; world 3 - {0,1,2}; world 4 - {0} only (class 3 in
- * world 4 is the documented CUT hazard, base 0x213/531, never selected by
- * any shipped descriptor). */
+ * world 4, base 0x213/531, is never selected by a System A descriptor, but
+ * selector 1 places it: Gods ranked item 68). */
 export const CLASS_TABLES_A = {
   1: [
     { base: 450, w: 32, h: 32, handlerA: 0xbe6b, handlerB: 0xbc4b },
@@ -1004,8 +999,8 @@ export const CLASS_TABLES_A = {
     { base: 496, w: 32, h: 32, handlerA: 0xbf15, handlerB: 0xbc4b },
     { base: 524, w: 32, h: 32, handlerA: 0xbf36, handlerB: 0xbc4b },
     { base: 504, w: 32, h: 48, handlerA: 0xbddb, handlerB: 0xbd71 },
-    /* class 3 — the documented CUT hazard. Never selected by shipped data;
-     * kept here for completeness, matching the table's own bytes. */
+    /* class 3 — never selected by a System A descriptor, but selector 1
+     * (PAT) places it in 4A/4B: pat-objects.js #bd38, falling-drop.js. */
     { base: 531, w: 32, h: 32, handlerA: 0xbd38, handlerB: 0xbd0b },
   ],
 };
@@ -1024,21 +1019,13 @@ export class EntityA {
     this.vx = 0;                // +0x12
     this.vy = 0;                // +0x14
     this.stepCap = 1;           // +0x16 — floors at 1 every tick (stage 0 preamble)
-    /* +0x19 — NOT a bare gate flag despite the name. CS:0xE72D stamps this
-     * with the group-runtime reroll-throttle counter's OWN value at the
-     * moment stage 1 (CS:0xe6e4) grants this entity a strategy reroll — a
-     * "my rank in this group's reroll queue this tick" number, read
-     * ordinally by TWO consumers: stageAccelerate's fine-arrival gate above
-     * (0 or 1 skip it, anything else arms it) and, at death, CS:0xE247's own
-     * rank-1 check (only the entity stamped exactly 1 triggers a
-     * synchronized whole-group strategy reset via CS:0xEBB9). This port
-     * never implements the reroll-throttle mechanism that would set it
-     * nonzero (see stageAccelerate's own header), so it stays 0 for the
-     * life of every entity and BOTH consumers are provably unreachable —
-     * the death-time rank-check/CS:0xEBB9 branches are correspondingly not
-     * ported below. Kept named `fineGate` rather than renamed, since that is
-     * still an accurate name for its one LIVE consumer in this port. */
-    this.fineGate = 0;
+    /* +0x19 — the member's rank in its group's leader/follower chain
+     * (game/sysa-group.js, Gods ranked item 68, [PROVEN] live): 1 = the
+     * leader CS:0xEB37 elected, 2.. = followers in joining order (CS:0xE72D),
+     * 0 = unranked. Read by stage 2's fine-arrival gate (0 and 1 skip it),
+     * by strategy 4's trail offset, by CS:0xE039 (the leader writes the
+     * trail) and at death (CS:0xE283). */
+    this.rank = 0;
     this.zone = 0;              // +0x1a — CS:0xec12's spawn-time result, unconsumed
     this.arrivedCoarse = false; // +0x1b
     this.goalX = x;             // +0x1c — seeded to spawn point (materialise loop)
@@ -1135,10 +1122,15 @@ export class EntityA {
    *   (objects.js), for strategy 2's own theft attempt only. Omitted (the
    *   default) skips the steal for this tick, matching every other optional
    *   arg's "degrade, don't throw" fallback in this method.
+   * @param {?{rt:import('./sysa-group.js').GroupRuntimesA, k:number, i:number,
+   *          members:EntityA[], planeA:?Uint8Array}} group  this member's
+   *   group runtime slot k and index i (DS:0x3C4) — the leader/follower
+   *   machinery (game/sysa-group.js). Omitted, the member never joins.
    * @returns {?({x:number,y:number,dir:number}|{hazard:true,attackBits:number,n:number,x:number,y:number})}
    *   a muzzle to fire from, a line-hazard spawn request, or null
    */
-  tick(hero, desc, draw, frozen = false, camera = null, markers = null, grid = null, objects = null) {
+  tick(hero, desc, draw, frozen = false, camera = null, markers = null, grid = null, objects = null,
+       group = null) {
     /* Pre-life FSM — see UNKNOWN_sysA_prelife_driver in the file header. */
     if (this.state === EST.WAITING) {
       this.timer = (this.timer - 1) & 0xffff;              // CS:0xE31A `dec` / `jz`
@@ -1196,10 +1188,8 @@ export class EntityA {
          * `deathDropId`'s own header in the constructor for why. Uses
          * carriedX/carriedY (the icon's own eased position), matching
          * CS:0xE25C/E259's own `ax,bx=[di+0x20]/[di+0x22]` read.
-         * CS:0xE283-E2A9 (the [di+0x19] rank-check / EBB9 group-reset) still
-         * hangs off this SAME one-shot gate in the original and is still
-         * NOT ported — fineGate's own header above already establishes it
-         * is provably unreachable in this port regardless of steal-and-carry. */
+         * CS:0xE283-E2A9 (the rank check / EBB9 group reset) hangs off this
+         * SAME one-shot gate and runs after the drop, below. */
         if (this.carriedType >= 0) {
           const isWeapon = this.carriedType >= 0xC0;
           this.deathDropId = isWeapon ? this.carriedType - 0xC0 : this.carriedType + 0xB;
@@ -1207,6 +1197,7 @@ export class EntityA {
           this.deathDropY = this.carriedY;
           this.carriedType = -1;
         }
+        if (group) group.rt.onDeath(group.k, this, group.members, desc);   // CS:0xE283
       }
       this.frame++;                                          // CS:0xE2AC, unconditional
       if (this.frame >= DEATH_FRAMES_A) {                     // CS:0xE2AF/E2B3
@@ -1226,8 +1217,14 @@ export class EntityA {
      * (`strategy1`/`strategy2`, above) need a `camera`; a caller that omits
      * it (or `markers` for strategy 2) gets the pre-this-session fallback of
      * leaving the goal untouched, rather than a throw. */
-    if (this.strategy < 0) this.strategy = rollStrategy(desc.seedPair, desc.seedWeight, draw);
-    if (this.strategy === 0) {
+    /* CS:0xE6F1: with a leader in the group, a member not yet ranked may
+     * join as a follower (one draw) before the ordinary roll. */
+    if (this.strategy < 0 && !(group && group.rt.tryJoin(group.k, this, group.i, desc, draw))) {
+      this.strategy = rollStrategy(desc.seedPair, desc.seedWeight, draw);
+    }
+    if (this.strategy === 4) {
+      if (group) group.rt.strategy4(group.k, this, desc, group.planeA);   // CS:0xE7DB
+    } else if (this.strategy === 0) {
       this.goalX = hero.x;
       this.goalY = hero.y + 8;
     } else if (this.strategy === 1) {
@@ -1261,7 +1258,10 @@ export class EntityA {
     /* Stage 5. */
     stageApply(this, frozen);
     /* Stage 6. */
-    return stageFacingAndFire(this, desc);
+    const fired = stageFacingAndFire(this, desc);
+    /* CS:0xE039 — the leader writes its post-move position into the trail. */
+    if (group && this.rank === 1) group.rt.trail(group.k, this);
+    return fired;
   }
 }
 

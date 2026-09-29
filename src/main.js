@@ -66,6 +66,7 @@ import { LeverToggle, SFX_LEVER_TOGGLE } from './game/levers.js';
 import { KillSmoke } from './game/kill-smoke.js';
 import { Sparkles } from './game/sparkle.js';
 import { FallingDrops } from './game/falling-drop.js';
+import { GroupRuntimesA } from './game/sysa-group.js';
 import { LoopSfx, spikeOnScreen } from './game/loop-sfx.js';
 import { SpikeClock, stepSpikes, spikeSprites, spike130Sprite,
          SPIKE_TYPE, SPIKE117_TYPE, SPIKE130_TYPE } from './game/spikes.js';
@@ -1090,6 +1091,10 @@ let lastDropFx = [];
   let slots = new GroupSlots();
   let enemies = [];
   let slotsA = new GroupSlots();
+  /* SS:0x3768 — System A's group runtimes as bytes (leader, followers, the
+   * trail ring that overruns its slot): game/sysa-group.js. Zeroed with the
+   * slots, as CS:0xDE6F zeroes all 0x8E8 bytes. */
+  let groupRtA = new GroupRuntimesA();
   let enemiesA = [];
   /* CS:0xBF5F/0xBF80 — the single-slot floating item-icon popup (game/
    * popup.js). Feeds selector2.js's own already-computed `rewards` array
@@ -1591,7 +1596,14 @@ let lastDropFx = [];
        * of its own to hang it off, unlike CS:0xdf39's own `[bp+0x10]`).
        * `slot`/`released` carry System-A's own slot release (CS:0xDFF9) for
        * the same reason System B's do — see that block. */
-      groupsA.push({ desc: d, members, rewardGiven: false, slot, released: false });
+      /* CS:0xDEED-0xDF2A — the runtime's materialise tail (+0x11 pre-select,
+       * count, mask, rotation). CS:0xE30D doubles the HP of every member when
+       * the pre-selected index equals SS:0x435, the GROUP-slot counter
+       * (9 - slot), not the member index: a shipped mix-up, and unreachable
+       * (no placed descriptor sets +4 bit 0). Gods ranked item 68. */
+      const pre = groupRtA.materialise(g, d, () => rng.next());
+      if (9 - g === pre) for (const e of members) e.hp = (e.hp * 2) & 0xffff;
+      groupsA.push({ desc: d, members, rewardGiven: false, slot, released: false, k: g, justSpawned: true });
       slot.state = 1;
     }
   };
@@ -1646,7 +1658,7 @@ let lastDropFx = [];
       progress.reset(level.world, spawn.x, spawn.y); // CS:0x8C34 — chain, counters, ring, respawn
       events = new EventRunner(level.map, level.palfils);
       slots = new GroupSlots(); enemies = []; clamped = 0; firedByB = 0;
-      slotsA = new GroupSlots(); enemiesA = []; clampedA = 0; firedByA = 0;
+      slotsA = new GroupSlots(); groupRtA = new GroupRuntimesA(); enemiesA = []; clampedA = 0; firedByA = 0;
       firedHazardsByA = 0; firedHazardsByB = 0;
       groupsB = []; groupsA = []; popup = new Popup();
       messages = new MessageEngine(); seenTypes = new SeenBitmap();
@@ -1897,7 +1909,7 @@ let lastDropFx = [];
            * sparkles (CS:0x69A4 -> 0x1221, game/sparkle.js). A "spawn flash"
            * pool at DS:0xac90 has no port-side module yet; the world-2 nest
            * pool (DS:0xcfcc) is not reset here either. */
-          slotsA = new GroupSlots();
+          slotsA = new GroupSlots(); groupRtA = new GroupRuntimesA();
           groupsA = [];
           enemiesA = [];
           lineHazards = new LineHazards();
@@ -3387,7 +3399,7 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
          * there is no other producer — so clearing all three together is a
          * complete and faithful mirror of the original's block-clear, not
          * an approximation of it. */
-        slotsA = new GroupSlots();
+        slotsA = new GroupSlots(); groupRtA = new GroupRuntimesA();
         groupsA = [];
         enemiesA = [];
         /* CS:0x1030-0x103F — the teleport tail then runs the respawn tick
@@ -3750,12 +3762,15 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
          * 2's own theft attempt (CS:0xE90E). All four are optional on tick()'s
          * own signature, so this call is the only thing that actually arms
          * them — see entity-a.js's header for what each one does. */
-        for (const e of enemiesA) {
-          if (e.spawnTick) { e.spawnTick = false; continue; }
+        /* CS:0xDF39 walks the ten runtime slots in order; each slot runs its
+         * members (CS:0xDF93-0xDFAA), then the election CS:0xEB37
+         * (CS:0xDFB9). A slot that materialises this tick does neither
+         * (CS:0xDF37 `jmp 0xdf62`). */
+        const stepA = (e, grp) => {
           const muzzle = e.tick(
             { x: player.x, y: player.y }, e.desc,
             () => rng.next(), fx.freeze > 0,
-            { x: cam.snapX, y: cam.snapY }, markerList.entries, grid, level.drawObjects);
+            { x: cam.snapX, y: cam.snapY }, markerList.entries, grid, level.drawObjects, grp);
           playFlash(e);                                    // CS:0xE322
           if (muzzle && muzzle.hazard) {
             /* CS:0xE5E4 — attackBits 1 throws at a jittered point near the
@@ -3789,6 +3804,16 @@ let gameOverFade = null;   // null | { snapshot, palette, start, next: 'name-ent
             popup.spawn(e.deathDropX, e.deathDropY, e.deathDropId, dropCarriedIntoWorld);
             e.deathDropId = null;
           }
+        };
+        for (const g of groupsA.filter((q) => !q.released).sort((a, b) => a.k - b.k)) {
+          if (g.justSpawned) {
+            g.justSpawned = false;
+            for (const e of g.members) e.spawnTick = false;
+            continue;
+          }
+          g.members.forEach((e, i) => stepA(e,
+            { rt: groupRtA, k: g.k, i, members: g.members, planeA: level.map.planeA }));
+          groupRtA.elect(g.k, g.members, g.desc, () => rng.next());   // CS:0xDFB9
         }
         /* CS:0x028E — the materialise flash pool's walker (game/flash.js). */
         flashFx = flashPool.step({ x: cam.snapX, y: cam.snapY });

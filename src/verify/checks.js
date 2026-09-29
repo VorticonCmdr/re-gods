@@ -109,6 +109,7 @@ import { GROUP_SLOTS as PAT_GROUP_SLOTS, SUBRECORDS_PER_GROUP, ABSOLUTE_TAG,
          scoreForKey } from '../game/pat-objects.js';
 import { killAwardGain } from '../game/treasure.js';
 import { FallingDrops } from '../game/falling-drop.js';
+import { GroupRuntimesA } from '../game/sysa-group.js';
 import { spriteForType, parseObjectCategories, isDeadType, isUnstamped,
          OBJECT_SPRITE_BASE, STAMPED_TYPES, ObjectAnimClock, crystalSprite,
          animatedObjectSprite, CRYSTAL_SPRITE, category5Draws, SHOP_POTION_ANIM } from '../game/objects.js';
@@ -9235,6 +9236,112 @@ export async function checkWeaponsProjectiles(fetchRaw) {
         'CS:0x1950 converts the addend with eight `div 10` and adds byte by ' +
         'byte with `daa`. 375 x 4 = 1500 stores as bytes 00 15 00 00, and ' +
         'eight digits wrap — which is the field, not a clamp I invented');
+    }
+
+    /* ── System A's leader and followers (game/sysa-group.js), Gods ranked
+     * item 68, [PROVEN] live. Every expected value below was read off the
+     * live captures (tools/attract-capture/sys2b.json, sys4b.json,
+     * deathquirk.py); tools/attract-capture/sysa-replay.mjs replays the
+     * whole captures byte for byte. */
+    {
+      const put16 = (rt, off, v) => { rt.bytes[off] = v & 0xff; rt.bytes[off + 1] = (v >> 8) & 0xff; };
+      const alive = (n) => Array.from({ length: n }, () => ({ state: 40, rank: 0, strategy: -1, x: 0, y: 0, stepCap: 1 }));
+      /* The ring overrun: 2B tick 55 -> 56, leader at (313, 40), cursor 200. */
+      {
+        const rt = new GroupRuntimesA();
+        rt.bytes[0x12] = 3; put16(rt, 0xe0, 200); rt.bytes[0xe2] = 50;
+        rt.trail(0, { x: 313, y: 40 });
+        check('the trail ring overruns its runtime: at cursor 200 the leader overwrites +0xE0 itself (CS:0xE053 -> 0xE05B)',
+          rt.cursor(0) === 317 && rt.bytes[0xe2] === 40,
+          `live 2B tick 56: e0 200 -> 317 (x 313 + 4); e2 took y's low byte 40 (the election step makes it 41). ` +
+          `port e0 ${rt.cursor(0)}, e2 ${rt.bytes[0xe2]}`);
+      }
+      /* Joining: tenure must reach 10 x count (CS:0xE714-0xE725). */
+      {
+        const rt = new GroupRuntimesA();
+        const m = alive(3);
+        rt.bytes[0x12] = 1; put16(rt, 0x14, 1); m[0].rank = 1;
+        put16(rt, 0x16, 9);
+        const early = rt.tryJoin(0, m[1], 1, { leadWeight: 127 }, () => 0);
+        put16(rt, 0x16, 10);
+        const joined = rt.tryJoin(0, m[1], 1, { leadWeight: 127 }, () => 0);
+        check('a follower joins only once the leader\'s tenure reaches 10 x count, as rank count+1 in strategy 4',
+          !early && joined && m[1].rank === 2 && m[1].strategy === 4 && rt.mask(0) === 3 && rt.count(0) === 2,
+          'live: 2B ranks 2/3 joined at tenure 10/20 (ticks 22, 38), 4B rank 4 at 30');
+      }
+      /* The follower death quirk: bit RANK is cleared, not the member's own. */
+      {
+        const rt = new GroupRuntimesA();
+        const m = alive(4); m.forEach((e, i) => { e.rank = i + 1; e.strategy = i ? 4 : 0; });
+        rt.bytes[0x12] = 4; put16(rt, 0x14, 0b1111);
+        rt.onDeath(0, m[1], m, { count: 4 });
+        check('a rank-2 follower\'s death clears bit 2, not its own bit 1, and lowers only ranks still in the mask (CS:0xE29F / CS:0xEBE5)',
+          rt.mask(0) === 0b1011 && rt.count(0) === 3 && m.map((e) => e.rank).join() === '1,2,3,3',
+          `[PROVEN] live (deathquirk.py, 4B): mask 1111 -> 1011, ranks 1,2,3,4 -> 1,2,3,3. port mask ${rt.mask(0).toString(2)}, ranks ${m.map((e) => e.rank)}`);
+        rt.onDeath(0, m[0], m, { count: 4 });
+        check('...and the leader\'s death resets the whole chain (CS:0xEBB9)',
+          rt.count(0) === 0 && rt.mask(0) === 0 && m.every((e) => e.rank === 0 && e.strategy === -1));
+      }
+      /* The election draws twice per leaderless tick, and a 0xFFFF pick hangs DOS. */
+      {
+        const rt = new GroupRuntimesA();
+        rt.materialise(0, { flags: 0, count: 3 }, () => 0);   // CS:0xDEF1: [+0x11] = 0xFF, no draw
+        const m = alive(3);
+        let draws = 0;
+        const dead = alive(3).map((e) => ({ ...e, state: -2 }));
+        rt.elect(0, dead, { count: 3, leadWeight: 127 }, () => { draws++; return 0; });
+        const idx = rt.elect(0, m, { count: 3, leadWeight: 127 }, () => { draws++; return 0x5000; });
+        check('a leaderless group draws twice per tick (CS:0xEB4A, CS:0xEB60) and elects a living member as rank 1',
+          draws === 4 && idx === 0 && m[0].rank === 1 && rt.count(0) === 1 && rt.mask(0) === 1,
+          'live 2B: DS:0x160 +4 per tick while all members were pre-life (ticks 0-4) or dying (155-171)');
+        const rh = new GroupRuntimesA();
+        rh.materialise(0, { flags: 0, count: 3 }, () => 0);
+        const seq = [0, 0xffff]; let q = 0;
+        rh.elect(0, alive(3), { count: 3, leadWeight: 127 }, () => seq[q++]);
+        check('a pick draw of 0xFFFF is where DOS hangs (CS:0xEB76 `jc` never taken); the port counts it and elects nobody',
+          rh.pickHangs === 1 && rh.count(0) === 0);
+      }
+      /* End to end through EntityA.tick: PLEV2B's descriptor 2 (3 members,
+       * leadWeight 127, trail mode) standing by an idle hero, as staged live. */
+      {
+        const d = parseGroupsA(dclDecompress(await fetchRaw('game/PALFILS.0B2')).data)[2];
+        const rng = new GodsRandom(0x1234);
+        const draw = () => rng.next();
+        const rt = new GroupRuntimesA();
+        rt.materialise(0, d, draw);
+        /* Member i waits i * stagger (export 38) and materialises on its
+         * flash (main.js playFlash), so the leader is elected before the
+         * others first roll a strategy — as live. */
+        const members = [0, 1, 2].map((i) => new EntityA({ x: 256, y: 16, cls: d.cls, hp: d.hp, delay: i * d.stagger }));
+        const flash = (e) => { if (e.wantsFlash) { e.wantsFlash = false; e.materialise(); } };
+        members.forEach(flash);
+        let elected = -1, joined = 0, trailGoals = 0;
+        for (let t = 0; t < 120; t++) {
+          members.forEach((e, i) => {
+            e.tick({ x: 160, y: 32 }, d, draw, false, null, null, null, null,
+              { rt, k: 0, i, members, planeA: null });
+            flash(e);
+            if (e.strategy === 4 && e.rank >= 2 && e.goalX !== 0) trailGoals++;
+          });
+          const idx = rt.elect(0, members, d, draw);
+          if (idx !== null && elected < 0) elected = t;
+          joined = Math.max(joined, rt.count(0));
+        }
+        check('end to end: a 2B descriptor-2 group elects a leader and recruits both others as trail followers (EntityA.tick + CS:0xEB37)',
+          d.leadWeight === 127 && elected >= 0 && joined === 3 && trailGoals > 0,
+          `elected on tick ${elected}, ${joined} ranked, ${trailGoals} follower-goal ticks (live: elected tick 5, 3 ranked by tick 38)`);
+      }
+      /* Formation: plane A as the circle table. 4B tick 121. */
+      {
+        const planeA = parseMap(dclDecompress(await fetchRaw('game/PLEV4B.MAP')).data).planeA;
+        const rt = new GroupRuntimesA();
+        rt.bytes[0x12] = 4; put16(rt, 0xe0, 52); rt.bytes[0xe2] = 41;
+        put16(rt, 0x18 + 48, 3398); put16(rt, 0x18 + 50, 63);
+        const got = [2, 3, 4].map((rank) => { const e = { rank, stepCap: 1 }; rt.strategy4(0, e, { flags: 0xa2 }, planeA); return `${e.goalX},${e.goalY}`; });
+        check('formation goals are the leader\'s point plus PLANE A words >> 10 (CS:0xE828 reads DS:0x40B0, not SS)',
+          got.join(' ') === '3405,63 3416,86 3418,83',
+          `live 4B tick 121: 3405,63 3416,86 3418,83; port ${got.join(' ')}`);
+      }
     }
 
     /* ── A System-A/B kill's score, CS:0xEFE7 -> CS:0x0C8B. */

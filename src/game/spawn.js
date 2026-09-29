@@ -93,6 +93,10 @@ export function parseGroupsA(buf) {
       cls:     b[0x07],                        // sprite-class index, CS:0xe199
       seedPair:   b[0x08],                     // stage 1 strategy nibble pair, CS:0xe748
       seedWeight: b[0x09],                     // stage 1 weight, 7-bit
+      /* CS:0xEB47 `mov bl,[si+0xa]` / CS:0xE707 `mov cl,[si+0xa]`: the
+       * leader election's and a follower's join weight, out of 128
+       * (game/sysa-group.js). 0 = the group never elects a leader. */
+      leadWeight: b[0x0a],
       speedCap:   signByte(b[0x0b]),           // stage 4 (CS:0xe44d) clamp
       stepCap:    signByte(b[0x0c]),           // stage 2 (CS:0xe336) steering-step cap partner, also stage 3's range gate (stageAttack, entity-a.js — now wired)
       /* Strategy 1's own weight, CS:0xe9de `mov bl,[si+0xd]` — the probability
