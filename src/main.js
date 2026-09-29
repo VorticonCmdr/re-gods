@@ -33,6 +33,7 @@ import { makeActionContext, makeGates, DOOR_TILES,
          ACTION_NAMES } from './game/trigger-actions.js';
 import { cameraForSpawn, Camera, scriptedCameraStep } from './game/camera.js';
 import { spriteFor, STATE_INFO, UNMODELLED_PHASE_STATES } from './game/states.js';
+import { applyObjectLoadMask } from './formats/object-mask.js';
 import { buildDescriptorMap, GROUP_STEMS, HERO_DESCRIPTOR_MAX,
          LEVEL_LOAD_ORDER } from './formats/descriptors.js';
 import { spriteForType, parseObjectCategories, sortForDraw, isDeadType,
@@ -338,6 +339,15 @@ async function loadSprites(world) {
     const d = map[id];
     const f = atlases[d.stem].frames[d.frame];
     frames[id] = { ...f, pixels: cutAll(images[d.stem], { frames: [f] })[0].pixels };
+  }
+  /* CS:0x2B6F's per-world `objects` load mask: a frame whose bit is clear
+   * draws the next built frame's bytes (formats/object-mask.js, Gods ranked
+   * item 63, [PROVEN] live). World 2's levers and 1B's stone switches look
+   * wrong in DOS, so they look wrong here too. */
+  const objs = ranges.filter((r) => r.group === 'objects');
+  if (objs.length) {
+    applyObjectLoadMask(frames, objs[0].base,
+      objs.reduce((n, r) => n + r.count, 0), world);
   }
   /* `DS:0x27e` — the glyph base (CS:0x2c4b's `[0x68]-0x1e00 >> 3`, snapshotted
    * BEFORE the smallfnt load, so it is that atlas's own record 0). The blit is

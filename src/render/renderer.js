@@ -102,8 +102,10 @@ export class Renderer {
    * The original's masked blitters are exports 1 and 2 of the graphics driver;
    * this reproduces the visible result, not the EGA latch mechanism.
    * `clipBottom` is export 1's bottom clip line SS:0x40A (the world-4 worm
-   * head sets 0x41).
-   * @param {{w:number,h:number,pixels:Uint8Array}} f
+   * head sets 0x41). `f.opaque0`, when present, marks index-0 pixels that
+   * are opaque: an `objects` frame aliased by the load mask
+   * (formats/object-mask.js) can read a clear mask bit over colour 0.
+   * @param {{w:number,h:number,pixels:Uint8Array,opaque0?:Uint8Array}} f
    */
   blitSprite(f, dx, dy, clipBottom = SCREEN_H) {
     const yEnd = Math.min(SCREEN_H, clipBottom);
@@ -116,6 +118,7 @@ export class Renderer {
         if (px < 0 || px >= SCREEN_W) continue;
         const v = f.pixels[src + x];
         if (v) this.buf[rowOff + px] = v;
+        else if (f.opaque0 && f.opaque0[src + x]) this.buf[rowOff + px] = 0;
       }
     }
   }

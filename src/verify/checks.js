@@ -11,6 +11,7 @@ import { Familiar, chooseAltSlot } from '../game/familiar.js';
 import { Guardian, convertBezier, getProcessJaw, resetProcessJaw } from '../game/guardian.js';
 import { PayoffScreen, PAYOFF_PAGES, LINE_Y, lineX } from '../game/payoff.js';
 import { dclDecompress } from '../formats/dcl.js';
+import { applyObjectLoadMask, isBuilt, OBJECT_LOAD_MASKS, MASK_BITS } from '../formats/object-mask.js';
 import { DOOR_TILES, ZONE_TELEPORT, ZONE_EXIT, makeGates, makeActionContext,
          runAction, fireTrigger, SFX } from '../game/trigger-actions.js';
 import { RecordingAudioBus, SFX_VOICES, adlAccepts } from '../audio/audio-bus.js';
@@ -2146,6 +2147,91 @@ export async function checkSelectorsAndObjects(fetchRaw) {
   check(`categories 24/25/26/27 are all 3 — the lever & switch off/on pairs`,
     [24, 25, 26, 27].every((t) => cats[t] === 3),
     [24, 25, 26, 27].map((t) => cats[t]).join(','));
+
+  /* --- the objects load mask (Gods ranked item 63) ---------------------- */
+  const popcounts = OBJECT_LOAD_MASKS.map((m) =>
+    Array.from({ length: MASK_BITS }, (_, i) => (m[i >> 3] >> (7 - (i & 7))) & 1).reduce((a, b) => a + b, 0));
+  check(`the four objects load masks build 114/145/152/131 frames, the counts read live (item 62)`,
+    popcounts.join('/') === '114/145/152/131', popcounts.join('/'));
+
+  /* Build each world's objects frames the way main.js's loadSprites does. */
+  const objAtl = {}, objImg = {};
+  for (const s of GROUP_STEMS.objects) {
+    objAtl[s] = parseAtlas(dclDecompress(await fetchRaw(`game/${s}.DAT`)).data);
+    objImg[s] = decodePI1(dclDecompress(await fetchRaw(`game/${s}.PI1`)).data);
+  }
+  const objFrames = [];
+  for (const s of GROUP_STEMS.objects) {
+    cutAll(objImg[s], objAtl[s]).forEach((f) => objFrames.push(f));
+  }
+  const masked = {};
+  for (const w of [1, 2, 3, 4]) {
+    const frames = [...Array(170).fill(null), ...objFrames.map((f) => ({ ...f }))];
+    masked[w] = { frames, ...applyObjectLoadMask(frames, 170, objFrames.length, w) };
+  }
+  /* The descriptor pointers read live (SS:0x1E00 + id*8, mask63_live.py):
+   * a cleared frame points at the next built one's pixels. */
+  const aliasTo = (w, id) => masked[w].frames[id].aliasOf ?? id;
+  const LIVE_ALIASES = [[1, 225, 239], [1, 232, 239], [1, 233, 239], [2, 194, 198], [2, 195, 198],
+    [2, 196, 198], [2, 197, 198], [4, 174, 175], [4, 194, 204], [4, 195, 204], [4, 302, 303]];
+  check(`a cleared objects frame draws the next built frame's bytes (11 descriptors read live)`,
+    LIVE_ALIASES.every(([w, id, to]) => aliasTo(w, id) === to),
+    LIVE_ALIASES.map(([w, id]) => `w${w}:${id}->${aliasTo(w, id)}`).join(' '));
+  /* Same height: the picture is exactly the target's. Different height
+   * (the 16-row lever on a 15-row frame): the planes read out of step, with
+   * opaque colour-0 pixels; the live arena dumps give 153 pixels, 17 of them
+   * colour 0, for world 2 and 164 / 13 for world 4. */
+  const flask = masked[4].frames[174], bag = objFrames[5];
+  const lever = (w) => {
+    const f = masked[w].frames[194];
+    let n = 0, z = 0;
+    for (let i = 0; i < f.pixels.length; i++) {
+      if (f.pixels[i]) n++;
+      else if (f.opaque0 && f.opaque0[i]) { n++; z++; }
+    }
+    return `${n}/${z}`;
+  };
+  check(`world 4's flask (type 4) draws the bag of gold (type 5) pixel for pixel`,
+    flask.pixels.every((v, i) => v === bag.pixels[i]) && flask.h === bag.h);
+  check(`the world-2 and world-4 levers read 16 rows over a 15-row frame: 153/17 and 164/13 opaque/colour-0 pixels`,
+    lever(2) === '153/17' && lever(4) === '164/13', `w2 ${lever(2)}, w4 ${lever(4)}`);
+
+  /* Every way this pass found an object to appear in a world: map records,
+   * trigger ACT0/ACT1, and the drop ids of PAT, System A/B and selector-2
+   * descriptors that a plane-B event references. The cleared types among
+   * them must be exactly these, and none may need a 32-wide alias. */
+  const reach = new Set();
+  const spr = (t) => (t >= 0xC0 ? 302 + t - 0xC0 : 170 + t);
+  const fromId = (id) => (id < 0x0B ? id + 0xC0 : id - 0x0B);
+  for (const k of keys) {
+    const w = +k[0];
+    const add = (t) => { if (t >= 0 && t !== 0xFFFF && !isBuilt(w, spr(t) - 170)) reach.add(`${w}:${t}`); };
+    const m = parseMap(dclDecompress(await fetchRaw(`game/PLEV${k}.MAP`)).data);
+    for (const o of m.objects) add(o.type);
+    for (const t of parseAllTriggers(m.bulk)) {
+      if (!isLive(t)) continue;
+      if (verbOf(t) === 0) add(t.actionArg);
+      if (verbOf(t) === 1) add(t.actionArg + 0xC0);
+    }
+    const pf = dclDecompress(await fetchRaw(`game/${palfilsNameFor(k)}`)).data;
+    const pal = parsePalfils(pf);
+    const ref = { 1: new Set(), 2: new Set(), 4: new Set(), 5: new Set() };
+    for (const v of m.planeB) {
+      const ev = v >= 3 ? pal.events[v - 3] : null;
+      if (ev && ref[ev.selector]) ref[ev.selector].add(ev.param);
+    }
+    for (const i of ref[1]) { const d = parsePatSpawnDescriptor(pf, i); if (d.extra !== 0xFF) add(fromId(d.extra)); }
+    parseGroupsA(pf).forEach((d, i) => { if (ref[5].has(i) && d.live && d.rewardId >= 0) add(fromId(d.rewardId)); });
+    parseGroupsB(pf).forEach((d, i) => { if (ref[4].has(i) && d.live && d.rewardId >= 0) add(fromId(d.rewardId)); });
+    parseSelectorTwoClasses(pf).forEach((d, i) => {
+      if (ref[2].has(i) && d.live && d.rewardItemId !== 0xFF) add(fromId(d.rewardItemId));
+    });
+  }
+  const reached = [...reach].sort();
+  check(`the reachable objects on cleared mask bits are 1:55 1:62 2:24 4:192 4:24 4:4, none of them unresolved`,
+    reached.join(' ') === '1:55 1:62 2:24 4:192 4:24 4:4' &&
+    reached.every((s) => { const [w, t] = s.split(':').map(Number); return !masked[w].unresolved.includes(spr(t)); }),
+    reached.join(' '));
 
   return results;
 }
