@@ -125,7 +125,20 @@ A sixth, `UNKNOWN_level_palette_source` (ranked item 24), CLOSED — and, like i
   - The phase uses the screen x, not the world x.
   - The shop potion's sparkle is wired.
   - See `docs/open-questions-history.md` item 64.
-- **Nothing registered is open now.**
+- ~~Nothing registered is open now.~~ Superseded by the port audit below.
+
+**A port audit (2026-09-29) found gaps the ranked list never held.** It swept the port for stale "not ported" notes, reviewed every unclosed `UNKNOWN_*` id in `gods-web/src`, ran a census of shipped content against the port's fallbacks, and diffed cited addresses against Ghidra's function list.
+- **Ranked item 65 is closed (`[STATIC]`, ported).** It covers the pickup sparkle (`CS:0x1239`/`0x1280`, `DS:0xb578`) and the four frozen PAT walk cycles (`CS:0xBED3`/`0xBEF4`/`0xBF15`/`0xBF36`). `CS:0xBF58` is a bare `RET`.
+- **Still open, verified against the port:**
+  - The time-bomb blast is a no-op: `CS:0xA2FC`–`0xA41B`, no area kill, puffs, fragments or self-damage.
+  - The teleport stone (type 54) is not wired, although teleport zones are.
+  - World-4 class-2 PAT walkers never shoot: `pat-objects.js` never advances their `CS:0xBE99` phase.
+  - The ladder-head DOWN+LEFT/RIGHT gate (`CS:0x59A4`/`0x5C1B`) is not ported.
+- **`[WF]` leads, not yet re-read:**
+  - System A spawn stagger, fire timer and leader/follower via `VGA.EXE` export 38. This conflicts with a recorded live read.
+  - World-4 PAT class 3 appears placed via PALFILS +5, contradicting `destructible-and-hazards.md`.
+  - `BC4B` should use exact-hero `CS:0xDBC6`, not a jittered spawn.
+  - The 4A turrets' score overflow at `CS:0xAF8E`.
 
 ## Tooling
 
