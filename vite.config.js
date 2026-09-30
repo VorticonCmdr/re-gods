@@ -11,6 +11,9 @@ export default defineConfig({
    * public/ dir, and a built index.html asks for the user's own copy
    * ("Load folder…"). */
   publicDir: false,
+  /* Relative asset URLs, so a build works from any subpath: GitHub Pages
+   * serves this project from /re-gods/, not the domain root. */
+  base: './',
   /* Vite's dev server serves any root-level .html file with no config at all;
    * `build.rollupOptions.input` defaults to `index.html` alone otherwise, so
    * `npm run build` would silently drop the other pages from `dist/`. */

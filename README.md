@@ -7,8 +7,14 @@ reverse-engineering record it is built from. Vanilla JS, no framework. Vite + np
 
 ![GODS running in the port: world 1, the hero beside a hint tablet and a ladder](screenshots/gods.png)
 
-Start the dev server (below) and open `http://localhost:5173/`. The intro plays first;
-any key skips to the title menu.
+**Play it in the browser at <https://vorticoncmdr.github.io/re-gods/>.** The site ships no
+game data: click **Load folder…** and pick your own copy of the DOS release (the directory
+with `GODS.EXE`, `GAME.EXE` and the `P*` files). The files are read straight from disk and
+never uploaded. The level editor is at
+[`editor.html`](https://vorticoncmdr.github.io/re-gods/editor.html).
+
+To run it locally instead, start the dev server (below) and open `http://localhost:5173/`.
+The intro plays first; any key skips to the title menu.
 
 | Key | Action |
 |---|---|
